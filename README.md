@@ -115,6 +115,17 @@ The honest headline: against the **structurally identical** cipher (same Feistel
 
 **Fairness caveat:** sqids and hashids are obfuscation encodings — they hide sequential ids but are **not** keyed cryptographic primitives (sqids has no key; hashids' salt is documented as non-secure), and they encode an arbitrary-length domain rather than quark's fixed 40-bit → 7-char bijection. So against those two, quark's numbers show a speed advantage, not a security-equivalent one. Only `feistel_hmac` is a like-for-like security comparison. Reproduce all of it with `cargo bench --bench compare_bench`.
 
+### Redirect capacity (end-to-end HTTP)
+
+The numbers above are the code generator in isolation. Serving an actual redirect adds the HTTP stack + cache lookup. Measured with `oha` against the release container (`GET /:code`, hot cache, not following the 302):
+
+| load | throughput | p50 | p99 |
+|---|---|---|---|
+| 50 conns | ~124,000 req/s | 0.33 ms | 1.4 ms |
+| 200 conns | ~152,000 req/s | 0.90 ms | 6.3 ms |
+
+**Caveats (read them):** this was measured on a single dev machine, inside a Docker Desktop VM (which caps CPU and adds networking overhead), hitting a cache-hit hot path. It is a *proxy* for capacity, not a production figure — a native Linux host will differ. Even so, ~150k redirects/sec is ~13 billion/day, orders of magnitude past the "millions/day" target. A benchmark on real deployment hardware is the number to trust; this repo ships a `Dockerfile` for that (see `docs/DEPLOY.md`).
+
 ## Running it
 
 ```bash
