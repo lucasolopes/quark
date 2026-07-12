@@ -1,0 +1,37 @@
+[package]
+name = "quark"
+version = "0.1.0"
+edition = "2021"
+description = "URL shortener whose short code is a calibrated reduced-round ARX permutation"
+license = "MIT"
+
+[lib]
+name = "quark"
+path = "src/lib.rs"
+
+[[bin]]
+name = "quark"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+heed = "0.20"
+moka = { version = "0.12", features = ["sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+tower = "0.5"
+criterion = "0.5"
+
+[[bench]]
+name = "permute_bench"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
