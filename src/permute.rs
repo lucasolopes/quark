@@ -28,15 +28,17 @@ fn round_fn(r: u32, key: u64, round: usize, half_bits: u32) -> u32 {
     x & mask
 }
 
-/// Feistel genérico sobre `width` bits (width par). Usado por encode e
-/// pelo teste de bijetividade em largura pequena.
+/// Feistel genérico sobre `width` bits (width par), parameterizado pelo nº de
+/// rounds. Generaliza o Feistel usado por encode; também usado pelo teste de
+/// bijetividade em largura pequena e pelo harness de calibração (bin/calibrate),
+/// que mede a permutação real (sem cópia divergente).
 #[inline]
-fn feistel(input: u64, key: u64, width: u32) -> u64 {
+pub fn feistel_n(input: u64, key: u64, rounds: usize, width: u32) -> u64 {
     let half = width / 2;
     let mask = (1u64 << half) - 1;
     let mut l = ((input >> half) & mask) as u32;
     let mut r = (input & mask) as u32;
-    for round in 0..ROUNDS {
+    for round in 0..rounds {
         let f = round_fn(r, key, round, half);
         let new_l = r;
         let new_r = l ^ f;
@@ -47,12 +49,12 @@ fn feistel(input: u64, key: u64, width: u32) -> u64 {
 }
 
 #[inline]
-fn feistel_inv(input: u64, key: u64, width: u32) -> u64 {
+pub fn feistel_n_inv(input: u64, key: u64, rounds: usize, width: u32) -> u64 {
     let half = width / 2;
     let mask = (1u64 << half) - 1;
     let mut l = ((input >> half) & mask) as u32;
     let mut r = (input & mask) as u32;
-    for round in (0..ROUNDS).rev() {
+    for round in (0..rounds).rev() {
         // inverte um round: antes tínhamos (l,r) = (r_prev, l_prev ^ f(r_prev))
         let r_prev = l;
         let f = round_fn(r_prev, key, round, half);
@@ -67,14 +69,14 @@ fn feistel_inv(input: u64, key: u64, width: u32) -> u64 {
 /// a função é total e nunca dá panic.
 pub fn encode(id: u64, key: u64) -> u64 {
     let id = id & MAX_ID;
-    feistel(id, key, WIDTH_BITS)
+    feistel_n(id, key, ROUNDS, WIDTH_BITS)
 }
 
 /// Decodifica um code em [0, MAX_ID] via Feistel inversa. Entrada fora do domínio é reduzida (mascarada);
 /// a função é total e nunca dá panic.
 pub fn decode(code: u64, key: u64) -> u64 {
     let code = code & MAX_ID;
-    feistel_inv(code, key, WIDTH_BITS)
+    feistel_n_inv(code, key, ROUNDS, WIDTH_BITS)
 }
 
 #[cfg(test)]
@@ -99,10 +101,29 @@ mod tests {
         let n = 1u64 << 20;
         let mut visto = vec![false; n as usize];
         for id in 0..n {
-            let c = feistel(id, key, 20);
+            let c = feistel_n(id, key, ROUNDS, 20);
             assert!(c < n);
             assert!(!visto[c as usize], "colisão em id={id} -> {c}");
             visto[c as usize] = true;
+        }
+    }
+
+    #[test]
+    fn feistel_n_bate_com_encode_decode_guarda_anti_drift() {
+        // Pin de comportamento: encode/decode devem ser exatamente feistel_n/feistel_n_inv
+        // com ROUNDS/WIDTH_BITS do módulo. Se um futuro refactor desviar a função de round
+        // usada pelo calibrate, este teste (ou o round-trip) quebra primeiro.
+        let key = 0x1122334455667788;
+        for id in [0u64, 1, 7, 12345, MAX_ID / 3, MAX_ID] {
+            assert_eq!(encode(id, key), feistel_n(id, key, ROUNDS, WIDTH_BITS));
+            assert_eq!(decode(id, key), feistel_n_inv(id, key, ROUNDS, WIDTH_BITS));
+        }
+
+        for &(rounds, width) in &[(4usize, 40u32), (6usize, 20u32)] {
+            let x = (1u64 << (width / 2)) ^ 0x2A;
+            let x = x & ((1u64 << width) - 1);
+            let enc = feistel_n(x, key, rounds, width);
+            assert_eq!(feistel_n_inv(enc, key, rounds, width), x);
         }
     }
 
