@@ -100,4 +100,18 @@ impl Store {
         let rtxn = self.env.read_txn()?;
         Ok(self.aliases.get(&rtxn, alias)?)
     }
+
+    /// Grava alias + link em uma única transação: ou ambos ou nenhum.
+    /// Evita link órfão se o processo falhar entre as duas escritas.
+    pub fn put_alias_and_link(&self, alias: &str, id: u64, rec: &Record) -> Result<bool, StoreError> {
+        let bytes = serde_json::to_vec(rec)?;
+        let mut wtxn = self.env.write_txn()?;
+        if self.aliases.get(&wtxn, alias)?.is_some() {
+            return Ok(false);
+        }
+        self.links.put(&mut wtxn, &id, &bytes)?;
+        self.aliases.put(&mut wtxn, alias, &id)?;
+        wtxn.commit()?;
+        Ok(true)
+    }
 }

@@ -37,3 +37,19 @@ fn alias_nao_sobrescreve() {
     assert_eq!(store.get_alias("promo").unwrap(), Some(5));
     assert_eq!(store.get_alias("inexistente").unwrap(), None);
 }
+
+#[test]
+fn put_alias_and_link_atomico() {
+    let dir = tmp();
+    let store = Store::open(dir.path()).unwrap();
+    let rec = Record { url: "https://example.com".into(), expiry: None, created: 100 };
+    let rec2 = Record { url: "https://outro.com".into(), expiry: None, created: 200 };
+
+    assert!(store.put_alias_and_link("promo", 5, &rec).unwrap());
+    assert_eq!(store.get_alias("promo").unwrap(), Some(5));
+    assert_eq!(store.get_link(5).unwrap().unwrap().url, "https://example.com");
+
+    assert!(!store.put_alias_and_link("promo", 9, &rec2).unwrap());
+    assert_eq!(store.get_alias("promo").unwrap(), Some(5));
+    assert!(store.get_link(9).unwrap().is_none());
+}

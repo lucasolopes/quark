@@ -62,14 +62,11 @@ async fn create(
             Ok(id) => id,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
-        match st.store.put_alias(&alias, id) {
+        match st.store.put_alias_and_link(&alias, id, &rec) {
             Ok(true) => {}
             Ok(false) => return (StatusCode::CONFLICT, "alias em uso").into_response(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
-        if st.store.put_link(id, &rec).is_err() {
-            return StatusCode::SERVICE_UNAVAILABLE.into_response();
-        }
         return Json(CreateResp { code: alias, url: req.url }).into_response();
     }
 
