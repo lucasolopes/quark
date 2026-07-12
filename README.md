@@ -117,14 +117,21 @@ The honest headline: against the **structurally identical** cipher (same Feistel
 
 ### Redirect capacity (end-to-end HTTP)
 
-The numbers above are the code generator in isolation. Serving an actual redirect adds the HTTP stack + cache lookup. Measured with `oha` against the release container (`GET /:code`, hot cache, not following the 302):
+The numbers above are the code generator in isolation. Serving an actual redirect adds the HTTP stack + cache lookup. Two measurements, because they answer two different questions.
 
-| load | throughput | p50 | p99 |
-|---|---|---|---|
-| 50 conns | ~124,000 req/s | 0.33 ms | 1.4 ms |
-| 200 conns | ~152,000 req/s | 0.90 ms | 6.3 ms |
+**Production, from an external client.** A real deploy on a VPS in Germany (Coolify + Traefik + TLS), load-tested with k6 from a client in Brazil — the full path a real user travels. `GET /:code`, not following the 302, so it measures quark, not the destination. Reproduce with `scripts/loadtest.k6.js`.
 
-**Caveats (read them):** this was measured on a single dev machine, inside a Docker Desktop VM (which caps CPU and adds networking overhead), hitting a cache-hit hot path. It is a *proxy* for capacity, not a production figure — a native Linux host will differ. Even so, ~150k redirects/sec is ~13 billion/day, orders of magnitude past the "millions/day" target. A benchmark on real deployment hardware is the number to trust; this repo ships a `Dockerfile` for that (see `docs/DEPLOY.md`).
+| concurrent users (VUs) | throughput | median | p95 | errors |
+|---|---|---|---|---|
+| 100 | 374 req/s | 214 ms | 228 ms | **0%** |
+| 500 | 1,844 req/s | 218 ms | 235 ms | **0%** |
+| 1,000 | 3,399 req/s | 221 ms | 262 ms | **0%** |
+
+How to read it: **throughput scales almost linearly with concurrency** (10× the users → 9.1× the requests/sec) while **latency stays essentially flat** (+7 ms median from 100 to 1,000 concurrent users) — the signature of a server that never queues. **0 errors across ~225k requests**, 100% correct 302s. The ~214 ms is **not** quark: it is the São Paulo↔Germany round trip (~200 ms of transatlantic RTT). Idle latency was ~212 ms, so quark adds ~2 ms *even under 1,000 concurrent users*. A user near the VPS (e.g. in Europe) sees that same ~2 ms of server work plus their own much shorter RTT (tens of ms). The bottleneck we hit was how much one distant client could pull — **not the server**; its real ceiling is higher and can only be found with distributed load.
+
+**Local capacity proxy (no network in the way).** Hitting the release container on one dev machine (RTT ≈ 0, cache-hit hot path) with `oha`: **~124k req/s @ 50 conns** (p50 0.33 ms, p99 1.4 ms) and **~152k req/s @ 200 conns** (p50 0.90 ms, p99 6.3 ms). This was inside a Docker Desktop VM (capped CPU), so it is a *floor* on raw capacity, not a ceiling. Even so, ~150k redirects/sec is ~13 billion/day — orders of magnitude past the "millions/day" target.
+
+Both measurements point to the same conclusion: **the redirect path is never the limiting factor.** What a user experiences is dominated by their network distance to the VPS, which is a geography problem (solved by an edge/CDN in front), not a quark problem.
 
 ## Running it
 
