@@ -25,9 +25,17 @@ serde_json = "1"
 tempfile = "3"
 tower = "0.5"
 criterion = "0.5"
+sqids = "0.4.2"
+harsh = "0.2.2"
+hmac = "0.13.0"
+sha2 = "0.11.0"
 
 [[bench]]
 name = "permute_bench"
+harness = false
+
+[[bench]]
+name = "compare_bench"
 harness = false
 
 [profile.release]
