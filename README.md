@@ -9,7 +9,7 @@ Most shorteners pick one of two paths for the code:
 - **Reversible encoding** (Hashids, Sqids-style): fast, but not security — codes are partially enumerable. You can scrape `/aaaa`, `/aaab`, …
 - **Real cipher** (e.g. Feistly = Feistel + HMAC-SHA256): non-enumerable, but slow — a full cryptographic hash runs on every round.
 
-quark closes that gap with a **Feistel network whose round function is ARX** (add-rotate-xor), not a hash. A Feistel network over an integer domain is a bijection by construction: `decode(encode(id)) == id` for every id, with **zero collision checks needed**, ever. The only open question is *how many rounds* of mixing are needed before the output looks random enough to resist enumeration — and that's not a guess here, it's **measured** (see the avalanche table below). The result is a code generator that is simultaneously non-enumerable *and* orders of magnitude faster than a real-cipher approach, because ARX rounds are cheap integer ops, not hash calls.
+quark closes that gap with a **Feistel network whose round function is ARX** (add-rotate-xor), not a hash. A Feistel network over an integer domain is a bijection by construction: `decode(encode(id)) == id` for every id, with **zero collision checks needed**, ever. The only open question is *how many rounds* of mixing are needed before the output looks random enough to resist enumeration — and that's not a guess here, it's **measured** (see the avalanche table below). The result is a code generator that is simultaneously non-enumerable *and* roughly an order of magnitude faster than a real-cipher approach (~18× measured against a structurally identical HMAC-round Feistel — see the benchmark below), because ARX rounds are cheap integer ops, not hash calls.
 
 Since the code is the permutation of the id, the store never has to index by string. It's keyed by `u64`, straight into an mmap'd database. Millions of links occupy a fraction of what a string-indexed store would need.
 
@@ -90,10 +90,30 @@ Measured on this machine (criterion, `benches/permute_bench.rs`):
 
 | op | time/op | ops/sec |
 |---|---|---|
-| `encode` | ~3.98 ns | ~251,000,000 |
-| `decode` | ~3.45 ns | ~290,000,000 |
+| `permute::encode` (u64 → u64, the permutation engine) | ~3.98 ns | ~251,000,000 |
+| `permute::decode` (u64 → u64) | ~3.45 ns | ~290,000,000 |
 
-For comparison, Feistly (Feistel + HMAC-SHA256 per round) does roughly **60,000 ops/sec**. quark's ARX permutation is **~4,000–4,800× faster** — because each round is a handful of adds, rotates and xors, not a cryptographic hash invocation. This is the direct payoff of measuring the minimum round count instead of over-provisioning "for safety": every round saved is real, compounding nanoseconds.
+That's the raw permutation. The **product operation** is `id → 7-char base62 string` (and back), which adds one heap-allocated `String` per call:
+
+| op | time/op | ops/sec |
+|---|---|---|
+| `encode` (id → code string) | ~45 ns | ~22,000,000 |
+| `decode` (code string → id) | ~80 ns | ~12,500,000 |
+
+### Head-to-head (same machine, same criterion harness)
+
+`benches/compare_bench.rs` measures the same class of operation — *integer id → opaque short string* — for quark and three real competitor approaches, over ids in `0..2^40`. The one that isolates quark's actual claim is **`feistel_hmac`**: an identical balanced Feistel (4 rounds, 40 bits), changing *only* the round function from ARX to HMAC-SHA256 (i.e. the "real cipher" approach that libraries like Feistly take).
+
+| approach | encode ops/sec | vs quark | what it is |
+|---|---|---|---|
+| **quark** (ARX Feistel) | **~22,000,000** | 1× | keyed bijection, fixed 7-char, non-enumerable |
+| hashids (`harsh` 0.2.2) | ~2,950,000 | ~7.5× slower | obfuscation encoding (weak salt, not keyed) |
+| feistel + HMAC-SHA256 | ~1,230,000 | **~18× slower** | same structure as quark, hash round fn |
+| sqids (`sqids` 0.4.2) | ~680,000 | ~32× slower | obfuscation encoding (no key) |
+
+The honest headline: against the **structurally identical** cipher (same Feistel, keyed, only the round function differs), quark's ARX round is **~18× faster** — because each round is a handful of adds/rotates/xors, not a cryptographic hash invocation. That is the direct payoff of *measuring* the minimum round count (4) instead of over-provisioning "for safety".
+
+**Fairness caveat:** sqids and hashids are obfuscation encodings — they hide sequential ids but are **not** keyed cryptographic primitives (sqids has no key; hashids' salt is documented as non-secure), and they encode an arbitrary-length domain rather than quark's fixed 40-bit → 7-char bijection. So against those two, quark's numbers show a speed advantage, not a security-equivalent one. Only `feistel_hmac` is a like-for-like security comparison. Reproduce all of it with `cargo bench --bench compare_bench`.
 
 ## Running it
 
