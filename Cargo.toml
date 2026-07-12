@@ -24,6 +24,11 @@ serde_json = "1"
 [dev-dependencies]
 tempfile = "3"
 tower = "0.5"
+criterion = "0.5"
+
+[[bench]]
+name = "permute_bench"
+harness = false
 
 [profile.release]
 lto = true
