@@ -1,14 +1,15 @@
 use crate::cache::Cache;
 use crate::store::{Record, Store};
 use crate::{codec, permute};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Request, State};
 use axum::http::{header, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub struct AppState {
     pub cache: Cache,
@@ -116,10 +117,64 @@ async fn health() -> &'static str {
     "ok"
 }
 
+/// Formata uma linha de log de acesso em JSON. Função pura: sem I/O, fácil de testar.
+fn access_log_line(method: &str, path: &str, status: u16, latency_ms: f64) -> String {
+    let latency_ms = (latency_ms * 1000.0).round() / 1000.0;
+    serde_json::json!({
+        "method": method,
+        "path": path,
+        "status": status,
+        "latency_ms": latency_ms,
+    })
+    .to_string()
+}
+
+/// Middleware que loga uma linha JSON por request no stdout (Coolify captura stdout).
+/// Puramente observacional: não altera a resposta.
+async fn log_requests(req: Request, next: Next) -> Response {
+    let start = Instant::now();
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+
+    let response = next.run(req).await;
+
+    let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let status = response.status().as_u16();
+    println!("{}", access_log_line(&method, &path, status, latency_ms));
+
+    response
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", post(create))
         .route("/health", get(health))
         .route("/:code", get(redirect))
+        .layer(axum::middleware::from_fn(log_requests))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::access_log_line;
+
+    #[test]
+    fn access_log_line_is_valid_json_with_expected_fields() {
+        let line = access_log_line("GET", "/abc", 302, 0.4139);
+        let v: serde_json::Value =
+            serde_json::from_str(&line).expect("access_log_line deve produzir JSON válido");
+        assert_eq!(v["method"], "GET");
+        assert_eq!(v["path"], "/abc");
+        assert_eq!(v["status"], 302);
+        assert_eq!(v["latency_ms"], 0.414);
+    }
+
+    #[test]
+    fn access_log_line_escapes_special_characters_in_path() {
+        let path = "/a\"b\\c";
+        let line = access_log_line("GET", path, 200, 1.0);
+        let v: serde_json::Value = serde_json::from_str(&line)
+            .expect("access_log_line deve escapar corretamente e continuar sendo JSON válido");
+        assert_eq!(v["path"], path);
+    }
 }
