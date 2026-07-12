@@ -3,7 +3,7 @@
 //! saem do range, nunca colidem.
 
 pub const WIDTH_BITS: u32 = 40;
-pub const ROUNDS: usize = 8; // provisório — calibrado na Task 4
+pub const ROUNDS: usize = 3; // calibrado: menor nº de rounds com avalanche ~0.50 e cobertura 40 (ver bin/calibrate)
 pub const MAX_ID: u64 = (1u64 << WIDTH_BITS) - 1;
 
 /// Deriva a subchave do round a partir da chave mestra e do índice.
