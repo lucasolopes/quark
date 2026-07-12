@@ -55,6 +55,9 @@ async fn create(
 
     // aliases: caminho separado; único ponto de checagem de colisão.
     if let Some(alias) = req.alias {
+        if codec::from_base62(&alias).is_some() {
+            return (StatusCode::BAD_REQUEST, "alias colide com o espaço de código numérico").into_response();
+        }
         let id = match st.store.next_id() {
             Ok(id) => id,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -94,7 +97,8 @@ async fn redirect(
         Some(c) if c <= permute::MAX_ID => permute::decode(c, st.key),
         _ => match st.store.get_alias(&code) {
             Ok(Some(id)) => id,
-            _ => return StatusCode::NOT_FOUND.into_response(),
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
     };
     match st.cache.get(id) {

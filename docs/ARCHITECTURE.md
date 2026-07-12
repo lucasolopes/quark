@@ -47,6 +47,10 @@ Walking through it: the API validates the URL is `http(s)://`, then asks the sto
 
 Custom aliases are a deliberately separate path: they still allocate a real id and record (so redirect logic doesn't need two code paths), but they route through an `aliases: alias -> id` table that *does* need a uniqueness check, because a human picked the string and two humans can pick the same one. That's the **one** place in the whole system that does a collision check, and it's opt-in.
 
+### Aliases
+
+Because `redirect` resolves a numeric base62 code first (see below), a custom alias must not itself be a valid 7-char base62 string in range `0..=MAX_ID` — such an alias would decode as a numeric id and be permanently unreachable. `create` checks this with the codec's own parser before allocating an id, rejecting the collision with `400 Bad Request` rather than silently shadowing a numeric code.
+
 ## Redirect flow
 
 ```mermaid

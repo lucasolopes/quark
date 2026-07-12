@@ -74,6 +74,31 @@ async fn link_expirado_410() {
 }
 
 #[tokio::test]
+async fn alias_redireciona() {
+    let app = app();
+    let resp = app.clone().oneshot(
+        Request::post("/").header("content-type", "application/json")
+            .body(Body::from(r#"{"url":"https://alias.example.com","alias":"promo"}"#)).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app.oneshot(Request::get("/promo").body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND); // 302
+    assert_eq!(resp.headers()["location"], "https://alias.example.com");
+}
+
+#[tokio::test]
+async fn alias_numerico_rejeitado() {
+    let app = app();
+    let resp = app.oneshot(
+        Request::post("/").header("content-type", "application/json")
+            .body(Body::from(r#"{"url":"https://x.com","alias":"0000000"}"#)).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn ttl_overflow_400() {
     let app = app();
     let resp = app.oneshot(

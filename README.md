@@ -54,7 +54,11 @@ sequenceDiagram
     end
 ```
 
-Decoding a malformed or out-of-range code is pure arithmetic (masked, never panics); it just fails to find a record and returns 404. A code that doesn't decode to a known numeric id is retried as a custom alias lookup.
+Numeric base62 codes are resolved first, by pure arithmetic (masked, never panics). Only a code that is **not** a valid in-range 7-char base62 string — i.e. wrong length, an invalid character, or a value greater than `MAX_ID` — falls through to a custom alias lookup in the store.
+
+### Aliases
+
+A custom `alias` must not itself be a valid 7-char base62 code in range `0..=MAX_ID`: if it were, it would be indistinguishable from a computed numeric code and would be unreachable (shadowed by the numeric branch above). `create` rejects such aliases with `400 Bad Request` at creation time, before allocating an id, so they never make it into the store.
 
 ## How many rounds? Measured, not guessed
 
