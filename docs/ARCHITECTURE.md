@@ -82,7 +82,7 @@ The core trick: quark needs a function `f: [0, 2^N) -> [0, 2^N)` that is a *bije
 
 ```mermaid
 flowchart TB
-    In["input: L | R"] --> Split[split into two halves]
+    In["input: L e R"] --> Split[split into two halves]
     Split --> L0[L]
     Split --> R0[R]
     R0 --> F["round_fn(R, key, round) — ARX: add + rotate + xor"]
@@ -90,7 +90,7 @@ flowchart TB
     F --> XOR
     XOR --> NewR["new R = L xor F(R)"]
     R0 --> NewL["new L = R"]
-    NewL --> Out["output: new L | new R"]
+    NewL --> Out["output: novo L e novo R"]
     NewR --> Out
     Out -->|repeat ROUNDS times| Split
 ```
