@@ -39,3 +39,46 @@ async fn codigo_inexistente_404() {
         .await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn alias_em_uso_409() {
+    let app = app();
+    let resp = app.clone().oneshot(
+        Request::post("/").header("content-type", "application/json")
+            .body(Body::from(r#"{"url":"https://a.com","alias":"promo"}"#)).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app.oneshot(
+        Request::post("/").header("content-type", "application/json")
+            .body(Body::from(r#"{"url":"https://b.com","alias":"promo"}"#)).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn link_expirado_410() {
+    let app = app();
+    let resp = app.clone().oneshot(
+        Request::post("/").header("content-type", "application/json")
+            .body(Body::from(r#"{"url":"https://a.com","ttl":0}"#)).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    let resp = app.oneshot(Request::get(format!("/{code}")).body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::GONE);
+}
+
+#[tokio::test]
+async fn ttl_overflow_400() {
+    let app = app();
+    let resp = app.oneshot(
+        Request::post("/").header("content-type", "application/json")
+            .body(Body::from(r#"{"url":"https://a.com","ttl":18446744073709551615}"#)).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}

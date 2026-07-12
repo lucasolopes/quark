@@ -44,7 +44,13 @@ async fn create(
     if !valida_url(&req.url) {
         return (StatusCode::BAD_REQUEST, "url inválida").into_response();
     }
-    let expiry = req.ttl.map(|t| now() + t);
+    let expiry = match req.ttl {
+        Some(t) => match now().checked_add(t) {
+            Some(e) => Some(e),
+            None => return (StatusCode::BAD_REQUEST, "ttl inválido").into_response(),
+        },
+        None => None,
+    };
     let rec = Record { url: req.url.clone(), expiry, created: now() };
 
     // aliases: caminho separado; único ponto de checagem de colisão.
@@ -53,14 +59,15 @@ async fn create(
             Ok(id) => id,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
+        match st.store.put_alias(&alias, id) {
+            Ok(true) => {}
+            Ok(false) => return (StatusCode::CONFLICT, "alias em uso").into_response(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
         if st.store.put_link(id, &rec).is_err() {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
-        return match st.store.put_alias(&alias, id) {
-            Ok(true) => Json(CreateResp { code: alias, url: req.url }).into_response(),
-            Ok(false) => (StatusCode::CONFLICT, "alias em uso").into_response(),
-            Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        };
+        return Json(CreateResp { code: alias, url: req.url }).into_response();
     }
 
     // caminho sem alias: id atômico → encode → grava. Sem checagem de colisão.
