@@ -63,13 +63,17 @@ fn feistel_inv(input: u64, key: u64, width: u32) -> u64 {
     ((l as u64) << half) | (r as u64)
 }
 
+/// Codifica um id em [0, MAX_ID] via Feistel. Entrada fora do domínio é reduzida (mascarada);
+/// a função é total e nunca dá panic.
 pub fn encode(id: u64, key: u64) -> u64 {
-    debug_assert!(id <= MAX_ID);
+    let id = id & MAX_ID;
     feistel(id, key, WIDTH_BITS)
 }
 
+/// Decodifica um code em [0, MAX_ID] via Feistel inversa. Entrada fora do domínio é reduzida (mascarada);
+/// a função é total e nunca dá panic.
 pub fn decode(code: u64, key: u64) -> u64 {
-    debug_assert!(code <= MAX_ID);
+    let code = code & MAX_ID;
     feistel_inv(code, key, WIDTH_BITS)
 }
 
