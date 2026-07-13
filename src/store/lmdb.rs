@@ -202,8 +202,8 @@ impl AnalyticsSink for LmdbStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{compose_id, parse_node_id, LOCAL_BITS, LOCAL_MAX};
-    use crate::store::StoreError;
+    use super::{compose_id, parse_node_id, LmdbStore, LOCAL_BITS, LOCAL_MAX};
+    use crate::store::{Store, StoreError};
 
     #[test]
     fn parse_node_id_ausente_ou_vazio_vira_none() {
@@ -268,9 +268,6 @@ mod tests {
         ));
     }
 
-    use super::LmdbStore;
-    use crate::store::Store;
-
     #[tokio::test]
     async fn next_id_default_e_compativel_com_hoje() {
         let dir = tempfile::tempdir().unwrap();
@@ -297,5 +294,28 @@ mod tests {
         let b = LmdbStore::open_with_node_id(dir_b.path(), Some(1)).unwrap();
         // mesmo contador local (1) em nós diferentes → ids diferentes
         assert_ne!(a.next_id().await.unwrap(), b.next_id().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn next_id_estouro_nao_avanca_o_contador() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), Some(7)).unwrap();
+        // semeia o contador local logo abaixo do teto
+        {
+            let mut wtxn = s.env.write_txn().unwrap();
+            s.meta.put(&mut wtxn, "next_id", &(LOCAL_MAX - 1)).unwrap();
+            wtxn.commit().unwrap();
+        }
+        // última alocação válida leva o contador ao teto (LOCAL_MAX)
+        let last = s.next_id().await.unwrap();
+        assert_eq!(last, (7u64 << LOCAL_BITS) | LOCAL_MAX);
+        // a próxima estoura ANTES de gravar
+        assert!(matches!(
+            s.next_id().await,
+            Err(crate::store::StoreError::IdSpaceExhausted)
+        ));
+        // e o contador NÃO avançou (a txn de estouro não foi commitada)
+        let rtxn = s.env.read_txn().unwrap();
+        assert_eq!(s.meta.get(&rtxn, "next_id").unwrap(), Some(LOCAL_MAX));
     }
 }
