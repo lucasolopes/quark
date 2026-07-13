@@ -10,18 +10,12 @@ type BeU64 = U64<BigEndian>;
 
 /// Particionamento defensivo do espaço de 40 bits entre nós (ver docs/SCALING.md).
 /// Os 8 bits altos identificam o nó; os 32 baixos são o contador local do nó.
-/// `allow(dead_code)`: helpers ainda não têm chamador — a fiação com
-/// `next_id`/`open` é a Task 2 deste tijolo.
-#[allow(dead_code)]
 const NODE_BITS: u32 = 8;
-#[allow(dead_code)]
 const LOCAL_BITS: u32 = 40 - NODE_BITS; // 32
-#[allow(dead_code)]
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1; // 4_294_967_295
 
 /// Lê `QUARK_NODE_ID`: ausente/vazio → `None` (modo single-node, 40 bits inteiros);
 /// "0".."255" → `Some(n)`; qualquer outra coisa → erro (fail-fast no startup).
-#[allow(dead_code)]
 fn parse_node_id(raw: Option<String>) -> Result<Option<u8>, StoreError> {
     match raw.as_deref() {
         None | Some("") => Ok(None),
@@ -34,7 +28,6 @@ fn parse_node_id(raw: Option<String>) -> Result<Option<u8>, StoreError> {
 /// Compõe o id final a partir do contador. Sem node-id: identidade (o chamador
 /// aplica o teto de `permute::MAX_ID`, como hoje). Com node-id: prefixa os bits
 /// altos e falha ANTES de estourar a faixa local (invariante de não-vazamento).
-#[allow(dead_code)]
 fn compose_id(node_id: Option<u8>, counter: u64) -> Result<u64, StoreError> {
     match node_id {
         None => Ok(counter),
@@ -52,13 +45,21 @@ pub struct LmdbStore {
     env: Env,
     links: Database<BeU64, Bytes>,  // id -> Record (json)
     aliases: Database<Str, BeU64>,  // alias -> id
-    meta: Database<Str, BeU64>,     // "next_id" -> u64
-    stats: Database<BeU64, Bytes>,  // id -> Aggregates (json)
+    meta: Database<Str, BeU64>, // "next_id" -> u64 (contador local; nos 40 bits no modo default)
+    stats: Database<BeU64, Bytes>, // id -> Aggregates (json)
     events: Database<BeU64, Bytes>, // id -> Vec<ClickEvent> (json, truncado a EVENTS_MAX)
+    node_id: Option<u8>,        // Some => particiona o espaço de id; None => 40 bits inteiros
 }
 
 impl LmdbStore {
+    /// Abre lendo `QUARK_NODE_ID` do ambiente (fail-fast se inválido).
     pub fn open(path: &Path) -> Result<LmdbStore, StoreError> {
+        let node_id = parse_node_id(std::env::var("QUARK_NODE_ID").ok())?;
+        LmdbStore::open_with_node_id(path, node_id)
+    }
+
+    /// Abre com um node-id explícito (usado por testes; evita corrida de env global).
+    pub fn open_with_node_id(path: &Path, node_id: Option<u8>) -> Result<LmdbStore, StoreError> {
         std::fs::create_dir_all(path).map_err(heed::Error::Io)?;
         let env = unsafe {
             EnvOpenOptions::new()
@@ -80,6 +81,7 @@ impl LmdbStore {
             meta,
             stats,
             events,
+            node_id,
         })
     }
 }
@@ -90,9 +92,12 @@ impl Store for LmdbStore {
         let mut wtxn = self.env.write_txn()?;
         let cur = self.meta.get(&wtxn, "next_id")?.unwrap_or(0);
         let next = cur + 1;
+        // Compõe ANTES de gravar: se o contador local estourou a faixa do nó,
+        // o erro sai aqui e o contador não avança (não vaza pro prefixo vizinho).
+        let id = compose_id(self.node_id, next)?;
         self.meta.put(&mut wtxn, "next_id", &next)?;
         wtxn.commit()?;
-        Ok(next)
+        Ok(id)
     }
 
     async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError> {
@@ -261,5 +266,36 @@ mod tests {
             compose_id(Some(3), LOCAL_MAX + 1),
             Err(StoreError::IdSpaceExhausted)
         ));
+    }
+
+    use super::LmdbStore;
+    use crate::store::Store;
+
+    #[tokio::test]
+    async fn next_id_default_e_compativel_com_hoje() {
+        let dir = tempfile::tempdir().unwrap();
+        // sem node-id: ids 1, 2, 3... nos 40 bits inteiros (igual ao comportamento atual)
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        assert_eq!(s.next_id().await.unwrap(), 1);
+        assert_eq!(s.next_id().await.unwrap(), 2);
+        assert_eq!(s.next_id().await.unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn next_id_com_node_prefixa_e_incrementa_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), Some(5)).unwrap();
+        assert_eq!(s.next_id().await.unwrap(), (5u64 << LOCAL_BITS) | 1);
+        assert_eq!(s.next_id().await.unwrap(), (5u64 << LOCAL_BITS) | 2);
+    }
+
+    #[tokio::test]
+    async fn next_id_de_nos_distintos_nao_colide() {
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        let a = LmdbStore::open_with_node_id(dir_a.path(), Some(0)).unwrap();
+        let b = LmdbStore::open_with_node_id(dir_b.path(), Some(1)).unwrap();
+        // mesmo contador local (1) em nós diferentes → ids diferentes
+        assert_ne!(a.next_id().await.unwrap(), b.next_id().await.unwrap());
     }
 }
