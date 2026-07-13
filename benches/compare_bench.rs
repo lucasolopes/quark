@@ -104,7 +104,11 @@ fn bench_sqids(c: &mut Criterion) {
         let mut id = 0u64;
         b.iter(|| {
             id = id.wrapping_add(1) & MAX_ID;
-            black_box(sqids.encode(&[black_box(id)]).expect("encode within default alphabet"))
+            black_box(
+                sqids
+                    .encode(&[black_box(id)])
+                    .expect("encode within default alphabet"),
+            )
         })
     });
 
@@ -137,7 +141,11 @@ fn bench_hashids(c: &mut Criterion) {
         b.iter(|| {
             id = id.wrapping_add(1) & MAX_ID;
             let s = harsh.encode(&[id]);
-            black_box(harsh.decode(black_box(&s)).expect("valid hashid round-trips"))
+            black_box(
+                harsh
+                    .decode(black_box(&s))
+                    .expect("valid hashid round-trips"),
+            )
         })
     });
 

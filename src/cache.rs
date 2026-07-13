@@ -39,10 +39,19 @@ mod tests {
     fn hit_e_miss() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(dir.path()).unwrap());
-        store.put_link(3, &Record { url: "u".into(), expiry: None, created: 0 }).unwrap();
+        store
+            .put_link(
+                3,
+                &Record {
+                    url: "u".into(),
+                    expiry: None,
+                    created: 0,
+                },
+            )
+            .unwrap();
         let cache = Cache::new(store.clone(), 1000);
-        assert_eq!(cache.get(3).unwrap().unwrap().url, "u");   // miss → popula
-        assert_eq!(cache.get(3).unwrap().unwrap().url, "u");   // hit
+        assert_eq!(cache.get(3).unwrap().unwrap().url, "u"); // miss → popula
+        assert_eq!(cache.get(3).unwrap().unwrap().url, "u"); // hit
         assert!(cache.get(404).unwrap().is_none());
     }
 }

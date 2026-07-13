@@ -10,8 +10,7 @@ pub const MAX_ID: u64 = (1u64 << WIDTH_BITS) - 1;
 #[inline]
 fn subkey(key: u64, round: usize) -> u32 {
     // mistura simples chave+round; espalha os bits altos da chave.
-    let x = key
-        .rotate_left((round as u32) * 7 + 1)
+    let x = key.rotate_left((round as u32) * 7 + 1)
         ^ (0x9E3779B97F4A7C15u64.wrapping_mul(round as u64 + 1));
     (x ^ (x >> 32)) as u32
 }
@@ -133,6 +132,9 @@ mod tests {
         let key = 0x0123456789ABCDEF;
         let a = encode(100, key);
         let b = encode(101, key);
-        assert!(a.abs_diff(b) > 1, "códigos vizinhos são sequenciais: {a} {b}");
+        assert!(
+            a.abs_diff(b) > 1,
+            "códigos vizinhos são sequenciais: {a} {b}"
+        );
     }
 }
