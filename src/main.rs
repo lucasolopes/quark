@@ -15,7 +15,17 @@ async fn main() {
             eprintln!("AVISO: QUARK_KEY não definido — usando chave de dev. NÃO use em produção.");
             0x9E3779B97F4A7C15
         });
-    let (store, sink) = open_backends(std::path::Path::new(&path)).expect("abrir backends");
+    let (store, sink) = open_backends(std::path::Path::new(&path))
+        .await
+        .expect("abrir backends");
+    eprintln!(
+        "backend: {}",
+        if std::env::var("QUARK_DATABASE_URL").is_ok() {
+            "postgres"
+        } else {
+            "lmdb"
+        }
+    );
     let cache = match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => match ValkeyTier::open(&url).await {
             Ok(tier) => {

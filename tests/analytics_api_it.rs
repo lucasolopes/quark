@@ -6,7 +6,7 @@ use quark::store::open_backends;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-fn app_with(
+async fn app_with(
     admin: Option<&str>,
     chan_cap: usize,
 ) -> (
@@ -14,7 +14,7 @@ fn app_with(
     tokio::sync::mpsc::Receiver<quark::analytics::ClickEvent>,
 ) {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).unwrap();
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
     let cache = Cache::new(store.clone(), 1000);
     let (tx, rx) = tokio::sync::mpsc::channel(chan_cap);
     let state = Arc::new(AppState {
@@ -50,7 +50,7 @@ async fn create(app: &axum::Router, url: &str) -> String {
 async fn redirect_nao_bloqueia_com_fila_cheia() {
     // canal capacidade 1, SEM worker consumindo: enche na 1ª e descarta o resto,
     // mas o redirect precisa continuar respondendo 302.
-    let (app, _rx) = app_with(None, 1);
+    let (app, _rx) = app_with(None, 1).await;
     let code = create(&app, "https://example.com").await;
     for _ in 0..5 {
         let resp = app
@@ -68,7 +68,7 @@ async fn redirect_nao_bloqueia_com_fila_cheia() {
 
 #[tokio::test]
 async fn stats_exige_token() {
-    let (app, _rx) = app_with(Some("segredo"), 100);
+    let (app, _rx) = app_with(Some("segredo"), 100).await;
     let code = create(&app, "https://example.com").await;
     // sem token → 401
     let resp = app
@@ -115,7 +115,7 @@ async fn stats_exige_token() {
 
 #[tokio::test]
 async fn stats_404_codigo_inexistente() {
-    let (app, _rx) = app_with(Some("segredo"), 100);
+    let (app, _rx) = app_with(Some("segredo"), 100).await;
     // "0000000" decodifica p/ id 0, in-range, nunca criado neste store fresco.
     let resp = app
         .clone()
@@ -132,7 +132,7 @@ async fn stats_404_codigo_inexistente() {
 
 #[tokio::test]
 async fn stats_desligado_sem_token_configurado() {
-    let (app, _rx) = app_with(None, 100); // admin_token None
+    let (app, _rx) = app_with(None, 100).await; // admin_token None
     let code = create(&app, "https://example.com").await;
     let resp = app
         .clone()

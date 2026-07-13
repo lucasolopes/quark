@@ -6,9 +6,9 @@ use quark::store::open_backends;
 use std::sync::Arc;
 use tower::ServiceExt; // oneshot
 
-fn app() -> axum::Router {
+async fn app() -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).unwrap();
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
     let cache = Cache::new(store.clone(), 1000);
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -24,7 +24,7 @@ fn app() -> axum::Router {
 
 #[tokio::test]
 async fn cria_e_redireciona() {
-    let app = app();
+    let app = app().await;
     let resp = app
         .clone()
         .oneshot(
@@ -56,7 +56,7 @@ async fn cria_e_redireciona() {
 
 #[tokio::test]
 async fn codigo_inexistente_404() {
-    let app = app();
+    let app = app().await;
     let resp = app
         .oneshot(Request::get("/0000000").body(Body::empty()).unwrap())
         .await
@@ -66,7 +66,7 @@ async fn codigo_inexistente_404() {
 
 #[tokio::test]
 async fn alias_em_uso_409() {
-    let app = app();
+    let app = app().await;
     let resp = app
         .clone()
         .oneshot(
@@ -93,7 +93,7 @@ async fn alias_em_uso_409() {
 
 #[tokio::test]
 async fn link_expirado_410() {
-    let app = app();
+    let app = app().await;
     let resp = app
         .clone()
         .oneshot(
@@ -124,7 +124,7 @@ async fn link_expirado_410() {
 
 #[tokio::test]
 async fn alias_redireciona() {
-    let app = app();
+    let app = app().await;
     let resp = app
         .clone()
         .oneshot(
@@ -149,7 +149,7 @@ async fn alias_redireciona() {
 
 #[tokio::test]
 async fn alias_numerico_rejeitado() {
-    let app = app();
+    let app = app().await;
     let resp = app
         .oneshot(
             Request::post("/")
@@ -164,7 +164,7 @@ async fn alias_numerico_rejeitado() {
 
 #[tokio::test]
 async fn redirect_sem_ttl_tem_cache_control_default() {
-    let app = app();
+    let app = app().await;
     let resp = app
         .clone()
         .oneshot(
@@ -196,7 +196,7 @@ async fn redirect_sem_ttl_tem_cache_control_default() {
 
 #[tokio::test]
 async fn redirect_com_ttl_tem_cache_control_limitado_pelo_ttl() {
-    let app = app();
+    let app = app().await;
     let resp = app
         .clone()
         .oneshot(
@@ -240,7 +240,7 @@ async fn redirect_com_ttl_tem_cache_control_limitado_pelo_ttl() {
 
 #[tokio::test]
 async fn codigo_inexistente_404_tem_cache_control_no_store() {
-    let app = app();
+    let app = app().await;
     let resp = app
         .oneshot(Request::get("/0000000").body(Body::empty()).unwrap())
         .await
@@ -251,7 +251,7 @@ async fn codigo_inexistente_404_tem_cache_control_no_store() {
 
 #[tokio::test]
 async fn ttl_overflow_400() {
-    let app = app();
+    let app = app().await;
     let resp = app
         .oneshot(
             Request::post("/")
