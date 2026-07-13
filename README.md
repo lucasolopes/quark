@@ -143,7 +143,34 @@ How to read it: **throughput scales almost linearly with concurrency** (10× the
 
 Both measurements point to the same conclusion: **the redirect path is never the limiting factor.** What a user experiences is dominated by their network distance to the VPS, which is a geography problem (solved by an edge/CDN in front), not a quark problem.
 
-## Running it
+## Backends & scaling
+
+quark's persistence, cache, and analytics are each behind a trait (`Store`, `CacheTier`, `AnalyticsSink`). The default is a **zero-dep single binary**; every other backend is **opt-in**, selected purely by which env var is set. Nothing here changes the hot path's shape — it changes what's on the other side of it.
+
+- **Default — LMDB store + L1 in-process cache + embedded LMDB analytics sink.** No external service, no config. `docker run`, done. This is what you get with none of the vars below set.
+- **L2 cache — Valkey, via `QUARK_VALKEY_URL`.** A shared L2 cache across multiple quark instances (the L1 `moka` cache is per-process). Circuit-breaker and a 100ms per-op timeout protected: a down or hung Valkey never blocks a redirect — it just falls back to L1/store. *Why:* horizontal scaling without every instance cold-starting its own cache.
+- **Relational store — Postgres, via `QUARK_DATABASE_URL`.** Implements both `Store` (links, aliases, an atomic id sequence) and `AnalyticsSink`. Unset → LMDB. *Why:* multi-node-safe persistence when a single embedded LMDB file can no longer be the source of truth for more than one instance.
+- **Analytics sink — ClickHouse, via `QUARK_CLICKHOUSE_URL`.** OLAP-style append + aggregate-by-query, for high-volume click analytics. Unset → whichever store is active provides its own embedded sink. ClickHouse is analytics-only — it never becomes the link store. *Why:* click event volume can be orders of magnitude higher than link-create volume, and wants a column store, not the same engine serving redirects.
+
+Store and AnalyticsSink are selected **independently** — e.g. Postgres store + ClickHouse analytics, or Postgres store + its own embedded analytics, are both valid combinations.
+
+The framing: quark **scales down to one binary with zero external dependencies**, and **scales up to a distributed stack** (Valkey + Postgres + ClickHouse) **one opt-in piece at a time** — never all-or-nothing. Compare that to heavier shorteners (e.g. Dub) that require Postgres + Redis + ClickHouse from day one, even for a single low-traffic instance.
+
+```mermaid
+flowchart LR
+    Cli[Cliente] -->|GET /:code| Api[api axum]
+    Api --> L1[L1 moka in-process]
+    L1 -->|miss| L2{L2 Valkey opt-in}
+    L2 -->|hit| Api
+    L2 -->|miss or unset| Store[(Store: LMDB or Postgres)]
+    Store --> Api
+    Api -->|302| Cli
+    Api -.click event.-> Chan[[channel]]
+    Chan --> Worker[analytics worker]
+    Worker --> Sink[(Sink: LMDB or ClickHouse)]
+```
+
+
 
 ```bash
 # QUARK_KEY is parsed as a DECIMAL u64 (not hex). Generate one:
@@ -177,6 +204,21 @@ curl localhost:8080/health
 ## Threat model — read this before relying on it for secrecy
 
 quark's non-enumerability is a **measured statistical property** (avalanche/SAC over a reduced-round ARX permutation), not a cryptographic guarantee. It resists casual scraping and sequential guessing far better than a raw counter or Hashids-style encoding, and changing `QUARK_KEY` remaps the entire code space. But this is **not AES**, and it is **not** a substitute for real access control if the linked resource itself needs to stay secret — treat codes as "hard to guess by brute force in practice," not "cryptographically secret." Each instance should run with its own random `QUARK_KEY`, kept out of source control.
+
+## Configuration
+
+Every var below is optional except `QUARK_KEY` in production. Unset a backend var and quark falls back to the zero-dep default.
+
+| Var | Purpose | Default |
+|---|---|---|
+| `QUARK_KEY` | Decimal `u64` secret — the permutation key. **Required in production** (each instance should have its own, kept out of source control). | dev fallback key (loud warning logged; not for production) |
+| `QUARK_DATA` | LMDB data directory. Only used when the store is LMDB. | `./data` (container: `/data`) |
+| `QUARK_ADDR` | HTTP bind address. | `0.0.0.0:8080` |
+| `QUARK_ADMIN_TOKEN` | Enables `GET /:code/stats`. | unset → stats endpoint off |
+| `QUARK_VALKEY_URL` | Enable the L2 Valkey cache, e.g. `redis://host:6379`. | unset → L1 + store only |
+| `QUARK_DATABASE_URL` | Use Postgres for the store, e.g. `postgres://user:pass@host:5432/db`. | unset → LMDB |
+| `QUARK_CLICKHOUSE_URL` | Use ClickHouse for analytics, e.g. `http://user:pass@host:8123/db`. | unset → store's embedded sink |
+| `QUARK_ACCESS_LOG` | Enable per-request JSON access log on stdout. | unset → off |
 
 ## Operating
 

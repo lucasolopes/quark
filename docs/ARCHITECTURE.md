@@ -116,6 +116,27 @@ rounds | avalanche_medio | cobertura(/40)
 
 `avalanche_medio` is the average fraction of output bits flipped across all input-bit flips and all sampled inputs; `cobertura` is the worst case, over all 40 input bits, of how many distinct output bits that one bit has ever been observed to influence — it catches structural blind spots that an average alone could hide (e.g. one bit that never reaches the top byte). At round 4, both metrics saturate: avalanche hits exactly `0.5000` and coverage is full `40/40`. Round 3 is close but not there (`0.4866`). Rounds 5–12 measure identically to round 4 — the diffusion has already closed, so there is nothing left to buy by adding more rounds, only latency to lose. `ROUNDS = 4` is fixed as a compile-time constant in `src/permute.rs`, derived directly from this measurement rather than picked by convention or "just to be safe."
 
+## Pluggable backends
+
+Three seams — `Store`, `CacheTier`, `AnalyticsSink` — separate the request path's *shape* from *which concrete backend* implements it. Everything documented above (LMDB, moka, the embedded sink) is the default implementation behind these traits, not the only one. Each backend is opt-in, selected at startup purely by which env var is set — no build-time feature flags, no code branching beyond `open_backends`/the `QUARK_VALKEY_URL` check in `main.rs`.
+
+```mermaid
+flowchart LR
+    Api[api] --> Cache[Cache: CacheTier]
+    Cache --> L1[L1 moka always on]
+    Cache -->|opt-in| L2[L2 Valkey via ValkeyTier]
+    Api --> St["Store trait: LmdbStore or PostgresStore"]
+    Api -.click event.-> Ch[[mpsc channel]]
+    Ch --> Wk[analytics worker]
+    Wk --> Sk["AnalyticsSink trait: LmdbStore or ClickHouseSink"]
+```
+
+- **`Store`** (`src/store/mod.rs`): `next_id`, `get_link`, `put_link`, `get_alias`, `put_alias_and_link` — all `async`, so a network-backed impl (Postgres) costs nothing structurally over the embedded one. `open_backends` in `src/store/mod.rs` picks `PostgresStore` when `QUARK_DATABASE_URL` is set, else `LmdbStore`; `PostgresStore` implements the id sequence atomically in the database itself (not a local counter), which is what makes it safe to run more than one quark instance against the same Postgres.
+- **`CacheTier`** (`src/cache/mod.rs`): `get`/`set` for an out-of-process L2. `ValkeyTier` (`src/cache/valkey.rs`) is the only implementation today, wired in `main.rs` when `QUARK_VALKEY_URL` is set. `Cache` (`src/cache/mod.rs`) always keeps the L1 `moka` map in front of any `CacheTier`; the tier is consulted only on an L1 miss. A `Breaker` (atomics, no locks) opens after `BREAKER_THRESHOLD` consecutive tier failures and stays open for `BREAKER_COOLDOWN_SECS`, and every L2 op is wrapped in a `L2_OP_TIMEOUT` (100ms) — so a Valkey that's merely slow, not down, still can't stall a redirect past that bound. Any tier error (timeout, connection, deserialize) is swallowed into a `TierError`, recorded by the breaker, and treated as a miss: the caller always falls through to the store, never surfaces the error.
+- **`AnalyticsSink`** (`src/analytics/mod.rs`): consumes `ClickEvent`s off an `mpsc` channel via a background worker (`spawn_worker`), decoupling the redirect response from analytics persistence entirely — a redirect returns its 302 before the click is durably recorded. `open_backends` gives every store its own embedded sink (LMDB's `LmdbStore` also implements `AnalyticsSink`; so does `PostgresStore`) and overrides it with `ClickHouseSink` (`src/analytics/clickhouse.rs`) when `QUARK_CLICKHOUSE_URL` is set. ClickHouse is analytics-only by construction — nothing in `Store` is implemented for it — because click-event volume is expected to dwarf link-create volume and wants an OLAP append/aggregate engine, not the transactional store.
+
+Store and AnalyticsSink are chosen independently of each other (see the doc comment on `open_backends`): the store follows `QUARK_DATABASE_URL`, and the sink follows `QUARK_CLICKHOUSE_URL` if set, otherwise falls back to whatever the chosen store provides as its embedded sink. This is what lets a deployment mix, say, a Postgres store with ClickHouse analytics, or Postgres for both, or plain LMDB for both — the same binary, no rebuild, just env vars.
+
 ## Data model (LMDB)
 
 Three named databases inside one LMDB environment (`heed::Env`), opened once, mmap'd for the process lifetime:
