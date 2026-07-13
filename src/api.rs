@@ -493,10 +493,20 @@ async fn admin_link_patch(
         Err(_) => return (StatusCode::BAD_REQUEST, "json inválido").into_response(),
     };
     if let Some(u) = patch.get("url") {
-        match u.as_str() {
-            Some(s) if is_valid_url(s) => rec.url = s.to_string(),
+        let s = match u.as_str() {
+            Some(s) if is_valid_url(s) => s,
             _ => return (StatusCode::BAD_REQUEST, "url inválida").into_response(),
+        };
+        let Some(host) = extract_host(s) else {
+            return (StatusCode::BAD_REQUEST, "url sem host").into_response();
+        };
+        if st.block_private && is_blocked_target(&host, &headers, &st) {
+            return (StatusCode::FORBIDDEN, "destino não permitido").into_response();
         }
+        if st.blocklist.is_blocked(&host, now()).await {
+            return (StatusCode::FORBIDDEN, "destino bloqueado").into_response();
+        }
+        rec.url = s.to_string();
     }
     if let Some(ttl) = patch.get("ttl") {
         if ttl.is_null() {

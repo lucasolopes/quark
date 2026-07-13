@@ -653,6 +653,40 @@ async fn admin_delete_inexistente_404() {
 }
 
 #[tokio::test]
+async fn admin_patch_destino_interno_403() {
+    let app = app_admin("segredo").await;
+    let code = cria_e_pega_code(&app, "https://ok.com").await;
+    let r = app
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "segredo")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"http://127.0.0.1:9000"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_patch_url_invalida_400() {
+    let app = app_admin("segredo").await;
+    let code = cria_e_pega_code(&app, "https://ok.com").await;
+    let r = app
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "segredo")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"ftp://nope"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn cors_header_presente_quando_configurado() {
     // monta o router com uma origem permitida explícita (sem env)
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
