@@ -541,6 +541,11 @@ async fn admin_links_lista_paginada() {
     assert_eq!(links.len(), 2);
     assert!(links[0]["code"].as_str().unwrap().len() == 7);
     assert_eq!(links[0]["url"], "https://a.com");
+    // página parcial (2 < limit 10) => sem próxima página
+    assert!(
+        v["next_after"].is_null(),
+        "next_after deve ser null numa página parcial"
+    );
 }
 
 #[tokio::test]
