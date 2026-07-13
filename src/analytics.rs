@@ -24,7 +24,7 @@ pub struct Aggregates {
 impl Aggregates {
     pub fn apply(&mut self, ev: &ClickEvent) {
         self.total += 1;
-        if self.first_ts == 0 || ev.ts < self.first_ts {
+        if self.total == 1 || ev.ts < self.first_ts {
             self.first_ts = ev.ts;
         }
         if ev.ts > self.last_ts {
@@ -152,5 +152,26 @@ mod tests {
         assert_eq!(day_bucket(0), "1970-01-01");
         assert_eq!(day_bucket(1_735_689_600), "2025-01-01"); // epoch de 2025-01-01 00:00 UTC
         assert_eq!(day_bucket(1_735_689_600 + 86_400), "2025-01-02");
+    }
+
+    #[test]
+    fn first_ts_lida_com_epoch_zero() {
+        let mut a = Aggregates::default();
+        a.apply(&ClickEvent {
+            id: 1,
+            ts: 0,
+            referer: None,
+            country: None,
+            user_agent: None,
+        });
+        a.apply(&ClickEvent {
+            id: 1,
+            ts: 5_000_000_000,
+            referer: None,
+            country: None,
+            user_agent: None,
+        });
+        assert_eq!(a.first_ts, 0); // epoch 0 é o menor/primeiro — não pode ser sobrescrito
+        assert_eq!(a.last_ts, 5_000_000_000);
     }
 }
