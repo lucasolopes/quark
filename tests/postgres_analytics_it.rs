@@ -52,3 +52,39 @@ async fn retencao_pg() {
     assert_eq!(st.aggregates.total, 1200);
     assert_eq!(st.recent.len(), 1000);
 }
+
+#[tokio::test]
+#[serial(pg)]
+async fn record_batch_concorrente_sem_perda() {
+    let url = match std::env::var("QUARK_TEST_DATABASE_URL") {
+        Ok(u) => u,
+        Err(_) => return,
+    };
+    // reset via one store
+    let s0 = PostgresStore::open(&url).await.unwrap();
+    s0.reset_for_tests().await.unwrap();
+    // 2 stores (pools independentes) martelando o MESMO id concorrentemente
+    let s1 = std::sync::Arc::new(PostgresStore::open(&url).await.unwrap());
+    let s2 = std::sync::Arc::new(PostgresStore::open(&url).await.unwrap());
+    let n = 50u64;
+    let t1 = {
+        let s = s1.clone();
+        tokio::spawn(async move {
+            for i in 0..n {
+                s.record_batch(&[ev(42, 1_752_300_000 + i)]).await.unwrap();
+            }
+        })
+    };
+    let t2 = {
+        let s = s2.clone();
+        tokio::spawn(async move {
+            for i in 0..n {
+                s.record_batch(&[ev(42, 1_752_400_000 + i)]).await.unwrap();
+            }
+        })
+    };
+    t1.await.unwrap();
+    t2.await.unwrap();
+    let st = s0.stats(42).await.unwrap().unwrap();
+    assert_eq!(st.aggregates.total, 2 * n); // sem o lock, seria < 2n (lost updates)
+}

@@ -210,6 +210,16 @@ impl AnalyticsSink for PostgresStore {
             .await
             .map_err(|e| StoreError::Backend(e.to_string()))?;
         for (id, evs) in by_id {
+            // Serializa read-modify-write concorrente sobre o mesmo id entre instâncias
+            // (multi-node): sem isso, dois workers podem ler o mesmo snapshot de agg/recent,
+            // recomputar e o segundo commit sobrescreve o primeiro (lost update). O lock
+            // é escopado à transação (libera em commit/rollback) e funciona mesmo quando
+            // as linhas de stats/events ainda não existem (diferente de SELECT ... FOR UPDATE).
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind(id as i64)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Backend(e.to_string()))?;
             // agregados
             let row = sqlx::query("SELECT agg FROM stats WHERE id=$1")
                 .bind(id as i64)
