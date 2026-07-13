@@ -32,6 +32,7 @@ impl std::error::Error for TierError {}
 pub trait CacheTier: Send + Sync + 'static {
     async fn get(&self, id: u64) -> Result<Option<Record>, TierError>;
     async fn set(&self, id: u64, rec: &Record, ttl_secs: u64) -> Result<(), TierError>;
+    async fn invalidate(&self, id: u64) -> Result<(), TierError>;
 }
 
 /// TTL efetivo do L2 pra um registro: capado pelo TTL default e pelo tempo
@@ -174,6 +175,22 @@ impl Cache {
             None => Ok(None),
         }
     }
+
+    /// Remove um id do cache: L1 sempre; L2 best-effort (breaker + timeout), como
+    /// as demais ops de tier. Usado quando um link é editado ou apagado, pra o
+    /// redirect parar de servir o valor velho.
+    pub async fn invalidate(&self, id: u64) {
+        self.hot.invalidate(&id);
+        if let Some(l2) = &self.l2 {
+            let n = now();
+            if self.breaker.allow(n) {
+                match tokio::time::timeout(L2_OP_TIMEOUT, l2.invalidate(id)).await {
+                    Ok(Ok(())) => self.breaker.record_success(),
+                    Ok(Err(_)) | Err(_) => self.breaker.record_failure(n),
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -204,6 +221,9 @@ mod tests {
         async fn set(&self, _id: u64, _r: &Record, _t: u64) -> Result<(), TierError> {
             Err(TierError("down".into()))
         }
+        async fn invalidate(&self, _id: u64) -> Result<(), TierError> {
+            Err(TierError("down".into()))
+        }
     }
 
     // Tier fake que pendura (simula Valkey aceitando a conexão mas nunca
@@ -219,6 +239,10 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             Ok(())
         }
+        async fn invalidate(&self, _id: u64) -> Result<(), TierError> {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            Ok(())
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -231,6 +255,19 @@ mod tests {
         // cai no store em vez de travar o redirect:
         let got = c.get(9).await.unwrap().unwrap();
         assert_eq!(got.url, "hung");
+    }
+
+    #[tokio::test]
+    async fn invalidate_remove_do_l1() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
+        store.put_link(1, &rec("u1")).await.unwrap();
+        let c = Cache::new(store.clone(), 1000);
+        assert_eq!(c.get(1).await.unwrap().unwrap().url, "u1"); // popula L1
+                                                                // apaga no store e invalida o cache: próximo get NÃO pode servir do L1
+        store.delete_link(1).await.unwrap();
+        c.invalidate(1).await;
+        assert!(c.get(1).await.unwrap().is_none());
     }
 
     #[tokio::test]
