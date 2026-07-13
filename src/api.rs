@@ -31,7 +31,10 @@ pub struct CreateResp {
 }
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn valida_url(u: &str) -> bool {
@@ -54,10 +57,7 @@ fn cache_control_for(expiry: Option<u64>, now: u64) -> String {
     }
 }
 
-async fn create(
-    State(st): State<Arc<AppState>>,
-    Json(req): Json<CreateReq>,
-) -> Response {
+async fn create(State(st): State<Arc<AppState>>, Json(req): Json<CreateReq>) -> Response {
     if !valida_url(&req.url) {
         return (StatusCode::BAD_REQUEST, "url inválida").into_response();
     }
@@ -68,12 +68,20 @@ async fn create(
         },
         None => None,
     };
-    let rec = Record { url: req.url.clone(), expiry, created: now() };
+    let rec = Record {
+        url: req.url.clone(),
+        expiry,
+        created: now(),
+    };
 
     // aliases: caminho separado; único ponto de checagem de colisão.
     if let Some(alias) = req.alias {
         if codec::from_base62(&alias).is_some() {
-            return (StatusCode::BAD_REQUEST, "alias colide com o espaço de código numérico").into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                "alias colide com o espaço de código numérico",
+            )
+                .into_response();
         }
         let id = match st.store.next_id() {
             Ok(id) => id,
@@ -84,7 +92,11 @@ async fn create(
             Ok(false) => return (StatusCode::CONFLICT, "alias em uso").into_response(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
-        return Json(CreateResp { code: alias, url: req.url }).into_response();
+        return Json(CreateResp {
+            code: alias,
+            url: req.url,
+        })
+        .into_response();
     }
 
     // caminho sem alias: id atômico → encode → grava. Sem checagem de colisão.
@@ -102,10 +114,7 @@ async fn create(
     Json(CreateResp { code, url: req.url }).into_response()
 }
 
-async fn redirect(
-    State(st): State<Arc<AppState>>,
-    Path(code): Path<String>,
-) -> Response {
+async fn redirect(State(st): State<Arc<AppState>>, Path(code): Path<String>) -> Response {
     // resolve id: primeiro tenta código numérico; se falhar, tenta alias.
     let id = match codec::from_base62(&code) {
         Some(c) if c <= permute::MAX_ID => permute::decode(c, st.key),
@@ -206,7 +215,10 @@ mod tests {
     #[test]
     fn cache_control_com_expiry_futuro_usa_diferenca() {
         let now = 1_000;
-        assert_eq!(cache_control_for(Some(now + 100), now), "public, max-age=100");
+        assert_eq!(
+            cache_control_for(Some(now + 100), now),
+            "public, max-age=100"
+        );
     }
 
     #[test]

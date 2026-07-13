@@ -58,7 +58,12 @@ impl Store {
         let aliases = env.create_database(&mut wtxn, Some("aliases"))?;
         let meta = env.create_database(&mut wtxn, Some("meta"))?;
         wtxn.commit()?;
-        Ok(Store { env, links, aliases, meta })
+        Ok(Store {
+            env,
+            links,
+            aliases,
+            meta,
+        })
     }
 
     pub fn next_id(&self) -> Result<u64, StoreError> {
@@ -103,7 +108,12 @@ impl Store {
 
     /// Grava alias + link em uma única transação: ou ambos ou nenhum.
     /// Evita link órfão se o processo falhar entre as duas escritas.
-    pub fn put_alias_and_link(&self, alias: &str, id: u64, rec: &Record) -> Result<bool, StoreError> {
+    pub fn put_alias_and_link(
+        &self,
+        alias: &str,
+        id: u64,
+        rec: &Record,
+    ) -> Result<bool, StoreError> {
         let bytes = serde_json::to_vec(rec)?;
         let mut wtxn = self.env.write_txn()?;
         if self.aliases.get(&wtxn, alias)?.is_some() {

@@ -1,5 +1,6 @@
 # quark
 
+[![CI](https://github.com/lucasolopes/quark/actions/workflows/ci.yml/badge.svg)](https://github.com/lucasolopes/quark/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![Rust 2021](https://img.shields.io/badge/rust-2021-orange)
 ![Runtime deps: none](https://img.shields.io/badge/runtime%20deps-none-brightgreen)

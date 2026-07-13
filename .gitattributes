@@ -1,0 +1,9 @@
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.js text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+.gitignore text eol=lf
+.dockerignore text eol=lf

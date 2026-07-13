@@ -14,7 +14,7 @@ fn main() {
         let mut total_flips: u64 = 0;
         // matriz de dependência: dependency[i][j] = bit de saída j já mudou ao virar bit de entrada i?
         let mut dep = vec![0u64; WIDTH as usize]; // bitmask de saída por bit de entrada
-        // gerador pseudo-aleatório simples (LCG) — determinístico, sem depender de Date/rand.
+                                                  // gerador pseudo-aleatório simples (LCG) — determinístico, sem depender de Date/rand.
         let mut seed = 0xCAFEF00DD15EA5E5u64;
         let mut next = || {
             seed ^= seed << 13;
