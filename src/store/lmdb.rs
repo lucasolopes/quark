@@ -8,6 +8,46 @@ use std::path::Path;
 
 type BeU64 = U64<BigEndian>;
 
+/// Particionamento defensivo do espaço de 40 bits entre nós (ver docs/SCALING.md).
+/// Os 8 bits altos identificam o nó; os 32 baixos são o contador local do nó.
+/// `allow(dead_code)`: helpers ainda não têm chamador — a fiação com
+/// `next_id`/`open` é a Task 2 deste tijolo.
+#[allow(dead_code)]
+const NODE_BITS: u32 = 8;
+#[allow(dead_code)]
+const LOCAL_BITS: u32 = 40 - NODE_BITS; // 32
+#[allow(dead_code)]
+const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1; // 4_294_967_295
+
+/// Lê `QUARK_NODE_ID`: ausente/vazio → `None` (modo single-node, 40 bits inteiros);
+/// "0".."255" → `Some(n)`; qualquer outra coisa → erro (fail-fast no startup).
+#[allow(dead_code)]
+fn parse_node_id(raw: Option<String>) -> Result<Option<u8>, StoreError> {
+    match raw.as_deref() {
+        None | Some("") => Ok(None),
+        Some(s) => s.parse::<u8>().map(Some).map_err(|_| {
+            StoreError::Backend(format!("QUARK_NODE_ID inválido: {s} (esperado 0-255)"))
+        }),
+    }
+}
+
+/// Compõe o id final a partir do contador. Sem node-id: identidade (o chamador
+/// aplica o teto de `permute::MAX_ID`, como hoje). Com node-id: prefixa os bits
+/// altos e falha ANTES de estourar a faixa local (invariante de não-vazamento).
+#[allow(dead_code)]
+fn compose_id(node_id: Option<u8>, counter: u64) -> Result<u64, StoreError> {
+    match node_id {
+        None => Ok(counter),
+        Some(node) => {
+            if counter > LOCAL_MAX {
+                Err(StoreError::IdSpaceExhausted)
+            } else {
+                Ok(((node as u64) << LOCAL_BITS) | counter)
+            }
+        }
+    }
+}
+
 pub struct LmdbStore {
     env: Env,
     links: Database<BeU64, Bytes>,  // id -> Record (json)
@@ -152,5 +192,74 @@ impl AnalyticsSink for LmdbStore {
             aggregates: agg,
             recent,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compose_id, parse_node_id, LOCAL_BITS, LOCAL_MAX};
+    use crate::store::StoreError;
+
+    #[test]
+    fn parse_node_id_ausente_ou_vazio_vira_none() {
+        assert!(matches!(parse_node_id(None), Ok(None)));
+        assert!(matches!(parse_node_id(Some(String::new())), Ok(None)));
+    }
+
+    #[test]
+    fn parse_node_id_valido() {
+        assert!(matches!(parse_node_id(Some("0".into())), Ok(Some(0))));
+        assert!(matches!(parse_node_id(Some("255".into())), Ok(Some(255))));
+        assert!(matches!(parse_node_id(Some("7".into())), Ok(Some(7))));
+    }
+
+    #[test]
+    fn parse_node_id_invalido_erra() {
+        assert!(matches!(
+            parse_node_id(Some("256".into())),
+            Err(StoreError::Backend(_))
+        ));
+        assert!(matches!(
+            parse_node_id(Some("-1".into())),
+            Err(StoreError::Backend(_))
+        ));
+        assert!(matches!(
+            parse_node_id(Some("abc".into())),
+            Err(StoreError::Backend(_))
+        ));
+    }
+
+    #[test]
+    fn compose_id_sem_node_e_identidade() {
+        // modo default: contador vira o id direto (checagem de MAX_ID fica no chamador)
+        assert_eq!(compose_id(None, 1).unwrap(), 1);
+        assert_eq!(compose_id(None, 1_000_000_000).unwrap(), 1_000_000_000);
+    }
+
+    #[test]
+    fn compose_id_com_node_prefixa_os_bits_altos() {
+        assert_eq!(compose_id(Some(0), 1).unwrap(), 1);
+        assert_eq!(compose_id(Some(1), 1).unwrap(), (1u64 << LOCAL_BITS) | 1);
+        assert_eq!(compose_id(Some(5), 42).unwrap(), (5u64 << LOCAL_BITS) | 42);
+    }
+
+    #[test]
+    fn compose_id_faixas_de_nos_sao_disjuntas() {
+        // o maior id do nó 0 é menor que o menor id do nó 1
+        let maior_no_0 = compose_id(Some(0), LOCAL_MAX).unwrap();
+        let menor_no_1 = compose_id(Some(1), 1).unwrap();
+        assert!(maior_no_0 < menor_no_1);
+    }
+
+    #[test]
+    fn compose_id_estouro_do_contador_local_erra() {
+        assert_eq!(
+            compose_id(Some(3), LOCAL_MAX).unwrap(),
+            (3u64 << LOCAL_BITS) | LOCAL_MAX
+        );
+        assert!(matches!(
+            compose_id(Some(3), LOCAL_MAX + 1),
+            Err(StoreError::IdSpaceExhausted)
+        ));
     }
 }
