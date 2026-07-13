@@ -38,6 +38,22 @@ fn valida_url(u: &str) -> bool {
     u.starts_with("http://") || u.starts_with("https://")
 }
 
+const DEFAULT_MAX_AGE: u64 = 86400;
+
+/// Calcula o valor do header Cache-Control para uma resposta de redirect,
+/// respeitando o TTL do link: nunca cacheia além da expiração. Função pura,
+/// alvo de TDD.
+fn cache_control_for(expiry: Option<u64>, now: u64) -> String {
+    match expiry {
+        None => format!("public, max-age={}", DEFAULT_MAX_AGE),
+        Some(e) if e > now => {
+            let max_age = DEFAULT_MAX_AGE.min(e - now);
+            format!("public, max-age={}", max_age)
+        }
+        Some(_) => "no-store".to_string(),
+    }
+}
+
 async fn create(
     State(st): State<Arc<AppState>>,
     Json(req): Json<CreateReq>,
@@ -95,20 +111,44 @@ async fn redirect(
         Some(c) if c <= permute::MAX_ID => permute::decode(c, st.key),
         _ => match st.store.get_alias(&code) {
             Ok(Some(id)) => id,
-            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    [(header::CACHE_CONTROL, "no-store".to_string())],
+                )
+                    .into_response()
+            }
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
     };
     match st.cache.get(id) {
         Ok(Some(rec)) => {
+            let now = now();
             if let Some(exp) = rec.expiry {
-                if now() >= exp {
-                    return (StatusCode::GONE, "link expirado").into_response();
+                if now >= exp {
+                    return (
+                        StatusCode::GONE,
+                        [(header::CACHE_CONTROL, "no-store".to_string())],
+                        "link expirado",
+                    )
+                        .into_response();
                 }
             }
-            (StatusCode::FOUND, [(header::LOCATION, rec.url)]).into_response()
+            let cache_control = cache_control_for(rec.expiry, now);
+            (
+                StatusCode::FOUND,
+                [
+                    (header::LOCATION, rec.url),
+                    (header::CACHE_CONTROL, cache_control),
+                ],
+            )
+                .into_response()
         }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            [(header::CACHE_CONTROL, "no-store".to_string())],
+        )
+            .into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
@@ -156,7 +196,33 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::access_log_line;
+    use super::{access_log_line, cache_control_for};
+
+    #[test]
+    fn cache_control_sem_expiry_usa_default() {
+        assert_eq!(cache_control_for(None, 1_000), "public, max-age=86400");
+    }
+
+    #[test]
+    fn cache_control_com_expiry_futuro_usa_diferenca() {
+        let now = 1_000;
+        assert_eq!(cache_control_for(Some(now + 100), now), "public, max-age=100");
+    }
+
+    #[test]
+    fn cache_control_com_expiry_futuro_distante_capa_em_default() {
+        let now = 1_000;
+        assert_eq!(
+            cache_control_for(Some(now + 999_999), now),
+            "public, max-age=86400"
+        );
+    }
+
+    #[test]
+    fn cache_control_com_expiry_passado_no_store() {
+        let now = 1_000;
+        assert_eq!(cache_control_for(Some(now - 1), now), "no-store");
+    }
 
     #[test]
     fn access_log_line_is_valid_json_with_expected_fields() {
