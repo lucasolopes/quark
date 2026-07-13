@@ -1,6 +1,8 @@
 use crate::store::StoreError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use tokio::sync::mpsc::Receiver;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClickEvent {
@@ -96,6 +98,57 @@ pub trait AnalyticsSink: Send + Sync + 'static {
     async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError>;
 }
 
+/// Tamanho de lote que dispara flush imediato (além do timer de 5s).
+pub const BATCH: usize = 500;
+
+/// Worker de fundo: acumula `ClickEvent`s do canal e faz flush no sink quando
+/// o buffer atinge `BATCH`, a cada 5s, ou quando o canal fecha (drena e sai).
+pub fn spawn_worker(
+    mut rx: Receiver<ClickEvent>,
+    sink: Arc<dyn AnalyticsSink>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut buf: Vec<ClickEvent> = Vec::with_capacity(BATCH);
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                maybe = rx.recv() => {
+                    match maybe {
+                        Some(ev) => {
+                            buf.push(ev);
+                            if buf.len() >= BATCH {
+                                flush(&sink, &mut buf).await;
+                            }
+                        }
+                        None => {
+                            // canal fechado: drena o resto e encerra
+                            flush(&sink, &mut buf).await;
+                            break;
+                        }
+                    }
+                }
+                _ = ticker.tick() => {
+                    flush(&sink, &mut buf).await;
+                }
+            }
+        }
+    })
+}
+
+async fn flush(sink: &Arc<dyn AnalyticsSink>, buf: &mut Vec<ClickEvent>) {
+    if buf.is_empty() {
+        return;
+    }
+    if let Err(e) = sink.record_batch(buf).await {
+        eprintln!(
+            "{}",
+            serde_json::json!({"analytics_flush_error": e.to_string()})
+        );
+    }
+    buf.clear();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +208,32 @@ mod tests {
         assert_eq!(day_bucket(0), "1970-01-01");
         assert_eq!(day_bucket(1_735_689_600), "2025-01-01"); // epoch de 2025-01-01 00:00 UTC
         assert_eq!(day_bucket(1_735_689_600 + 86_400), "2025-01-02");
+    }
+
+    #[tokio::test]
+    async fn worker_drena_e_grava_ao_fechar_canal() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_store, sink) = crate::store::open_backends(dir.path()).unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(1000);
+        let handle = spawn_worker(rx, sink.clone());
+
+        for i in 0..250u64 {
+            tx.send(ClickEvent {
+                id: 5,
+                ts: 1_752_300_000 + i,
+                referer: None,
+                country: Some("BR".into()),
+                user_agent: Some("iPhone".into()),
+            })
+            .await
+            .unwrap();
+        }
+        drop(tx); // fecha o canal → worker drena, faz flush e encerra
+        handle.await.unwrap();
+
+        let s = sink.stats(5).await.unwrap().unwrap();
+        assert_eq!(s.aggregates.total, 250);
+        assert_eq!(s.recent.len(), 250);
     }
 
     #[test]
