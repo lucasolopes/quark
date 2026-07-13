@@ -215,11 +215,19 @@ async fn stats(
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
     };
+    // link precisa existir; alvo de alias inexistente também é 404 (mesma lógica do redirect)
+    match st.store.get_link(id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
     match st.sink.stats(id).await {
         Ok(Some(s)) => Json(s).into_response(),
-        Ok(None) => {
-            Json(serde_json::json!({"total": 0, "aggregates": null, "recent": []})).into_response()
-        }
+        Ok(None) => Json(crate::analytics::Stats {
+            aggregates: crate::analytics::Aggregates::default(),
+            recent: Vec::new(),
+        })
+        .into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }

@@ -93,7 +93,7 @@ async fn stats_exige_token() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    // com token certo → 200
+    // com token certo → 200, shape consistente (aggregates é objeto, não null)
     let resp = app
         .clone()
         .oneshot(
@@ -105,6 +105,29 @@ async fn stats_exige_token() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(v["aggregates"].is_object());
+    assert!(v["recent"].is_array());
+}
+
+#[tokio::test]
+async fn stats_404_codigo_inexistente() {
+    let (app, _rx) = app_with(Some("segredo"), 100);
+    // "0000000" decodifica p/ id 0, in-range, nunca criado neste store fresco.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/0000000/stats")
+                .header("x-admin-token", "segredo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
