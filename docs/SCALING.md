@@ -66,6 +66,12 @@ local daquele nó:
 cai no nó errado dá 404, porque aquele nó não tem o dado. Ou seja, o node-id é um
 **guard-rail contra colisão**, não um modo multi-nó de verdade.
 
-**Para multi-nó real, use o formato 2 (Postgres compartilhado).** Um modo
-shared-nothing completo (com proxy entre nós usando o node-id embutido no código)
-é trabalho futuro, não implementado.
+**Por design, um binário puro (LMDB, sem banco) é single-node** — isso é uma
+restrição consciente do sistema, não uma limitação a ser removida. **Para
+multi-nó, use o formato 2 (Postgres compartilhado).**
+
+> Existe uma nota teórica (não planejada): como o `QUARK_NODE_ID` fica nos bits
+> altos do id, um nó poderia decodificar o código, descobrir o nó dono e fazer
+> proxy do redirect pra ele ("shared-nothing", sem banco). Fica só como
+> curiosidade — não está no roadmap; a restrição single-node do binário puro é
+> deliberada e o Postgres já resolve o multi-nó.

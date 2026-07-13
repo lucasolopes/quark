@@ -214,7 +214,7 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 | `QUARK_KEY` | Decimal `u64` secret — the permutation key. **Required in production** (each instance should have its own, kept out of source control). | dev fallback key (loud warning logged; not for production) |
 | `QUARK_DATA` | LMDB data directory. Only used when the store is LMDB. | `./data` (container: `/data`) |
 | `QUARK_ADDR` | HTTP bind address. | `0.0.0.0:8080` |
-| `QUARK_ADMIN_TOKEN` | Enables `GET /:code/stats`. | unset → stats endpoint off |
+| `QUARK_ADMIN_TOKEN` | Enables the token-protected admin endpoints: `GET /:code/stats` and `GET/POST/DELETE /admin/blocklist`. | unset → those endpoints off (404) |
 | `QUARK_VALKEY_URL` | Enable the L2 Valkey cache, e.g. `redis://host:6379`. | unset → L1 + store only |
 | `QUARK_DATABASE_URL` | Use Postgres for the store, e.g. `postgres://user:pass@host:5432/db`. | unset → LMDB |
 | `QUARK_CLICKHOUSE_URL` | Use ClickHouse for analytics, e.g. `http://user:pass@host:8123/db`. | unset → store's embedded sink |

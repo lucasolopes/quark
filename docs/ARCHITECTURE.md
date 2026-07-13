@@ -22,7 +22,9 @@ flowchart LR
 | `codec` | Integer ↔ 7-character base62 string, URL-safe. | — |
 | `store` | mmap'd persistence: `id: u64 -> {url, expiry, created}`; a separate `alias -> id` map; a persisted id counter. | `heed` (LMDB bindings) |
 | `cache` | A concurrent hot LRU `id -> Record` in front of the store, so a hot redirect never touches LMDB. | `moka` |
-| `api` | HTTP surface: `POST /` creates, `GET /:code` redirects, `GET /health`. | `axum` |
+| `api` | HTTP surface: `POST /` creates, `GET /:code` redirects, `GET /:code/stats`, `GET/POST/DELETE /admin/blocklist`, `GET /health`. | `axum` |
+| `analytics` | Click capture off the redirect (fire-and-forget), background batch worker, aggregates + last-N events; the `AnalyticsSink` trait and its LMDB/ClickHouse impls. | `tokio` mpsc |
+| `abuse` | `POST /` protection: per-IP rate limit (`RateLimiter`), destination blocklist (`Blocklist`, domain+subdomain, cached), and pure helpers for internal-host / self-loop guard. Never touches the redirect path. | `redis` (opt-in) |
 | `calibrate` | Offline avalanche/SAC harness that measures diffusion of `permute` across round counts and picks `ROUNDS`. Not part of the running service. | `permute` (a copy of its math, kept dependency-free) |
 
 `permute` and `calibrate` are the differentiator; everything else is standard, swappable engineering (LMDB could become `redb`, moka could become any other cache, axum could become anything that speaks HTTP).
@@ -46,6 +48,8 @@ sequenceDiagram
 Walking through it: the API validates the URL is `http(s)://`, then asks the store for the next id — a counter persisted in LMDB so it survives restarts. It writes the record keyed by that raw integer id, then computes the public code by running the id through `permute::encode` and base62-encoding the result. Note what's *missing*: there is no "does this code already exist?" check. Because `encode` is a bijection, two different ids can never produce the same code — collision-checking a whole class of bugs out of existence at the type level rather than the runtime level.
 
 Custom aliases are a deliberately separate path: they still allocate a real id and record (so redirect logic doesn't need two code paths), but they route through an `aliases: alias -> id` table that *does* need a uniqueness check, because a human picked the string and two humans can pick the same one. That's the **one** place in the whole system that does a collision check, and it's opt-in.
+
+Before any of that, `create` runs the abuse guards — and only `create`, never the redirect. In order, cheapest first: a per-IP **rate limit** (`429` if over), URL validation (`400`), destination-host extraction (`400` if hostless), an **internal/loop guard** (`403` for private/loopback/`localhost` IPs or the instance's own host — never resolves DNS), and a **blocklist** check (`403` for a listed domain or subdomain). All of it is opt-in or default-safe and lives in the `abuse` module; see *Abuse protection* below.
 
 ### Aliases
 
@@ -137,13 +141,23 @@ flowchart LR
 
 Store and AnalyticsSink are chosen independently of each other (see the doc comment on `open_backends`): the store follows `QUARK_DATABASE_URL`, and the sink follows `QUARK_CLICKHOUSE_URL` if set, otherwise falls back to whatever the chosen store provides as its embedded sink. This is what lets a deployment mix, say, a Postgres store with ClickHouse analytics, or Postgres for both, or plain LMDB for both — the same binary, no rebuild, just env vars.
 
+## Abuse protection
+
+Everything here runs **only on `POST /`** — the redirect and read paths are untouched, so the measured hot-path numbers still hold. Two knobs and one always-on guard, all in the `abuse` module:
+
+- **Rate limit** (`RateLimiter`, opt-in via `QUARK_RATELIMIT_PER_MIN`): a fixed 60s window per client IP. In-memory per replica by default (a `HashMap` pruned once per window so it can't grow without bound); when `QUARK_VALKEY_URL` is set it uses Valkey `INCR`/`EXPIRE` for a **global** limit across replicas. Fail-open: any Valkey error lets the request through — a broken cache never blocks link creation. The client IP comes from a configurable header (`QUARK_REAL_IP_HEADER`, default `CF-Connecting-IP`) with a socket-address fallback; because the header is trusted, only enable the limit behind a proxy that overwrites it.
+- **Destination blocklist** (`Blocklist`, on by content): the set of blocked domains lives in the `Store` (so a future admin UI can edit it — it is *data*, not config), managed via `GET/POST/DELETE /admin/blocklist` under `QUARK_ADMIN_TOKEN`. Matching is domain + subdomain, case-insensitive. Reads go through a snapshot cache — the whole set in memory (L1), refreshed on a TTL (`QUARK_BLOCKLIST_TTL`), optionally backed by Valkey (L2) so replicas share the source; an admin write invalidates it. Propagation across replicas is eventual (≤ TTL).
+- **Internal/loop guard** (default on, `QUARK_BLOCK_PRIVATE=0` disables): rejects destinations whose host is a private/loopback/link-local IP literal (v4 and v6, including IPv4-mapped like `::ffff:127.0.0.1`), `localhost`, or the instance's own host (anti-loop, via the `Host` header or `QUARK_PUBLIC_HOST`). It **never resolves DNS** — that would be slow and an SSRF vector in itself — so it only decides on literal IPs and obvious names.
+
 ## Data model (LMDB)
 
-Three named databases inside one LMDB environment (`heed::Env`), opened once, mmap'd for the process lifetime:
+Six named databases inside one LMDB environment (`heed::Env`, `max_dbs = 6`), opened once, mmap'd for the process lifetime:
 
 - **`links`**: key = `u64` big-endian (the raw id) → value = JSON-serialized `{ url: String, expiry: Option<u64>, created: u64 }`. This is the only place URL bytes live. Keying by a fixed-width integer instead of the string code means no variable-length string index — B-tree pages pack tighter, and there's no need to ever store or index the base62 code itself, since it's always recomputed from the id.
 - **`aliases`**: key = `String` (the human-chosen alias) → value = `u64` (the id it points to). Only touched by custom-alias creates and by redirects whose path segment didn't decode as a valid numeric code.
-- **`meta`**: currently one key, `"next_id"` → `u64`, the atomically-incremented id counter, persisted so restarts don't reuse ids.
+- **`meta`**: currently one key, `"next_id"` → `u64`, the atomically-incremented id counter, persisted so restarts don't reuse ids. In the `QUARK_NODE_ID` partitioning mode this holds the node-local counter (see `docs/SCALING.md`).
+- **`stats`** / **`events`**: the embedded `AnalyticsSink` — per-id aggregates and the last-N raw click events (both JSON). Written only by the background analytics worker, never on the redirect response path.
+- **`blocked`**: the destination blocklist — key = `String` (a blocked domain), value empty. Read into an in-memory snapshot; written only via the `/admin/blocklist` endpoints.
 
 ## Why these choices
 
