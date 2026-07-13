@@ -12,6 +12,13 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      valkey:
+        image: valkey/valkey:8
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping" --health-interval 5s --health-timeout 3s --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -38,3 +45,5 @@ jobs:
 
       - name: Test
         run: cargo test
+        env:
+          QUARK_TEST_VALKEY_URL: redis://127.0.0.1:6379
