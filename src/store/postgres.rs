@@ -1,3 +1,4 @@
+use crate::analytics::{Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::store::{Record, Store, StoreError};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
@@ -189,5 +190,123 @@ impl Store for PostgresStore {
             .await
             .map_err(|e| StoreError::Backend(e.to_string()))?;
         Ok(true)
+    }
+}
+
+#[async_trait::async_trait]
+impl AnalyticsSink for PostgresStore {
+    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), StoreError> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        use std::collections::BTreeMap;
+        let mut by_id: BTreeMap<u64, Vec<&ClickEvent>> = BTreeMap::new();
+        for e in events {
+            by_id.entry(e.id).or_default().push(e);
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        for (id, evs) in by_id {
+            // agregados
+            let row = sqlx::query("SELECT agg FROM stats WHERE id=$1")
+                .bind(id as i64)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Backend(e.to_string()))?;
+            let mut agg: Aggregates = match row {
+                Some(r) => {
+                    let v: serde_json::Value = r
+                        .try_get("agg")
+                        .map_err(|e| StoreError::Backend(e.to_string()))?;
+                    serde_json::from_value(v)?
+                }
+                None => Aggregates::default(),
+            };
+            for e in &evs {
+                agg.apply(e);
+            }
+            let aggv = serde_json::to_value(&agg)?;
+            sqlx::query(
+                "INSERT INTO stats (id, agg) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET agg=$2",
+            )
+            .bind(id as i64)
+            .bind(&aggv)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            // eventos crus (ring)
+            let row = sqlx::query("SELECT recent FROM events WHERE id=$1")
+                .bind(id as i64)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| StoreError::Backend(e.to_string()))?;
+            let mut recent: Vec<ClickEvent> = match row {
+                Some(r) => {
+                    let v: serde_json::Value = r
+                        .try_get("recent")
+                        .map_err(|e| StoreError::Backend(e.to_string()))?;
+                    serde_json::from_value(v)?
+                }
+                None => Vec::new(),
+            };
+            for e in &evs {
+                recent.push((*e).clone());
+            }
+            if recent.len() > EVENTS_MAX {
+                let d = recent.len() - EVENTS_MAX;
+                recent.drain(0..d);
+            }
+            let recv = serde_json::to_value(&recent)?;
+            sqlx::query(
+                "INSERT INTO events (id, recent) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET recent=$2",
+            )
+            .bind(id as i64)
+            .bind(&recv)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        }
+        tx.commit()
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError> {
+        let row = sqlx::query("SELECT agg FROM stats WHERE id=$1")
+            .bind(id as i64)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        let agg: Aggregates = match row {
+            Some(r) => {
+                let v: serde_json::Value = r
+                    .try_get("agg")
+                    .map_err(|e| StoreError::Backend(e.to_string()))?;
+                serde_json::from_value(v)?
+            }
+            None => return Ok(None),
+        };
+        let row = sqlx::query("SELECT recent FROM events WHERE id=$1")
+            .bind(id as i64)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        let recent: Vec<ClickEvent> = match row {
+            Some(r) => {
+                let v: serde_json::Value = r
+                    .try_get("recent")
+                    .map_err(|e| StoreError::Backend(e.to_string()))?;
+                serde_json::from_value(v)?
+            }
+            None => Vec::new(),
+        };
+        Ok(Some(Stats {
+            aggregates: agg,
+            recent,
+        }))
     }
 }
