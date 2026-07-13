@@ -1,5 +1,6 @@
 use quark::analytics::clickhouse::ClickHouseSink;
 use quark::analytics::{AnalyticsSink, ClickEvent};
+use serial_test::serial;
 
 async fn fresh() -> Option<ClickHouseSink> {
     let url = std::env::var("QUARK_TEST_CLICKHOUSE_URL").ok()?;
@@ -18,6 +19,7 @@ fn ev(id: u64, ts: u64, c: &str, ua: &str) -> ClickEvent {
 }
 
 #[tokio::test]
+#[serial(ch)]
 async fn record_e_stats_ch() {
     let Some(s) = fresh().await else {
         eprintln!("skip: sem QUARK_TEST_CLICKHOUSE_URL");
@@ -42,6 +44,7 @@ async fn record_e_stats_ch() {
 }
 
 #[tokio::test]
+#[serial(ch)]
 async fn recent_limita_n_ch() {
     let Some(s) = fresh().await else {
         return;

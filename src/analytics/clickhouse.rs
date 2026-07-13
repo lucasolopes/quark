@@ -32,13 +32,58 @@ struct RecentRow {
     referer: String,
 }
 
+/// Extrai (endpoint scheme://host[:port], user, password, database) de uma URL.
+#[allow(clippy::type_complexity)]
+fn parse_ch_url(
+    raw: &str,
+) -> Result<(String, Option<String>, Option<String>, Option<String>), StoreError> {
+    let u = url::Url::parse(raw)
+        .map_err(|e| StoreError::Backend(format!("URL ClickHouse inválida: {e}")))?;
+    let scheme = u.scheme();
+    let host = u
+        .host_str()
+        .ok_or_else(|| StoreError::Backend("URL ClickHouse sem host".into()))?;
+    let endpoint = match u.port() {
+        Some(p) => format!("{scheme}://{host}:{p}"),
+        None => format!("{scheme}://{host}"),
+    };
+    let user = {
+        let x = u.username();
+        if x.is_empty() {
+            None
+        } else {
+            Some(x.to_string())
+        }
+    };
+    let pass = u.password().map(|s| s.to_string());
+    let db = {
+        let p = u.path().trim_start_matches('/');
+        if p.is_empty() {
+            None
+        } else {
+            Some(p.to_string())
+        }
+    };
+    Ok((endpoint, user, pass, db))
+}
+
 pub struct ClickHouseSink {
     client: clickhouse::Client,
 }
 
 impl ClickHouseSink {
     pub async fn open(url: &str) -> Result<ClickHouseSink, StoreError> {
-        let client = clickhouse::Client::default().with_url(url);
+        let (endpoint, user, pass, db) = parse_ch_url(url)?;
+        let mut client = clickhouse::Client::default().with_url(endpoint);
+        if let Some(u) = user {
+            client = client.with_user(u);
+        }
+        if let Some(p) = pass {
+            client = client.with_password(p);
+        }
+        if let Some(d) = db {
+            client = client.with_database(d);
+        }
         let s = ClickHouseSink { client };
         s.init_schema().await?;
         Ok(s)
@@ -183,5 +228,38 @@ impl AnalyticsSink for ClickHouseSink {
             aggregates: agg,
             recent,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_ch_url;
+
+    #[test]
+    fn parse_ch_url_sem_credenciais() {
+        let (endpoint, user, pass, db) = parse_ch_url("http://127.0.0.1:8123").unwrap();
+        assert_eq!(endpoint, "http://127.0.0.1:8123");
+        assert_eq!(user, None);
+        assert_eq!(pass, None);
+        assert_eq!(db, None);
+    }
+
+    #[test]
+    fn parse_ch_url_com_credenciais_e_database() {
+        let (endpoint, user, pass, db) =
+            parse_ch_url("http://user:pass@host:8123/analytics").unwrap();
+        assert_eq!(endpoint, "http://host:8123");
+        assert_eq!(user, Some("user".to_string()));
+        assert_eq!(pass, Some("pass".to_string()));
+        assert_eq!(db, Some("analytics".to_string()));
+    }
+
+    #[test]
+    fn parse_ch_url_sem_porta() {
+        let (endpoint, user, pass, db) = parse_ch_url("https://host").unwrap();
+        assert_eq!(endpoint, "https://host");
+        assert_eq!(user, None);
+        assert_eq!(pass, None);
+        assert_eq!(db, None);
     }
 }
