@@ -3,6 +3,7 @@ use crate::analytics::{AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
 use crate::store::{Record, Store, StoreError};
 use crate::{codec, now, permute};
+use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
@@ -335,11 +336,15 @@ async fn blocklist_get(State(st): State<Arc<AppState>>, headers: HeaderMap) -> R
 async fn blocklist_add(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(req): Json<BlocklistReq>,
+    body: Bytes,
 ) -> Response {
     if let Err(status) = admin_guard(&st, &headers) {
         return status.into_response();
     }
+    let req: BlocklistReq = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::BAD_REQUEST, "json inválido").into_response(),
+    };
     if st.store.add_blocked_domain(&req.domain).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
@@ -350,11 +355,15 @@ async fn blocklist_add(
 async fn blocklist_delete(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(req): Json<BlocklistReq>,
+    body: Bytes,
 ) -> Response {
     if let Err(status) = admin_guard(&st, &headers) {
         return status.into_response();
     }
+    let req: BlocklistReq = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::BAD_REQUEST, "json inválido").into_response(),
+    };
     if st.store.remove_blocked_domain(&req.domain).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }

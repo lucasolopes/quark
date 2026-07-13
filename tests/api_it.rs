@@ -445,3 +445,63 @@ async fn ttl_overflow_400() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn admin_blocklist_sem_token_corpo_malformado_404() {
+    // endpoint opaco: sem QUARK_ADMIN_TOKEN, ate POST com corpo ruim da 404 (nao 400/415)
+    let app = app().await; // admin_token: None
+    let resp = app
+        .oneshot(
+            Request::post("/admin/blocklist")
+                .header("content-type", "application/json")
+                .body(Body::from("nao eh json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_blocklist_delete_remove() {
+    let app = app_admin("segredo").await;
+    // add
+    app.clone()
+        .oneshot(
+            Request::post("/admin/blocklist")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "segredo")
+                .body(Body::from(r#"{"domain":"del.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // delete
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::delete("/admin/blocklist")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "segredo")
+                .body(Body::from(r#"{"domain":"del.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // list vazia
+    let resp = app
+        .oneshot(
+            Request::get("/admin/blocklist")
+                .header("x-admin-token", "segredo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["domains"].as_array().unwrap().len(), 0);
+}
