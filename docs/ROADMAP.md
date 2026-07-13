@@ -5,8 +5,8 @@
 Produto OSS de operador único essencialmente completo: **API + painel web**, sob
 **licença AGPL-3.0** com **CLA** pra contribuições. Núcleo de binário único e
 zero-dependências por padrão; backends de rede opt-in por env (escolhidos no
-startup, sem feature flag de build). Testado (56 testes de lib + 28 de API +
-suíte de integração gated Postgres/Valkey/ClickHouse + 30 testes de frontend) e
+startup, sem feature flag de build). Testado (57 testes de lib + 29 de API +
+suíte de integração gated Postgres/Valkey/ClickHouse, incl. busca + 34 testes de frontend) e
 benchmarkado (permute ~264M ops/s; redirect ~7,9µs in-process; em produção
 escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 
@@ -32,9 +32,13 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
   tudo sob `QUARK_ADMIN_TOKEN`. **Criar (`POST /`) exige o token quando `QUARK_ADMIN_TOKEN`
   está configurado** (senão continua público). CORS opt-in via `QUARK_CORS_ORIGINS`.
 - **Painel web (SPA)** — `web/` (React + Vite + shadcn/ui + TanStack + Recharts), deploy
-  separado (build estático), binário API-only. Login por token → Links (CRUD, busca
-  client-side, copiar, **QR code**) → Stats por link (gráficos) → Blocklist. UI/UX seguindo
+  separado (build estático), binário API-only. Login por token → Links (CRUD, busca,
+  copiar, **QR code**) → Stats por link (gráficos) → Blocklist. UI/UX seguindo
   heurísticas de Nielsen.
+- **Busca server-side (Postgres)** — `GET /admin/links?q=` faz `ILIKE` em url+alias
+  (keyset paginado, curingas escapados). Recurso do Postgres; o LMDB responde `501` e o
+  painel cai pro filtro **client-side** (debounce ~300ms, fallback automático). Estado de
+  erro distinto do "nada encontrado".
 - **Licença + contribuições** — núcleo **AGPL-3.0-only**; `CLA.md` (license-grant) +
   `CONTRIBUTING.md` + bot do CLA (GitHub Action). Multi-tenancy/cloud fica proprietária, à parte.
 - **`docker-compose.yml`** — stack full (quark + Postgres + Valkey + ClickHouse) pra dev/self-host.
@@ -49,12 +53,6 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 ## Backlog
 
 - **Domínios customizados** — `meudominio.com/abc`.
-
-## Deferido — Postgres-gated (implementar só quando houver Postgres em uso)
-
-- **Busca server-side com paginação** nos links (`GET /admin/links?q=`). Decisão: recurso do
-  **Postgres** (`ILIKE`); o LMDB não ganha busca server-side (mantém a busca **client-side**
-  atual do painel). Mesmo princípio de escala do resto do projeto. Não construído ainda.
 
 ## Restrições de design (conscientes)
 
