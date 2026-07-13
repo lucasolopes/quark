@@ -1,5 +1,5 @@
-import { AlertTriangle, Link2, Plus, RotateCw } from "lucide-react";
-import { useMemo, useState } from "react";
+import { AlertTriangle, Link2, Loader2, Plus, RotateCw } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CreateLinkDialog } from "@/components/CreateLinkDialog";
 import { EditLinkDialog } from "@/components/EditLinkDialog";
 import { LinkTable } from "@/components/LinkTable";
+import { useDebounce } from "@/hooks/useDebounce";
 import { ApiError } from "@/lib/api";
 import { mutationErrorToast } from "@/lib/mutation-error";
 import { useDeleteLink, useLinks } from "@/lib/queries";
@@ -38,14 +39,38 @@ export function Links() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editingLink, setEditingLink] = useState<Link | null>(null);
   const [deletingLink, setDeletingLink] = useState<Link | null>(null);
-  const query = useLinks();
+  // Modo client-side: ligado pra sempre (pelo resto da sessão) na primeira
+  // vez que o servidor responder 501 — ele não sabe buscar e não vale a
+  // pena continuar perguntando.
+  const [clientMode, setClientMode] = useState(false);
+  const query = useLinks(); // lista base — sempre carregada, é a fonte do fallback client-side
   const deleteLink = useDeleteLink();
 
-  // A busca filtra só o que já foi carregado nesta sessão — ela não dispara
-  // uma nova página nem uma busca no servidor. "Carregar mais" antes de
-  // buscar amplia o conjunto sobre o qual a busca filtra.
+  const dq = useDebounce(search, 300);
+  const serverSearchEnabled = dq !== "" && !clientMode;
+  const serverSearch = useLinks(dq, { enabled: serverSearchEnabled });
+
+  useEffect(() => {
+    if (serverSearch.error instanceof ApiError && serverSearch.error.status === 501) setClientMode(true);
+  }, [serverSearch.error]);
+
+  // A busca client-side filtra só o que já foi carregado nesta sessão — ela
+  // não dispara uma nova página nem uma busca no servidor. "Carregar mais"
+  // antes de buscar amplia o conjunto sobre o qual a busca filtra.
   const allLinks = useMemo(() => query.data?.pages.flatMap((page) => page.links) ?? [], [query.data]);
-  const filtered = useMemo(() => allLinks.filter((link) => matches(link, search)), [allLinks, search]);
+  const searchResults = useMemo(
+    () => serverSearch.data?.pages.flatMap((page) => page.links) ?? [],
+    [serverSearch.data],
+  );
+
+  const usingServerSearch = dq !== "" && !clientMode;
+  const filtered = useMemo(() => {
+    if (dq === "") return allLinks;
+    if (clientMode) return allLinks.filter((link) => matches(link, dq));
+    return searchResults;
+  }, [allLinks, searchResults, clientMode, dq]);
+
+  const activeQuery = usingServerSearch ? serverSearch : query;
 
   async function handleConfirmDelete() {
     if (!deletingLink) return;
@@ -75,14 +100,21 @@ export function Links() {
         </Button>
       </div>
 
-      <Input
-        type="search"
-        placeholder="Buscar por código, URL ou alias…"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        aria-label="Buscar links"
-        className="max-w-sm"
-      />
+      <div className="relative max-w-sm">
+        <Input
+          type="search"
+          placeholder="Buscar por código, URL ou alias…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          aria-label="Buscar links"
+        />
+        {usingServerSearch && serverSearch.isFetching && (
+          <Loader2
+            className="absolute right-2 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground"
+            aria-hidden="true"
+          />
+        )}
+      </div>
 
       {query.isPending && <LinksSkeleton />}
 
@@ -120,13 +152,18 @@ export function Links() {
         </Card>
       )}
 
-      {!query.isPending && !query.isError && allLinks.length > 0 && filtered.length === 0 && (
-        <Card>
-          <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            Nenhum link corresponde a "{search}".
-          </CardContent>
-        </Card>
-      )}
+      {!query.isPending &&
+        !query.isError &&
+        allLinks.length > 0 &&
+        dq !== "" &&
+        !activeQuery.isPending &&
+        filtered.length === 0 && (
+          <Card>
+            <CardContent className="py-8 text-center text-sm text-muted-foreground">
+              nenhum link encontrado para "{dq}"
+            </CardContent>
+          </Card>
+        )}
 
       {!query.isPending && !query.isError && filtered.length > 0 && (
         <Card className="py-0">
@@ -138,9 +175,14 @@ export function Links() {
         </Card>
       )}
 
-      {query.hasNextPage && !search && (
-        <Button variant="outline" onClick={() => query.fetchNextPage()} disabled={query.isFetchingNextPage} className="self-center">
-          {query.isFetchingNextPage ? "Carregando…" : "Carregar mais"}
+      {activeQuery.hasNextPage && (
+        <Button
+          variant="outline"
+          onClick={() => activeQuery.fetchNextPage()}
+          disabled={activeQuery.isFetchingNextPage}
+          className="self-center"
+        >
+          {activeQuery.isFetchingNextPage ? "Carregando…" : "Carregar mais"}
         </Button>
       )}
 

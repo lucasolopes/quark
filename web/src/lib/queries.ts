@@ -1,5 +1,5 @@
 import { QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import type { CreateLinkRequest, PatchLinkRequest } from "./types";
 
 const LINKS_QUERY_KEY = ["links"];
@@ -24,19 +24,28 @@ const LINKS_PAGE_SIZE = 50;
 /**
  * Lista paginada de links via keyset (`after`/`next_after`). Cada página
  * carrega `LINKS_PAGE_SIZE` links; `fetchNextPage` busca a próxima usando o
- * cursor devolvido pela API. A busca da tela de Links é client-side, sobre
- * as páginas já carregadas — não dispara nova página.
+ * cursor devolvido pela API.
+ *
+ * Sem `q`, é a lista base (sempre carregada — fonte do fallback client-side
+ * da tela de Links). Com `q`, é a busca server-side paginada; o backend
+ * pode responder 501 (sem suporte a busca), caso em que a tela cai pro
+ * filtro client-side sobre a lista base — por isso `retry` não reintenta
+ * em 501 (é resposta definitiva, não erro transitório).
  */
-export function useLinks() {
+export function useLinks(q?: string, options: { enabled?: boolean } = {}) {
+  const term = q?.trim() ?? "";
   return useInfiniteQuery({
-    queryKey: LINKS_QUERY_KEY,
-    queryFn: ({ pageParam }) => api.listLinks({ after: pageParam ?? undefined, limit: LINKS_PAGE_SIZE }),
+    queryKey: [...LINKS_QUERY_KEY, term],
+    queryFn: ({ pageParam }) =>
+      api.listLinks({ after: pageParam ?? undefined, limit: LINKS_PAGE_SIZE, q: term || undefined }),
     initialPageParam: null as number | null,
     // O backend sempre manda `next_after` = id do último link da página,
     // mesmo quando ela veio incompleta (não manda `null` só porque acabou).
     // Sem esse corte por tamanho, "Carregar mais" dispararia um fetch extra
     // que sempre volta vazio depois da última página real.
     getNextPageParam: (lastPage) => (lastPage.links.length < LINKS_PAGE_SIZE ? undefined : lastPage.next_after),
+    enabled: options.enabled,
+    retry: (failureCount, err) => !(err instanceof ApiError && err.status === 501) && failureCount < 3,
   });
 }
 

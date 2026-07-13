@@ -39,11 +39,12 @@ export const api = {
   async createLink(body: CreateLinkRequest): Promise<CreateLinkResponse> {
     return jsonOrThrow(await req("/", { method: "POST", body: JSON.stringify(body) }));
   },
-  async listLinks(params: { after?: number; limit?: number } = {}): Promise<ListLinksResponse> {
-    const q = new URLSearchParams();
-    if (params.after != null) q.set("after", String(params.after));
-    if (params.limit != null) q.set("limit", String(params.limit));
-    const qs = q.toString();
+  async listLinks(params: { after?: number; limit?: number; q?: string } = {}): Promise<ListLinksResponse> {
+    const sp = new URLSearchParams();
+    if (params.after != null) sp.set("after", String(params.after));
+    if (params.limit != null) sp.set("limit", String(params.limit));
+    if (params.q && params.q.trim() !== "") sp.set("q", params.q.trim());
+    const qs = sp.toString();
     return jsonOrThrow(await req(`/admin/links${qs ? `?${qs}` : ""}`));
   },
   async deleteLink(code: string): Promise<void> {
