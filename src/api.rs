@@ -276,13 +276,21 @@ async fn log_requests(req: Request, next: Next) -> Response {
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let app = Router::new()
         .route("/", post(create))
         .route("/health", get(health))
         .route("/:code", get(redirect))
         .route("/:code/stats", get(stats))
-        .layer(axum::middleware::from_fn(log_requests))
-        .with_state(state)
+        .with_state(state);
+
+    // Log de acesso por request é opt-in: em alta vazão, o println! síncrono
+    // por request serializa tudo na lock do stdout (I/O do Docker json-file).
+    // Fica desligado por padrão; ativa com QUARK_ACCESS_LOG=1.
+    if std::env::var("QUARK_ACCESS_LOG").is_ok() {
+        app.layer(axum::middleware::from_fn(log_requests))
+    } else {
+        app
+    }
 }
 
 #[cfg(test)]

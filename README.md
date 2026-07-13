@@ -180,7 +180,7 @@ quark's non-enumerability is a **measured statistical property** (avalanche/SAC 
 
 ## Operating
 
-- Every request emits a **structured JSON log line** to stdout (`{"method","path","status","latency_ms"}`) — captured as-is by Coolify/Docker, ready to `grep` or ship to a log collector.
+- Per-request access logging is **opt-in via `QUARK_ACCESS_LOG`** (off by default). When set, every request emits a **structured JSON log line** to stdout (`{"method","path","status","latency_ms"}`) — captured as-is by Coolify/Docker, ready to `grep` or ship to a log collector. Off by default so the hot redirect path pays no synchronous `println!`/stdout-lock cost at high throughput.
 - Redirects carry a **TTL-aware `Cache-Control`** header, so a CDN/browser can cache the 302 (and never past a link's expiry). See [`docs/EDGE.md`](docs/EDGE.md) for putting Cloudflare in front.
 
 ## More

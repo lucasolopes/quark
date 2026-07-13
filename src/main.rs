@@ -62,6 +62,9 @@ async fn main() {
     if admin_token.is_none() {
         eprintln!("AVISO: QUARK_ADMIN_TOKEN não definido — endpoint /stats desligado.");
     }
+    if std::env::var("QUARK_ACCESS_LOG").is_err() {
+        eprintln!("access log por request desligado (defina QUARK_ACCESS_LOG=1 para ligar)");
+    }
     let state = Arc::new(AppState {
         cache,
         store,
