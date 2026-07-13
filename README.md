@@ -232,6 +232,7 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 - What's next: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Full system design: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Deeper walkthrough of every component, data model and the Feistel round internals: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Escala horizontal (réplicas + Postgres) e o `QUARK_NODE_ID`: [`docs/SCALING.md`](docs/SCALING.md)
 
 ## License
 
