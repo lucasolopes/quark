@@ -91,6 +91,34 @@ async fn search_escapes_wildcards() {
     );
 }
 
+// Case-insensitive: termo em caixa alta casa url/alias em minúsculas (ILIKE).
+#[tokio::test]
+#[serial(pg)]
+async fn search_is_case_insensitive() {
+    let Some(store) = fresh().await else {
+        return;
+    };
+    let ids = seed_links(
+        &store,
+        &[
+            ("https://github.com/rust-lang", None),
+            ("https://docs.rs", Some("rust")),
+        ],
+    )
+    .await;
+    // "RUST" (caixa alta) casa a url minúscula rust-lang E o alias minúsculo "rust".
+    let hits = store.search_links("RUST", None, 50).await.unwrap();
+    assert!(
+        hits.iter()
+            .any(|(_, r)| r.url.contains("github.com/rust-lang")),
+        "casa url em caixa diferente"
+    );
+    assert!(
+        hits.iter().any(|(id, _)| *id == ids[1]),
+        "casa alias em caixa diferente"
+    );
+}
+
 // Keyset: after corta os ids <= after.
 #[tokio::test]
 #[serial(pg)]
