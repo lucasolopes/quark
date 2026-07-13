@@ -242,6 +242,10 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 - Deeper walkthrough of every component, data model and the Feistel round internals: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Escala horizontal (réplicas + Postgres) e o `QUARK_NODE_ID`: [`docs/SCALING.md`](docs/SCALING.md)
 
+## Contributing
+
+Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). PRs require a one-time [Contributor License Agreement](CLA.md) (a license grant — **you keep ownership of your contributions**).
+
 ## License
 
 quark's core is **AGPL-3.0-only** — see [`LICENSE`](LICENSE). Copyright © 2026 Lucas Olopes.
