@@ -1,7 +1,7 @@
 # quark
 
 [![CI](https://github.com/lucasolopes/quark/actions/workflows/ci.yml/badge.svg)](https://github.com/lucasolopes/quark/actions/workflows/ci.yml)
-![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue)
 ![Rust 2021](https://img.shields.io/badge/rust-2021-orange)
 ![Runtime deps: none](https://img.shields.io/badge/runtime%20deps-none-brightgreen)
 ![Self-hosted](https://img.shields.io/badge/self--hosted-single%20binary-informational)
@@ -244,4 +244,9 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+quark's core is **AGPL-3.0-only** — see [`LICENSE`](LICENSE). Copyright © 2026 Lucas Olopes.
+
+- **Self-hosting a single-account instance is free and unrestricted.**
+- If you run a **modified** quark as a network service for others, the AGPL requires you to publish your modifications under the same license.
+- The hosted, **multi-tenant cloud edition** (accounts, billing, tenant isolation) is a separate proprietary offering, not part of this AGPL core.
+- **Commercial licenses** of the core — to use it without the AGPL's copyleft obligations — are available on request.

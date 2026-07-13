@@ -3,7 +3,7 @@ name = "quark"
 version = "0.1.0"
 edition = "2021"
 description = "URL shortener whose short code is a calibrated reduced-round ARX permutation"
-license = "MIT"
+license = "AGPL-3.0-only"
 
 [lib]
 name = "quark"
