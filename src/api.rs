@@ -64,12 +64,34 @@ fn cache_control_for(expiry: Option<u64>, now: u64) -> String {
     }
 }
 
+/// Exige o admin token para criar — mas só quando um token está configurado.
+/// Sem QUARK_ADMIN_TOKEN, criar continua público (shortener aberto).
+fn require_admin_for_create(st: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
+    match st.admin_token.as_deref() {
+        None => Ok(()),
+        Some(expected) => {
+            let provided = headers
+                .get("x-admin-token")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+                Ok(())
+            } else {
+                Err(StatusCode::UNAUTHORIZED)
+            }
+        }
+    }
+}
+
 async fn create(
     State(st): State<Arc<AppState>>,
     conn: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
     Json(req): Json<CreateReq>,
 ) -> Response {
+    if let Err(status) = require_admin_for_create(&st, &headers) {
+        return status.into_response();
+    }
     // 1) rate-limit (checagem barata primeiro)
     let ip = client_ip(&headers, &st.real_ip_header, conn.as_ref());
     if !st.ratelimiter.check(&ip, now()).await {

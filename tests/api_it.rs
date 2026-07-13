@@ -515,6 +515,7 @@ async fn admin_links_lista_paginada() {
             .oneshot(
                 Request::post("/")
                     .header("content-type", "application/json")
+                    .header("x-admin-token", "segredo")
                     .body(Body::from(format!(r#"{{"url":"{u}"}}"#)))
                     .unwrap(),
             )
@@ -558,6 +559,7 @@ async fn cria_e_pega_code(app: &axum::Router, url: &str) -> String {
         .oneshot(
             Request::post("/")
                 .header("content-type", "application/json")
+                .header("x-admin-token", "segredo")
                 .body(Body::from(format!(r#"{{"url":"{url}"}}"#)))
                 .unwrap(),
         )
@@ -684,6 +686,37 @@ async fn admin_patch_url_invalida_400() {
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_sem_token_quando_configurado_401() {
+    let app = app_admin("segredo").await;
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"https://example.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn create_com_token_quando_configurado_ok() {
+    let app = app_admin("segredo").await;
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "segredo")
+                .body(Body::from(r#"{"url":"https://example.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]
