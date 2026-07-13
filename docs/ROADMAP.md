@@ -2,12 +2,13 @@
 
 ## Estado atual
 
-Núcleo em produção + **arquitetura plugável completa**. Único binário e zero-dependências
-por padrão; backends de rede opt-in por variável de ambiente, escolhidos no startup, sem
-feature flags de build. Testado (53 testes de lib + 18 de API + suíte de integração gated
-para Postgres/Valkey/ClickHouse) e benchmarkado (permute ~264M ops/s; redirect ~7,9µs
-in-process; em produção escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o
-servidor).
+Produto OSS de operador único essencialmente completo: **API + painel web**, sob
+**licença AGPL-3.0** com **CLA** pra contribuições. Núcleo de binário único e
+zero-dependências por padrão; backends de rede opt-in por env (escolhidos no
+startup, sem feature flag de build). Testado (56 testes de lib + 28 de API +
+suíte de integração gated Postgres/Valkey/ClickHouse + 30 testes de frontend) e
+benchmarkado (permute ~264M ops/s; redirect ~7,9µs in-process; em produção
+escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 
 ## Feito
 
@@ -15,46 +16,62 @@ servidor).
   é uma permutação Feistel/ARX calibrada (`ROUNDS=4`); códigos são **calculados, não
   armazenados** (store chaveado por `u64`).
 - **Arquitetura plugável** — traits `Store` / `CacheTier` / `AnalyticsSink`:
-  - **L2 Valkey** (`QUARK_VALKEY_URL`) — cache compartilhado entre réplicas, com
-    circuit-breaker + timeout de 100ms, fail-open (Valkey caído nunca trava o redirect).
+  - **L2 Valkey** (`QUARK_VALKEY_URL`) — cache compartilhado, circuit-breaker + timeout, fail-open.
   - **Postgres** (`QUARK_DATABASE_URL`) — store relacional multi-nó (sequência de id atômica).
-  - **ClickHouse** (`QUARK_CLICKHOUSE_URL`) — sink de analytics OLAP (analytics-only, nunca store).
-- **Analytics de cliques** — captura fire-and-forget no 302 (custo medido ~180ns, ~2,3% do
-  handler) → worker de fundo (batch) → sink; `GET /:code/stats` (agregados + últimos N eventos),
-  protegido por `QUARK_ADMIN_TOKEN`.
-- **Observabilidade** — log de acesso JSON por request, **opt-in** (`QUARK_ACCESS_LOG`), fora do
-  caminho quente por padrão.
-- **Edge/CDN** — `Cache-Control` no redirect respeitando o TTL do link (guia em `docs/EDGE.md`).
+  - **ClickHouse** (`QUARK_CLICKHOUSE_URL`) — sink de analytics OLAP (analytics-only).
+- **Analytics de cliques** — captura fire-and-forget no 302 (~180ns) → worker → sink;
+  `GET /:code/stats` (agregados + últimos N eventos).
+- **Observabilidade** — log de acesso JSON por request, opt-in (`QUARK_ACCESS_LOG`).
+- **Edge/CDN** — `Cache-Control` no redirect respeitando o TTL (guia em `docs/EDGE.md`).
 - **Escala horizontal** — réplicas stateless sobre Postgres compartilhado; `QUARK_NODE_ID`
-  particiona o espaço de id no LMDB (guarda defensiva contra colisão de código). Doc:
-  `docs/SCALING.md`.
-- **Proteção contra abuso** — só no `POST /`: rate-limit por IP (memória ou Valkey, fail-open,
-  opt-in via `QUARK_RATELIMIT_PER_MIN`), blocklist de destino **no banco** (match
-  domínio+subdomínio, cache snapshot L1/L2, gerida por `GET/POST/DELETE /admin/blocklist`), e
-  guarda embutida contra rede interna/loop (default on, `QUARK_BLOCK_PRIVATE=0` desliga).
+  particiona o espaço de id no LMDB (guarda defensiva). Doc: `docs/SCALING.md`.
+- **Proteção contra abuso** (só no `POST /`) — rate-limit por IP (`QUARK_RATELIMIT_PER_MIN`,
+  memória/Valkey, fail-open), blocklist de destino no banco (`/admin/blocklist`, cache L1/L2),
+  guarda embutida contra rede interna/loop (`QUARK_BLOCK_PRIVATE`, default on).
+- **API do painel** — `GET /admin/links` (lista keyset paginada), `DELETE`/`PATCH /admin/links/:code`,
+  tudo sob `QUARK_ADMIN_TOKEN`. **Criar (`POST /`) exige o token quando `QUARK_ADMIN_TOKEN`
+  está configurado** (senão continua público). CORS opt-in via `QUARK_CORS_ORIGINS`.
+- **Painel web (SPA)** — `web/` (React + Vite + shadcn/ui + TanStack + Recharts), deploy
+  separado (build estático), binário API-only. Login por token → Links (CRUD, busca
+  client-side, copiar, **QR code**) → Stats por link (gráficos) → Blocklist. UI/UX seguindo
+  heurísticas de Nielsen.
+- **Licença + contribuições** — núcleo **AGPL-3.0-only**; `CLA.md` (license-grant) +
+  `CONTRIBUTING.md` + bot do CLA (GitHub Action). Multi-tenancy/cloud fica proprietária, à parte.
+- **`docker-compose.yml`** — stack full (quark + Postgres + Valkey + ClickHouse) pra dev/self-host.
 
 ## Próximo
 
-- **Contas + painel web** — login + UI pra gerenciar links. É o que faz o quark deixar de ser
-  só infra e virar produto (concorrente dos SaaS). Modelo de produto travado: **versão OSS =
-  conta única; versão cloud = multi-tenant**. O painel consome os endpoints `/admin/*` já
-  existentes. Merece brainstorming próprio (backend de auth + modelo de usuário + frontend).
+- **Contas + painel multi-usuário** — é **fase cloud** (multi-tenant, proprietária). O OSS
+  fica em conta única (operador). Merece brainstorming próprio quando for a hora.
+- **Deploy da versão completa na VPS** — API + painel ainda não estão em produção
+  (`quark.meuchat.ai` roda versão antiga); subir via Coolify.
 
 ## Backlog
 
-- **Domínios customizados + QR code.**
-- **Deploy da versão nova na VPS:** `quark.meuchat.ai` ainda roda uma versão anterior aos
-  tijolos 3–7; subir via Coolify quando quiser.
+- **Domínios customizados** — `meudominio.com/abc`.
+
+## Deferido — Postgres-gated (implementar só quando houver Postgres em uso)
+
+- **Busca server-side com paginação** nos links (`GET /admin/links?q=`). Decisão: recurso do
+  **Postgres** (`ILIKE`); o LMDB não ganha busca server-side (mantém a busca **client-side**
+  atual do painel). Mesmo princípio de escala do resto do projeto. Não construído ainda.
 
 ## Restrições de design (conscientes)
 
-- **Um binário puro (LMDB, sem banco) é single-node, por design.** Não é uma limitação a ser
-  removida: é uma escolha. Escalar horizontalmente = rodar réplicas stateless sobre **Postgres
-  compartilhado** (formato 2 em `docs/SCALING.md`). O `QUARK_NODE_ID` existe só como guarda
-  defensiva contra colisão de código, não pra transformar o LMDB em multi-nó.
-- **Proteção contra abuso** roda só no `POST /`; o redirect é caminho quente e não paga nada.
+- **Um binário puro (LMDB, sem banco) é single-node, por design** — não é limitação a remover.
+  Escalar = réplicas stateless sobre Postgres compartilhado (`docs/SCALING.md`).
+- **Proteção contra abuso** roda só no `POST /`; o redirect (caminho quente) não paga nada.
+- **Criar link é público quando não há `QUARK_ADMIN_TOKEN`** (shortener aberto zero-config);
+  configurar o token tranca a criação pro operador.
+
+## Parqueado (futuro, não planejado)
+
+- **Cloud full-edge na Cloudflare Workers** — direção da versão cloud (permute compila WASM;
+  Store vira KV/D1/Durable Objects). Parqueado até virar prioridade.
+- **Proxy shared-nothing** (multi-nó LMDB sem banco) — não planejado; Postgres já cobre multi-nó.
 
 ## Notas
 
-- Anti-abuso, escala horizontal e analytics **não são mais diferidos** — foram entregues.
-- A CI no GitHub sobe serviços valkey + postgres + clickhouse para os testes de integração gated.
+- Anti-abuso, escala horizontal, analytics e o painel **foram entregues** (não são mais futuros).
+- A CI no GitHub tem um job Rust (com serviços valkey+postgres+clickhouse pros testes gated) e
+  um job `web` (lint/typecheck/test/build do frontend). O CLA é coletado por bot em cada PR.
