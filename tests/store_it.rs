@@ -33,16 +33,6 @@ async fn next_id_incrementa_e_persiste() {
 }
 
 #[tokio::test]
-async fn alias_nao_sobrescreve() {
-    let dir = tmp();
-    let store = open_store(dir.path()).await.unwrap();
-    assert!(store.put_alias("promo", 5).await.unwrap());
-    assert!(!store.put_alias("promo", 9).await.unwrap());
-    assert_eq!(store.get_alias("promo").await.unwrap(), Some(5));
-    assert_eq!(store.get_alias("inexistente").await.unwrap(), None);
-}
-
-#[tokio::test]
 async fn put_alias_and_link_atomico() {
     let dir = tmp();
     let store = open_store(dir.path()).await.unwrap();

@@ -45,7 +45,6 @@ pub trait Store: Send + Sync + 'static {
     async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError>;
     async fn put_link(&self, id: u64, rec: &Record) -> Result<(), StoreError>;
     async fn get_alias(&self, alias: &str) -> Result<Option<u64>, StoreError>;
-    async fn put_alias(&self, alias: &str, id: u64) -> Result<bool, StoreError>;
     async fn put_alias_and_link(
         &self,
         alias: &str,

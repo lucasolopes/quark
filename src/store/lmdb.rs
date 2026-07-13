@@ -68,16 +68,6 @@ impl Store for LmdbStore {
         Ok(self.aliases.get(&rtxn, alias)?)
     }
 
-    async fn put_alias(&self, alias: &str, id: u64) -> Result<bool, StoreError> {
-        let mut wtxn = self.env.write_txn()?;
-        if self.aliases.get(&wtxn, alias)?.is_some() {
-            return Ok(false);
-        }
-        self.aliases.put(&mut wtxn, alias, &id)?;
-        wtxn.commit()?;
-        Ok(true)
-    }
-
     /// Grava alias + link em uma única transação: ou ambos ou nenhum.
     /// Evita link órfão se o processo falhar entre as duas escritas.
     async fn put_alias_and_link(
