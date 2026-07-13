@@ -1,8 +1,9 @@
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { BarChart3, Check, Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { BarChart3, Check, Copy, MoreHorizontal, Pencil, QrCode, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { LinkQrDialog } from "@/components/LinkQrDialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -34,6 +35,7 @@ interface LinkTableProps {
 
 export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
   const [justCopiedId, setJustCopiedId] = useState<number | null>(null);
+  const [qrLink, setQrLink] = useState<Link | null>(null);
   const navigate = useNavigate();
 
   async function handleCopy(link: Link) {
@@ -119,6 +121,10 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
                   <BarChart3 className="size-3.5" />
                   Estatísticas
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setQrLink(link)}>
+                  <QrCode className="size-3.5" />
+                  QR code
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => onEdit(link)}>
                   <Pencil className="size-3.5" />
                   Editar
@@ -138,28 +144,41 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
   const table = useReactTable({ data: links, columns, getCoreRowModel: getCoreRowModel() });
 
   return (
-    <Table>
-      <caption className="sr-only">Links curtos cadastrados no sistema</caption>
-      <TableHeader>
-        {table.getHeaderGroups().map((headerGroup) => (
-          <TableRow key={headerGroup.id}>
-            {headerGroup.headers.map((header) => (
-              <TableHead key={header.id}>
-                {flexRender(header.column.columnDef.header, header.getContext())}
-              </TableHead>
-            ))}
-          </TableRow>
-        ))}
-      </TableHeader>
-      <TableBody>
-        {table.getRowModel().rows.map((row) => (
-          <TableRow key={row.id}>
-            {row.getVisibleCells().map((cell) => (
-              <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-            ))}
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <>
+      <Table>
+        <caption className="sr-only">Links curtos cadastrados no sistema</caption>
+        <TableHeader>
+          {table.getHeaderGroups().map((headerGroup) => (
+            <TableRow key={headerGroup.id}>
+              {headerGroup.headers.map((header) => (
+                <TableHead key={header.id}>
+                  {flexRender(header.column.columnDef.header, header.getContext())}
+                </TableHead>
+              ))}
+            </TableRow>
+          ))}
+        </TableHeader>
+        <TableBody>
+          {table.getRowModel().rows.map((row) => (
+            <TableRow key={row.id}>
+              {row.getVisibleCells().map((cell) => (
+                <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+
+      {qrLink && (
+        <LinkQrDialog
+          code={qrLink.code}
+          url={shortUrl(qrLink.code)}
+          open
+          onOpenChange={(next) => {
+            if (!next) setQrLink(null);
+          }}
+        />
+      )}
+    </>
   );
 }
