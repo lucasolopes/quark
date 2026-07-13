@@ -549,6 +549,21 @@ async fn admin_links_lista_paginada() {
 }
 
 #[tokio::test]
+async fn admin_links_search_on_lmdb_returns_501() {
+    let app = app_admin("segredo").await;
+    let resp = app
+        .oneshot(
+            Request::get("/admin/links?q=abc")
+                .header("x-admin-token", "segredo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
 async fn admin_links_sem_token_404() {
     let app = app().await; // admin_token: None
     let resp = app

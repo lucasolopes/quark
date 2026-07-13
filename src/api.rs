@@ -399,6 +399,7 @@ async fn blocklist_delete(
 struct ListParams {
     after: Option<u64>,
     limit: Option<usize>,
+    q: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -421,9 +422,19 @@ async fn admin_links_list(
         return status.into_response();
     }
     let limit = p.limit.unwrap_or(50).clamp(1, 500);
-    let links = match st.store.list_links(p.after, limit).await {
-        Ok(l) => l,
-        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    let q = p.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let links = match q {
+        Some(term) => match st.store.search_links(term, p.after, limit).await {
+            Ok(l) => l,
+            // Backend sem busca server-side (LMDB): sinaliza ao painel cair
+            // pro filtro client-side.
+            Err(StoreError::Unsupported) => return StatusCode::NOT_IMPLEMENTED.into_response(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        },
+        None => match st.store.list_links(p.after, limit).await {
+            Ok(l) => l,
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        },
     };
     // mapa id -> alias (um único list_aliases por request)
     let alias_map: std::collections::HashMap<u64, String> = match st.store.list_aliases().await {
