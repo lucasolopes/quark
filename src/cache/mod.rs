@@ -1,10 +1,10 @@
 pub mod valkey;
 
+use crate::now;
 use crate::store::{Record, Store, StoreError};
 use moka::sync::Cache as Moka;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const BREAKER_THRESHOLD: u32 = 5;
 pub const BREAKER_COOLDOWN_SECS: u64 = 30;
@@ -32,13 +32,6 @@ impl std::error::Error for TierError {}
 pub trait CacheTier: Send + Sync + 'static {
     async fn get(&self, id: u64) -> Result<Option<Record>, TierError>;
     async fn set(&self, id: u64, rec: &Record, ttl_secs: u64) -> Result<(), TierError>;
-}
-
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 /// TTL efetivo do L2 pra um registro: capado pelo TTL default e pelo tempo

@@ -29,6 +29,14 @@ impl std::fmt::Display for StoreError {
     }
 }
 impl std::error::Error for StoreError {}
+impl StoreError {
+    /// Constrói um `Backend` a partir de qualquer erro exibível (sqlx,
+    /// clickhouse, etc). Enxuga o `.map_err(|e| Backend(e.to_string()))`
+    /// repetido nos backends de rede: `.map_err(StoreError::backend)`.
+    pub fn backend<E: std::fmt::Display>(e: E) -> StoreError {
+        StoreError::Backend(e.to_string())
+    }
+}
 impl From<heed::Error> for StoreError {
     fn from(e: heed::Error) -> Self {
         StoreError::Db(e)

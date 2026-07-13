@@ -32,6 +32,16 @@ struct RecentRow {
     referer: String,
 }
 
+/// String vazia vira `None`, senão `Some(s)`. Enxuga o padrão de campo-vazio.
+/// Toma posse: move no caminho de reconstrução (sem alocação extra).
+fn non_empty(s: String) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
 /// Extrai (endpoint scheme://host[:port], user, password, database) de uma URL.
 #[allow(clippy::type_complexity)]
 fn parse_ch_url(
@@ -47,23 +57,9 @@ fn parse_ch_url(
         Some(p) => format!("{scheme}://{host}:{p}"),
         None => format!("{scheme}://{host}"),
     };
-    let user = {
-        let x = u.username();
-        if x.is_empty() {
-            None
-        } else {
-            Some(x.to_string())
-        }
-    };
+    let user = non_empty(u.username().to_string());
     let pass = u.password().map(|s| s.to_string());
-    let db = {
-        let p = u.path().trim_start_matches('/');
-        if p.is_empty() {
-            None
-        } else {
-            Some(p.to_string())
-        }
-    };
+    let db = non_empty(u.path().trim_start_matches('/').to_string());
     Ok((endpoint, user, pass, db))
 }
 
@@ -96,7 +92,7 @@ impl ClickHouseSink {
             )
             .execute()
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))
+            .map_err(StoreError::backend)
     }
 
     /// Uso em testes: zera todo o estado.
@@ -105,7 +101,7 @@ impl ClickHouseSink {
             .query("TRUNCATE TABLE IF EXISTS clicks")
             .execute()
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))
+            .map_err(StoreError::backend)
     }
 }
 
@@ -115,10 +111,7 @@ impl AnalyticsSink for ClickHouseSink {
         if events.is_empty() {
             return Ok(());
         }
-        let mut insert = self
-            .client
-            .insert("clicks")
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        let mut insert = self.client.insert("clicks").map_err(StoreError::backend)?;
         for e in events {
             let device = device_from_ua(e.user_agent.as_deref());
             let row = ClickRow {
@@ -128,15 +121,9 @@ impl AnalyticsSink for ClickHouseSink {
                 device,
                 referer: e.referer.as_deref().unwrap_or(""),
             };
-            insert
-                .write(&row)
-                .await
-                .map_err(|e| StoreError::Backend(e.to_string()))?;
+            insert.write(&row).await.map_err(StoreError::backend)?;
         }
-        insert
-            .end()
-            .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        insert.end().await.map_err(StoreError::backend)?;
         Ok(())
     }
 
@@ -147,7 +134,7 @@ impl AnalyticsSink for ClickHouseSink {
             .bind(id)
             .fetch_one()
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
         if totals.total == 0 {
             return Ok(None);
         }
@@ -167,7 +154,7 @@ impl AnalyticsSink for ClickHouseSink {
             .bind(id)
             .fetch_all()
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
         for kv in per_day {
             agg.per_day.insert(kv.k, kv.c);
         }
@@ -178,7 +165,7 @@ impl AnalyticsSink for ClickHouseSink {
             .bind(id)
             .fetch_all()
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
         for kv in per_country {
             if !kv.k.is_empty() {
                 agg.per_country.insert(kv.k, kv.c);
@@ -191,7 +178,7 @@ impl AnalyticsSink for ClickHouseSink {
             .bind(id)
             .fetch_all()
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
         for kv in per_device {
             agg.per_device.insert(kv.k, kv.c);
         }
@@ -203,23 +190,15 @@ impl AnalyticsSink for ClickHouseSink {
             .bind(EVENTS_MAX as u64)
             .fetch_all()
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
         recent_rows.reverse(); // cronológico
         let recent = recent_rows
             .into_iter()
             .map(|r| ClickEvent {
                 id,
                 ts: r.ts,
-                referer: if r.referer.is_empty() {
-                    None
-                } else {
-                    Some(r.referer)
-                },
-                country: if r.country.is_empty() {
-                    None
-                } else {
-                    Some(r.country)
-                },
+                referer: non_empty(r.referer),
+                country: non_empty(r.country),
                 user_agent: None, // ClickHouse guarda device, não o UA cru (fidelidade documentada)
             })
             .collect();

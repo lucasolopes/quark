@@ -16,7 +16,7 @@ impl PostgresStore {
             .max_connections(10)
             .connect(url)
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
         let s = PostgresStore { pool };
         s.init_schema().await?;
         Ok(s)
@@ -28,16 +28,12 @@ impl PostgresStore {
     /// do Postgres) — por isso serializamos com um advisory lock de sessão numa
     /// única conexão antes de rodar o DDL.
     async fn init_schema(&self) -> Result<(), StoreError> {
-        let mut conn = self
-            .pool
-            .acquire()
-            .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        let mut conn = self.pool.acquire().await.map_err(StoreError::backend)?;
         sqlx::query("SELECT pg_advisory_lock($1)")
             .bind(QUARK_SCHEMA_LOCK_ID)
             .execute(&mut *conn)
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
 
         let result = async {
             for ddl in [
@@ -50,7 +46,7 @@ impl PostgresStore {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
                     .await
-                    .map_err(|e| StoreError::Backend(e.to_string()))?;
+                    .map_err(StoreError::backend)?;
             }
             Ok(())
         }
@@ -60,7 +56,7 @@ impl PostgresStore {
             .bind(QUARK_SCHEMA_LOCK_ID)
             .execute(&mut *conn)
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
 
         result
     }
@@ -74,7 +70,7 @@ impl PostgresStore {
             sqlx::query(q)
                 .execute(&self.pool)
                 .await
-                .map_err(|e| StoreError::Backend(e.to_string()))?;
+                .map_err(StoreError::backend)?;
         }
         Ok(())
     }
@@ -86,10 +82,8 @@ impl Store for PostgresStore {
         let row = sqlx::query("SELECT nextval('quark_id_seq') AS id")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
-        let id: i64 = row
-            .try_get("id")
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
+        let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
         Ok(id as u64)
     }
 
@@ -98,18 +92,12 @@ impl Store for PostgresStore {
             .bind(id as i64)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
         match row {
             Some(r) => {
-                let url: String = r
-                    .try_get("url")
-                    .map_err(|e| StoreError::Backend(e.to_string()))?;
-                let expiry: Option<i64> = r
-                    .try_get("expiry")
-                    .map_err(|e| StoreError::Backend(e.to_string()))?;
-                let created: i64 = r
-                    .try_get("created")
-                    .map_err(|e| StoreError::Backend(e.to_string()))?;
+                let url: String = r.try_get("url").map_err(StoreError::backend)?;
+                let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
+                let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
                 Ok(Some(Record {
                     url,
                     expiry: expiry.map(|v| v as u64),
@@ -131,7 +119,7 @@ impl Store for PostgresStore {
         .bind(rec.created as i64)
         .execute(&self.pool)
         .await
-        .map_err(|e| StoreError::Backend(e.to_string()))?;
+        .map_err(StoreError::backend)?;
         Ok(())
     }
 
@@ -140,12 +128,10 @@ impl Store for PostgresStore {
             .bind(alias)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
         match row {
             Some(r) => {
-                let id: i64 = r
-                    .try_get("id")
-                    .map_err(|e| StoreError::Backend(e.to_string()))?;
+                let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
                 Ok(Some(id as u64))
             }
             None => Ok(None),
@@ -158,11 +144,7 @@ impl Store for PostgresStore {
         id: u64,
         rec: &Record,
     ) -> Result<bool, StoreError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
         let res = sqlx::query(
             "INSERT INTO aliases (alias, id) VALUES ($1,$2) ON CONFLICT (alias) DO NOTHING",
         )
@@ -170,7 +152,7 @@ impl Store for PostgresStore {
         .bind(id as i64)
         .execute(&mut *tx)
         .await
-        .map_err(|e| StoreError::Backend(e.to_string()))?;
+        .map_err(StoreError::backend)?;
         if res.rows_affected() == 0 {
             // alias já existe -> rollback (drop) e false
             return Ok(false);
@@ -185,10 +167,8 @@ impl Store for PostgresStore {
         .bind(rec.created as i64)
         .execute(&mut *tx)
         .await
-        .map_err(|e| StoreError::Backend(e.to_string()))?;
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        .map_err(StoreError::backend)?;
+        tx.commit().await.map_err(StoreError::backend)?;
         Ok(true)
     }
 }
@@ -204,11 +184,7 @@ impl AnalyticsSink for PostgresStore {
         for e in events {
             by_id.entry(e.id).or_default().push(e);
         }
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
         for (id, evs) in by_id {
             // Serializa read-modify-write concorrente sobre o mesmo id entre instâncias
             // (multi-node): sem isso, dois workers podem ler o mesmo snapshot de agg/recent,
@@ -219,18 +195,16 @@ impl AnalyticsSink for PostgresStore {
                 .bind(id as i64)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| StoreError::Backend(e.to_string()))?;
+                .map_err(StoreError::backend)?;
             // agregados
             let row = sqlx::query("SELECT agg FROM stats WHERE id=$1")
                 .bind(id as i64)
                 .fetch_optional(&mut *tx)
                 .await
-                .map_err(|e| StoreError::Backend(e.to_string()))?;
+                .map_err(StoreError::backend)?;
             let mut agg: Aggregates = match row {
                 Some(r) => {
-                    let v: serde_json::Value = r
-                        .try_get("agg")
-                        .map_err(|e| StoreError::Backend(e.to_string()))?;
+                    let v: serde_json::Value = r.try_get("agg").map_err(StoreError::backend)?;
                     serde_json::from_value(v)?
                 }
                 None => Aggregates::default(),
@@ -246,18 +220,16 @@ impl AnalyticsSink for PostgresStore {
             .bind(&aggv)
             .execute(&mut *tx)
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
             // eventos crus (ring)
             let row = sqlx::query("SELECT recent FROM events WHERE id=$1")
                 .bind(id as i64)
                 .fetch_optional(&mut *tx)
                 .await
-                .map_err(|e| StoreError::Backend(e.to_string()))?;
+                .map_err(StoreError::backend)?;
             let mut recent: Vec<ClickEvent> = match row {
                 Some(r) => {
-                    let v: serde_json::Value = r
-                        .try_get("recent")
-                        .map_err(|e| StoreError::Backend(e.to_string()))?;
+                    let v: serde_json::Value = r.try_get("recent").map_err(StoreError::backend)?;
                     serde_json::from_value(v)?
                 }
                 None => Vec::new(),
@@ -277,11 +249,9 @@ impl AnalyticsSink for PostgresStore {
             .bind(&recv)
             .execute(&mut *tx)
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
         }
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        tx.commit().await.map_err(StoreError::backend)?;
         Ok(())
     }
 
@@ -290,12 +260,10 @@ impl AnalyticsSink for PostgresStore {
             .bind(id as i64)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
         let agg: Aggregates = match row {
             Some(r) => {
-                let v: serde_json::Value = r
-                    .try_get("agg")
-                    .map_err(|e| StoreError::Backend(e.to_string()))?;
+                let v: serde_json::Value = r.try_get("agg").map_err(StoreError::backend)?;
                 serde_json::from_value(v)?
             }
             None => return Ok(None),
@@ -304,12 +272,10 @@ impl AnalyticsSink for PostgresStore {
             .bind(id as i64)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| StoreError::Backend(e.to_string()))?;
+            .map_err(StoreError::backend)?;
         let recent: Vec<ClickEvent> = match row {
             Some(r) => {
-                let v: serde_json::Value = r
-                    .try_get("recent")
-                    .map_err(|e| StoreError::Backend(e.to_string()))?;
+                let v: serde_json::Value = r.try_get("recent").map_err(StoreError::backend)?;
                 serde_json::from_value(v)?
             }
             None => Vec::new(),

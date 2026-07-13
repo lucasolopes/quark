@@ -1,7 +1,7 @@
 use crate::analytics::{AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
-use crate::store::{Record, Store};
-use crate::{codec, permute};
+use crate::store::{Record, Store, StoreError};
+use crate::{codec, now, permute};
 use axum::extract::{Path, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
@@ -10,7 +10,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 pub struct AppState {
     pub cache: Cache,
@@ -32,13 +32,6 @@ pub struct CreateReq {
 pub struct CreateResp {
     code: String,
     url: String,
-}
-
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 fn is_valid_url(u: &str) -> bool {
@@ -118,25 +111,32 @@ async fn create(State(st): State<Arc<AppState>>, Json(req): Json<CreateReq>) -> 
     Json(CreateResp { code, url: req.url }).into_response()
 }
 
+/// Resolve um code de URL em id: primeiro tenta código numérico (base62 no
+/// domínio); se não for, trata como alias no store. `Ok(Some(id))` resolvido,
+/// `Ok(None)` inexistente, `Err` falha de backend. Cada handler mapeia esses
+/// casos pra sua própria resposta HTTP (o redirect anexa Cache-Control no 404).
+async fn resolve_code(st: &AppState, code: &str) -> Result<Option<u64>, StoreError> {
+    match codec::from_base62(code) {
+        Some(c) if c <= permute::MAX_ID => Ok(Some(permute::decode(c, st.key))),
+        _ => st.store.get_alias(code).await,
+    }
+}
+
 async fn redirect(
     State(st): State<Arc<AppState>>,
     Path(code): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    // resolve id: primeiro tenta código numérico; se falhar, tenta alias.
-    let id = match codec::from_base62(&code) {
-        Some(c) if c <= permute::MAX_ID => permute::decode(c, st.key),
-        _ => match st.store.get_alias(&code).await {
-            Ok(Some(id)) => id,
-            Ok(None) => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    [(header::CACHE_CONTROL, "no-store".to_string())],
-                )
-                    .into_response()
-            }
-            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        },
+    let id = match resolve_code(&st, &code).await {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                [(header::CACHE_CONTROL, "no-store".to_string())],
+            )
+                .into_response()
+        }
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     match st.cache.get(id).await {
         Ok(Some(rec)) => {
@@ -206,14 +206,10 @@ async fn stats(
     if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    // resolve code -> id (mesma lógica do redirect)
-    let id = match codec::from_base62(&code) {
-        Some(c) if c <= permute::MAX_ID => permute::decode(c, st.key),
-        _ => match st.store.get_alias(&code).await {
-            Ok(Some(id)) => id,
-            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        },
+    let id = match resolve_code(&st, &code).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     // link precisa existir; alvo de alias inexistente também é 404 (mesma lógica do redirect)
     match st.store.get_link(id).await {
