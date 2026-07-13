@@ -3,6 +3,7 @@ import { api } from "./api";
 import type { CreateLinkRequest, PatchLinkRequest } from "./types";
 
 const LINKS_QUERY_KEY = ["links"];
+const BLOCKLIST_QUERY_KEY = ["blocklist"];
 
 /**
  * Cliente único do TanStack Query para a aplicação. `retry: false` porque um
@@ -68,5 +69,31 @@ export function useStats(code: string) {
     queryKey: ["stats", code],
     queryFn: () => api.getStats(code),
     enabled: Boolean(code),
+  });
+}
+
+/** Lista de domínios bloqueados, para a tela de Blocklist. */
+export function useBlocklist() {
+  return useQuery({
+    queryKey: BLOCKLIST_QUERY_KEY,
+    queryFn: () => api.listBlocked(),
+  });
+}
+
+/** Adiciona um domínio à blocklist; sucesso invalida `useBlocklist`. */
+export function useAddBlocked() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (domain: string) => api.addBlocked(domain),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: BLOCKLIST_QUERY_KEY }); },
+  });
+}
+
+/** Remove um domínio da blocklist; sucesso invalida `useBlocklist`. */
+export function useRemoveBlocked() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (domain: string) => api.removeBlocked(domain),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: BLOCKLIST_QUERY_KEY }); },
   });
 }
