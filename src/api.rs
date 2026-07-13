@@ -4,7 +4,7 @@ use crate::cache::Cache;
 use crate::store::{Record, Store, StoreError};
 use crate::{codec, now, permute};
 use axum::body::Bytes;
-use axum::extract::{ConnectInfo, Path, Request, State};
+use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -371,6 +371,56 @@ async fn blocklist_delete(
     StatusCode::OK.into_response()
 }
 
+#[derive(Deserialize)]
+struct ListParams {
+    after: Option<u64>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct LinkRow {
+    id: u64,
+    code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alias: Option<String>,
+    url: String,
+    expiry: Option<u64>,
+    created: u64,
+}
+
+async fn admin_links_list(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(p): Query<ListParams>,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    let limit = p.limit.unwrap_or(50).clamp(1, 500);
+    let links = match st.store.list_links(p.after, limit).await {
+        Ok(l) => l,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    // mapa id -> alias (um único list_aliases por request)
+    let alias_map: std::collections::HashMap<u64, String> = match st.store.list_aliases().await {
+        Ok(pairs) => pairs.into_iter().map(|(a, id)| (id, a)).collect(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let next_after = links.last().map(|(id, _)| *id);
+    let rows: Vec<LinkRow> = links
+        .into_iter()
+        .map(|(id, rec)| LinkRow {
+            id,
+            code: codec::to_base62(permute::encode(id, st.key)),
+            alias: alias_map.get(&id).cloned(),
+            url: rec.url,
+            expiry: rec.expiry,
+            created: rec.created,
+        })
+        .collect();
+    Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -426,6 +476,7 @@ pub fn router(state: Arc<AppState>) -> Router {
                 .post(blocklist_add)
                 .delete(blocklist_delete),
         )
+        .route("/admin/links", get(admin_links_list))
         .with_state(state);
 
     // Log de acesso por request é opt-in: em alta vazão, o println! síncrono

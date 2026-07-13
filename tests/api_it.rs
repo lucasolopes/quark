@@ -505,3 +505,49 @@ async fn admin_blocklist_delete_remove() {
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["domains"].as_array().unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn admin_links_lista_paginada() {
+    let app = app_admin("segredo").await;
+    // cria 2 links
+    for u in ["https://a.com", "https://b.com"] {
+        app.clone()
+            .oneshot(
+                Request::post("/")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"url":"{u}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    // lista
+    let resp = app
+        .oneshot(
+            Request::get("/admin/links?limit=10")
+                .header("x-admin-token", "segredo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let links = v["links"].as_array().unwrap();
+    assert_eq!(links.len(), 2);
+    assert!(links[0]["code"].as_str().unwrap().len() == 7);
+    assert_eq!(links[0]["url"], "https://a.com");
+}
+
+#[tokio::test]
+async fn admin_links_sem_token_404() {
+    let app = app().await; // admin_token: None
+    let resp = app
+        .oneshot(Request::get("/admin/links").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
