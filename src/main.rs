@@ -1,6 +1,6 @@
 use quark::api::{router, AppState};
 use quark::cache::Cache;
-use quark::store::Store;
+use quark::store::open_store;
 use std::sync::Arc;
 
 #[tokio::main]
@@ -13,7 +13,9 @@ async fn main() {
             eprintln!("AVISO: QUARK_KEY não definido — usando chave de dev. NÃO use em produção.");
             0x9E3779B97F4A7C15
         });
-    let store = Arc::new(Store::open(std::path::Path::new(&path)).expect("abrir store"));
+    let store = open_store(std::path::Path::new(&path))
+        .await
+        .expect("abrir store");
     let cache = Cache::new(store.clone(), 100_000);
     let state = Arc::new(AppState { cache, store, key });
     let app = router(state);

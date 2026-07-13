@@ -8,7 +8,8 @@ use tower::ServiceExt; // oneshot
 
 fn app() -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let store = Arc::new(Store::open(dir.path()).unwrap());
+    let store = quark::store::lmdb::LmdbStore::open(dir.path()).unwrap();
+    let store: Arc<dyn Store> = Arc::new(store);
     let cache = Cache::new(store.clone(), 1000);
     let state = Arc::new(AppState {
         cache,
