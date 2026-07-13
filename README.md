@@ -219,11 +219,17 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 | `QUARK_DATABASE_URL` | Use Postgres for the store, e.g. `postgres://user:pass@host:5432/db`. | unset → LMDB |
 | `QUARK_CLICKHOUSE_URL` | Use ClickHouse for analytics, e.g. `http://user:pass@host:8123/db`. | unset → store's embedded sink |
 | `QUARK_ACCESS_LOG` | Enable per-request JSON access log on stdout. | unset → off |
+| `QUARK_RATELIMIT_PER_MIN` | Creations/min per IP on `POST /` (unset/`0` = off). Uses Valkey if `QUARK_VALKEY_URL` is set (global limit), else in-memory per replica. | unset → off |
+| `QUARK_REAL_IP_HEADER` | Header to read the client IP from. | `CF-Connecting-IP` |
+| `QUARK_BLOCK_PRIVATE` | Guard against internal/loop destinations; on by default, `0` disables it. | on |
+| `QUARK_PUBLIC_HOST` | This instance's own host, for anti-loop (otherwise uses the `Host` header). | unset → uses `Host` header |
+| `QUARK_BLOCKLIST_TTL` | Seconds the blocklist snapshot is cached for. | `60` |
 
 ## Operating
 
 - Per-request access logging is **opt-in via `QUARK_ACCESS_LOG`** (off by default). When set, every request emits a **structured JSON log line** to stdout (`{"method","path","status","latency_ms"}`) — captured as-is by Coolify/Docker, ready to `grep` or ship to a log collector. Off by default so the hot redirect path pays no synchronous `println!`/stdout-lock cost at high throughput.
 - Redirects carry a **TTL-aware `Cache-Control`** header, so a CDN/browser can cache the 302 (and never past a link's expiry). See [`docs/EDGE.md`](docs/EDGE.md) for putting Cloudflare in front.
+- The domain blocklist is managed via `GET/POST/DELETE /admin/blocklist` (JSON body `{"domain": "..."}` for POST/DELETE), protected by `QUARK_ADMIN_TOKEN` (header `x-admin-token`; unset → 404, wrong token → 401).
 
 ## More
 

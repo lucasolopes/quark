@@ -342,6 +342,93 @@ async fn codigo_inexistente_404_tem_cache_control_no_store() {
     assert_eq!(resp.headers()["cache-control"], "no-store");
 }
 
+async fn app_admin(token: &str) -> axum::Router {
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let store2 = store.clone();
+    let state = Arc::new(AppState {
+        cache,
+        store,
+        key: 0x1234,
+        analytics_tx: tx,
+        sink,
+        admin_token: Some(token.to_string()),
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+    });
+    router(state)
+}
+
+#[tokio::test]
+async fn admin_blocklist_add_list_e_bloqueia() {
+    let app = app_admin("segredo").await;
+    // add
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/blocklist")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "segredo")
+                .body(Body::from(r#"{"domain":"evil.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // list contém
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/blocklist")
+                .header("x-admin-token", "segredo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["domains"][0], "evil.com");
+}
+
+#[tokio::test]
+async fn admin_blocklist_sem_token_404() {
+    // app() tem admin_token: None
+    let app = app().await;
+    let resp = app
+        .oneshot(
+            Request::get("/admin/blocklist")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_blocklist_token_errado_401() {
+    let app = app_admin("segredo").await;
+    let resp = app
+        .oneshot(
+            Request::get("/admin/blocklist")
+                .header("x-admin-token", "errado")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
 #[tokio::test]
 async fn ttl_overflow_400() {
     let app = app().await;

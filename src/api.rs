@@ -299,6 +299,69 @@ async fn stats(
     }
 }
 
+#[derive(Deserialize)]
+struct BlocklistReq {
+    domain: String,
+}
+
+/// Autoriza uma requisição admin: `Ok(())` se o token bate; `Err(status)` senão.
+/// Sem token configurado → 404 (endpoint desligado); token errado → 401.
+/// Retorna `StatusCode` (não `Response`) pra ficar `Copy`/pequeno — evita o lint
+/// `result_large_err` do clippy, que dispararia com `Response` no `Err`.
+fn admin_guard(st: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
+    let Some(expected) = st.admin_token.as_deref() else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    let provided = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(())
+}
+
+async fn blocklist_get(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    match st.store.list_blocked_domains().await {
+        Ok(domains) => Json(serde_json::json!({ "domains": domains })).into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn blocklist_add(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<BlocklistReq>,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    if st.store.add_blocked_domain(&req.domain).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    st.blocklist.invalidate().await;
+    StatusCode::OK.into_response()
+}
+
+async fn blocklist_delete(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<BlocklistReq>,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    if st.store.remove_blocked_domain(&req.domain).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    st.blocklist.invalidate().await;
+    StatusCode::OK.into_response()
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -348,6 +411,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/health", get(health))
         .route("/:code", get(redirect))
         .route("/:code/stats", get(stats))
+        .route(
+            "/admin/blocklist",
+            get(blocklist_get)
+                .post(blocklist_add)
+                .delete(blocklist_delete),
+        )
         .with_state(state);
 
     // Log de acesso por request é opt-in: em alta vazão, o println! síncrono
