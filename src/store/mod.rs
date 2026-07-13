@@ -41,8 +41,8 @@ impl From<serde_json::Error> for StoreError {
 }
 
 /// Interface de persistência. O caminho quente é sempre servido do cache L1;
-/// os métodos async permitem backends de rede (Postgres/Valkey) nos próximos
-/// tijolos sem gambiarra de bloqueio.
+/// os métodos async acomodam backends de rede (Postgres/Valkey) sem gambiarra
+/// de bloqueio.
 #[async_trait::async_trait]
 pub trait Store: Send + Sync + 'static {
     async fn next_id(&self) -> Result<u64, StoreError>;

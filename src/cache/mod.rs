@@ -25,10 +25,9 @@ impl std::fmt::Display for TierError {
 }
 impl std::error::Error for TierError {}
 
-/// Camada L2 (rede) plugável — hoje só a impl fake dos testes; o Tijolo 3
-/// Task 2 adiciona `ValkeyTier` (e o `pub mod valkey;` correspondente). Erros
-/// de tier nunca propagam pro chamador: o `Cache::get` os registra no
-/// `Breaker` e cai pro store.
+/// Camada L2 (rede) plugável. Implementada por `ValkeyTier` (Valkey/Redis) e
+/// pelos tiers fake dos testes. Erros de tier nunca propagam pro chamador: o
+/// `Cache::get` os registra no `Breaker` e cai pro store.
 #[async_trait::async_trait]
 pub trait CacheTier: Send + Sync + 'static {
     async fn get(&self, id: u64) -> Result<Option<Record>, TierError>;

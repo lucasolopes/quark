@@ -41,7 +41,7 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
-fn valida_url(u: &str) -> bool {
+fn is_valid_url(u: &str) -> bool {
     u.starts_with("http://") || u.starts_with("https://")
 }
 
@@ -62,7 +62,7 @@ fn cache_control_for(expiry: Option<u64>, now: u64) -> String {
 }
 
 async fn create(State(st): State<Arc<AppState>>, Json(req): Json<CreateReq>) -> Response {
-    if !valida_url(&req.url) {
+    if !is_valid_url(&req.url) {
         return (StatusCode::BAD_REQUEST, "url inválida").into_response();
     }
     let expiry = match req.ttl {
