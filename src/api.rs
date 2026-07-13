@@ -1,8 +1,9 @@
+use crate::analytics::{AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
 use crate::store::{Record, Store};
 use crate::{codec, permute};
 use axum::extract::{Path, Request, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -15,6 +16,9 @@ pub struct AppState {
     pub cache: Cache,
     pub store: Arc<dyn Store>,
     pub key: u64,
+    pub analytics_tx: tokio::sync::mpsc::Sender<ClickEvent>,
+    pub sink: Arc<dyn AnalyticsSink>,
+    pub admin_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -114,7 +118,11 @@ async fn create(State(st): State<Arc<AppState>>, Json(req): Json<CreateReq>) -> 
     Json(CreateResp { code, url: req.url }).into_response()
 }
 
-async fn redirect(State(st): State<Arc<AppState>>, Path(code): Path<String>) -> Response {
+async fn redirect(
+    State(st): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+) -> Response {
     // resolve id: primeiro tenta código numérico; se falhar, tenta alias.
     let id = match codec::from_base62(&code) {
         Some(c) if c <= permute::MAX_ID => permute::decode(c, st.key),
@@ -144,6 +152,26 @@ async fn redirect(State(st): State<Arc<AppState>>, Path(code): Path<String>) -> 
                 }
             }
             let cache_control = cache_control_for(rec.expiry, now);
+
+            // Captura fire-and-forget: nunca bloqueia nem falha o redirect.
+            let ev = ClickEvent {
+                id,
+                ts: now,
+                referer: headers
+                    .get(header::REFERER)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string()),
+                country: headers
+                    .get("cf-ipcountry")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string()),
+                user_agent: headers
+                    .get(header::USER_AGENT)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string()),
+            };
+            let _ = st.analytics_tx.try_send(ev);
+
             (
                 StatusCode::FOUND,
                 [
@@ -160,6 +188,51 @@ async fn redirect(State(st): State<Arc<AppState>>, Path(code): Path<String>) -> 
             .into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
+}
+
+async fn stats(
+    State(st): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    // endpoint desligado se não há token configurado
+    let Some(expected) = st.admin_token.as_deref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let provided = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    // resolve code -> id (mesma lógica do redirect)
+    let id = match codec::from_base62(&code) {
+        Some(c) if c <= permute::MAX_ID => permute::decode(c, st.key),
+        _ => match st.store.get_alias(&code).await {
+            Ok(Some(id)) => id,
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        },
+    };
+    match st.sink.stats(id).await {
+        Ok(Some(s)) => Json(s).into_response(),
+        Ok(None) => {
+            Json(serde_json::json!({"total": 0, "aggregates": null, "recent": []})).into_response()
+        }
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 async fn health() -> &'static str {
@@ -199,6 +272,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/", post(create))
         .route("/health", get(health))
         .route("/:code", get(redirect))
+        .route("/:code/stats", get(stats))
         .layer(axum::middleware::from_fn(log_requests))
         .with_state(state)
 }

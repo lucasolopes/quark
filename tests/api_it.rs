@@ -2,19 +2,22 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::api::{router, AppState};
 use quark::cache::Cache;
-use quark::store::Store;
+use quark::store::open_backends;
 use std::sync::Arc;
 use tower::ServiceExt; // oneshot
 
 fn app() -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let store = quark::store::lmdb::LmdbStore::open(dir.path()).unwrap();
-    let store: Arc<dyn Store> = Arc::new(store);
+    let (store, sink) = open_backends(dir.path()).unwrap();
     let cache = Cache::new(store.clone(), 1000);
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         cache,
         store,
         key: 0x1234,
+        analytics_tx,
+        sink,
+        admin_token: None,
     });
     router(state)
 }
