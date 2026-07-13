@@ -10,13 +10,19 @@ enum Mode {
     Disabled,
     Memory {
         per_min: u32,
-        // ip -> (janela atual, contagem na janela)
-        state: Mutex<HashMap<String, (u64, u32)>>,
+        state: Mutex<MemState>,
     },
     Valkey {
         per_min: u32,
         conn: redis::aio::MultiplexedConnection,
     },
+}
+
+/// Estado do modo memória: mapa ip -> (janela atual, contagem na janela) +
+/// a última janela em que o mapa foi podado (poda O(n) no máximo 1x por janela).
+struct MemState {
+    swept_window: u64,
+    map: HashMap<String, (u64, u32)>,
 }
 
 const WINDOW_SECS: u64 = 60;
@@ -29,7 +35,10 @@ impl RateLimiter {
     pub fn memory(per_min: u32) -> RateLimiter {
         RateLimiter(Mode::Memory {
             per_min,
-            state: Mutex::new(HashMap::new()),
+            state: Mutex::new(MemState {
+                swept_window: 0,
+                map: HashMap::new(),
+            }),
         })
     }
 
@@ -43,8 +52,15 @@ impl RateLimiter {
         match &self.0 {
             Mode::Disabled => true,
             Mode::Memory { per_min, state } => {
-                let mut map = state.lock().unwrap();
-                let entry = map.entry(ip.to_string()).or_insert((window, 0));
+                let mut st = state.lock().unwrap();
+                if st.swept_window != window {
+                    // Poda O(n), no máximo uma vez por virada de janela: entradas de
+                    // janelas antigas são inúteis (a nova janela zera a contagem mesmo),
+                    // então descartá-las evita crescimento ilimitado do HashMap.
+                    st.map.retain(|_, (w, _)| *w == window);
+                    st.swept_window = window;
+                }
+                let entry = st.map.entry(ip.to_string()).or_insert((window, 0));
                 if entry.0 != window {
                     *entry = (window, 0); // nova janela: reseta
                 }
@@ -71,6 +87,14 @@ impl RateLimiter {
                     Err(_) => true, // fail-open
                 }
             }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn memory_entries(&self) -> usize {
+        match &self.0 {
+            Mode::Memory { state, .. } => state.lock().unwrap().map.len(),
+            _ => 0,
         }
     }
 }
@@ -109,5 +133,18 @@ mod tests {
         let rl = RateLimiter::memory(1);
         assert!(rl.check("3.3.3.3", 600).await);
         assert!(rl.check("4.4.4.4", 600).await); // outro IP, própria conta
+    }
+
+    #[tokio::test]
+    async fn memoria_poda_entradas_de_janelas_antigas() {
+        let rl = RateLimiter::memory(100);
+        // janela 10 (600/60): 3 IPs distintos
+        rl.check("1.1.1.1", 600).await;
+        rl.check("2.2.2.2", 600).await;
+        rl.check("3.3.3.3", 600).await;
+        assert_eq!(rl.memory_entries(), 3);
+        // janela 11 (660/60): uma checagem varre as antigas, sobra só a nova
+        rl.check("9.9.9.9", 660).await;
+        assert_eq!(rl.memory_entries(), 1);
     }
 }
