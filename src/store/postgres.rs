@@ -2,6 +2,9 @@ use crate::store::{Record, Store, StoreError};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 
+/// Chave do pg_advisory_lock que serializa a criação idempotente do schema entre instâncias.
+const QUARK_SCHEMA_LOCK_ID: i64 = 727271;
+
 pub struct PostgresStore {
     pool: PgPool,
 }
@@ -29,7 +32,8 @@ impl PostgresStore {
             .acquire()
             .await
             .map_err(|e| StoreError::Backend(e.to_string()))?;
-        sqlx::query("SELECT pg_advisory_lock(727271)")
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(QUARK_SCHEMA_LOCK_ID)
             .execute(&mut *conn)
             .await
             .map_err(|e| StoreError::Backend(e.to_string()))?;
@@ -51,7 +55,8 @@ impl PostgresStore {
         }
         .await;
 
-        sqlx::query("SELECT pg_advisory_unlock(727271)")
+        sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(QUARK_SCHEMA_LOCK_ID)
             .execute(&mut *conn)
             .await
             .map_err(|e| StoreError::Backend(e.to_string()))?;

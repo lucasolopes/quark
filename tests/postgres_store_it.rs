@@ -1,4 +1,5 @@
 use quark::store::{postgres::PostgresStore, Record, Store};
+use serial_test::serial;
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
@@ -9,6 +10,7 @@ async fn fresh() -> Option<PostgresStore> {
 }
 
 #[tokio::test]
+#[serial(pg)]
 async fn put_get_link_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: sem QUARK_TEST_DATABASE_URL");
@@ -28,6 +30,7 @@ async fn put_get_link_pg() {
 }
 
 #[tokio::test]
+#[serial(pg)]
 async fn next_id_incrementa_pg() {
     let Some(s) = fresh().await else {
         return;
@@ -38,6 +41,7 @@ async fn next_id_incrementa_pg() {
 }
 
 #[tokio::test]
+#[serial(pg)]
 async fn alias_atomico_sem_orfao_pg() {
     let Some(s) = fresh().await else {
         return;
