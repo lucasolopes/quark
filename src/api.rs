@@ -82,6 +82,9 @@ async fn create(State(st): State<Arc<AppState>>, Json(req): Json<CreateReq>) -> 
         }
         let id = match st.store.next_id().await {
             Ok(id) => id,
+            Err(StoreError::IdSpaceExhausted) => {
+                return (StatusCode::INSUFFICIENT_STORAGE, "espaço de id esgotado").into_response()
+            }
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
         match st.store.put_alias_and_link(&alias, id, &rec).await {
@@ -99,6 +102,9 @@ async fn create(State(st): State<Arc<AppState>>, Json(req): Json<CreateReq>) -> 
     // caminho sem alias: id atômico → encode → grava. Sem checagem de colisão.
     let id = match st.store.next_id().await {
         Ok(id) => id,
+        Err(StoreError::IdSpaceExhausted) => {
+            return (StatusCode::INSUFFICIENT_STORAGE, "espaço de id esgotado").into_response()
+        }
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     if id > permute::MAX_ID {

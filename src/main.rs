@@ -36,6 +36,17 @@ async fn main() {
             "lmdb(embutido)"
         }
     );
+    match std::env::var("QUARK_NODE_ID") {
+        Ok(n) if !n.is_empty() && std::env::var("QUARK_DATABASE_URL").is_ok() => {
+            eprintln!(
+                "AVISO: QUARK_NODE_ID={n} ignorado no backend Postgres (node-id é só do LMDB)"
+            );
+        }
+        Ok(n) if !n.is_empty() => {
+            eprintln!("node-id LMDB: {n} (espaço de id particionado em 8+32 bits)")
+        }
+        _ => {}
+    }
     let cache = match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => match ValkeyTier::open(&url).await {
             Ok(tier) => {

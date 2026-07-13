@@ -18,6 +18,7 @@ pub enum StoreError {
     Db(heed::Error),
     Serde(serde_json::Error),
     Backend(String),
+    IdSpaceExhausted,
 }
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -25,6 +26,7 @@ impl std::fmt::Display for StoreError {
             StoreError::Db(e) => write!(f, "db: {e}"),
             StoreError::Serde(e) => write!(f, "serde: {e}"),
             StoreError::Backend(s) => write!(f, "backend: {s}"),
+            StoreError::IdSpaceExhausted => write!(f, "espaço de id esgotado"),
         }
     }
 }
