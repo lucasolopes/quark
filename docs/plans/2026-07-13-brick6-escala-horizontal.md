@@ -615,9 +615,8 @@ local daquele nó:
 cai no nó errado dá 404, porque aquele nó não tem o dado. Ou seja, o node-id é um
 **guard-rail contra colisão**, não um modo multi-nó de verdade.
 
-**Para multi-nó real, use o formato 2 (Postgres compartilhado).** Um modo
-shared-nothing completo (com proxy entre nós usando o node-id embutido no código)
-é trabalho futuro, não implementado.
+**Por design, um binário puro (LMDB, sem banco) é single-node** — restrição
+consciente do sistema. **Para multi-nó, use o formato 2 (Postgres compartilhado).**
 ````
 
 - [ ] **Step 2: Validar o Mermaid**

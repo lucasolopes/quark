@@ -118,14 +118,11 @@ Qualquer réplica atende qualquer request: `next_id` vem da sequência global,
 
 ## Fora de escopo (YAGNI, consciente)
 
-- Proxy entre nós / mesh shared-nothing (formato 3 com reads cross-nó).
+- Multi-nó com reads cross-nó no binário puro (LMDB): **restrição de design** — um
+  binário puro é single-node; multi-nó = Postgres compartilhado (formato 2).
 - Descoberta de nós, replicação de LMDB, re-sharding dinâmico.
 - Particionar o contador do Postgres (a sequência global já basta; prefixá-lo
   desperdiçaria a coordenação nativa).
-
-Se o formato 3 (multi-nó no binário puro, com proxy pelo node-id embutido no
-código) virar desejável, é um **tijolo separado** — este design deixa a porta
-aberta (o node-id já fica no código), mas não o implementa.
 
 ## Critérios de sucesso
 

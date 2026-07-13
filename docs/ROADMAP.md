@@ -52,10 +52,6 @@ servidor).
   removida: é uma escolha. Escalar horizontalmente = rodar réplicas stateless sobre **Postgres
   compartilhado** (formato 2 em `docs/SCALING.md`). O `QUARK_NODE_ID` existe só como guarda
   defensiva contra colisão de código, não pra transformar o LMDB em multi-nó.
-  - *Nota, não plano:* como o `QUARK_NODE_ID` fica nos bits altos do id, seria teoricamente
-    possível um nó decodificar o código e fazer proxy pro nó dono ("shared-nothing", sem
-    banco). Fica registrado como curiosidade — **não está planejado**; a restrição single-node
-    do binário puro é deliberada e o Postgres já cobre multi-nó.
 - **Proteção contra abuso** roda só no `POST /`; o redirect é caminho quente e não paga nada.
 
 ## Notas
