@@ -26,6 +26,16 @@ async fn main() {
             "lmdb"
         }
     );
+    eprintln!(
+        "analytics sink: {}",
+        if std::env::var("QUARK_CLICKHOUSE_URL").is_ok() {
+            "clickhouse"
+        } else if std::env::var("QUARK_DATABASE_URL").is_ok() {
+            "postgres"
+        } else {
+            "lmdb(embutido)"
+        }
+    );
     let cache = match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => match ValkeyTier::open(&url).await {
             Ok(tier) => {
