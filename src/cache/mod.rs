@@ -60,22 +60,26 @@ impl Breaker {
         }
     }
     /// Deve consultar o L2 agora?
-    fn allow(&self) -> bool {
+    fn allow(&self, now: u64) -> bool {
         let opened = self.opened_at.load(Ordering::Relaxed);
         if opened == 0 {
             return true; // fechado
         }
         // aberto: só permite (half-open) após o cooldown
-        now().saturating_sub(opened) >= BREAKER_COOLDOWN_SECS
+        now.saturating_sub(opened) >= BREAKER_COOLDOWN_SECS
     }
     fn record_success(&self) {
         self.failures.store(0, Ordering::Relaxed);
         self.opened_at.store(0, Ordering::Relaxed);
     }
-    fn record_failure(&self) {
+    fn record_failure(&self, now: u64) {
         let f = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
-        if f >= BREAKER_THRESHOLD && self.opened_at.load(Ordering::Relaxed) == 0 {
-            self.opened_at.store(now(), Ordering::Relaxed);
+        if f >= BREAKER_THRESHOLD {
+            // Re-arma o cooldown a cada falha no/acima do threshold: uma
+            // probe de half-open que falha reabre o breaker por mais
+            // BREAKER_COOLDOWN_SECS, em vez de deixar `allow()` liberar
+            // pra sempre depois do primeiro cooldown.
+            self.opened_at.store(now, Ordering::Relaxed);
         }
     }
 }
@@ -128,10 +132,11 @@ impl Cache {
         if let Some(rec) = self.hot.get(&id) {
             return Ok(Some(rec));
         }
+        let n = now();
         // L2 (best-effort, protegido por breaker; erro nunca propaga)
         let mut l2_failed_this_request = false;
         if let Some(l2) = &self.l2 {
-            if self.breaker.allow() {
+            if self.breaker.allow(n) {
                 match l2.get(id).await {
                     Ok(Some(rec)) => {
                         self.breaker.record_success();
@@ -142,7 +147,7 @@ impl Cache {
                         self.breaker.record_success();
                     }
                     Err(_) => {
-                        self.breaker.record_failure();
+                        self.breaker.record_failure(n);
                         l2_failed_this_request = true;
                     }
                 }
@@ -154,12 +159,12 @@ impl Cache {
                 // Não tenta o L2.set se ele já falhou nesta mesma requisição
                 // (evita martelar um L2 que acabamos de ver caído).
                 if let Some(l2) = &self.l2 {
-                    if !l2_failed_this_request && self.breaker.allow() {
-                        let ttl = l2_ttl(&rec, now(), self.l2_ttl_secs);
+                    if !l2_failed_this_request && self.breaker.allow(n) {
+                        let ttl = l2_ttl(&rec, n, self.l2_ttl_secs);
                         if ttl > 0 {
                             match l2.set(id, &rec, ttl).await {
                                 Ok(()) => self.breaker.record_success(),
-                                Err(_) => self.breaker.record_failure(),
+                                Err(_) => self.breaker.record_failure(n),
                             }
                         }
                     }
@@ -284,5 +289,43 @@ mod tests {
             ),
             3600
         );
+        // já expirado -> 0
+        assert_eq!(
+            l2_ttl(
+                &Record {
+                    url: "".into(),
+                    expiry: Some(now - 1),
+                    created: 0
+                },
+                now,
+                3600
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn breaker_reabre_apos_probe_half_open_falhar() {
+        let b = Breaker::new();
+        let t0 = 1_000_000u64;
+        // fecha inicialmente
+        assert!(b.allow(t0));
+        // THRESHOLD falhas -> abre
+        for _ in 0..BREAKER_THRESHOLD {
+            b.record_failure(t0);
+        }
+        assert!(!b.allow(t0)); // aberto: dentro do cooldown
+                               // ainda dentro do cooldown
+        assert!(!b.allow(t0 + BREAKER_COOLDOWN_SECS - 1));
+        // passou o cooldown -> half-open permite UMA tentativa
+        let t1 = t0 + BREAKER_COOLDOWN_SECS;
+        assert!(b.allow(t1));
+        // a probe falha -> re-arma o cooldown a partir de t1
+        b.record_failure(t1);
+        assert!(!b.allow(t1)); // reaberto, não deixa martelar
+        assert!(!b.allow(t1 + BREAKER_COOLDOWN_SECS - 1));
+        // sucesso fecha e zera
+        b.record_success();
+        assert!(b.allow(t1 + 1));
     }
 }
