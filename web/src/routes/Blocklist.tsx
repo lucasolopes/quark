@@ -16,6 +16,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api";
+import { mutationErrorToast } from "@/lib/mutation-error";
 import { useAddBlocked, useBlocklist, useRemoveBlocked } from "@/lib/queries";
 
 /** Mensagem de erro amigável para as mutações de blocklist (adicionar/remover). */
@@ -44,7 +45,7 @@ export function Blocklist() {
       toast.success(`${trimmed} bloqueado.`);
       setDomain("");
     } catch (err) {
-      toast.error(mutationErrorMessage(err, "Não foi possível bloquear o domínio. Tente de novo."));
+      mutationErrorToast(err, (e) => mutationErrorMessage(e, "Não foi possível bloquear o domínio. Tente de novo."));
     }
   }
 
@@ -55,7 +56,7 @@ export function Blocklist() {
       toast.success(`${removingDomain} desbloqueado.`);
       setRemovingDomain(null);
     } catch (err) {
-      toast.error(mutationErrorMessage(err, "Não foi possível desbloquear o domínio. Tente de novo."));
+      mutationErrorToast(err, (e) => mutationErrorMessage(e, "Não foi possível desbloquear o domínio. Tente de novo."));
     }
   }
 

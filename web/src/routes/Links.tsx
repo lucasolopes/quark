@@ -19,6 +19,7 @@ import { CreateLinkDialog } from "@/components/CreateLinkDialog";
 import { EditLinkDialog } from "@/components/EditLinkDialog";
 import { LinkTable } from "@/components/LinkTable";
 import { ApiError } from "@/lib/api";
+import { mutationErrorToast } from "@/lib/mutation-error";
 import { useDeleteLink, useLinks } from "@/lib/queries";
 import type { Link } from "@/lib/types";
 
@@ -53,11 +54,11 @@ export function Links() {
       toast.success("Link excluído.");
       setDeletingLink(null);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 429) {
-        toast.error("Muitas requisições. Tente de novo em um instante.");
-      } else {
-        toast.error("Não foi possível excluir o link. Tente de novo.");
-      }
+      mutationErrorToast(err, (e) =>
+        e instanceof ApiError && e.status === 429
+          ? "Muitas requisições. Tente de novo em um instante."
+          : "Não foi possível excluir o link. Tente de novo.",
+      );
     }
   }
 

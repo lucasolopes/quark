@@ -6,18 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RecentEventsTable } from "@/components/RecentEventsTable";
 import { StatsCharts } from "@/components/StatsCharts";
+import { formatDateTime } from "@/lib/format";
 import { useStats } from "@/lib/queries";
-
-function formatDateTime(epochSeconds: number): string {
-  if (!epochSeconds) return "—";
-  return new Date(epochSeconds * 1000).toLocaleString("pt-BR", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 export function LinkStats() {
   const { code = "" } = useParams<{ code: string }>();

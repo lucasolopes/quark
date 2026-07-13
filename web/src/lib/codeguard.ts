@@ -25,12 +25,14 @@ export function isNumericCode(s: string): boolean {
   return true;
 }
 
-/** `true` quando `s`, ignorando espaços nas pontas, começa com http(s):// e é uma URL bem formada. */
+/**
+ * `true` quando `s`, ignorando espaços nas pontas, começa com `http://` ou
+ * `https://` — mesmo teste do backend (`starts_with`, `src/api.rs`):
+ * comparação de prefixo, sensível a maiúsculas/minúsculas, sem parsing via
+ * `URL`. Um scheme como `HTTP://` passaria pelo `new URL` do JS mas seria
+ * rejeitado pelo backend; alinhar aqui evita esse descompasso.
+ */
 export function isHttpUrl(s: string): boolean {
-  try {
-    const u = new URL(s.trim());
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
-  }
+  const trimmed = s.trim();
+  return trimmed.startsWith("http://") || trimmed.startsWith("https://");
 }

@@ -11,23 +11,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatDate } from "@/lib/format";
 import type { Link } from "@/lib/types";
 
 // A base pública dos links curtos é o próprio host da API (é ele quem
 // resolve `/:code`); sem essa env var, cai no host onde o painel está
-// servido — mais correto do que inventar um domínio.
-const PUBLIC_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) || window.location.origin;
+// servido — mais correto do que inventar um domínio. Sem barra final, pra
+// não gerar `//` na concatenação com o código.
+const PUBLIC_BASE = (
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) || window.location.origin
+).replace(/\/+$/, "");
 
 function shortUrl(code: string): string {
   return `${PUBLIC_BASE}/${code}`;
-}
-
-function formatDate(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toLocaleDateString("pt-BR", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
 }
 
 interface LinkTableProps {
@@ -143,6 +139,7 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
 
   return (
     <Table>
+      <caption className="sr-only">Links curtos cadastrados no sistema</caption>
       <TableHeader>
         {table.getHeaderGroups().map((headerGroup) => (
           <TableRow key={headerGroup.id}>

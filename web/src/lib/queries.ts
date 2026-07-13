@@ -32,7 +32,11 @@ export function useLinks() {
     queryKey: LINKS_QUERY_KEY,
     queryFn: ({ pageParam }) => api.listLinks({ after: pageParam ?? undefined, limit: LINKS_PAGE_SIZE }),
     initialPageParam: null as number | null,
-    getNextPageParam: (lastPage) => lastPage.next_after,
+    // O backend sempre manda `next_after` = id do último link da página,
+    // mesmo quando ela veio incompleta (não manda `null` só porque acabou).
+    // Sem esse corte por tamanho, "Carregar mais" dispararia um fetch extra
+    // que sempre volta vazio depois da última página real.
+    getNextPageParam: (lastPage) => (lastPage.links.length < LINKS_PAGE_SIZE ? undefined : lastPage.next_after),
   });
 }
 

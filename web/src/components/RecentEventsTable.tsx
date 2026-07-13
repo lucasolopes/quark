@@ -1,15 +1,6 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatDateTime } from "@/lib/format";
 import type { ClickEvent } from "@/lib/types";
-
-function formatDateTime(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toLocaleString("pt-BR", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 interface RecentEventsTableProps {
   events: ClickEvent[];

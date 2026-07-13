@@ -4,7 +4,9 @@ import type {
   Stats, BlocklistResponse, PatchLinkRequest,
 } from "./types";
 
-const BASE: string = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "";
+// Remove barra(s) final(is) da env — evita `//` ao concatenar com o path
+// (que já começa com `/`), caso a env venha com trailing slash.
+const BASE: string = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "").replace(/\/+$/, "");
 
 let onUnauthorized: () => void = () => {};
 export function setUnauthorizedHandler(fn: () => void): void { onUnauthorized = fn; }

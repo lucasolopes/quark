@@ -12,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api";
 import { isHttpUrl } from "@/lib/codeguard";
+import { isUnauthorized } from "@/lib/mutation-error";
 import { usePatchLink } from "@/lib/queries";
 import type { Link } from "@/lib/types";
 
@@ -42,6 +43,7 @@ function formatExpiry(expiry: number | null): string {
 export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps) {
   const [url, setUrl] = useState(link.url);
   const [ttl, setTtl] = useState("");
+  const [removeExpiry, setRemoveExpiry] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
 
@@ -58,7 +60,7 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
       next.url = "URL inválida — use um endereço http:// ou https://.";
     }
     const trimmedTtl = ttl.trim();
-    if (trimmedTtl) {
+    if (!removeExpiry && trimmedTtl) {
       const n = Number(trimmedTtl);
       if (!Number.isInteger(n) || n <= 0) {
         next.ttl = "TTL deve ser um número de segundos maior que zero.";
@@ -80,19 +82,24 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
         code: link.code,
         body: {
           url: url.trim(),
-          ...(ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
+          // `ttl: null` remove a expiração (o backend aceita isso no PATCH).
+          // Sem marcar "sem expiração", só manda `ttl` se o campo foi preenchido.
+          ...(removeExpiry ? { ttl: null } : ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
         },
       });
       toast.success("Link atualizado.");
       onOpenChange(false);
     } catch (err) {
+      // 401: o handler global já limpa o token e redireciona pro /login —
+      // não duplica feedback aqui.
+      if (isUnauthorized(err)) return;
       if (err instanceof ApiError && err.status === 403) {
         setErrors({ url: "Esse destino não é permitido (pode estar bloqueado)." });
       } else if (err instanceof ApiError && err.status === 429) {
         toast.error("Muitas requisições. Tente de novo em um instante.");
-      } else if (err instanceof ApiError && err.status === 409) {
-        setErrors({ form: "Conflito ao salvar. Recarregue e tente de novo." });
       } else {
+        // O PATCH nunca devolve 409 (sem alias na edição, não há colisão a
+        // detectar) — sem branch dedicado pra esse status.
         setErrors({ form: GENERIC_ERROR });
       }
     }
@@ -140,12 +147,25 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
                 value={ttl}
                 onChange={(e) => setTtl(e.target.value)}
                 aria-invalid={errors.ttl != null}
+                disabled={removeExpiry}
               />
               {errors.ttl && (
                 <p className="text-sm text-destructive" role="alert">
                   {errors.ttl}
                 </p>
               )}
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="size-4 rounded border-input accent-primary"
+                  checked={removeExpiry}
+                  onChange={(e) => {
+                    setRemoveExpiry(e.target.checked);
+                    if (e.target.checked) setTtl("");
+                  }}
+                />
+                Remover expiração (link nunca expira)
+              </label>
             </div>
 
             {errors.form && (

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { clearToken, setToken } from "@/lib/auth";
 
 export function Login() {
@@ -70,7 +70,9 @@ export function Login() {
               />
               {mutation.isError && (
                 <p id="admin-token-error" role="alert" className="text-sm text-destructive">
-                  Token inválido. Verifique e tente novamente.
+                  {mutation.error instanceof ApiError && mutation.error.status === 401
+                    ? "Token inválido. Verifique e tente novamente."
+                    : "Não foi possível conectar. Tente novamente."}
                 </p>
               )}
             </div>

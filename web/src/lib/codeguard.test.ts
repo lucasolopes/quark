@@ -50,4 +50,16 @@ describe("isHttpUrl", () => {
     expect(isHttpUrl("exemplo.com")).toBe(false);
     expect(isHttpUrl("")).toBe(false);
   });
+
+  it("é sensível a maiúsculas/minúsculas, como o backend (starts_with)", () => {
+    // O backend compara prefixo cru, sem normalizar o scheme — então
+    // `HTTP://`/`HTTPS://` são rejeitados lá, mesmo que `new URL` os aceite.
+    expect(isHttpUrl("HTTP://exemplo.com")).toBe(false);
+    expect(isHttpUrl("HTTPS://exemplo.com")).toBe(false);
+  });
+
+  it("não valida a URL em si, só o prefixo (mesmo comportamento do backend)", () => {
+    expect(isHttpUrl("http://")).toBe(true);
+    expect(isHttpUrl("https://não é uma url válida")).toBe(true);
+  });
 });

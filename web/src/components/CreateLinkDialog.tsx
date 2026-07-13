@@ -12,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api";
 import { isHttpUrl, isNumericCode } from "@/lib/codeguard";
+import { isUnauthorized } from "@/lib/mutation-error";
 import { useCreateLink } from "@/lib/queries";
 
 interface FormErrors {
@@ -91,6 +92,9 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
       reset();
       onOpenChange(false);
     } catch (err) {
+      // 401: o handler global já limpa o token e redireciona pro /login —
+      // não duplica feedback aqui.
+      if (isUnauthorized(err)) return;
       if (err instanceof ApiError && err.status === 409) {
         setErrors({ alias: "Esse alias já está em uso." });
       } else if (err instanceof ApiError && err.status === 403) {

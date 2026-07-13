@@ -23,11 +23,20 @@ describe("Login", () => {
     expect(localStorage.getItem("quark_admin_token")).toBe("segredo");
   });
 
-  it("token inválido mostra erro", async () => {
+  it("token inválido (401) mostra erro específico", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 401 }));
     render(wrap(<Login />));
     await userEvent.type(screen.getByLabelText(/token/i), "errado");
     await userEvent.click(screen.getByRole("button", { name: /entrar/i }));
     expect(await screen.findByText(/token inválido/i)).toBeInTheDocument();
+  });
+
+  it("erro de rede/5xx mostra mensagem genérica de conexão, não 'token inválido'", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 503 }));
+    render(wrap(<Login />));
+    await userEvent.type(screen.getByLabelText(/token/i), "segredo");
+    await userEvent.click(screen.getByRole("button", { name: /entrar/i }));
+    expect(await screen.findByText(/não foi possível conectar/i)).toBeInTheDocument();
+    expect(screen.queryByText(/token inválido/i)).not.toBeInTheDocument();
   });
 });
