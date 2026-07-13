@@ -42,6 +42,7 @@ impl PostgresStore {
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS blocked_domains (domain TEXT PRIMARY KEY)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -170,6 +171,39 @@ impl Store for PostgresStore {
         .map_err(StoreError::backend)?;
         tx.commit().await.map_err(StoreError::backend)?;
         Ok(true)
+    }
+
+    async fn add_blocked_domain(&self, domain: &str) -> Result<(), StoreError> {
+        let d = domain.trim().to_lowercase();
+        sqlx::query("INSERT INTO blocked_domains (domain) VALUES ($1) ON CONFLICT DO NOTHING")
+            .bind(&d)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn remove_blocked_domain(&self, domain: &str) -> Result<(), StoreError> {
+        let d = domain.trim().to_lowercase();
+        sqlx::query("DELETE FROM blocked_domains WHERE domain = $1")
+            .bind(&d)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn list_blocked_domains(&self) -> Result<Vec<String>, StoreError> {
+        let rows = sqlx::query("SELECT domain FROM blocked_domains")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        rows.iter()
+            .map(|r| {
+                r.try_get::<String, _>("domain")
+                    .map_err(StoreError::backend)
+            })
+            .collect()
     }
 }
 
