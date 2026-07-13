@@ -1,3 +1,5 @@
+pub mod valkey;
+
 use crate::store::{Record, Store, StoreError};
 use moka::sync::Cache as Moka;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
