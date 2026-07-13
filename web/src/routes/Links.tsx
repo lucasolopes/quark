@@ -71,6 +71,13 @@ export function Links() {
   }, [allLinks, searchResults, clientMode, dq]);
 
   const activeQuery = usingServerSearch ? serverSearch : query;
+  // 501 é o sinal de "sem suporte a busca" e vira `clientMode` (ver efeito
+  // acima) — não é uma falha real, então não deve acionar este card. Qualquer
+  // outro erro (500, 429, 503…) é uma falha de verdade e não pode ser
+  // confundida com "nenhum resultado", ou o usuário é enganado a pensar que
+  // buscou e não achou nada.
+  const serverSearchFailed =
+    usingServerSearch && serverSearch.isError && !(serverSearch.error instanceof ApiError && serverSearch.error.status === 501);
 
   async function handleConfirmDelete() {
     if (!deletingLink) return;
@@ -152,8 +159,27 @@ export function Links() {
         </Card>
       )}
 
+      {!query.isPending && !query.isError && serverSearchFailed && (
+        <Card className="border-destructive/30">
+          <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
+            <AlertTriangle className="size-8 text-destructive" aria-hidden="true" />
+            <div>
+              <p className="font-medium">Não foi possível buscar.</p>
+              <p className="text-sm text-muted-foreground">
+                {serverSearch.error instanceof Error ? serverSearch.error.message : "Tente de novo em alguns instantes."}
+              </p>
+            </div>
+            <Button variant="outline" onClick={() => serverSearch.refetch()}>
+              <RotateCw className="size-4" />
+              Tentar de novo
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {!query.isPending &&
         !query.isError &&
+        !serverSearchFailed &&
         allLinks.length > 0 &&
         dq !== "" &&
         !activeQuery.isPending &&
@@ -165,7 +191,7 @@ export function Links() {
           </Card>
         )}
 
-      {!query.isPending && !query.isError && filtered.length > 0 && (
+      {!query.isPending && !query.isError && !serverSearchFailed && filtered.length > 0 && (
         <Card className="py-0">
           <LinkTable
             links={filtered}

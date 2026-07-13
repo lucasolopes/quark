@@ -89,6 +89,16 @@ describe("Links", () => {
     expect(await screen.findByText(/nenhum link encontrado para "zzz"/i)).toBeInTheDocument();
   });
 
+  it("busca com erro não-501 (500) mostra estado de erro, não o de 'nenhum resultado'", async () => {
+    const base = { links: [{ id: 1, code: "AAA0000", url: "https://gato.com", expiry: null, created: 1 }], next_after: null };
+    mockFetchByUrl((url) => (url.includes("q=") ? new Response("{}", { status: 500 }) : jsonResponse(base)));
+    render(wrap(<Links />));
+    await screen.findByText("AAA0000");
+    await userEvent.type(screen.getByRole("searchbox"), "zzz");
+    expect(await screen.findByText(/não foi possível buscar/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nenhum link encontrado para "zzz"/i)).not.toBeInTheDocument();
+  });
+
   it("estado vazio", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ links: [], next_after: null }), { status: 200 }));
     render(wrap(<Links />));

@@ -1,5 +1,5 @@
 import { QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError } from "./api";
+import { api } from "./api";
 import type { CreateLinkRequest, PatchLinkRequest } from "./types";
 
 const LINKS_QUERY_KEY = ["links"];
@@ -29,8 +29,12 @@ const LINKS_PAGE_SIZE = 50;
  * Sem `q`, é a lista base (sempre carregada — fonte do fallback client-side
  * da tela de Links). Com `q`, é a busca server-side paginada; o backend
  * pode responder 501 (sem suporte a busca), caso em que a tela cai pro
- * filtro client-side sobre a lista base — por isso `retry` não reintenta
- * em 501 (é resposta definitiva, não erro transitório).
+ * filtro client-side sobre a lista base. Não define `retry` próprio —
+ * herda o `retry: false` global do `queryClient` (mesmo motivo do
+ * comentário lá: um 401 já é tratado por `onUnauthorized`, e reintentos
+ * automáticos não ajudam nem no 501, que é resposta definitiva, não erro
+ * transitório). Um `retry` custom aqui vazaria pra chamada sem `q` também,
+ * já que é o mesmo hook.
  */
 export function useLinks(q?: string, options: { enabled?: boolean } = {}) {
   const term = q?.trim() ?? "";
@@ -45,7 +49,6 @@ export function useLinks(q?: string, options: { enabled?: boolean } = {}) {
     // que sempre volta vazio depois da última página real.
     getNextPageParam: (lastPage) => (lastPage.links.length < LINKS_PAGE_SIZE ? undefined : lastPage.next_after),
     enabled: options.enabled,
-    retry: (failureCount, err) => !(err instanceof ApiError && err.status === 501) && failureCount < 3,
   });
 }
 
