@@ -244,6 +244,15 @@ links `GET /admin/links`, delete `DELETE /admin/links/:code`, edit
 `PATCH /admin/links/:code`. A separate web panel (SPA) consumes this API; set
 `QUARK_CORS_ORIGINS` to the panel's origin.
 
+### Web panel (`web/`)
+
+A single-operator admin panel (React SPA) lives in `web/`. It's built and
+deployed **separately** from the API binary (static build → CDN/edge); the quark
+binary stays API-only. Dev: `cd web && npm install && npm run dev` (Vite on
+`:5173`), pointing `VITE_API_BASE_URL` at your quark API and setting
+`QUARK_CORS_ORIGINS=http://localhost:5173` on the API. Auth is the same
+`QUARK_ADMIN_TOKEN`, entered on the panel's login screen.
+
 ## More
 
 - Deploy on a VPS with Coolify (ships a `Dockerfile`): [`docs/DEPLOY.md`](docs/DEPLOY.md)
