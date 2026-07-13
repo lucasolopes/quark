@@ -31,7 +31,7 @@ serial_test = "3"
 tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"
 tower = "0.5"
-criterion = "0.5"
+criterion = { version = "0.5", features = ["async_tokio"] }
 sqids = "0.4.2"
 harsh = "0.2.2"
 hmac = "0.13.0"
@@ -43,6 +43,10 @@ harness = false
 
 [[bench]]
 name = "compare_bench"
+harness = false
+
+[[bench]]
+name = "redirect_bench"
 harness = false
 
 [profile.release]
