@@ -1,6 +1,7 @@
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { Check, Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { BarChart3, Check, Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { Link as RouterLink, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,6 +38,7 @@ interface LinkTableProps {
 
 export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
   const [justCopiedId, setJustCopiedId] = useState<number | null>(null);
+  const navigate = useNavigate();
 
   async function handleCopy(link: Link) {
     try {
@@ -53,7 +55,15 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
     {
       accessorKey: "code",
       header: "Código",
-      cell: ({ row }) => <span className="font-mono text-sm font-medium">{row.original.code}</span>,
+      cell: ({ row }) => (
+        <RouterLink
+          to={`/links/${row.original.code}`}
+          className="font-mono text-sm font-medium text-primary hover:underline"
+          aria-label={`Ver estatísticas de ${row.original.code}`}
+        >
+          {row.original.code}
+        </RouterLink>
+      ),
     },
     {
       accessorKey: "url",
@@ -109,6 +119,10 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
                 <MoreHorizontal className="size-3.5" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => navigate(`/links/${link.code}`)}>
+                  <BarChart3 className="size-3.5" />
+                  Estatísticas
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => onEdit(link)}>
                   <Pencil className="size-3.5" />
                   Editar
