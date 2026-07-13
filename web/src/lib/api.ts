@@ -10,7 +10,12 @@ let onUnauthorized: () => void = () => {};
 export function setUnauthorizedHandler(fn: () => void): void { onUnauthorized = fn; }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+    this.name = "ApiError";
+  }
 }
 
 async function req(path: string, opts: RequestInit = {}): Promise<Response> {
