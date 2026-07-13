@@ -1,5 +1,8 @@
-import { QueryClient, useInfiniteQuery } from "@tanstack/react-query";
+import { QueryClient, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
+import type { CreateLinkRequest, PatchLinkRequest } from "./types";
+
+const LINKS_QUERY_KEY = ["links"];
 
 /**
  * Cliente único do TanStack Query para a aplicação. `retry: false` porque um
@@ -25,9 +28,36 @@ const LINKS_PAGE_SIZE = 50;
  */
 export function useLinks() {
   return useInfiniteQuery({
-    queryKey: ["links"],
+    queryKey: LINKS_QUERY_KEY,
     queryFn: ({ pageParam }) => api.listLinks({ after: pageParam ?? undefined, limit: LINKS_PAGE_SIZE }),
     initialPageParam: null as number | null,
     getNextPageParam: (lastPage) => lastPage.next_after,
+  });
+}
+
+/** Cria um link; sucesso invalida `useLinks` para refletir o novo registro na lista. */
+export function useCreateLink() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateLinkRequest) => api.createLink(body),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY }); },
+  });
+}
+
+/** Atualiza url e/ou ttl de um link existente; sucesso invalida `useLinks`. */
+export function usePatchLink() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ code, body }: { code: string; body: PatchLinkRequest }) => api.patchLink(code, body),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY }); },
+  });
+}
+
+/** Remove um link; sucesso invalida `useLinks`. */
+export function useDeleteLink() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (code: string) => api.deleteLink(code),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY }); },
   });
 }

@@ -1,19 +1,25 @@
 import { AlertTriangle, Link2, Plus, RotateCw } from "lucide-react";
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CreateLinkDialog } from "@/components/CreateLinkDialog";
+import { EditLinkDialog } from "@/components/EditLinkDialog";
 import { LinkTable } from "@/components/LinkTable";
-import { useLinks } from "@/lib/queries";
+import { ApiError } from "@/lib/api";
+import { useDeleteLink, useLinks } from "@/lib/queries";
 import type { Link } from "@/lib/types";
 
 function matches(link: Link, query: string): boolean {
@@ -28,14 +34,32 @@ function matches(link: Link, query: string): boolean {
 
 export function Links() {
   const [search, setSearch] = useState("");
-  const [stub, setStub] = useState<{ action: "criar" | "editar" | "excluir"; link?: Link } | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editingLink, setEditingLink] = useState<Link | null>(null);
+  const [deletingLink, setDeletingLink] = useState<Link | null>(null);
   const query = useLinks();
+  const deleteLink = useDeleteLink();
 
   // A busca filtra só o que já foi carregado nesta sessão — ela não dispara
   // uma nova página nem uma busca no servidor. "Carregar mais" antes de
   // buscar amplia o conjunto sobre o qual a busca filtra.
   const allLinks = useMemo(() => query.data?.pages.flatMap((page) => page.links) ?? [], [query.data]);
   const filtered = useMemo(() => allLinks.filter((link) => matches(link, search)), [allLinks, search]);
+
+  async function handleConfirmDelete() {
+    if (!deletingLink) return;
+    try {
+      await deleteLink.mutateAsync(deletingLink.code);
+      toast.success("Link excluído.");
+      setDeletingLink(null);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 429) {
+        toast.error("Muitas requisições. Tente de novo em um instante.");
+      } else {
+        toast.error("Não foi possível excluir o link. Tente de novo.");
+      }
+    }
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -44,7 +68,7 @@ export function Links() {
           <h1 className="font-heading text-2xl font-semibold">Links</h1>
           <p className="mt-1 text-sm text-muted-foreground">Todos os links curtos criados no sistema.</p>
         </div>
-        <Button onClick={() => setStub({ action: "criar" })}>
+        <Button onClick={() => setCreateOpen(true)}>
           <Plus className="size-4" />
           Criar link
         </Button>
@@ -87,7 +111,7 @@ export function Links() {
               <p className="font-medium">Nenhum link ainda.</p>
               <p className="text-sm text-muted-foreground">Crie o primeiro link curto para começar.</p>
             </div>
-            <Button onClick={() => setStub({ action: "criar" })}>
+            <Button onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />
               Criar link
             </Button>
@@ -107,8 +131,8 @@ export function Links() {
         <Card className="py-0">
           <LinkTable
             links={filtered}
-            onEdit={(link) => setStub({ action: "editar", link })}
-            onDelete={(link) => setStub({ action: "excluir", link })}
+            onEdit={(link) => setEditingLink(link)}
+            onDelete={(link) => setDeletingLink(link)}
           />
         </Card>
       )}
@@ -119,23 +143,37 @@ export function Links() {
         </Button>
       )}
 
-      <Dialog open={stub != null} onOpenChange={(open) => !open && setStub(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {stub?.action === "criar" && "Criar link"}
-              {stub?.action === "editar" && `Editar ${stub.link?.code}`}
-              {stub?.action === "excluir" && `Excluir ${stub.link?.code}`}
-            </DialogTitle>
-            <DialogDescription>Essa ação chega na próxima etapa.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setStub(null)}>
-              Fechar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <CreateLinkDialog open={createOpen} onOpenChange={setCreateOpen} />
+
+      {editingLink && (
+        <EditLinkDialog
+          key={editingLink.code}
+          link={editingLink}
+          open
+          onOpenChange={(open) => !open && setEditingLink(null)}
+        />
+      )}
+
+      <AlertDialog open={deletingLink != null} onOpenChange={(open) => !open && setDeletingLink(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir {deletingLink?.code}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Isto não pode ser desfeito. O link deixará de redirecionar imediatamente.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteLink.isPending}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={deleteLink.isPending}
+              onClick={handleConfirmDelete}
+            >
+              {deleteLink.isPending ? "Excluindo…" : "Excluir"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
