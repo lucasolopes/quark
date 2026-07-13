@@ -27,6 +27,12 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 5
+      clickhouse:
+        image: clickhouse/clickhouse-server:24
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget -q -O - http://localhost:8123/ping || exit 1" --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -56,3 +62,4 @@ jobs:
         env:
           QUARK_TEST_VALKEY_URL: redis://127.0.0.1:6379
           QUARK_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          QUARK_TEST_CLICKHOUSE_URL: http://127.0.0.1:8123

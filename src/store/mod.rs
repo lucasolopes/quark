@@ -68,19 +68,26 @@ pub type Backends = (Arc<dyn Store>, Arc<dyn AnalyticsSink>);
 /// Seam de seleção de backend por `QUARK_DATABASE_URL`: definido → Postgres;
 /// ausente → LMDB local em `data_path`. Async pra acomodar setup de conexão
 /// (Postgres) sem gambiarra de bloqueio.
+///
+/// O Store e o AnalyticsSink são escolhidos de forma independente: o Store
+/// (+ seu sink embutido) segue a regra acima; o Sink é sobrescrito por
+/// `QUARK_CLICKHOUSE_URL` quando definido (ClickHouse é analytics-only,
+/// nunca Store).
 pub async fn open_backends(data_path: &Path) -> Result<Backends, StoreError> {
-    match std::env::var("QUARK_DATABASE_URL") {
-        Ok(url) => {
-            let pg = Arc::new(postgres::PostgresStore::open(&url).await?);
-            let store: Arc<dyn Store> = pg.clone();
-            let sink: Arc<dyn AnalyticsSink> = pg;
-            Ok((store, sink))
-        }
-        Err(_) => {
-            let lmdb = Arc::new(lmdb::LmdbStore::open(data_path)?);
-            let store: Arc<dyn Store> = lmdb.clone();
-            let sink: Arc<dyn AnalyticsSink> = lmdb;
-            Ok((store, sink))
-        }
-    }
+    let (store, embedded_sink): (Arc<dyn Store>, Arc<dyn AnalyticsSink>) =
+        match std::env::var("QUARK_DATABASE_URL") {
+            Ok(url) => {
+                let pg = Arc::new(postgres::PostgresStore::open(&url).await?);
+                (pg.clone(), pg)
+            }
+            Err(_) => {
+                let lmdb = Arc::new(lmdb::LmdbStore::open(data_path)?);
+                (lmdb.clone(), lmdb)
+            }
+        };
+    let sink: Arc<dyn AnalyticsSink> = match std::env::var("QUARK_CLICKHOUSE_URL") {
+        Ok(url) => Arc::new(crate::analytics::clickhouse::ClickHouseSink::open(&url).await?),
+        Err(_) => embedded_sink,
+    };
+    Ok((store, sink))
 }
