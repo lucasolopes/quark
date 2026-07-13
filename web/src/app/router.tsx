@@ -1,6 +1,6 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { Blocklist } from "@/routes/Blocklist";
-import { LinkDetail } from "@/routes/LinkDetail";
+import { LinkStats } from "@/routes/LinkStats";
 import { Links } from "@/routes/Links";
 import { Login } from "@/routes/Login";
 import { RequireAuth } from "./RequireAuth";
@@ -18,7 +18,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/links" replace /> },
       { path: "links", element: <Links /> },
-      { path: "links/:code", element: <LinkDetail /> },
+      { path: "links/:code", element: <LinkStats /> },
       { path: "blocklist", element: <Blocklist /> },
     ],
   },

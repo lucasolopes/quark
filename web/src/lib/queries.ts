@@ -1,4 +1,4 @@
-import { QueryClient, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import type { CreateLinkRequest, PatchLinkRequest } from "./types";
 
@@ -59,5 +59,14 @@ export function useDeleteLink() {
   return useMutation({
     mutationFn: (code: string) => api.deleteLink(code),
     onSuccess: () => { void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY }); },
+  });
+}
+
+/** Estatísticas agregadas + eventos recentes de um link, para a tela de detalhe. */
+export function useStats(code: string) {
+  return useQuery({
+    queryKey: ["stats", code],
+    queryFn: () => api.getStats(code),
+    enabled: Boolean(code),
   });
 }
