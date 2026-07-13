@@ -189,6 +189,16 @@ impl Store for LmdbStore {
         Ok(out)
     }
 
+    async fn search_links(
+        &self,
+        _q: &str,
+        _after: Option<u64>,
+        _limit: usize,
+    ) -> Result<Vec<(u64, Record)>, StoreError> {
+        // LMDB não tem índice de texto; busca server-side é recurso do Postgres.
+        Err(StoreError::Unsupported)
+    }
+
     async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut out = Vec::new();
@@ -407,6 +417,14 @@ mod tests {
             s.list_blocked_domains().await.unwrap(),
             vec!["spam.net".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn search_links_is_unsupported_on_lmdb() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let r = store.search_links("qualquer", None, 10).await;
+        assert!(matches!(r, Err(StoreError::Unsupported)));
     }
 
     #[tokio::test]

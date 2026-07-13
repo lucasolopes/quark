@@ -19,6 +19,8 @@ pub enum StoreError {
     Serde(serde_json::Error),
     Backend(String),
     IdSpaceExhausted,
+    /// Operação não suportada por este backend (ex.: busca server-side no LMDB).
+    Unsupported,
 }
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -27,6 +29,7 @@ impl std::fmt::Display for StoreError {
             StoreError::Serde(e) => write!(f, "serde: {e}"),
             StoreError::Backend(s) => write!(f, "backend: {s}"),
             StoreError::IdSpaceExhausted => write!(f, "espaço de id esgotado"),
+            StoreError::Unsupported => write!(f, "operação não suportada por este backend"),
         }
     }
 }
@@ -70,6 +73,15 @@ pub trait Store: Send + Sync + 'static {
     async fn list_blocked_domains(&self) -> Result<Vec<String>, StoreError>;
     async fn list_links(
         &self,
+        after: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<(u64, Record)>, StoreError>;
+    /// Busca server-side paginada (keyset por id). Casa `url`/`alias`,
+    /// case-insensitive, termo literal. Backends sem busca retornam
+    /// `Err(StoreError::Unsupported)`.
+    async fn search_links(
+        &self,
+        q: &str,
         after: Option<u64>,
         limit: usize,
     ) -> Result<Vec<(u64, Record)>, StoreError>;

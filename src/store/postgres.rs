@@ -6,6 +6,14 @@ use sqlx::{PgPool, Row};
 /// Chave do pg_advisory_lock que serializa a criação idempotente do schema entre instâncias.
 const QUARK_SCHEMA_LOCK_ID: i64 = 727271;
 
+/// Escapa os curingas do `LIKE`/`ILIKE` (escape char padrão = `\`) para que o
+/// termo do usuário seja tratado literalmente. Ordem importa: escapa a `\` antes.
+fn like_escape(q: &str) -> String {
+    q.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 pub struct PostgresStore {
     pool: PgPool,
 }
@@ -216,6 +224,44 @@ impl Store for PostgresStore {
              WHERE ($1::bigint IS NULL OR id > $1) ORDER BY id LIMIT $2",
         )
         .bind(after.map(|a| a as i64))
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        let mut out = Vec::new();
+        for r in rows {
+            let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+            let url: String = r.try_get("url").map_err(StoreError::backend)?;
+            let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
+            let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+            out.push((
+                id as u64,
+                Record {
+                    url,
+                    expiry: expiry.map(|v| v as u64),
+                    created: created as u64,
+                },
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn search_links(
+        &self,
+        q: &str,
+        after: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<(u64, Record)>, StoreError> {
+        let pattern = format!("%{}%", like_escape(q));
+        let rows = sqlx::query(
+            "SELECT DISTINCT l.id, l.url, l.expiry, l.created \
+             FROM links l LEFT JOIN aliases a ON a.id = l.id \
+             WHERE ($1::bigint IS NULL OR l.id > $1) \
+               AND (l.url ILIKE $2 OR a.alias ILIKE $2) \
+             ORDER BY l.id LIMIT $3",
+        )
+        .bind(after.map(|a| a as i64))
+        .bind(&pattern)
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await
