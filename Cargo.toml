@@ -25,6 +25,7 @@ redis = { version = "0.27", features = ["tokio-comp"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
 clickhouse = "0.13"
 url = "2"
+tower-http = { version = "0.6", features = ["cors"] }
 
 [dev-dependencies]
 serial_test = "3"

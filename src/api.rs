@@ -5,6 +5,7 @@ use crate::store::{Record, Store, StoreError};
 use crate::{codec, now, permute};
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
+use axum::http::Method;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -14,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
+use tower_http::cors::{Any, CorsLayer};
 
 pub struct AppState {
     pub cache: Cache,
@@ -558,7 +560,24 @@ async fn log_requests(req: Request, next: Next) -> Response {
     response
 }
 
+/// Origens de CORS a partir da env `QUARK_CORS_ORIGINS` (lista por vírgula).
+pub fn parse_cors_origins(raw: Option<String>) -> Vec<String> {
+    match raw {
+        None => Vec::new(),
+        Some(s) => s
+            .split(',')
+            .map(|o| o.trim().to_string())
+            .filter(|o| !o.is_empty())
+            .collect(),
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
+    let origins = parse_cors_origins(std::env::var("QUARK_CORS_ORIGINS").ok());
+    router_with_cors(state, origins)
+}
+
+pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
     let app = Router::new()
         .route("/", post(create))
         .route("/health", get(health))
@@ -577,6 +596,20 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .with_state(state);
 
+    // CORS é opt-in via QUARK_CORS_ORIGINS: sem origens configuradas, nenhum
+    // header de CORS é adicionado (comportamento atual preservado).
+    let app = if origins.is_empty() {
+        app
+    } else {
+        let list: Vec<axum::http::HeaderValue> =
+            origins.iter().filter_map(|o| o.parse().ok()).collect();
+        let cors = CorsLayer::new()
+            .allow_origin(list)
+            .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+            .allow_headers(Any);
+        app.layer(cors)
+    };
+
     // Log de acesso por request é opt-in: em alta vazão, o println! síncrono
     // por request serializa tudo na lock do stdout (I/O do Docker json-file).
     // Fica desligado por padrão; ativa com QUARK_ACCESS_LOG=1.
@@ -589,7 +622,17 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::{access_log_line, cache_control_for};
+    use super::{access_log_line, cache_control_for, parse_cors_origins};
+
+    #[test]
+    fn parse_cors_origins_split_e_trim() {
+        assert_eq!(parse_cors_origins(None), Vec::<String>::new());
+        assert_eq!(parse_cors_origins(Some("".into())), Vec::<String>::new());
+        assert_eq!(
+            parse_cors_origins(Some(" https://a.com , https://b.com ".into())),
+            vec!["https://a.com".to_string(), "https://b.com".to_string()]
+        );
+    }
 
     #[test]
     fn cache_control_sem_expiry_usa_default() {

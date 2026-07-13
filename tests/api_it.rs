@@ -651,3 +651,40 @@ async fn admin_delete_inexistente_404() {
         .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn cors_header_presente_quando_configurado() {
+    // monta o router com uma origem permitida explícita (sem env)
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let store2 = store.clone();
+    let state = Arc::new(AppState {
+        cache,
+        store,
+        key: 0x1234,
+        analytics_tx: tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".into(),
+    });
+    let app = quark::api::router_with_cors(state, vec!["https://painel.example".into()]);
+    let resp = app
+        .oneshot(
+            Request::get("/health")
+                .header("origin", "https://painel.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "https://painel.example"
+    );
+}
