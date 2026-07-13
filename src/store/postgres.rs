@@ -205,6 +205,70 @@ impl Store for PostgresStore {
             })
             .collect()
     }
+
+    async fn list_links(
+        &self,
+        after: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<(u64, Record)>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT id, url, expiry, created FROM links \
+             WHERE ($1::bigint IS NULL OR id > $1) ORDER BY id LIMIT $2",
+        )
+        .bind(after.map(|a| a as i64))
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        let mut out = Vec::new();
+        for r in rows {
+            let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+            let url: String = r.try_get("url").map_err(StoreError::backend)?;
+            let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
+            let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+            out.push((
+                id as u64,
+                Record {
+                    url,
+                    expiry: expiry.map(|v| v as u64),
+                    created: created as u64,
+                },
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError> {
+        let rows = sqlx::query("SELECT alias, id FROM aliases")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        let mut out = Vec::new();
+        for r in rows {
+            let alias: String = r.try_get("alias").map_err(StoreError::backend)?;
+            let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+            out.push((alias, id as u64));
+        }
+        Ok(out)
+    }
+
+    async fn delete_link(&self, id: u64) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM links WHERE id = $1")
+            .bind(id as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn delete_alias(&self, alias: &str) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM aliases WHERE alias = $1")
+            .bind(alias)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]

@@ -4,7 +4,8 @@ use crate::cache::Cache;
 use crate::store::{Record, Store, StoreError};
 use crate::{codec, now, permute};
 use axum::body::Bytes;
-use axum::extract::{ConnectInfo, Path, Request, State};
+use axum::extract::{ConnectInfo, Path, Query, Request, State};
+use axum::http::Method;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -14,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
+use tower_http::cors::{Any, CorsLayer};
 
 pub struct AppState {
     pub cache: Cache,
@@ -371,6 +373,160 @@ async fn blocklist_delete(
     StatusCode::OK.into_response()
 }
 
+#[derive(Deserialize)]
+struct ListParams {
+    after: Option<u64>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct LinkRow {
+    id: u64,
+    code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alias: Option<String>,
+    url: String,
+    expiry: Option<u64>,
+    created: u64,
+}
+
+async fn admin_links_list(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(p): Query<ListParams>,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    let limit = p.limit.unwrap_or(50).clamp(1, 500);
+    let links = match st.store.list_links(p.after, limit).await {
+        Ok(l) => l,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    // mapa id -> alias (um único list_aliases por request)
+    let alias_map: std::collections::HashMap<u64, String> = match st.store.list_aliases().await {
+        Ok(pairs) => pairs.into_iter().map(|(a, id)| (id, a)).collect(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let next_after = links.last().map(|(id, _)| *id);
+    let rows: Vec<LinkRow> = links
+        .into_iter()
+        .map(|(id, rec)| LinkRow {
+            id,
+            code: codec::to_base62(permute::encode(id, st.key)),
+            alias: alias_map.get(&id).cloned(),
+            url: rec.url,
+            expiry: rec.expiry,
+            created: rec.created,
+        })
+        .collect();
+    Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
+}
+
+/// Resolve o code em (id, alias_opcional). Se o code é numérico, não há alias
+/// a remover; se é uma string de alias, devolve o alias pra apagar junto.
+async fn resolve_for_admin(
+    st: &AppState,
+    code: &str,
+) -> Result<Option<(u64, Option<String>)>, StoreError> {
+    match codec::from_base62(code) {
+        Some(c) if c <= permute::MAX_ID => Ok(Some((permute::decode(c, st.key), None))),
+        _ => match st.store.get_alias(code).await? {
+            Some(id) => Ok(Some((id, Some(code.to_string())))),
+            None => Ok(None),
+        },
+    }
+}
+
+async fn admin_link_delete(
+    State(st): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    let (id, alias) = match resolve_for_admin(&st, &code).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    // 404 se o link em si não existe
+    match st.store.get_link(id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    if st.store.delete_link(id).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if let Some(a) = alias {
+        let _ = st.store.delete_alias(&a).await;
+    }
+    st.cache.invalidate(id).await;
+    StatusCode::OK.into_response()
+}
+
+async fn admin_link_patch(
+    State(st): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    let (id, _) = match resolve_for_admin(&st, &code).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let mut rec = match st.store.get_link(id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    // corpo: chaves ausentes = mantém; "url" atualiza; "ttl": número recomputa
+    // expiry (now+ttl), null remove a expiração.
+    let patch: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, "json inválido").into_response(),
+    };
+    if let Some(u) = patch.get("url") {
+        let s = match u.as_str() {
+            Some(s) if is_valid_url(s) => s,
+            _ => return (StatusCode::BAD_REQUEST, "url inválida").into_response(),
+        };
+        let Some(host) = extract_host(s) else {
+            return (StatusCode::BAD_REQUEST, "url sem host").into_response();
+        };
+        if st.block_private && is_blocked_target(&host, &headers, &st) {
+            return (StatusCode::FORBIDDEN, "destino não permitido").into_response();
+        }
+        if st.blocklist.is_blocked(&host, now()).await {
+            return (StatusCode::FORBIDDEN, "destino bloqueado").into_response();
+        }
+        rec.url = s.to_string();
+    }
+    if let Some(ttl) = patch.get("ttl") {
+        if ttl.is_null() {
+            rec.expiry = None;
+        } else if let Some(secs) = ttl.as_u64() {
+            match now().checked_add(secs) {
+                Some(e) => rec.expiry = Some(e),
+                None => return (StatusCode::BAD_REQUEST, "ttl inválido").into_response(),
+            }
+        } else {
+            return (StatusCode::BAD_REQUEST, "ttl inválido").into_response();
+        }
+    }
+    if st.store.put_link(id, &rec).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    st.cache.invalidate(id).await;
+    StatusCode::OK.into_response()
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -414,7 +570,24 @@ async fn log_requests(req: Request, next: Next) -> Response {
     response
 }
 
+/// Origens de CORS a partir da env `QUARK_CORS_ORIGINS` (lista por vírgula).
+pub fn parse_cors_origins(raw: Option<String>) -> Vec<String> {
+    match raw {
+        None => Vec::new(),
+        Some(s) => s
+            .split(',')
+            .map(|o| o.trim().to_string())
+            .filter(|o| !o.is_empty())
+            .collect(),
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
+    let origins = parse_cors_origins(std::env::var("QUARK_CORS_ORIGINS").ok());
+    router_with_cors(state, origins)
+}
+
+pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
     let app = Router::new()
         .route("/", post(create))
         .route("/health", get(health))
@@ -426,7 +599,26 @@ pub fn router(state: Arc<AppState>) -> Router {
                 .post(blocklist_add)
                 .delete(blocklist_delete),
         )
+        .route("/admin/links", get(admin_links_list))
+        .route(
+            "/admin/links/:code",
+            axum::routing::delete(admin_link_delete).patch(admin_link_patch),
+        )
         .with_state(state);
+
+    // CORS é opt-in via QUARK_CORS_ORIGINS: sem origens configuradas, nenhum
+    // header de CORS é adicionado (comportamento atual preservado).
+    let app = if origins.is_empty() {
+        app
+    } else {
+        let list: Vec<axum::http::HeaderValue> =
+            origins.iter().filter_map(|o| o.parse().ok()).collect();
+        let cors = CorsLayer::new()
+            .allow_origin(list)
+            .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+            .allow_headers(Any);
+        app.layer(cors)
+    };
 
     // Log de acesso por request é opt-in: em alta vazão, o println! síncrono
     // por request serializa tudo na lock do stdout (I/O do Docker json-file).
@@ -440,7 +632,17 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::{access_log_line, cache_control_for};
+    use super::{access_log_line, cache_control_for, parse_cors_origins};
+
+    #[test]
+    fn parse_cors_origins_split_e_trim() {
+        assert_eq!(parse_cors_origins(None), Vec::<String>::new());
+        assert_eq!(parse_cors_origins(Some("".into())), Vec::<String>::new());
+        assert_eq!(
+            parse_cors_origins(Some(" https://a.com , https://b.com ".into())),
+            vec!["https://a.com".to_string(), "https://b.com".to_string()]
+        );
+    }
 
     #[test]
     fn cache_control_sem_expiry_usa_default() {

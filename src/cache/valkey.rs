@@ -48,4 +48,12 @@ impl CacheTier for ValkeyTier {
             .map_err(|e| TierError(e.to_string()))?;
         Ok(())
     }
+
+    async fn invalidate(&self, id: u64) -> Result<(), TierError> {
+        let mut conn = self.conn.clone();
+        conn.del::<_, ()>(Self::key(id))
+            .await
+            .map_err(|e| TierError(e.to_string()))?;
+        Ok(())
+    }
 }

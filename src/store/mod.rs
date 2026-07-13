@@ -68,6 +68,14 @@ pub trait Store: Send + Sync + 'static {
     async fn add_blocked_domain(&self, domain: &str) -> Result<(), StoreError>;
     async fn remove_blocked_domain(&self, domain: &str) -> Result<(), StoreError>;
     async fn list_blocked_domains(&self) -> Result<Vec<String>, StoreError>;
+    async fn list_links(
+        &self,
+        after: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<(u64, Record)>, StoreError>;
+    async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError>;
+    async fn delete_link(&self, id: u64) -> Result<(), StoreError>;
+    async fn delete_alias(&self, alias: &str) -> Result<(), StoreError>;
 }
 
 /// Abre só o Store em LMDB (usado por testes que não precisam do AnalyticsSink).

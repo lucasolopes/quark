@@ -1,0 +1,44 @@
+# Stack completa pra dev local / referência de self-host full-stack.
+# `docker compose up --build` sobe quark + os 3 backends plugáveis.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: quark
+      POSTGRES_USER: quark
+      POSTGRES_DB: quark
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "quark"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  valkey:
+    image: valkey/valkey:8
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24
+    ports: ["8123:8123"]
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+
+  quark:
+    build: .
+    depends_on:
+      postgres: { condition: service_healthy }
+      valkey: { condition: service_healthy }
+    ports: ["8080:8080"]
+    environment:
+      QUARK_KEY: "12345678901234567"        # dev only — troque em produção
+      QUARK_ADMIN_TOKEN: "dev-admin-token"
+      QUARK_DATABASE_URL: "postgres://quark:quark@postgres:5432/quark"
+      QUARK_VALKEY_URL: "redis://valkey:6379"
+      QUARK_CLICKHOUSE_URL: "http://clickhouse:8123"
+      QUARK_CORS_ORIGINS: "http://localhost:5173"   # origem do painel em dev

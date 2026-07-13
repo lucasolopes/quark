@@ -224,6 +224,7 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 | `QUARK_BLOCK_PRIVATE` | Guard against internal/loop destinations; on by default, `0` disables it. | on |
 | `QUARK_PUBLIC_HOST` | This instance's own host, for anti-loop (otherwise uses the `Host` header). | unset → uses `Host` header |
 | `QUARK_BLOCKLIST_TTL` | Seconds the blocklist snapshot is cached for. | `60` |
+| `QUARK_CORS_ORIGINS` | Comma-separated origins allowed to call the API (for the web panel). | unset → no CORS (same-origin only) |
 
 > Only enable `QUARK_RATELIMIT_PER_MIN` behind a proxy that overwrites `QUARK_REAL_IP_HEADER` (e.g. Cloudflare with `CF-Connecting-IP`); exposed directly, a client can forge the header and bypass the limit.
 
@@ -232,6 +233,16 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 - Per-request access logging is **opt-in via `QUARK_ACCESS_LOG`** (off by default). When set, every request emits a **structured JSON log line** to stdout (`{"method","path","status","latency_ms"}`) — captured as-is by Coolify/Docker, ready to `grep` or ship to a log collector. Off by default so the hot redirect path pays no synchronous `println!`/stdout-lock cost at high throughput.
 - Redirects carry a **TTL-aware `Cache-Control`** header, so a CDN/browser can cache the 302 (and never past a link's expiry). See [`docs/EDGE.md`](docs/EDGE.md) for putting Cloudflare in front.
 - The domain blocklist is managed via `GET/POST/DELETE /admin/blocklist` (JSON body `{"domain": "..."}` for POST/DELETE), protected by `QUARK_ADMIN_TOKEN` (header `x-admin-token`; unset → 404, wrong token → 401).
+
+### Local dev stack
+
+`docker compose up --build` brings up quark plus all three optional backends
+(Postgres, Valkey, ClickHouse) wired together — handy for development, for
+running the gated integration tests, and as a full-stack self-host reference.
+The admin/panel API lives under `/admin/*` (token `QUARK_ADMIN_TOKEN`): list
+links `GET /admin/links`, delete `DELETE /admin/links/:code`, edit
+`PATCH /admin/links/:code`. A separate web panel (SPA) consumes this API; set
+`QUARK_CORS_ORIGINS` to the panel's origin.
 
 ## More
 

@@ -505,3 +505,220 @@ async fn admin_blocklist_delete_remove() {
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["domains"].as_array().unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn admin_links_lista_paginada() {
+    let app = app_admin("segredo").await;
+    // cria 2 links
+    for u in ["https://a.com", "https://b.com"] {
+        app.clone()
+            .oneshot(
+                Request::post("/")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"url":"{u}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    // lista
+    let resp = app
+        .oneshot(
+            Request::get("/admin/links?limit=10")
+                .header("x-admin-token", "segredo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let links = v["links"].as_array().unwrap();
+    assert_eq!(links.len(), 2);
+    assert!(links[0]["code"].as_str().unwrap().len() == 7);
+    assert_eq!(links[0]["url"], "https://a.com");
+}
+
+#[tokio::test]
+async fn admin_links_sem_token_404() {
+    let app = app().await; // admin_token: None
+    let resp = app
+        .oneshot(Request::get("/admin/links").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+async fn cria_e_pega_code(app: &axum::Router, url: &str) -> String {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"url":"{url}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    v["code"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn admin_delete_link_vira_404_no_redirect() {
+    let app = app_admin("segredo").await;
+    let code = cria_e_pega_code(&app, "https://del.com").await;
+    // antes: redireciona
+    let r = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FOUND);
+    // delete
+    let r = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/admin/links/{code}"))
+                .header("x-admin-token", "segredo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    // depois: 404
+    let r = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_patch_link_atualiza_destino() {
+    let app = app_admin("segredo").await;
+    let code = cria_e_pega_code(&app, "https://velho.com").await;
+    let r = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "segredo")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"https://novo.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let r = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FOUND);
+    assert_eq!(r.headers()["location"], "https://novo.com");
+}
+
+#[tokio::test]
+async fn admin_delete_inexistente_404() {
+    let app = app_admin("segredo").await;
+    let r = app
+        .oneshot(
+            Request::delete("/admin/links/0000000")
+                .header("x-admin-token", "segredo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_patch_destino_interno_403() {
+    let app = app_admin("segredo").await;
+    let code = cria_e_pega_code(&app, "https://ok.com").await;
+    let r = app
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "segredo")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"http://127.0.0.1:9000"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_patch_url_invalida_400() {
+    let app = app_admin("segredo").await;
+    let code = cria_e_pega_code(&app, "https://ok.com").await;
+    let r = app
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "segredo")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"ftp://nope"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn cors_header_presente_quando_configurado() {
+    // monta o router com uma origem permitida explícita (sem env)
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let store2 = store.clone();
+    let state = Arc::new(AppState {
+        cache,
+        store,
+        key: 0x1234,
+        analytics_tx: tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".into(),
+    });
+    let app = quark::api::router_with_cors(state, vec!["https://painel.example".into()]);
+    let resp = app
+        .oneshot(
+            Request::get("/health")
+                .header("origin", "https://painel.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "https://painel.example"
+    );
+}
