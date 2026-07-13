@@ -213,7 +213,7 @@ mod tests {
     #[tokio::test]
     async fn worker_drena_e_grava_ao_fechar_canal() {
         let dir = tempfile::tempdir().unwrap();
-        let (_store, sink) = crate::store::open_backends(dir.path()).unwrap();
+        let (_store, sink) = crate::store::open_backends(dir.path()).await.unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(1000);
         let handle = spawn_worker(rx, sink.clone());
 

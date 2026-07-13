@@ -1,4 +1,5 @@
 pub mod lmdb;
+pub mod postgres;
 
 use crate::analytics::AnalyticsSink;
 use serde::{Deserialize, Serialize};
@@ -16,12 +17,14 @@ pub struct Record {
 pub enum StoreError {
     Db(heed::Error),
     Serde(serde_json::Error),
+    Backend(String),
 }
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StoreError::Db(e) => write!(f, "db: {e}"),
             StoreError::Serde(e) => write!(f, "serde: {e}"),
+            StoreError::Backend(s) => write!(f, "backend: {s}"),
         }
     }
 }
@@ -54,19 +57,30 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<bool, StoreError>;
 }
 
-/// Seam de seleção de backend. Hoje só resolve LMDB; o Tijolo 4 adiciona o
-/// match em `QUARK_STORE`. Async pra acomodar setup de conexão (Postgres) depois.
+/// Abre só o Store em LMDB (usado por testes que não precisam do AnalyticsSink).
 pub async fn open_store(path: &Path) -> Result<Arc<dyn Store>, StoreError> {
     Ok(Arc::new(lmdb::LmdbStore::open(path)?))
 }
 
-/// Par de backends (Store + AnalyticsSink) que compartilham o mesmo env LMDB.
+/// Par de backends (Store + AnalyticsSink) que compartilham o mesmo backend físico.
 pub type Backends = (Arc<dyn Store>, Arc<dyn AnalyticsSink>);
 
-/// Abre UM LmdbStore e o expõe como Store E AnalyticsSink (mesmo env LMDB).
-pub fn open_backends(path: &Path) -> Result<Backends, StoreError> {
-    let backend = Arc::new(lmdb::LmdbStore::open(path)?);
-    let store: Arc<dyn Store> = backend.clone();
-    let sink: Arc<dyn AnalyticsSink> = backend;
-    Ok((store, sink))
+/// Seam de seleção de backend por `QUARK_DATABASE_URL`: definido → Postgres;
+/// ausente → LMDB local em `data_path`. Async pra acomodar setup de conexão
+/// (Postgres) sem gambiarra de bloqueio.
+pub async fn open_backends(data_path: &Path) -> Result<Backends, StoreError> {
+    match std::env::var("QUARK_DATABASE_URL") {
+        Ok(url) => {
+            let pg = Arc::new(postgres::PostgresStore::open(&url).await?);
+            let store: Arc<dyn Store> = pg.clone();
+            let sink: Arc<dyn AnalyticsSink> = pg;
+            Ok((store, sink))
+        }
+        Err(_) => {
+            let lmdb = Arc::new(lmdb::LmdbStore::open(data_path)?);
+            let store: Arc<dyn Store> = lmdb.clone();
+            let sink: Arc<dyn AnalyticsSink> = lmdb;
+            Ok((store, sink))
+        }
+    }
 }

@@ -14,7 +14,7 @@ fn ev(id: u64, ts: u64) -> ClickEvent {
 #[tokio::test]
 async fn record_e_stats() {
     let dir = tempfile::tempdir().unwrap();
-    let (_store, sink) = open_backends(dir.path()).unwrap();
+    let (_store, sink) = open_backends(dir.path()).await.unwrap();
 
     sink.record_batch(&[ev(1, 1_752_300_000), ev(1, 1_752_300_050)])
         .await
@@ -29,7 +29,7 @@ async fn record_e_stats() {
 #[tokio::test]
 async fn retencao_trunca_em_events_max() {
     let dir = tempfile::tempdir().unwrap();
-    let (_store, sink) = open_backends(dir.path()).unwrap();
+    let (_store, sink) = open_backends(dir.path()).await.unwrap();
     // Grava 1200 eventos pro mesmo id em lotes; recent deve ficar em 1000.
     for batch in 0..12 {
         let evs: Vec<ClickEvent> = (0..100)
