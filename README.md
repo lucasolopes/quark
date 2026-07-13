@@ -225,6 +225,8 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 | `QUARK_PUBLIC_HOST` | This instance's own host, for anti-loop (otherwise uses the `Host` header). | unset → uses `Host` header |
 | `QUARK_BLOCKLIST_TTL` | Seconds the blocklist snapshot is cached for. | `60` |
 
+> Only enable `QUARK_RATELIMIT_PER_MIN` behind a proxy that overwrites `QUARK_REAL_IP_HEADER` (e.g. Cloudflare with `CF-Connecting-IP`); exposed directly, a client can forge the header and bypass the limit.
+
 ## Operating
 
 - Per-request access logging is **opt-in via `QUARK_ACCESS_LOG`** (off by default). When set, every request emits a **structured JSON log line** to stdout (`{"method","path","status","latency_ms"}`) — captured as-is by Coolify/Docker, ready to `grep` or ship to a log collector. Off by default so the hot redirect path pays no synchronous `println!`/stdout-lock cost at high throughput.

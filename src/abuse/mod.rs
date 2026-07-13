@@ -29,7 +29,20 @@ pub fn is_internal_host(host: &str) -> bool {
                 || v4.is_unspecified()
                 || v4.is_broadcast()
         }
-        Ok(IpAddr::V6(v6)) => v6.is_loopback() || v6.is_unspecified(),
+        Ok(IpAddr::V6(v6)) => {
+            // IPv4-mapeado (::ffff:a.b.c.d): reavalia como IPv4 (loopback/privado disfarçado)
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return v4.is_private()
+                    || v4.is_loopback()
+                    || v4.is_link_local()
+                    || v4.is_unspecified()
+                    || v4.is_broadcast();
+            }
+            let seg = v6.segments();
+            let ula = (seg[0] & 0xfe00) == 0xfc00; // fc00::/7
+            let link_local = (seg[0] & 0xffc0) == 0xfe80; // fe80::/10
+            v6.is_loopback() || v6.is_unspecified() || ula || link_local
+        }
         Err(_) => false, // nome não-IP e não-localhost: não é "interno" por si só
     }
 }
@@ -96,6 +109,26 @@ mod tests {
         for h in ["example.com", "8.8.8.8", "1.1.1.1", "meusite.com.br"] {
             assert!(!is_internal_host(h), "não deveria bloquear {h}");
         }
+    }
+
+    #[test]
+    fn is_internal_host_pega_ipv6_interno_e_mapeado() {
+        for h in [
+            "::1",
+            "::",
+            "[fc00::1]",
+            "[fe80::1]",
+            "[::ffff:127.0.0.1]",
+            "[::ffff:10.0.0.1]",
+        ] {
+            assert!(is_internal_host(h), "deveria bloquear {h}");
+        }
+    }
+
+    #[test]
+    fn is_internal_host_libera_ipv6_publico() {
+        assert!(!is_internal_host("[2606:4700::1111]"));
+        assert!(!is_internal_host("[::ffff:8.8.8.8]")); // publico mapeado
     }
 
     #[test]
