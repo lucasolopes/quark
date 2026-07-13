@@ -85,10 +85,10 @@ mod tests {
     }
 
     #[test]
-    fn day_bucket_formata_utc() {
-        // 2026-07-12T... -> "2026-07-12"
-        assert_eq!(day_bucket(1_752_300_000).len(), 10);
-        assert!(day_bucket(1_752_300_000).starts_with("2026-"));
+    fn day_bucket_datas_conhecidas() {
+        assert_eq!(day_bucket(0), "1970-01-01");
+        assert_eq!(day_bucket(1_735_689_600), "2025-01-01"); // epoch de 2025-01-01 00:00 UTC
+        assert_eq!(day_bucket(1_735_689_600 + 86_400), "2025-01-02");
     }
 }
 ```
