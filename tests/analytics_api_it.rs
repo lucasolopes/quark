@@ -34,13 +34,16 @@ async fn app_with(
     (router(state), rx)
 }
 
-async fn create(app: &axum::Router, url: &str) -> String {
+async fn create(app: &axum::Router, url: &str, token: Option<&str>) -> String {
+    // Quando o app tem admin_token configurado, o POST / exige o token; envie-o.
+    let mut req = Request::post("/").header("content-type", "application/json");
+    if let Some(t) = token {
+        req = req.header("x-admin-token", t);
+    }
     let resp = app
         .clone()
         .oneshot(
-            Request::post("/")
-                .header("content-type", "application/json")
-                .body(Body::from(format!(r#"{{"url":"{url}"}}"#)))
+            req.body(Body::from(format!(r#"{{"url":"{url}"}}"#)))
                 .unwrap(),
         )
         .await
@@ -57,7 +60,7 @@ async fn redirect_nao_bloqueia_com_fila_cheia() {
     // canal capacidade 1, SEM worker consumindo: enche na 1ª e descarta o resto,
     // mas o redirect precisa continuar respondendo 302.
     let (app, _rx) = app_with(None, 1).await;
-    let code = create(&app, "https://example.com").await;
+    let code = create(&app, "https://example.com", None).await;
     for _ in 0..5 {
         let resp = app
             .clone()
@@ -75,7 +78,7 @@ async fn redirect_nao_bloqueia_com_fila_cheia() {
 #[tokio::test]
 async fn stats_exige_token() {
     let (app, _rx) = app_with(Some("segredo"), 100).await;
-    let code = create(&app, "https://example.com").await;
+    let code = create(&app, "https://example.com", Some("segredo")).await;
     // sem token → 401
     let resp = app
         .clone()
@@ -139,7 +142,7 @@ async fn stats_404_codigo_inexistente() {
 #[tokio::test]
 async fn stats_desligado_sem_token_configurado() {
     let (app, _rx) = app_with(None, 100).await; // admin_token None
-    let code = create(&app, "https://example.com").await;
+    let code = create(&app, "https://example.com", None).await;
     let resp = app
         .clone()
         .oneshot(
