@@ -4,6 +4,7 @@ use heed::byteorder::BigEndian;
 use heed::types::{Bytes, Str, U64};
 use heed::{Database, Env, EnvOpenOptions};
 use std::collections::BTreeMap;
+use std::ops::Bound;
 use std::path::Path;
 
 type BeU64 = U64<BigEndian>;
@@ -168,6 +169,49 @@ impl Store for LmdbStore {
         }
         Ok(out)
     }
+
+    async fn list_links(
+        &self,
+        after: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<(u64, Record)>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let start = match after {
+            Some(a) => Bound::Excluded(a),
+            None => Bound::Unbounded,
+        };
+        let range = (start, Bound::Unbounded);
+        let mut out = Vec::new();
+        for item in self.links.range(&rtxn, &range)?.take(limit) {
+            let (id, bytes) = item?;
+            out.push((id, serde_json::from_slice(bytes)?));
+        }
+        Ok(out)
+    }
+
+    async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        for item in self.aliases.iter(&rtxn)? {
+            let (alias, id) = item?;
+            out.push((alias.to_string(), id));
+        }
+        Ok(out)
+    }
+
+    async fn delete_link(&self, id: u64) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        self.links.delete(&mut wtxn, &id)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn delete_alias(&self, alias: &str) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        self.aliases.delete(&mut wtxn, alias)?;
+        wtxn.commit()?;
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -232,7 +276,7 @@ impl AnalyticsSink for LmdbStore {
 #[cfg(test)]
 mod tests {
     use super::{compose_id, parse_node_id, LmdbStore, LOCAL_BITS, LOCAL_MAX};
-    use crate::store::{Store, StoreError};
+    use crate::store::{Record, Store, StoreError};
 
     #[test]
     fn parse_node_id_ausente_ou_vazio_vira_none() {
@@ -363,5 +407,47 @@ mod tests {
             s.list_blocked_domains().await.unwrap(),
             vec!["spam.net".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn list_delete_links_e_aliases() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let rec = |u: &str| Record {
+            url: u.into(),
+            expiry: None,
+            created: 0,
+        };
+        for id in 1..=5u64 {
+            s.put_link(id, &rec(&format!("https://e{id}.com")))
+                .await
+                .unwrap();
+        }
+        s.put_alias_and_link("promo", 10, &rec("https://promo.com"))
+            .await
+            .unwrap();
+
+        // keyset: página 1 (após None, limit 3) => ids 1,2,3
+        let p1 = s.list_links(None, 3).await.unwrap();
+        assert_eq!(
+            p1.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        // página 2 (após 3, limit 3) => ids 4,5,10
+        let p2 = s.list_links(Some(3), 3).await.unwrap();
+        assert_eq!(
+            p2.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![4, 5, 10]
+        );
+
+        // aliases
+        let al = s.list_aliases().await.unwrap();
+        assert_eq!(al, vec![("promo".to_string(), 10u64)]);
+
+        // delete
+        s.delete_link(2).await.unwrap();
+        assert!(s.get_link(2).await.unwrap().is_none());
+        s.delete_alias("promo").await.unwrap();
+        assert_eq!(s.get_alias("promo").await.unwrap(), None);
     }
 }
