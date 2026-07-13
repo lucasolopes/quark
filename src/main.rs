@@ -19,7 +19,8 @@ async fn main() {
     let cache = match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => match ValkeyTier::open(&url).await {
             Ok(tier) => {
-                eprintln!("L2 Valkey habilitado: {url}");
+                let shown = url.rsplit('@').next().unwrap_or(&url);
+                eprintln!("L2 Valkey habilitado: {shown}");
                 Cache::with_l2(
                     store.clone(),
                     100_000,

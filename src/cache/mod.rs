@@ -10,6 +10,11 @@ pub const BREAKER_THRESHOLD: u32 = 5;
 pub const BREAKER_COOLDOWN_SECS: u64 = 30;
 pub const L1_TTL_SECS: u64 = 60;
 pub const L2_TTL_SECS: u64 = 3600;
+/// Timeout por operação de L2: um Valkey que aceita a conexão mas para de
+/// responder (sobrecarga/black-hole/pausa) nunca pode travar o redirect —
+/// isso quebraria o invariante sagrado. Um timeout conta como falha pro
+/// breaker, igual a um `Err` de tier.
+pub const L2_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
 
 #[derive(Debug)]
 pub struct TierError(pub String);
@@ -139,16 +144,16 @@ impl Cache {
         let mut l2_failed_this_request = false;
         if let Some(l2) = &self.l2 {
             if self.breaker.allow(n) {
-                match l2.get(id).await {
-                    Ok(Some(rec)) => {
+                match tokio::time::timeout(L2_OP_TIMEOUT, l2.get(id)).await {
+                    Ok(Ok(Some(rec))) => {
                         self.breaker.record_success();
                         self.hot.insert(id, rec.clone());
                         return Ok(Some(rec));
                     }
-                    Ok(None) => {
+                    Ok(Ok(None)) => {
                         self.breaker.record_success();
                     }
-                    Err(_) => {
+                    Ok(Err(_)) | Err(_ /* Elapsed */) => {
                         self.breaker.record_failure(n);
                         l2_failed_this_request = true;
                     }
@@ -164,9 +169,9 @@ impl Cache {
                     if !l2_failed_this_request && self.breaker.allow(n) {
                         let ttl = l2_ttl(&rec, n, self.l2_ttl_secs);
                         if ttl > 0 {
-                            match l2.set(id, &rec, ttl).await {
-                                Ok(()) => self.breaker.record_success(),
-                                Err(_) => self.breaker.record_failure(n),
+                            match tokio::time::timeout(L2_OP_TIMEOUT, l2.set(id, &rec, ttl)).await {
+                                Ok(Ok(())) => self.breaker.record_success(),
+                                Ok(Err(_)) | Err(_ /* Elapsed */) => self.breaker.record_failure(n),
                             }
                         }
                     }
@@ -207,6 +212,33 @@ mod tests {
         async fn set(&self, _id: u64, _r: &Record, _t: u64) -> Result<(), TierError> {
             Err(TierError("down".into()))
         }
+    }
+
+    // Tier fake que pendura (simula Valkey aceitando a conexão mas nunca
+    // respondendo — overload/black-hole/pausa).
+    struct HangingTier;
+    #[async_trait::async_trait]
+    impl CacheTier for HangingTier {
+        async fn get(&self, _id: u64) -> Result<Option<Record>, TierError> {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            Ok(None)
+        }
+        async fn set(&self, _id: u64, _r: &Record, _t: u64) -> Result<(), TierError> {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            Ok(())
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn l2_pendurado_cai_no_store_via_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
+        store.put_link(9, &rec("hung")).await.unwrap();
+        let c = Cache::with_l2(store, 1000, Arc::new(HangingTier), 60, 3600);
+        // com o relógio pausado, o timeout de 100ms dispara (auto-advance) e
+        // cai no store em vez de travar o redirect:
+        let got = c.get(9).await.unwrap().unwrap();
+        assert_eq!(got.url, "hung");
     }
 
     #[tokio::test]
