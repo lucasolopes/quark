@@ -45,6 +45,9 @@ pub struct Stats {
     pub recent: Vec<ClickEvent>,
 }
 
+/// Quantidade máxima de eventos crus retidos por id (retenção circular).
+pub const EVENTS_MAX: usize = 1000;
+
 /// Heurística leve de device a partir do User-Agent (sem dep externa).
 pub fn device_from_ua(ua: Option<&str>) -> &'static str {
     match ua {

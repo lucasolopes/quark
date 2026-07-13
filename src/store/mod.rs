@@ -1,5 +1,6 @@
 pub mod lmdb;
 
+use crate::analytics::AnalyticsSink;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -57,4 +58,15 @@ pub trait Store: Send + Sync + 'static {
 /// match em `QUARK_STORE`. Async pra acomodar setup de conexão (Postgres) depois.
 pub async fn open_store(path: &Path) -> Result<Arc<dyn Store>, StoreError> {
     Ok(Arc::new(lmdb::LmdbStore::open(path)?))
+}
+
+/// Par de backends (Store + AnalyticsSink) que compartilham o mesmo env LMDB.
+pub type Backends = (Arc<dyn Store>, Arc<dyn AnalyticsSink>);
+
+/// Abre UM LmdbStore e o expõe como Store E AnalyticsSink (mesmo env LMDB).
+pub fn open_backends(path: &Path) -> Result<Backends, StoreError> {
+    let backend = Arc::new(lmdb::LmdbStore::open(path)?);
+    let store: Arc<dyn Store> = backend.clone();
+    let sink: Arc<dyn AnalyticsSink> = backend;
+    Ok((store, sink))
 }
