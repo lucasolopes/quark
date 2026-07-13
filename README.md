@@ -1,5 +1,14 @@
 # quark
 
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+![Rust 2021](https://img.shields.io/badge/rust-2021-orange)
+![Runtime deps: none](https://img.shields.io/badge/runtime%20deps-none-brightgreen)
+![Self-hosted](https://img.shields.io/badge/self--hosted-single%20binary-informational)
+
+> Short codes are **computed, not stored** — a keyed bijection. One tiny static binary (~1 MB), no Redis, no database, no external services.
+
+**Quick links:** [Deploy](docs/DEPLOY.md) · [Architecture](docs/ARCHITECTURE.md) · [Edge/CDN](docs/EDGE.md) · [Roadmap](docs/ROADMAP.md)
+
 A URL shortener whose short code is a **calibrated, reduced-round ARX permutation** of the internal integer id. The code is not looked up in an index — it is **computed**, in both directions, from a tiny bijective function. That one design choice removes an entire class of problems (collisions) and an entire index (string → id) at once.
 
 ## The pitch
@@ -136,13 +145,14 @@ Both measurements point to the same conclusion: **the redirect path is never the
 ## Running it
 
 ```bash
-export QUARK_KEY=<a random u64, e.g. from `openssl rand -hex 8`>
+# QUARK_KEY is parsed as a DECIMAL u64 (not hex). Generate one:
+export QUARK_KEY=$(od -An -N8 -tu8 /dev/urandom | tr -d ' ')
 export QUARK_DATA=./data        # LMDB directory, created if missing
 export QUARK_ADDR=0.0.0.0:8080  # bind address
 cargo run --release
 ```
 
-If `QUARK_KEY` isn't set, quark logs a loud warning and falls back to a hardcoded dev key — fine for local testing, **never for production**: the key is what makes the code space unpredictable per instance.
+If `QUARK_KEY` isn't set — or isn't a valid decimal `u64` (a hex string will silently fail to parse) — quark logs a loud warning and falls back to a hardcoded dev key. Fine for local testing, **never for production**: the key is what makes the code space unpredictable per instance.
 
 ### curl examples
 
@@ -167,8 +177,16 @@ curl localhost:8080/health
 
 quark's non-enumerability is a **measured statistical property** (avalanche/SAC over a reduced-round ARX permutation), not a cryptographic guarantee. It resists casual scraping and sequential guessing far better than a raw counter or Hashids-style encoding, and changing `QUARK_KEY` remaps the entire code space. But this is **not AES**, and it is **not** a substitute for real access control if the linked resource itself needs to stay secret — treat codes as "hard to guess by brute force in practice," not "cryptographically secret." Each instance should run with its own random `QUARK_KEY`, kept out of source control.
 
+## Operating
+
+- Every request emits a **structured JSON log line** to stdout (`{"method","path","status","latency_ms"}`) — captured as-is by Coolify/Docker, ready to `grep` or ship to a log collector.
+- Redirects carry a **TTL-aware `Cache-Control`** header, so a CDN/browser can cache the 302 (and never past a link's expiry). See [`docs/EDGE.md`](docs/EDGE.md) for putting Cloudflare in front.
+
 ## More
 
+- Deploy on a VPS with Coolify (ships a `Dockerfile`): [`docs/DEPLOY.md`](docs/DEPLOY.md)
+- Edge/CDN caching guide: [`docs/EDGE.md`](docs/EDGE.md)
+- What's next: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Full system design: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Deeper walkthrough of every component, data model and the Feistel round internals: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 
