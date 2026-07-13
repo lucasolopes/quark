@@ -430,7 +430,13 @@ async fn admin_links_list(
         Ok(pairs) => pairs.into_iter().map(|(a, id)| (id, a)).collect(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    let next_after = links.last().map(|(id, _)| *id);
+    // Só há próxima página se veio uma página cheia; página parcial = fim
+    // (evita um fetch vazio extra no cliente).
+    let next_after = if links.len() == limit {
+        links.last().map(|(id, _)| *id)
+    } else {
+        None
+    };
     let rows: Vec<LinkRow> = links
         .into_iter()
         .map(|(id, rec)| LinkRow {
