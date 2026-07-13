@@ -421,6 +421,100 @@ async fn admin_links_list(
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
 }
 
+/// Resolve o code em (id, alias_opcional). Se o code é numérico, não há alias
+/// a remover; se é uma string de alias, devolve o alias pra apagar junto.
+async fn resolve_for_admin(
+    st: &AppState,
+    code: &str,
+) -> Result<Option<(u64, Option<String>)>, StoreError> {
+    match codec::from_base62(code) {
+        Some(c) if c <= permute::MAX_ID => Ok(Some((permute::decode(c, st.key), None))),
+        _ => match st.store.get_alias(code).await? {
+            Some(id) => Ok(Some((id, Some(code.to_string())))),
+            None => Ok(None),
+        },
+    }
+}
+
+async fn admin_link_delete(
+    State(st): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    let (id, alias) = match resolve_for_admin(&st, &code).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    // 404 se o link em si não existe
+    match st.store.get_link(id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    if st.store.delete_link(id).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if let Some(a) = alias {
+        let _ = st.store.delete_alias(&a).await;
+    }
+    st.cache.invalidate(id).await;
+    StatusCode::OK.into_response()
+}
+
+async fn admin_link_patch(
+    State(st): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    let (id, _) = match resolve_for_admin(&st, &code).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let mut rec = match st.store.get_link(id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    // corpo: chaves ausentes = mantém; "url" atualiza; "ttl": número recomputa
+    // expiry (now+ttl), null remove a expiração.
+    let patch: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, "json inválido").into_response(),
+    };
+    if let Some(u) = patch.get("url") {
+        match u.as_str() {
+            Some(s) if is_valid_url(s) => rec.url = s.to_string(),
+            _ => return (StatusCode::BAD_REQUEST, "url inválida").into_response(),
+        }
+    }
+    if let Some(ttl) = patch.get("ttl") {
+        if ttl.is_null() {
+            rec.expiry = None;
+        } else if let Some(secs) = ttl.as_u64() {
+            match now().checked_add(secs) {
+                Some(e) => rec.expiry = Some(e),
+                None => return (StatusCode::BAD_REQUEST, "ttl inválido").into_response(),
+            }
+        } else {
+            return (StatusCode::BAD_REQUEST, "ttl inválido").into_response();
+        }
+    }
+    if st.store.put_link(id, &rec).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    st.cache.invalidate(id).await;
+    StatusCode::OK.into_response()
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -477,6 +571,10 @@ pub fn router(state: Arc<AppState>) -> Router {
                 .delete(blocklist_delete),
         )
         .route("/admin/links", get(admin_links_list))
+        .route(
+            "/admin/links/:code",
+            axum::routing::delete(admin_link_delete).patch(admin_link_patch),
+        )
         .with_state(state);
 
     // Log de acesso por request é opt-in: em alta vazão, o println! síncrono

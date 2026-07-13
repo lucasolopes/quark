@@ -551,3 +551,103 @@ async fn admin_links_sem_token_404() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+async fn cria_e_pega_code(app: &axum::Router, url: &str) -> String {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"url":"{url}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    v["code"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn admin_delete_link_vira_404_no_redirect() {
+    let app = app_admin("segredo").await;
+    let code = cria_e_pega_code(&app, "https://del.com").await;
+    // antes: redireciona
+    let r = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FOUND);
+    // delete
+    let r = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/admin/links/{code}"))
+                .header("x-admin-token", "segredo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    // depois: 404
+    let r = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_patch_link_atualiza_destino() {
+    let app = app_admin("segredo").await;
+    let code = cria_e_pega_code(&app, "https://velho.com").await;
+    let r = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "segredo")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"https://novo.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let r = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FOUND);
+    assert_eq!(r.headers()["location"], "https://novo.com");
+}
+
+#[tokio::test]
+async fn admin_delete_inexistente_404() {
+    let app = app_admin("segredo").await;
+    let r = app
+        .oneshot(
+            Request::delete("/admin/links/0000000")
+                .header("x-admin-token", "segredo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+}
