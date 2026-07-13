@@ -13,7 +13,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub struct AppState {
     pub cache: Cache,
-    pub store: Arc<Store>,
+    pub store: Arc<dyn Store>,
     pub key: u64,
 }
 
@@ -83,11 +83,11 @@ async fn create(State(st): State<Arc<AppState>>, Json(req): Json<CreateReq>) -> 
             )
                 .into_response();
         }
-        let id = match st.store.next_id() {
+        let id = match st.store.next_id().await {
             Ok(id) => id,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
-        match st.store.put_alias_and_link(&alias, id, &rec) {
+        match st.store.put_alias_and_link(&alias, id, &rec).await {
             Ok(true) => {}
             Ok(false) => return (StatusCode::CONFLICT, "alias em uso").into_response(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -100,14 +100,14 @@ async fn create(State(st): State<Arc<AppState>>, Json(req): Json<CreateReq>) -> 
     }
 
     // caminho sem alias: id atômico → encode → grava. Sem checagem de colisão.
-    let id = match st.store.next_id() {
+    let id = match st.store.next_id().await {
         Ok(id) => id,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     if id > permute::MAX_ID {
         return (StatusCode::INSUFFICIENT_STORAGE, "espaço de id esgotado").into_response();
     }
-    if st.store.put_link(id, &rec).is_err() {
+    if st.store.put_link(id, &rec).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let code = codec::to_base62(permute::encode(id, st.key));
@@ -118,7 +118,7 @@ async fn redirect(State(st): State<Arc<AppState>>, Path(code): Path<String>) -> 
     // resolve id: primeiro tenta código numérico; se falhar, tenta alias.
     let id = match codec::from_base62(&code) {
         Some(c) if c <= permute::MAX_ID => permute::decode(c, st.key),
-        _ => match st.store.get_alias(&code) {
+        _ => match st.store.get_alias(&code).await {
             Ok(Some(id)) => id,
             Ok(None) => {
                 return (
@@ -130,7 +130,7 @@ async fn redirect(State(st): State<Arc<AppState>>, Path(code): Path<String>) -> 
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
     };
-    match st.cache.get(id) {
+    match st.cache.get(id).await {
         Ok(Some(rec)) => {
             let now = now();
             if let Some(exp) = rec.expiry {
