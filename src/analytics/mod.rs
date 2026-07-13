@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 
+pub mod clickhouse;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClickEvent {
     pub id: u64,
