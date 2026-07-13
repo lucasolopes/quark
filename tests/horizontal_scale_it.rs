@@ -24,6 +24,7 @@ async fn pg_replica(url: &str) -> axum::Router {
     let sink: Arc<dyn AnalyticsSink> = pg;
     let cache = Cache::new(store.clone(), 1000);
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let store2 = store.clone();
     let state = Arc::new(AppState {
         cache,
         store,
@@ -31,6 +32,11 @@ async fn pg_replica(url: &str) -> axum::Router {
         analytics_tx,
         sink,
         admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
     });
     router(state)
 }

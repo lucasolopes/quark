@@ -48,6 +48,7 @@ pub struct LmdbStore {
     meta: Database<Str, BeU64>, // "next_id" -> u64 (contador local; nos 40 bits no modo default)
     stats: Database<BeU64, Bytes>, // id -> Aggregates (json)
     events: Database<BeU64, Bytes>, // id -> Vec<ClickEvent> (json, truncado a EVENTS_MAX)
+    blocked: Database<Str, Str>, // domínio -> "" (conjunto de domínios bloqueados)
     node_id: Option<u8>,        // Some => particiona o espaço de id; None => 40 bits inteiros
 }
 
@@ -64,7 +65,7 @@ impl LmdbStore {
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(64 * 1024 * 1024 * 1024) // 64 GiB de espaço de endereço virtual (mmap)
-                .max_dbs(5)
+                .max_dbs(6)
                 .open(path)?
         };
         let mut wtxn = env.write_txn()?;
@@ -73,6 +74,7 @@ impl LmdbStore {
         let meta = env.create_database(&mut wtxn, Some("meta"))?;
         let stats = env.create_database(&mut wtxn, Some("stats"))?;
         let events = env.create_database(&mut wtxn, Some("events"))?;
+        let blocked = env.create_database(&mut wtxn, Some("blocked"))?;
         wtxn.commit()?;
         Ok(LmdbStore {
             env,
@@ -81,6 +83,7 @@ impl LmdbStore {
             meta,
             stats,
             events,
+            blocked,
             node_id,
         })
     }
@@ -138,6 +141,32 @@ impl Store for LmdbStore {
         self.aliases.put(&mut wtxn, alias, &id)?;
         wtxn.commit()?;
         Ok(true)
+    }
+
+    async fn add_blocked_domain(&self, domain: &str) -> Result<(), StoreError> {
+        let d = domain.trim().to_ascii_lowercase();
+        let mut wtxn = self.env.write_txn()?;
+        self.blocked.put(&mut wtxn, &d, "")?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn remove_blocked_domain(&self, domain: &str) -> Result<(), StoreError> {
+        let d = domain.trim().to_ascii_lowercase();
+        let mut wtxn = self.env.write_txn()?;
+        self.blocked.delete(&mut wtxn, &d)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn list_blocked_domains(&self) -> Result<Vec<String>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        for item in self.blocked.iter(&rtxn)? {
+            let (k, _) = item?;
+            out.push(k.to_string());
+        }
+        Ok(out)
     }
 }
 
@@ -317,5 +346,22 @@ mod tests {
         // e o contador NÃO avançou (a txn de estouro não foi commitada)
         let rtxn = s.env.read_txn().unwrap();
         assert_eq!(s.meta.get(&rtxn, "next_id").unwrap(), Some(LOCAL_MAX));
+    }
+
+    #[tokio::test]
+    async fn blocklist_add_list_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        s.add_blocked_domain("Evil.COM").await.unwrap(); // normaliza
+        s.add_blocked_domain("evil.com").await.unwrap(); // idempotente
+        s.add_blocked_domain("spam.net").await.unwrap();
+        let mut list = s.list_blocked_domains().await.unwrap();
+        list.sort();
+        assert_eq!(list, vec!["evil.com".to_string(), "spam.net".to_string()]);
+        s.remove_blocked_domain("evil.com").await.unwrap();
+        assert_eq!(
+            s.list_blocked_domains().await.unwrap(),
+            vec!["spam.net".to_string()]
+        );
     }
 }

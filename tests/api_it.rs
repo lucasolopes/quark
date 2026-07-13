@@ -11,6 +11,7 @@ async fn app() -> axum::Router {
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     let cache = Cache::new(store.clone(), 1000);
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let store2 = store.clone();
     let state = Arc::new(AppState {
         cache,
         store,
@@ -18,6 +19,11 @@ async fn app() -> axum::Router {
         analytics_tx,
         sink,
         admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
     });
     router(state)
 }
@@ -163,6 +169,93 @@ async fn alias_numerico_rejeitado() {
 }
 
 #[tokio::test]
+async fn bloqueia_destino_interno_403() {
+    let app = app().await;
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"http://127.0.0.1:8080/x"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn bloqueia_dominio_na_blocklist_403() {
+    // helper dedicado que semeia a blocklist antes de montar o app
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    store.add_blocked_domain("evil.com").await.unwrap();
+    let cache = Cache::new(store.clone(), 1000);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        cache,
+        store: store.clone(),
+        key: 0x1234,
+        analytics_tx: tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store, None, 60),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+    });
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"https://sub.evil.com/x"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn rate_limit_429_apos_estourar() {
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let store2 = store.clone();
+    let state = Arc::new(AppState {
+        cache,
+        store,
+        key: 0x1234,
+        analytics_tx: tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::memory(1),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+    });
+    let app = router(state);
+    let mk = || {
+        Request::post("/")
+            .header("content-type", "application/json")
+            .header("cf-connecting-ip", "9.9.9.9")
+            .body(Body::from(r#"{"url":"https://ok.com/x"}"#))
+            .unwrap()
+    };
+    assert_eq!(
+        app.clone().oneshot(mk()).await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.oneshot(mk()).await.unwrap().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[tokio::test]
 async fn redirect_sem_ttl_tem_cache_control_default() {
     let app = app().await;
     let resp = app
@@ -249,6 +342,93 @@ async fn codigo_inexistente_404_tem_cache_control_no_store() {
     assert_eq!(resp.headers()["cache-control"], "no-store");
 }
 
+async fn app_admin(token: &str) -> axum::Router {
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let store2 = store.clone();
+    let state = Arc::new(AppState {
+        cache,
+        store,
+        key: 0x1234,
+        analytics_tx: tx,
+        sink,
+        admin_token: Some(token.to_string()),
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+    });
+    router(state)
+}
+
+#[tokio::test]
+async fn admin_blocklist_add_list_e_bloqueia() {
+    let app = app_admin("segredo").await;
+    // add
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/blocklist")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "segredo")
+                .body(Body::from(r#"{"domain":"evil.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // list contém
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/blocklist")
+                .header("x-admin-token", "segredo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["domains"][0], "evil.com");
+}
+
+#[tokio::test]
+async fn admin_blocklist_sem_token_404() {
+    // app() tem admin_token: None
+    let app = app().await;
+    let resp = app
+        .oneshot(
+            Request::get("/admin/blocklist")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_blocklist_token_errado_401() {
+    let app = app_admin("segredo").await;
+    let resp = app
+        .oneshot(
+            Request::get("/admin/blocklist")
+                .header("x-admin-token", "errado")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
 #[tokio::test]
 async fn ttl_overflow_400() {
     let app = app().await;
@@ -264,4 +444,64 @@ async fn ttl_overflow_400() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn admin_blocklist_sem_token_corpo_malformado_404() {
+    // endpoint opaco: sem QUARK_ADMIN_TOKEN, ate POST com corpo ruim da 404 (nao 400/415)
+    let app = app().await; // admin_token: None
+    let resp = app
+        .oneshot(
+            Request::post("/admin/blocklist")
+                .header("content-type", "application/json")
+                .body(Body::from("nao eh json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_blocklist_delete_remove() {
+    let app = app_admin("segredo").await;
+    // add
+    app.clone()
+        .oneshot(
+            Request::post("/admin/blocklist")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "segredo")
+                .body(Body::from(r#"{"domain":"del.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // delete
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::delete("/admin/blocklist")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "segredo")
+                .body(Body::from(r#"{"domain":"del.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // list vazia
+    let resp = app
+        .oneshot(
+            Request::get("/admin/blocklist")
+                .header("x-admin-token", "segredo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["domains"].as_array().unwrap().len(), 0);
 }

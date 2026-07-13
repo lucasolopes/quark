@@ -1,14 +1,17 @@
+use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
 use crate::store::{Record, Store, StoreError};
 use crate::{codec, now, permute};
-use axum::extract::{Path, Request, State};
+use axum::body::Bytes;
+use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -19,6 +22,11 @@ pub struct AppState {
     pub analytics_tx: tokio::sync::mpsc::Sender<ClickEvent>,
     pub sink: Arc<dyn AnalyticsSink>,
     pub admin_token: Option<String>,
+    pub ratelimiter: crate::abuse::ratelimit::RateLimiter,
+    pub blocklist: crate::abuse::blocklist::Blocklist,
+    pub block_private: bool,
+    pub public_host: Option<String>,
+    pub real_ip_header: String,
 }
 
 #[derive(Deserialize)]
@@ -54,10 +62,34 @@ fn cache_control_for(expiry: Option<u64>, now: u64) -> String {
     }
 }
 
-async fn create(State(st): State<Arc<AppState>>, Json(req): Json<CreateReq>) -> Response {
+async fn create(
+    State(st): State<Arc<AppState>>,
+    conn: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateReq>,
+) -> Response {
+    // 1) rate-limit (checagem barata primeiro)
+    let ip = client_ip(&headers, &st.real_ip_header, conn.as_ref());
+    if !st.ratelimiter.check(&ip, now()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "muitas requisições").into_response();
+    }
+    // 2) validação de URL (http/https) — já existente
     if !is_valid_url(&req.url) {
         return (StatusCode::BAD_REQUEST, "url inválida").into_response();
     }
+    // 3) host do destino (URL sem host é inválida)
+    let Some(host) = extract_host(&req.url) else {
+        return (StatusCode::BAD_REQUEST, "url sem host").into_response();
+    };
+    // 4) guarda embutida (rede interna / loop pro próprio host)
+    if st.block_private && is_blocked_target(&host, &headers, &st) {
+        return (StatusCode::FORBIDDEN, "destino não permitido").into_response();
+    }
+    // 5) blocklist do banco (domínio + subdomínio)
+    if st.blocklist.is_blocked(&host, now()).await {
+        return (StatusCode::FORBIDDEN, "destino bloqueado").into_response();
+    }
+
     let expiry = match req.ttl {
         Some(t) => match now().checked_add(t) {
             Some(e) => Some(e),
@@ -115,6 +147,40 @@ async fn create(State(st): State<Arc<AppState>>, Json(req): Json<CreateReq>) -> 
     }
     let code = codec::to_base62(permute::encode(id, st.key));
     Json(CreateResp { code, url: req.url }).into_response()
+}
+
+/// IP do cliente: header configurável (default CF-Connecting-IP) tem prioridade;
+/// senão o IP do socket; senão "unknown" (bucket único, conservador).
+fn client_ip(
+    headers: &HeaderMap,
+    header_name: &str,
+    conn: Option<&ConnectInfo<SocketAddr>>,
+) -> String {
+    if let Some(v) = headers.get(header_name).and_then(|v| v.to_str().ok()) {
+        let v = v.trim();
+        if !v.is_empty() {
+            return v.to_string();
+        }
+    }
+    if let Some(ConnectInfo(addr)) = conn {
+        return addr.ip().to_string();
+    }
+    "unknown".to_string()
+}
+
+/// Guarda embutida: destino de rede interna, ou loop pro próprio host do quark.
+fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
+    if is_internal_host(host) {
+        return true;
+    }
+    // anti-loop: host próprio via QUARK_PUBLIC_HOST ou o header Host da requisição
+    let self_host = st.public_host.clone().or_else(|| {
+        headers
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .map(|h| h.split(':').next().unwrap_or(h).to_ascii_lowercase())
+    });
+    matches!(self_host, Some(sh) if sh == host)
 }
 
 /// Resolve um code de URL em id: primeiro tenta código numérico (base62 no
@@ -234,6 +300,77 @@ async fn stats(
     }
 }
 
+#[derive(Deserialize)]
+struct BlocklistReq {
+    domain: String,
+}
+
+/// Autoriza uma requisição admin: `Ok(())` se o token bate; `Err(status)` senão.
+/// Sem token configurado → 404 (endpoint desligado); token errado → 401.
+/// Retorna `StatusCode` (não `Response`) pra ficar `Copy`/pequeno — evita o lint
+/// `result_large_err` do clippy, que dispararia com `Response` no `Err`.
+fn admin_guard(st: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
+    let Some(expected) = st.admin_token.as_deref() else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    let provided = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(())
+}
+
+async fn blocklist_get(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    match st.store.list_blocked_domains().await {
+        Ok(domains) => Json(serde_json::json!({ "domains": domains })).into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn blocklist_add(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    let req: BlocklistReq = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::BAD_REQUEST, "json inválido").into_response(),
+    };
+    if st.store.add_blocked_domain(&req.domain).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    st.blocklist.invalidate().await;
+    StatusCode::OK.into_response()
+}
+
+async fn blocklist_delete(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    let req: BlocklistReq = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::BAD_REQUEST, "json inválido").into_response(),
+    };
+    if st.store.remove_blocked_domain(&req.domain).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    st.blocklist.invalidate().await;
+    StatusCode::OK.into_response()
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -283,6 +420,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/health", get(health))
         .route("/:code", get(redirect))
         .route("/:code/stats", get(stats))
+        .route(
+            "/admin/blocklist",
+            get(blocklist_get)
+                .post(blocklist_add)
+                .delete(blocklist_delete),
+        )
         .with_state(state);
 
     // Log de acesso por request é opt-in: em alta vazão, o println! síncrono
