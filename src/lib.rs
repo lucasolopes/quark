@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod api;
 pub mod cache;
 pub mod codec;
