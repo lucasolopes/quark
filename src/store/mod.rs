@@ -1,4 +1,5 @@
 pub mod lmdb;
+pub mod postgres;
 
 use crate::analytics::AnalyticsSink;
 use serde::{Deserialize, Serialize};
@@ -16,12 +17,14 @@ pub struct Record {
 pub enum StoreError {
     Db(heed::Error),
     Serde(serde_json::Error),
+    Backend(String),
 }
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StoreError::Db(e) => write!(f, "db: {e}"),
             StoreError::Serde(e) => write!(f, "serde: {e}"),
+            StoreError::Backend(s) => write!(f, "backend: {s}"),
         }
     }
 }
