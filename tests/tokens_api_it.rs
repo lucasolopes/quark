@@ -294,3 +294,60 @@ async fn api_token_works_when_no_env_admin_token_is_configured() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
+
+async fn post_root_create(app: &axum::Router, token: &str) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", token)
+                .body(Body::from(r#"{"url":"https://example.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn links_write_scope_can_create_via_post_root() {
+    let app = app_admin("secret").await;
+    let (status, v) = create_token(
+        &app,
+        "secret",
+        r#"{"name":"writer","scopes":["links_write"]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let token = v["token"].as_str().unwrap();
+    assert_eq!(post_root_create(&app, token).await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn links_read_scope_cannot_create_via_post_root() {
+    let app = app_admin("secret").await;
+    let (status, v) = create_token(
+        &app,
+        "secret",
+        r#"{"name":"reader","scopes":["links_read"]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let token = v["token"].as_str().unwrap();
+    assert_eq!(post_root_create(&app, token).await, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn env_admin_token_still_creates_via_post_root() {
+    let app = app_admin("secret").await;
+    assert_eq!(post_root_create(&app, "secret").await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn unknown_token_cannot_create_via_post_root() {
+    let app = app_admin("secret").await;
+    assert_eq!(
+        post_root_create(&app, "qtok_bogus").await,
+        StatusCode::UNAUTHORIZED
+    );
+}

@@ -293,20 +293,40 @@ fn cache_control_for(expiry: Option<u64>, now: u64) -> String {
 
 /// Requires the admin token to create — but only when a token is configured.
 /// Without QUARK_ADMIN_TOKEN, create remains public (open shortener).
-fn require_admin_for_create(st: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
-    match st.admin_token.as_deref() {
-        None => Ok(()),
-        Some(expected) => {
-            let provided = headers
-                .get("x-admin-token")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
-                Ok(())
-            } else {
-                Err(StatusCode::UNAUTHORIZED)
+async fn require_admin_for_create(st: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
+    // Open shortener: with no admin token configured, create stays public.
+    let Some(expected) = st.admin_token.as_deref() else {
+        return Ok(());
+    };
+    let provided = headers
+        .get("x-admin-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    // The env admin token grants full access.
+    if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+        return Ok(());
+    }
+    if provided.is_empty() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    // Otherwise accept a scoped API token that covers LinksWrite, matching how
+    // `POST /admin/import` authorizes (both are link writes).
+    let hash = hash_token(provided);
+    match st.store.get_api_token_by_hash(&hash).await {
+        Ok(Some(token)) => {
+            if !token.scopes.iter().any(|s| s.covers(Scope::LinksWrite)) {
+                return Err(StatusCode::FORBIDDEN);
             }
+            if let Some(limit) = token.rate_limit_per_min {
+                let key = format!("tok:{}", token.id);
+                if !st.ratelimiter.check_with_limit(&key, now(), limit).await {
+                    return Err(StatusCode::TOO_MANY_REQUESTS);
+                }
+            }
+            Ok(())
         }
+        Ok(None) => Err(StatusCode::UNAUTHORIZED),
+        Err(_) => Err(StatusCode::SERVICE_UNAVAILABLE),
     }
 }
 
@@ -481,7 +501,7 @@ async fn create(
     headers: HeaderMap,
     Json(req): Json<CreateReq>,
 ) -> Response {
-    if let Err(status) = require_admin_for_create(&st, &headers) {
+    if let Err(status) = require_admin_for_create(&st, &headers).await {
         return status.into_response();
     }
     let ip = client_ip(&headers, &st.real_ip_header, conn.as_ref());
@@ -725,7 +745,7 @@ async fn redirect(
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     match st.cache.get(id).await {
-        Ok(Some(rec)) => {
+        Ok(Some(mut rec)) => {
             let now = now();
             if let Some(exp) = rec.expiry {
                 if now >= exp {
@@ -783,19 +803,31 @@ async fn redirect(
             // redirect rules (#12), a targeted web redirect; then (3) A/B
             // variants (#17), a stateless weighted pick (one getrandom draw,
             // no store write). Links with none of these (the common case)
-            // just clone `rec.url`. `variant` is only recorded for the A/B
+            // reuse `rec.url` directly. `variant` is only recorded for the A/B
             // branch.
             let app_dest = if rec.app_ios.is_some() || rec.app_android.is_some() {
                 app_destination(&rec, user_agent.as_deref()).map(str::to_string)
             } else {
                 None
             };
+            // Read the gate once: the `link.clicked` payload below borrows
+            // `rec.url`, so the common path may only MOVE `rec.url` into the
+            // location when no subscriber will need it afterwards.
+            let clicked_subscribed = st.webhooks.clicked_subscribed.load(Ordering::Relaxed);
             let (location, variant): (String, Option<u32>) = if let Some(app) = app_dest {
                 (app, None)
             } else {
                 match matched_rule_index(&rec.rules, country.as_deref(), user_agent.as_deref()) {
                     Some(i) => (rec.rules[i].to.clone(), None),
-                    None if rec.variants.is_empty() => (rec.url.clone(), None),
+                    None if rec.variants.is_empty() => {
+                        // Common case: move `rec.url` out (no allocation) unless
+                        // the gated click webhook still needs to read it.
+                        if clicked_subscribed {
+                            (rec.url.clone(), None)
+                        } else {
+                            (std::mem::take(&mut rec.url), None)
+                        }
+                    }
                     None => {
                         let mut buf = [0u8; 8];
                         let r = if getrandom::fill(&mut buf).is_ok() {
@@ -831,11 +863,11 @@ async fn redirect(
                     .map(|fbclid| format!("fb.1.{}.{}", now.saturating_mul(1000), fbclid)),
                 variant,
             };
-            // Gate check first (cheap: one atomic load) so the payload build
-            // — which reads `ev`'s fields — happens before `ev` is moved
-            // into `try_send` below. No subscriber -> no extra work beyond
-            // the load, same as before this fix.
-            if st.webhooks.clicked_subscribed.load(Ordering::Relaxed) {
+            // Gate already read above into `clicked_subscribed`. The payload
+            // build reads `ev`'s fields (and `rec.url`, which is only still
+            // populated on this branch because the gate was true), so it
+            // happens before `ev` is moved into `try_send` below.
+            if clicked_subscribed {
                 st.webhooks.emit(WebhookEvent {
                     event_type: EventType::LinkClicked,
                     body: webhook_event_payload(
