@@ -67,9 +67,9 @@ async fn main() {
             },
             None => None,
         };
-    let invalidator = Arc::new(Invalidator {
-        conn: control_conn.clone(),
-    });
+    let invalidator: Option<Arc<Invalidator>> = control_conn
+        .clone()
+        .map(|conn| Arc::new(Invalidator { conn: Some(conn) }));
 
     let cache = match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {
@@ -83,16 +83,16 @@ async fn main() {
                         Arc::new(tier),
                         quark::cache::L1_TTL_SECS,
                         quark::cache::L2_TTL_SECS,
-                        Some(invalidator.clone()),
+                        invalidator.clone(),
                     )
                 }
                 Err(e) => {
                     eprintln!("WARNING: failed to connect to Valkey ({e}); continuing with L1+store only.");
-                    Cache::new(store.clone(), CACHE_CAPACITY, Some(invalidator.clone()))
+                    Cache::new(store.clone(), CACHE_CAPACITY, invalidator.clone())
                 }
             }
         }
-        None => Cache::new(store.clone(), CACHE_CAPACITY, Some(invalidator.clone())),
+        None => Cache::new(store.clone(), CACHE_CAPACITY, invalidator.clone()),
     };
     let (analytics_tx, analytics_rx) = tokio::sync::mpsc::channel(ANALYTICS_CHANNEL_CAPACITY);
     let pixel_client = reqwest::Client::builder()
@@ -145,7 +145,7 @@ async fn main() {
         store.clone(),
         control_conn.clone(),
         blocklist_ttl,
-        Some(invalidator.clone()),
+        invalidator.clone(),
     );
     let block_private = std::env::var("QUARK_BLOCK_PRIVATE")
         .map(|v| v != "0")

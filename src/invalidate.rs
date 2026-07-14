@@ -12,6 +12,12 @@ pub const INVALIDATION_CHANNEL: &str = "quark:invalidate";
 /// blocklist 60s) covers staleness while a subscriber is reconnecting.
 const RECONNECT_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Bound on a PUBLISH so a connected-but-unresponsive Valkey (overload, pause,
+/// black-hole) cannot hang the admin write that triggered the invalidation.
+/// Mirrors the L2 cache op timeout; on timeout the message is simply dropped,
+/// and the per-node TTL still bounds staleness.
+const PUBLISH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// Best-effort publisher for cross-node invalidation messages. Holds an optional
 /// clone of the shared multiplexed control connection; when absent (single-node,
 /// no `QUARK_VALKEY_URL`) every publish is a silent no-op, so single-node
@@ -29,13 +35,13 @@ impl Invalidator {
             return;
         };
         let mut c = conn.clone();
-        let res: Result<(), redis::RedisError> = redis::cmd("PUBLISH")
-            .arg(INVALIDATION_CHANNEL)
-            .arg(msg)
-            .query_async(&mut c)
-            .await;
-        if let Err(e) = res {
-            eprintln!("invalidate: publish '{msg}' failed (ignored): {e}");
+        let mut cmd = redis::cmd("PUBLISH");
+        cmd.arg(INVALIDATION_CHANNEL).arg(msg);
+        let publish = cmd.query_async::<()>(&mut c);
+        match tokio::time::timeout(PUBLISH_TIMEOUT, publish).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!("invalidate: publish '{msg}' failed (ignored): {e}"),
+            Err(_) => eprintln!("invalidate: publish '{msg}' timed out (ignored)"),
         }
     }
 }
