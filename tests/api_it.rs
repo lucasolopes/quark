@@ -12,7 +12,6 @@ async fn app() -> axum::Router {
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let store2 = store.clone();
     let state = Arc::new(AppState {
         cache,
         store,
@@ -21,7 +20,6 @@ async fn app() -> axum::Router {
         sink,
         admin_token: None,
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
@@ -198,46 +196,11 @@ async fn blocks_internal_destination_403() {
 }
 
 #[tokio::test]
-async fn blocks_domain_on_blocklist_403() {
-    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
-    store.add_blocked_domain("evil.com").await.unwrap();
-    let cache = Cache::new(store.clone(), 1000, None);
-    let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        cache,
-        store: store.clone(),
-        key: 0x1234,
-        analytics_tx: tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store, None, 60, None),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-    });
-    let app = router(state);
-    let resp = app
-        .oneshot(
-            Request::post("/")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"url":"https://sub.evil.com/x"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
 async fn rate_limit_429_after_exceeding() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let store2 = store.clone();
     let state = Arc::new(AppState {
         cache,
         store,
@@ -246,7 +209,6 @@ async fn rate_limit_429_after_exceeding() {
         sink,
         admin_token: None,
         ratelimiter: quark::abuse::ratelimit::RateLimiter::memory(1),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
@@ -362,7 +324,6 @@ async fn app_admin(token: &str) -> axum::Router {
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let store2 = store.clone();
     let state = Arc::new(AppState {
         cache,
         store,
@@ -371,75 +332,12 @@ async fn app_admin(token: &str) -> axum::Router {
         sink,
         admin_token: Some(token.to_string()),
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
     });
     router(state)
-}
-
-#[tokio::test]
-async fn admin_blocklist_add_list_and_blocks() {
-    let app = app_admin("secret").await;
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::post("/admin/blocklist")
-                .header("content-type", "application/json")
-                .header("x-admin-token", "secret")
-                .body(Body::from(r#"{"domain":"evil.com"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::get("/admin/blocklist")
-                .header("x-admin-token", "secret")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(v["domains"][0], "evil.com");
-}
-
-#[tokio::test]
-async fn admin_blocklist_without_token_404() {
-    let app = app().await;
-    let resp = app
-        .oneshot(
-            Request::get("/admin/blocklist")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn admin_blocklist_token_wrong_401() {
-    let app = app_admin("secret").await;
-    let resp = app
-        .oneshot(
-            Request::get("/admin/blocklist")
-                .header("x-admin-token", "wrong")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -457,62 +355,6 @@ async fn ttl_overflow_400() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn admin_blocklist_without_token_malformed_body_404() {
-    let app = app().await;
-    let resp = app
-        .oneshot(
-            Request::post("/admin/blocklist")
-                .header("content-type", "application/json")
-                .body(Body::from("not json"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn admin_blocklist_delete_remove() {
-    let app = app_admin("secret").await;
-    app.clone()
-        .oneshot(
-            Request::post("/admin/blocklist")
-                .header("content-type", "application/json")
-                .header("x-admin-token", "secret")
-                .body(Body::from(r#"{"domain":"del.com"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::delete("/admin/blocklist")
-                .header("content-type", "application/json")
-                .header("x-admin-token", "secret")
-                .body(Body::from(r#"{"domain":"del.com"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let resp = app
-        .oneshot(
-            Request::get("/admin/blocklist")
-                .header("x-admin-token", "secret")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(v["domains"].as_array().unwrap().len(), 0);
 }
 
 #[tokio::test]
@@ -913,7 +755,6 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (analytics_tx, rx) = tokio::sync::mpsc::channel(100);
-    let store2 = store.clone();
     let state = Arc::new(AppState {
         cache,
         store,
@@ -922,7 +763,6 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
         sink,
         admin_token: None,
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
@@ -1606,7 +1446,6 @@ async fn cors_header_present_when_configured() {
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let store2 = store.clone();
     let state = Arc::new(AppState {
         cache,
         store,
@@ -1615,7 +1454,6 @@ async fn cors_header_present_when_configured() {
         sink,
         admin_token: None,
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".into(),

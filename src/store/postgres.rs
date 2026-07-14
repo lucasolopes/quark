@@ -250,7 +250,6 @@ impl PostgresStore {
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS blocked_domains (domain TEXT PRIMARY KEY)",
                 "CREATE TABLE IF NOT EXISTS webhooks (id BIGINT PRIMARY KEY, url TEXT NOT NULL, events JSONB NOT NULL, secret TEXT NOT NULL, active BOOLEAN NOT NULL, created BIGINT NOT NULL, kind TEXT NOT NULL DEFAULT 'generic')",
                 // `kind` (#6, native chat channels) is added after the fact for
                 // deployments whose `webhooks` table predates it; pre-existing
@@ -475,39 +474,6 @@ impl Store for PostgresStore {
         enqueue_in_tx(&mut tx, deliveries).await?;
         tx.commit().await.map_err(StoreError::backend)?;
         Ok(())
-    }
-
-    async fn add_blocked_domain(&self, domain: &str) -> Result<(), StoreError> {
-        let d = domain.trim().to_lowercase();
-        sqlx::query("INSERT INTO blocked_domains (domain) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(&d)
-            .execute(&self.pool)
-            .await
-            .map_err(StoreError::backend)?;
-        Ok(())
-    }
-
-    async fn remove_blocked_domain(&self, domain: &str) -> Result<(), StoreError> {
-        let d = domain.trim().to_lowercase();
-        sqlx::query("DELETE FROM blocked_domains WHERE domain = $1")
-            .bind(&d)
-            .execute(&self.pool)
-            .await
-            .map_err(StoreError::backend)?;
-        Ok(())
-    }
-
-    async fn list_blocked_domains(&self) -> Result<Vec<String>, StoreError> {
-        let rows = sqlx::query("SELECT domain FROM blocked_domains")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(StoreError::backend)?;
-        rows.iter()
-            .map(|r| {
-                r.try_get::<String, _>("domain")
-                    .map_err(StoreError::backend)
-            })
-            .collect()
     }
 
     async fn list_links(

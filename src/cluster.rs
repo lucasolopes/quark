@@ -3,7 +3,7 @@
 /// When `QUARK_STRICT_CLUSTER` is set the operator is declaring a real cluster,
 /// so both shared-state dependencies must be wired: `QUARK_DATABASE_URL` (the
 /// shared store) and `QUARK_VALKEY_URL` (shared rate-limit plus cross-node
-/// cache and blocklist invalidation). Without them a "multi-node" deployment
+/// cache invalidation). Without them a "multi-node" deployment
 /// silently degrades: per-node LMDB files that do not share links, N-times the
 /// intended rate limit, and stale caches. This is a pure decision so it can be
 /// unit-tested; `main` reads the env, calls it early, and exits non-zero on

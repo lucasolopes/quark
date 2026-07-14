@@ -1,6 +1,5 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppLinks } from "@/routes/AppLinks";
-import { Blocklist } from "@/routes/Blocklist";
 import { Import } from "@/routes/Import";
 import { LinkStats } from "@/routes/LinkStats";
 import { Links } from "@/routes/Links";
@@ -24,7 +23,6 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/links" replace /> },
       { path: "links", element: <Links /> },
       { path: "links/:code", element: <LinkStats /> },
-      { path: "blocklist", element: <Blocklist /> },
       { path: "webhooks", element: <Webhooks /> },
       { path: "import", element: <Import /> },
       { path: "tokens", element: <Tokens /> },

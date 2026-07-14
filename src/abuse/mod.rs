@@ -1,7 +1,5 @@
-pub mod blocklist;
 pub mod ratelimit;
 
-use std::collections::HashSet;
 use std::net::IpAddr;
 
 /// Lowercased URL host, without port. `None` if it doesn't parse or has no host.
@@ -44,26 +42,9 @@ pub fn is_internal_host(host: &str) -> bool {
     }
 }
 
-/// `true` if `host` or any parent domain is in the set (case-insensitive).
-/// E.g.: set={evil.com} blocks evil.com, x.evil.com, a.b.evil.com.
-pub fn host_in_blocklist(host: &str, set: &HashSet<String>) -> bool {
-    let h = host.to_ascii_lowercase();
-    let mut rest = h.as_str();
-    loop {
-        if set.contains(rest) {
-            return true;
-        }
-        match rest.find('.') {
-            Some(i) => rest = &rest[i + 1..],
-            None => return false,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{extract_host, host_in_blocklist, is_internal_host};
-    use std::collections::HashSet;
+    use super::{extract_host, is_internal_host};
 
     #[test]
     fn extract_host_normalizes_and_strips_port() {
@@ -122,17 +103,5 @@ mod tests {
     fn is_internal_host_allows_public_ipv6() {
         assert!(!is_internal_host("[2606:4700::1111]"));
         assert!(!is_internal_host("[::ffff:8.8.8.8]"));
-    }
-
-    #[test]
-    fn host_in_blocklist_matches_domain_and_subdomain() {
-        let mut set = HashSet::new();
-        set.insert("evil.com".to_string());
-        assert!(host_in_blocklist("evil.com", &set));
-        assert!(host_in_blocklist("x.evil.com", &set));
-        assert!(host_in_blocklist("a.b.evil.com", &set));
-        assert!(host_in_blocklist("EVIL.COM", &set));
-        assert!(!host_in_blocklist("eviltwin.com", &set));
-        assert!(!host_in_blocklist("evil.com.br", &set));
     }
 }

@@ -24,15 +24,15 @@ flowchart LR
 |---|---|---|
 | `permute` | A bijeção entre id e código: uma rede Feistel balanceada com função de round ARX. `encode(u64) -> u64`, `decode(u64) -> u64`, domínio de 40 bits, 4 rounds. Sem estado, sem I/O. | (núcleo puro) |
 | `codec` | Inteiro para string base62 de 7 caracteres, URL-safe, e de volta. | (núcleo puro) |
-| `store` | Persistência atrás da trait `Store`: links por `u64`, aliases, blocklist, webhooks, tokens, pixels, docs well-known, visitas, o outbox de webhook. Backends: `lmdb.rs` (embutido default) e `postgres.rs` (compartilhado). | `heed` (LMDB), `sqlx` (Postgres) |
+| `store` | Persistência atrás da trait `Store`: links por `u64`, aliases, webhooks, tokens, pixels, docs well-known, visitas, o outbox de webhook. Backends: `lmdb.rs` (embutido default) e `postgres.rs` (compartilhado). | `heed` (LMDB), `sqlx` (Postgres) |
 | `cache` | Mapa concorrente L1 `id -> Record` na frente do store, com tier L2 opcional e um circuit breaker. | `moka`, `redis` (L2 opt-in) |
 | `analytics` | Captura de clique fora do redirect (fire-and-forget), worker de lote em background, agregados mais últimos N eventos; a trait `AnalyticsSink` e as impls embutida e ClickHouse. Também dirige o forward de conversão. | `tokio` mpsc, `clickhouse` (opt-in) |
 | `pixel` | Forward de conversão server-side para GA4 e Meta CAPI a partir do worker de analytics, com ids de dedup por clique. | `reqwest` |
 | `webhooks` | Eventos HTTP de saída assinados (Standard Webhooks) mais canais de chat; `delivery.rs` tem o worker best-effort em memória e o relay durável do outbox Postgres. | `reqwest`, `hmac`, `sha2` |
 | `auth` | Tokens de API nomeados e escopos; geração de token e hash SHA-256. | `sha2` |
 | `import` | Parsing de import em lote CSV/JSON para `POST /admin/import`. | `csv`, `serde_json` |
-| `abuse` | Guards do `POST /`: rate limit por IP, blocklist de destino (domínio mais subdomínio, cacheada) e helpers puros de host interno / self-loop. Nunca no caminho do redirect. | `redis` (opt-in) |
-| `invalidate` | Invalidação de cache e blocklist cross-node por um canal pub/sub do Valkey. No-op no nó único. | `redis` |
+| `abuse` | Guards do `POST /`: rate limit por IP e helpers puros de host interno / self-loop. Nunca no caminho do redirect. | `redis` (opt-in) |
+| `invalidate` | Invalidação de cache cross-node por um canal pub/sub do Valkey. No-op no nó único. | `redis` |
 | `cluster` | Preflight de startup que falha um deploy multi-nó estrito sem suas deps de estado compartilhado. Decisão pura, com teste unitário. | (puro) |
 | `calibrate` | Harness offline de avalanche/SAC que mede a difusão do `permute` e escolhe `ROUNDS`. Fora do serviço em execução. | `permute` (uma cópia da matemática) |
 
@@ -60,7 +60,7 @@ A API valida que a URL é `http(s)://`, roda os guards de abuso, então pede ao 
 
 Aliases customizados são um caminho de propósito separado: ainda alocam um id e registro reais (para a lógica de redirect não precisar de dois caminhos), mas passam por uma tabela `aliases: alias -> id` que precisa de checagem de unicidade, porque um humano escolheu a string e dois humanos podem escolher a mesma. É o único lugar do sistema que faz checagem de colisão, e é opt-in.
 
-Os guards de abuso rodam no `create`, e só no `create`, nunca no redirect. Em ordem, mais barato primeiro: rate limit por IP (`429` se acima), validação de URL (`400`), extração do host (`400` se sem host), o guard interno/loop (`403` para IPs privados/loopback/`localhost` ou o próprio host da instância, nunca resolve DNS) e a checagem de blocklist (`403` para um domínio ou subdomínio listado). Regras, variantes e destinos de app passam pelas mesmas checagens SSRF/blocklist para uma regra não contrabandear um host interno.
+Os guards de abuso rodam no `create`, e só no `create`, nunca no redirect. Em ordem, mais barato primeiro: rate limit por IP (`429` se acima), validação de URL (`400`), extração do host (`400` se sem host), e o guard interno/loop (`403` para IPs privados/loopback/`localhost` ou o próprio host da instância, nunca resolve DNS). Regras, variantes e destinos de app passam pelas mesmas checagens SSRF para uma regra não contrabandear um host interno.
 
 ### O Record
 
@@ -177,7 +177,7 @@ flowchart LR
     Wk -.lote.-> Px[forward de pixel GA4/Meta]
 ```
 
-- **`Store`** (`src/store/mod.rs`): `next_id`, `get_link`, `put_link`, `get_alias`, `put_alias_and_link`, mais métodos de blocklist, webhook, token, pixel, well-known, visita e outbox, todos `async`. `open_backends` escolhe `PostgresStore` quando `QUARK_DATABASE_URL` está setado, senão `LmdbStore`. O `PostgresStore` implementa a sequência de id atomicamente no banco (quatro sequências `nextval`), o que torna seguro rodar mais de um quark contra o mesmo Postgres.
+- **`Store`** (`src/store/mod.rs`): `next_id`, `get_link`, `put_link`, `get_alias`, `put_alias_and_link`, mais métodos de webhook, token, pixel, well-known, visita e outbox, todos `async`. `open_backends` escolhe `PostgresStore` quando `QUARK_DATABASE_URL` está setado, senão `LmdbStore`. O `PostgresStore` implementa a sequência de id atomicamente no banco (quatro sequências `nextval`), o que torna seguro rodar mais de um quark contra o mesmo Postgres.
 - **`CacheTier`** (`src/cache/mod.rs`): `get`/`set`/`invalidate` para um L2 fora do processo. `ValkeyTier` (`src/cache/valkey.rs`) é a única implementação, ligada quando `QUARK_VALKEY_URL` está setado. O `Cache` sempre mantém o mapa L1 moka (TTL 60s) na frente de qualquer tier; o tier (TTL 3600s) é consultado só num miss de L1. Um `Breaker` (atômicos lock-free) abre após 5 falhas seguidas do tier e fica aberto 30s, e toda op de L2 é envolta num timeout de 100ms, então um Valkey lento não trava um redirect. Qualquer erro do tier é engolido e tratado como miss; o chamador sempre cai no store.
 - **`AnalyticsSink`** (`src/analytics/mod.rs`): consome `ClickEvent`s de um canal mpsc por um worker de background (`spawn_worker`), desacoplando o 302 da persistência de analytics. `open_backends` dá a cada store seu sink embutido (tanto `LmdbStore` quanto `PostgresStore` implementam `AnalyticsSink`) e o sobrescreve com `ClickHouseSink` quando `QUARK_CLICKHOUSE_URL` está setado. ClickHouse é só analytics por construção (nada do `Store` é implementado nele) porque o volume de cliques supera o de criação de link e quer um motor OLAP de append/agregação.
 
@@ -188,7 +188,6 @@ Store e AnalyticsSink são escolhidos independentemente: o store segue `QUARK_DA
 Tudo aqui roda só no `POST /`. Dois botões e um guard sempre ligado, todos no módulo `abuse`:
 
 - **Rate limit** (`RateLimiter`, opt-in via `QUARK_RATELIMIT_PER_MIN`): janela fixa de 60s por IP. Em memória por réplica por default (um `HashMap` varrido uma vez por janela); com `QUARK_VALKEY_URL` usa `INCR`/`EXPIRE` do Valkey para um limite global. Fail-open. O mesmo limiter também aplica as cotas por token de API. O IP vem de `QUARK_REAL_IP_HEADER` (default `cf-connecting-ip`) com fallback no socket, então só ligue atrás de um proxy que sobrescreva o header.
-- **Blocklist de destino** (`Blocklist`): o conjunto de domínios bloqueados vive no store, gerido por `/admin/blocklist`. O casamento é domínio mais subdomínio, sem diferenciar maiúsculas. Leituras passam por um snapshot em memória num TTL (`QUARK_BLOCKLIST_TTL`), opcionalmente apoiado no Valkey; uma escrita de admin invalida local e, com Valkey, cross-node via pub/sub.
 - **Guard interno/loop** (default on, `QUARK_BLOCK_PRIVATE=0` desliga): rejeita um IP literal privado/loopback/link-local (v4 e v6, incluindo IPv4-mapeado), `localhost`, ou o próprio host da instância. Nunca resolve DNS.
 
 ## Modelo de dados
@@ -204,7 +203,6 @@ Onze bancos nomeados dentro de um ambiente LMDB (`heed::Env`, `max_dbs = 11`, ma
 | `meta` | nomes de contador (`next_id`, `next_webhook_id`, `next_api_token_id`, `next_pixel_id`) para `u64` |
 | `stats` / `events` | `Aggregates` por id e últimos N `ClickEvent`s crus (o sink embutido) |
 | `visits` | id `u64` para contagem `u64` de visitas |
-| `blocked` | domínio bloqueado para vazio |
 | `webhooks` | id `u64` para JSON da assinatura |
 | `api_tokens` | id `u64` para JSON do token |
 | `pixels` | id `u64` para JSON da config de pixel |
@@ -214,7 +212,7 @@ A chave por inteiro de largura fixa em vez da string do código significa nenhum
 
 ### Postgres
 
-Os mesmos dados em treze tabelas mais quatro sequências de id, criadas de forma idempotente sob um advisory lock. Além dos análogos diretos (`links`, `aliases`, `blocked_domains`, `webhooks`, `api_tokens`, `pixels`, `wellknown_documents`), o backend compartilhado adiciona:
+Os mesmos dados em doze tabelas mais quatro sequências de id, criadas de forma idempotente sob um advisory lock. Além dos análogos diretos (`links`, `aliases`, `webhooks`, `api_tokens`, `pixels`, `wellknown_documents`), o backend compartilhado adiciona:
 
 - **Analytics atômico** em `click_counters` (uma linha por id, dimensão e bucket, incrementada com `INSERT ... ON CONFLICT DO UPDATE SET count = count + n`), `stats_meta` (primeiro/último timestamp) e `click_events` (append-only, uma linha por clique). Isso substitui um read-modify-write anterior de um blob de agregado sob advisory lock por link, então um link viral não serializa mais no sink.
 - **Um outbox durável de webhook** em `webhook_deliveries` (chave de entrega, assinatura, payload, tentativas, próxima tentativa, flag dead), drenado por um relay com lease.
@@ -225,7 +223,7 @@ As tabelas legadas `stats` e `events` são mantidas mas não mais lidas nem escr
 
 Sobre os backends plugáveis, uma camada fina faz um deploy multi-nó Postgres+Valkey se comportar de forma correta em vez de degradar em silêncio. Cada peça é no-op ou um default local num nó único.
 
-- **Invalidação cross-node** (`src/invalidate.rs`): uma edição, deleção ou bloqueio de admin publica uma mensagem minúscula (`link:<id>` ou `blocklist`) num canal pub/sub do Valkey; cada nó assina e derruba a entrada L1 correspondente ou recarrega seu snapshot de blocklist local, nunca republicando (sem loop). A publicação é limitada por um timeout de 100ms e é fail-open. Sem Valkey é no-op e a defasagem é limitada pelos TTLs de 60s.
+- **Invalidação cross-node** (`src/invalidate.rs`): uma edição ou deleção de admin publica uma mensagem minúscula (`link:<id>`) num canal pub/sub do Valkey; cada nó assina e derruba a entrada L1 correspondente local, nunca republicando (sem loop). A publicação é limitada por um timeout de 100ms e é fail-open. Sem Valkey é no-op e a defasagem é limitada pelos TTLs de 60s.
 - **Contadores atômicos de analytics** (sink Postgres): os incrementos atômicos de `click_counters` acima, então dois nós dando flush no mesmo link viral aterrissam suas contagens sem perda de update e sem lock. A ingestão continua at-most-once por design (um clique é `try_send` a um canal limitado e descartado quando cheio).
 - **Outbox e relay durável de webhook** (`src/webhooks/delivery.rs`): no Postgres, os eventos de ciclo de vida (`link.created/updated/deleted`) são gravados em `webhook_deliveries` e entregues at-least-once por um relay que reivindica linhas devidas com `SELECT ... FOR UPDATE SKIP LOCKED` (disjuntas por nó), com backoff exponencial persistido, uma flag dead-letter após 8 tentativas e uma chave de idempotência estável. `link.clicked` e `link.expired` ficam best-effort em memória por design, já que disparam no caminho quente do redirect. Veja [WEBHOOKS](WEBHOOKS.PT_BR.md).
 - **Preflight de cluster** (`src/cluster.rs`): com `QUARK_STRICT_CLUSTER` setado, o quark se recusa a subir a menos que `QUARK_DATABASE_URL` e `QUARK_VALKEY_URL` estejam presentes, transformando uma configuração errada silenciosa em erro de startup.

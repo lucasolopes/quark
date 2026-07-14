@@ -4,12 +4,11 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 
 /// Valkey pub/sub channel carrying cross-node invalidation messages. Payloads are
-/// tiny text: `link:<id>` (drop one L1 cache entry everywhere) or `blocklist`
-/// (force every node to reload its blocklist snapshot on the next check).
+/// tiny text: `link:<id>` (drop one L1 cache entry everywhere).
 pub const INVALIDATION_CHANNEL: &str = "quark:invalidate";
 
-/// Backoff between subscriber reconnect attempts. The per-node TTL (L1 60s /
-/// blocklist 60s) covers staleness while a subscriber is reconnecting.
+/// Backoff between subscriber reconnect attempts. The per-node TTL (L1 60s)
+/// covers staleness while a subscriber is reconnecting.
 const RECONNECT_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Bound on a PUBLISH so a connected-but-unresponsive Valkey (overload, pause,
@@ -50,16 +49,11 @@ impl Invalidator {
 #[derive(Debug, PartialEq, Eq)]
 enum Invalidation {
     Link(u64),
-    Blocklist,
 }
 
-/// Parses a channel payload into an `Invalidation`. `link:<u64>` and `blocklist`
-/// are the only accepted forms; anything else (bad prefix, non-numeric id,
-/// garbage) is `None`.
+/// Parses a channel payload into an `Invalidation`. `link:<u64>` is the only
+/// accepted form; anything else (bad prefix, non-numeric id, garbage) is `None`.
 fn parse_message(payload: &str) -> Option<Invalidation> {
-    if payload == "blocklist" {
-        return Some(Invalidation::Blocklist);
-    }
     let rest = payload.strip_prefix("link:")?;
     rest.parse::<u64>().ok().map(Invalidation::Link)
 }
@@ -100,7 +94,6 @@ async fn run_once(url: &str, state: &Arc<AppState>) -> Result<(), redis::RedisEr
         };
         match parse_message(&payload) {
             Some(Invalidation::Link(id)) => state.cache.invalidate_local(id).await,
-            Some(Invalidation::Blocklist) => state.blocklist.invalidate_local().await,
             None => eprintln!("invalidate: unknown message '{payload}' (ignored)"),
         }
     }
@@ -115,7 +108,6 @@ mod tests {
     async fn publish_without_connection_is_noop() {
         let inv = Invalidator { conn: None };
         inv.publish("link:1").await;
-        inv.publish("blocklist").await;
     }
 
     #[test]
@@ -125,16 +117,10 @@ mod tests {
     }
 
     #[test]
-    fn parses_blocklist() {
-        assert_eq!(parse_message("blocklist"), Some(Invalidation::Blocklist));
-    }
-
-    #[test]
     fn rejects_malformed() {
         assert_eq!(parse_message("link:x"), None);
         assert_eq!(parse_message("link:"), None);
         assert_eq!(parse_message("link:-1"), None);
-        assert_eq!(parse_message("blocklist:1"), None);
         assert_eq!(parse_message(""), None);
         assert_eq!(parse_message("garbage"), None);
     }

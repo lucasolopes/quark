@@ -22,7 +22,6 @@ async fn app_admin(token: &str) -> axum::Router {
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let store2 = store.clone();
     let state = Arc::new(AppState {
         cache,
         store,
@@ -31,7 +30,6 @@ async fn app_admin(token: &str) -> axum::Router {
         sink,
         admin_token: Some(token.to_string()),
         ratelimiter: quark::abuse::ratelimit::RateLimiter::memory(1000),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
@@ -266,7 +264,6 @@ async fn api_token_works_when_no_env_admin_token_is_configured() {
         created: 1,
     };
     store.put_api_token(&token).await.unwrap();
-    let store2 = store.clone();
     let state = Arc::new(AppState {
         cache,
         store,
@@ -275,7 +272,6 @@ async fn api_token_works_when_no_env_admin_token_is_configured() {
         sink,
         admin_token: None,
         ratelimiter: quark::abuse::ratelimit::RateLimiter::memory(1000),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),

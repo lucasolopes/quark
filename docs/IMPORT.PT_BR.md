@@ -10,7 +10,7 @@ relatando exatamente quais linhas deram certo e quais falharam.
 
 O endpoint é admin-only (protegido por `QUARK_ADMIN_TOKEN`), independente de
 o `POST /` de criação pública estar habilitado. Cada linha passa pelas
-mesmas checagens de validação, blocklist e anti-loop de um create normal via
+mesmas checagens de validação e anti-loop de um create normal via
 `POST /`, então uma importação não consegue criar links que um create manual
 teria rejeitado.
 

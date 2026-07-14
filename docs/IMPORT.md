@@ -10,7 +10,7 @@ rows succeeded and which failed.
 
 The endpoint is admin-only (protected by `QUARK_ADMIN_TOKEN`), independent of
 whether public `POST /` creation is enabled. Every row runs through the same
-validation, blocklist, and anti-loop checks as a normal `POST /` create, so
+validation and anti-loop checks as a normal `POST /` create, so
 an import can't create links that a manual create would have rejected.
 
 ## Formats

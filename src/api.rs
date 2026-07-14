@@ -33,7 +33,6 @@ pub struct AppState {
     pub sink: Arc<dyn AnalyticsSink>,
     pub admin_token: Option<String>,
     pub ratelimiter: crate::abuse::ratelimit::RateLimiter,
-    pub blocklist: crate::abuse::blocklist::Blocklist,
     pub block_private: bool,
     pub public_host: Option<String>,
     pub real_ip_header: String,
@@ -65,8 +64,8 @@ const MAX_RULES: usize = 20;
 /// Validates and normalizes rules for `create`/`admin_link_patch`: caps the
 /// count, normalizes country codes to uppercase and device values to the
 /// canonical `Mobile`/`Desktop`/`Other` set, and runs each rule's `to`
-/// through the SAME SSRF/blocklist guards as the link's main `url` (a rule
-/// destination must not smuggle an internal/blocked host).
+/// through the SAME SSRF guard as the link's main `url` (a rule
+/// destination must not smuggle an internal/self host).
 async fn validate_rules(
     rules: Vec<Rule>,
     headers: &HeaderMap,
@@ -107,9 +106,6 @@ async fn validate_rules(
         };
         if st.block_private && is_blocked_target(&host, headers, st) {
             return Err((StatusCode::FORBIDDEN, "rule destination not allowed").into_response());
-        }
-        if st.blocklist.is_blocked(&host, now()).await {
-            return Err((StatusCode::FORBIDDEN, "blocked rule destination").into_response());
         }
         out.push(rule);
     }
@@ -255,9 +251,9 @@ fn mask_secret(secret: &str) -> String {
 const MAX_VARIANTS: usize = 10;
 
 /// Validates a set of A/B variants against the same rules as the main `url`:
-/// count cap, `is_valid_url`, SSRF guard (`is_blocked_target` + blocklist),
-/// and a minimum weight of 1. Shared by `create` and `admin_link_patch` so the
-/// two paths can never drift out of sync on SSRF coverage.
+/// count cap, `is_valid_url`, SSRF guard (`is_blocked_target`), and a minimum
+/// weight of 1. Shared by `create` and `admin_link_patch` so the two paths can
+/// never drift out of sync on SSRF coverage.
 async fn validate_variants(
     variants: &[Variant],
     headers: &HeaderMap,
@@ -278,9 +274,6 @@ async fn validate_variants(
         };
         if st.block_private && is_blocked_target(&host, headers, st) {
             return Err((StatusCode::FORBIDDEN, "variant destination not allowed").into_response());
-        }
-        if st.blocklist.is_blocked(&host, now()).await {
-            return Err((StatusCode::FORBIDDEN, "blocked variant destination").into_response());
         }
     }
     Ok(())
@@ -360,7 +353,7 @@ pub enum CreateError {
 }
 
 /// Core link-creation logic shared by `POST /` and `POST /admin/import`:
-/// validates the URL, runs the blocklist/anti-loop guards, computes expiry
+/// validates the URL, runs the SSRF/anti-loop guard, computes expiry
 /// from `ttl`, then either claims `alias` (custom code) or allocates the
 /// next numeric id. Holds no admin/rate-limit policy — callers apply those
 /// before invoking this. Returns the created code (the alias, or the
@@ -391,9 +384,6 @@ pub async fn create_link_core(
         return Err(CreateError::NoHost);
     };
     if st.block_private && is_blocked_target(&host, headers, st) {
-        return Err(CreateError::Blocked);
-    }
-    if st.blocklist.is_blocked(&host, now()).await {
         return Err(CreateError::Blocked);
     }
 
@@ -579,7 +569,7 @@ struct ImportSummary {
 
 /// `POST /admin/import`: bulk-creates links from a CSV or JSON body (see
 /// `crate::import`), driving each row through `create_link_core` so
-/// validation and blocklist rules match `POST /` exactly. Always admin-gated
+/// validation matches `POST /` exactly. Always admin-gated
 /// via `admin_guard`, independent of `require_admin_for_create` (import
 /// stays admin-only even when public create is enabled). Never aborts on a
 /// bad row: every row is attempted, and failures are reported in the
@@ -700,8 +690,8 @@ fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
 
 /// Validates an app destination URL with the same rules — and the same status
 /// codes — as the main link URL: 400 for a malformed URL (bad scheme / no host),
-/// 403 for a policy denial (internal/self target or a blocklisted host). Mirrors
-/// the create/patch main-`url` arms exactly, in the same order.
+/// 403 for a policy denial (internal/self target). Mirrors the create/patch
+/// main-`url` arms exactly, in the same order.
 async fn app_destination_ok(
     st: &AppState,
     headers: &HeaderMap,
@@ -714,9 +704,6 @@ async fn app_destination_ok(
         return Err(StatusCode::BAD_REQUEST);
     };
     if st.block_private && is_blocked_target(&host, headers, st) {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    if st.blocklist.is_blocked(&host, now()).await {
         return Err(StatusCode::FORBIDDEN);
     }
     Ok(())
@@ -950,11 +937,6 @@ async fn stats(
     }
 }
 
-#[derive(Deserialize)]
-struct BlocklistReq {
-    domain: String,
-}
-
 /// Authorizes an admin request against a required `Scope`: `Ok(())` if
 /// authorized; `Err(status)` otherwise. Returns `StatusCode` (not `Response`)
 /// to stay `Copy`/small — avoids clippy's `result_large_err` lint, which
@@ -1016,54 +998,6 @@ async fn admin_guard(
     }
 
     Ok(())
-}
-
-async fn blocklist_get(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Blocklist).await {
-        return status.into_response();
-    }
-    match st.store.list_blocked_domains().await {
-        Ok(domains) => Json(serde_json::json!({ "domains": domains })).into_response(),
-        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    }
-}
-
-async fn blocklist_add(
-    State(st): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Blocklist).await {
-        return status.into_response();
-    }
-    let req: BlocklistReq = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
-    };
-    if st.store.add_blocked_domain(&req.domain).await.is_err() {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
-    st.blocklist.invalidate().await;
-    StatusCode::OK.into_response()
-}
-
-async fn blocklist_delete(
-    State(st): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Blocklist).await {
-        return status.into_response();
-    }
-    let req: BlocklistReq = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
-    };
-    if st.store.remove_blocked_domain(&req.domain).await.is_err() {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
-    st.blocklist.invalidate().await;
-    StatusCode::OK.into_response()
 }
 
 #[derive(Deserialize)]
@@ -1256,9 +1190,6 @@ async fn admin_link_patch(
         };
         if st.block_private && is_blocked_target(&host, &headers, &st) {
             return (StatusCode::FORBIDDEN, "destination not allowed").into_response();
-        }
-        if st.blocklist.is_blocked(&host, now()).await {
-            return (StatusCode::FORBIDDEN, "blocked destination").into_response();
         }
         rec.url = s.to_string();
     }
@@ -2022,12 +1953,6 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route("/health", get(health))
         .route("/:code", get(redirect))
         .route("/:code/stats", get(stats))
-        .route(
-            "/admin/blocklist",
-            get(blocklist_get)
-                .post(blocklist_add)
-                .delete(blocklist_delete),
-        )
         .route("/admin/links", get(admin_links_list))
         .route("/admin/import", post(admin_import))
         .route(

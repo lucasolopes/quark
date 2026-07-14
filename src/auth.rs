@@ -9,7 +9,6 @@ use sha2::{Digest, Sha256};
 pub enum Scope {
     LinksRead,
     LinksWrite,
-    Blocklist,
     Webhooks,
     Analytics,
     Full,
@@ -84,7 +83,6 @@ mod tests {
         for required in [
             Scope::LinksRead,
             Scope::LinksWrite,
-            Scope::Blocklist,
             Scope::Webhooks,
             Scope::Analytics,
             Scope::Full,
@@ -98,7 +96,7 @@ mod tests {
         assert!(Scope::LinksRead.covers(Scope::LinksRead));
         assert!(!Scope::LinksRead.covers(Scope::LinksWrite));
         assert!(!Scope::LinksWrite.covers(Scope::LinksRead));
-        assert!(!Scope::Blocklist.covers(Scope::Full));
+        assert!(!Scope::Webhooks.covers(Scope::Full));
     }
 
     #[test]
@@ -110,10 +108,6 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Scope::LinksWrite).unwrap(),
             "\"links_write\""
-        );
-        assert_eq!(
-            serde_json::to_string(&Scope::Blocklist).unwrap(),
-            "\"blocklist\""
         );
         assert_eq!(
             serde_json::to_string(&Scope::Webhooks).unwrap(),

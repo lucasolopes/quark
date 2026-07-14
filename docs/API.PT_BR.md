@@ -63,7 +63,7 @@ Falhas (cada uma com corpo em texto):
 | Status | Motivo |
 |---|---|
 | `400 Bad Request` | url inválida, url sem host, ttl inválido, alias colide com o espaço numérico, regras/variantes demais, valor de device inválido, peso de variante < 1 |
-| `403 Forbidden` | destino bloqueado (interno/self ou host na blocklist), na url, no `to` de uma regra ou na url de variante |
+| `403 Forbidden` | destino bloqueado (interno/self), na url, no `to` de uma regra ou na url de variante |
 | `409 Conflict` | alias em uso |
 | `429 Too Many Requests` | acima de `QUARK_RATELIMIT_PER_MIN` para o IP |
 | `507 Insufficient Storage` | espaço de id esgotado |
@@ -150,7 +150,7 @@ chaves presentes mudam. Mandar `null` para `ttl`, `max_visits`, `app_ios` ou
 
 Chaves aceitas: `url`, `ttl`, `tags`, `max_visits`, `rules`, `variants`,
 `app_ios`, `app_android`. Cada uma é validada como na criação (esquema de URL,
-guard SSRF/blocklist, tetos de regra e variante). `200` no sucesso, `404` se o
+guard SSRF, tetos de regra e variante). `200` no sucesso, `404` se o
 código não resolve, `400`/`403` num campo rejeitado.
 
 ### `DELETE /admin/links/:code`
@@ -165,19 +165,6 @@ Sempre com gate de admin, mesmo com `POST /` público ligado. Nunca aborta numa
 linha ruim; retorna `200` com `{"imported": N, "failed": [{index, url, reason}, ...]}`.
 Um corpo acima de 10.000 linhas ou não parseável é `400`. Veja
 [IMPORT](IMPORT.PT_BR.md).
-
-## Blocklist
-
-Blocklist de domínios de destino. Escopo: `blocklist` nos três verbos.
-
-| Rota | Corpo | Resultado |
-|---|---|---|
-| `GET /admin/blocklist` | | `200 {"domains": [...]}` |
-| `POST /admin/blocklist` | `{"domain": "..."}` | `200`; adiciona e invalida o snapshot |
-| `DELETE /admin/blocklist` | `{"domain": "..."}` | `200`; remove e invalida |
-
-Um JSON malformado é `400`. O casamento é por domínio e subdomínio, sem
-diferenciar maiúsculas.
 
 ## Webhooks
 

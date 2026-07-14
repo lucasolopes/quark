@@ -823,15 +823,6 @@ mod tests {
         ) -> Result<(), StoreError> {
             unimplemented!()
         }
-        async fn add_blocked_domain(&self, _domain: &str) -> Result<(), StoreError> {
-            unimplemented!()
-        }
-        async fn remove_blocked_domain(&self, _domain: &str) -> Result<(), StoreError> {
-            unimplemented!()
-        }
-        async fn list_blocked_domains(&self) -> Result<Vec<String>, StoreError> {
-            unimplemented!()
-        }
         async fn list_links(
             &self,
             _after: Option<u64>,

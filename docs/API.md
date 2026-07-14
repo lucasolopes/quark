@@ -63,7 +63,7 @@ Failures (each is a plain-text body):
 | Status | Reason |
 |---|---|
 | `400 Bad Request` | invalid url, url without host, invalid ttl, alias collides with the numeric code space, too many rules, too many variants, invalid device value, variant weight must be >= 1 |
-| `403 Forbidden` | blocked destination (internal/self target or a blocklisted host), for the url, a rule `to`, or a variant url |
+| `403 Forbidden` | blocked destination (internal/self target), for the url, a rule `to`, or a variant url |
 | `409 Conflict` | alias in use |
 | `429 Too Many Requests` | over `QUARK_RATELIMIT_PER_MIN` for the client IP |
 | `507 Insufficient Storage` | id space exhausted |
@@ -147,7 +147,7 @@ keys present are changed. Sending `null` for `ttl`, `max_visits`, `app_ios`, or
 
 Accepted keys: `url`, `ttl`, `tags`, `max_visits`, `rules`, `variants`,
 `app_ios`, `app_android`. Each is validated the same way as on create (URL
-scheme, SSRF/blocklist guard, rule and variant caps). `200` on success, `404`
+scheme, SSRF guard, rule and variant caps). `200` on success, `404`
 if the code does not resolve, `400`/`403` on a rejected field.
 
 ### `DELETE /admin/links/:code`
@@ -161,19 +161,6 @@ Bulk-create links from a CSV or JSON body. Scope: `links_write`. Always
 admin-gated, even when public `POST /` is enabled. Never aborts on a bad row;
 returns `200` with `{"imported": N, "failed": [{index, url, reason}, ...]}`.
 A body over 10,000 rows or an unparseable body is `400`. See [IMPORT](IMPORT.md).
-
-## Blocklist
-
-Destination domain blocklist. Scope: `blocklist` on all three verbs.
-
-| Route | Body | Result |
-|---|---|---|
-| `GET /admin/blocklist` | | `200 {"domains": [...]}` |
-| `POST /admin/blocklist` | `{"domain": "..."}` | `200`; adds the domain and invalidates the snapshot |
-| `DELETE /admin/blocklist` | `{"domain": "..."}` | `200`; removes it and invalidates |
-
-A malformed JSON body is `400`. Matching is by domain and subdomain,
-case-insensitive.
 
 ## Webhooks
 

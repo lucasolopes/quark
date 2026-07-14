@@ -52,7 +52,6 @@ export interface Aggregates {
   per_variant: Record<string, number>;
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
-export interface BlocklistResponse { domains: string[]; }
 export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; variants?: Variant[]; app_ios?: string | null; app_android?: string | null; }
 
 /** The 5 link lifecycle events a webhook subscription can be notified about. */
@@ -86,8 +85,8 @@ export interface PatchWebhookRequest { url?: string; events?: WebhookEvent[]; ac
 export interface TestWebhookResponse { delivered: boolean; status: number; }
 export interface ImportFailure { index: number; url: string; reason: string; }
 export interface ImportSummary { imported: number; failed: ImportFailure[]; }
-export type Scope = "links_read" | "links_write" | "blocklist" | "webhooks" | "analytics" | "full";
-export const ALL_SCOPES: Scope[] = ["links_read", "links_write", "blocklist", "webhooks", "analytics", "full"];
+export type Scope = "links_read" | "links_write" | "webhooks" | "analytics" | "full";
+export const ALL_SCOPES: Scope[] = ["links_read", "links_write", "webhooks", "analytics", "full"];
 
 export interface ApiToken {
   id: number;

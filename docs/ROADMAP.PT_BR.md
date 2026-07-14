@@ -41,14 +41,14 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 - **Escala horizontal**: réplicas stateless sobre Postgres compartilhado; `QUARK_NODE_ID`
   particiona o espaço de id no LMDB (guarda defensiva). Doc: `docs/SCALING.md`.
 - **Proteção contra abuso** (só no `POST /`): rate-limit por IP (`QUARK_RATELIMIT_PER_MIN`,
-  memória/Valkey, fail-open), blocklist de destino no banco (`/admin/blocklist`, cache L1/L2),
-  guarda embutida contra rede interna/loop (`QUARK_BLOCK_PRIVATE`, default on).
+  memória/Valkey, fail-open), guarda embutida contra rede interna/loop
+  (`QUARK_BLOCK_PRIVATE`, default on).
 - **API do painel**: `GET /admin/links` (lista keyset paginada), `DELETE`/`PATCH /admin/links/:code`,
   tudo sob `QUARK_ADMIN_TOKEN`. **Criar (`POST /`) exige o token quando `QUARK_ADMIN_TOKEN`
   está configurado** (senão continua público). CORS opt-in via `QUARK_CORS_ORIGINS`.
 - **Painel web (SPA)**: `web/` (React + Vite + shadcn/ui + TanStack + Recharts), deploy
   separado (build estático), binário API-only. Login por token → Links (CRUD, busca,
-  tags, copiar, **QR code**) → Stats por link (gráficos) → Blocklist. UI/UX seguindo
+  tags, copiar, **QR code**) → Stats por link (gráficos). UI/UX seguindo
   heurísticas de Nielsen.
 - **Tags (#7)**: links carregam tags normalizadas (`Record.tags`: aparadas,
   minúsculas, deduplicadas, com limite) pra organizar; a lista de links filtra
@@ -67,7 +67,7 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
   painel web. Doc: [`docs/IMPORT.PT_BR.md`](IMPORT.PT_BR.md).
 - **Builder de UTM + templates**: seção colapsável de UTM no diálogo de criar link, com
   prévia ao vivo do destino e templates nomeados salvos localmente (`localStorage`).
-- **#9 Tokens de API com escopos + quota**: tokens nomeados (`links_read`, `links_write`, `blocklist`, `webhooks`, `analytics`, `full`) com limite de requisições opcional por token, gerenciados em `/admin/tokens` e na página **Tokens de API** do painel; o `QUARK_ADMIN_TOKEN` do env continua se comportando como `full`, sem mudanças. Doc: `docs/API-TOKENS.PT_BR.md`.
+- **#9 Tokens de API com escopos + quota**: tokens nomeados (`links_read`, `links_write`, `webhooks`, `analytics`, `full`) com limite de requisições opcional por token, gerenciados em `/admin/tokens` e na página **Tokens de API** do painel; o `QUARK_ADMIN_TOKEN` do env continua se comportando como `full`, sem mudanças. Doc: `docs/API-TOKENS.PT_BR.md`.
 - **Regras de redirecionamento (#12)**: regras por link de geo/dispositivo (primeira que combina vence, `url` continua o padrão), editor no painel nos diálogos de criar/editar. Doc: `docs/REDIRECT-RULES.PT_BR.md`.
 - **Encaminhamento de conversão (#14)**: pixels GA4/Meta CAPI a nível de instância, encaminhados
   async pelo worker de analytics (nunca no caminho quente do redirect), fail-open. Painel: `/pixels`.
@@ -80,7 +80,7 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
   um link pode carregar destinos `app_ios` / `app_android`, e um clique daquela plataforma (quando o
   SO não pegou) resolve pro destino do app, na frente das regras geo/dispositivo e das variantes A/B
   na ordem de precedência. Guia: `docs/DEEP-LINKING.PT_BR.md`.
-- **Reforço de escala**: invalidação de cache e blocklist cross-node por um canal pub/sub do Valkey
+- **Reforço de escala**: invalidação de cache cross-node por um canal pub/sub do Valkey
   (`src/invalidate.rs`); contadores atômicos de analytics no Postgres (`click_counters`, `INSERT ...
   ON CONFLICT`) mais `click_events` append-only, substituindo o read-modify-write de blob sob
   advisory lock; um outbox durável de webhook no Postgres com relay por lease (retry/DLQ/idempotência);

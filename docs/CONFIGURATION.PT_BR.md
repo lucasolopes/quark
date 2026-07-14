@@ -34,7 +34,7 @@ controle compartilhada seguem `QUARK_VALKEY_URL`.
 | Variável | Default | Função |
 |---|---|---|
 | `QUARK_DATABASE_URL` | sem setar (LMDB) | Usa Postgres como store, ex. `postgres://user:pass@host:5432/db`. É o store compartilhado, seguro para multi-nó, e também implementa o sink de analytics. Sem setar, cai no LMDB embutido. |
-| `QUARK_VALKEY_URL` | sem setar (só L1 + store) | Liga o cache L2 no Valkey, ex. `redis://host:6379`. A mesma conexão sustenta o rate limit global, o snapshot de blocklist compartilhado e o pub/sub de invalidação cross-node. |
+| `QUARK_VALKEY_URL` | sem setar (só L1 + store) | Liga o cache L2 no Valkey, ex. `redis://host:6379`. A mesma conexão sustenta o rate limit global e o pub/sub de invalidação cross-node. |
 | `QUARK_CLICKHOUSE_URL` | sem setar (sink embutido do store) | Usa ClickHouse como sink de analytics, ex. `http://user:pass@host:8123/db`. É só analytics; nunca vira o store de links. |
 | `QUARK_NODE_ID` | sem setar (espaço de id de 40 bits cheio) | Particionamento de espaço de id, só no LMDB, `0`-`255`. Os 8 bits do topo viram o id do nó e os 32 de baixo um contador local. Ignorado no backend Postgres (a sequência compartilhada aloca) e o quark loga que foi ignorado. Um valor fora da faixa aborta o processo no startup. Veja [SCALING](SCALING.PT_BR.md). |
 
@@ -70,7 +70,6 @@ Valem só para `POST /`. O caminho do redirect nunca é tocado por elas.
 | `QUARK_REAL_IP_HEADER` | `cf-connecting-ip` | Header de onde ler o IP do cliente, com fallback no endereço do socket. Como o header é confiado, só ligue o rate limit atrás de um proxy que o sobrescreva, ou um cliente pode forjá-lo. |
 | `QUARK_BLOCK_PRIVATE` | ligado (setar `0` desliga) | O guard de rede interna/loop. Rejeita destino cujo host seja um IP literal privado, loopback ou link-local (v4 e v6, incluindo IPv4-mapeado como `::ffff:127.0.0.1`), `localhost`, ou o próprio host da instância. Nunca resolve DNS. |
 | `QUARK_PUBLIC_HOST` | sem setar (usa o header `Host`) | O host da própria instância, usado pela checagem anti-loop para um link não apontar de volta ao quark. |
-| `QUARK_BLOCKLIST_TTL` | `60` | Segundos que o snapshot de blocklist em memória fica em cache antes de recarregar. Com Valkey e o canal de invalidação ligados, uma escrita de admin propaga quase na hora e esse TTL é o backstop. |
 
 ## Defaults compilados no binário
 

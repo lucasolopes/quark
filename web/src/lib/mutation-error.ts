@@ -13,9 +13,9 @@ export function isUnauthorized(err: unknown): boolean {
 }
 
 /**
- * Shows an error toast for simple mutations (delete link, add/remove
- * blocklist) — except on 401, where the global handler already takes care
- * of the feedback. `mapMessage` maps the error to a friendly message
+ * Shows an error toast for simple mutations (like delete link), except on
+ * 401, where the global handler already takes care of the feedback.
+ * `mapMessage` maps the error to a friendly message
  * (403/429/etc; see callers for each mutation's specific cases).
  */
 export function mutationErrorToast(err: unknown, mapMessage: (err: unknown) => string): void {

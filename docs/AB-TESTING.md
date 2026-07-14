@@ -46,8 +46,8 @@ In the panel, open **Create link** or **Edit link** and expand the
 
 1. Add a row for each destination: a URL and a weight (defaults to 1).
 2. Every variant URL goes through the same validation as the main URL
-   (must be `http://` or `https://`, and is checked against the blocklist
-   and internal-network guard on the server).
+   (must be `http://` or `https://`, and is checked against the same
+   internal-network SSRF guard on the server).
 3. Up to 10 variants per link.
 4. Save. The link now shows an "A/B: N" badge in the links table.
 

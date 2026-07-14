@@ -8,7 +8,6 @@
 //! doesn't show up here — but oha couldn't measure it above the noise either.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use quark::abuse::blocklist::Blocklist;
 use quark::abuse::ratelimit::RateLimiter;
 use quark::analytics::{spawn_worker, ClickEvent};
 use quark::api::{router, AppState};
@@ -68,7 +67,6 @@ fn bench(c: &mut Criterion) {
             sink,
             admin_token: None,
             ratelimiter: RateLimiter::disabled(),
-            blocklist: Blocklist::new(store, None, 60, None),
             block_private: true,
             public_host: None,
             real_ip_header: "cf-connecting-ip".to_string(),

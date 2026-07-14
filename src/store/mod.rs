@@ -277,9 +277,6 @@ pub trait Store: Send + Sync + 'static {
     /// `deliveries` in ONE transaction. On LMDB `deliveries` is empty and this
     /// delegates to `delete_link`.
     async fn delete_link_tx(&self, id: u64, deliveries: &[OutboxRow]) -> Result<(), StoreError>;
-    async fn add_blocked_domain(&self, domain: &str) -> Result<(), StoreError>;
-    async fn remove_blocked_domain(&self, domain: &str) -> Result<(), StoreError>;
-    async fn list_blocked_domains(&self) -> Result<Vec<String>, StoreError>;
     /// `tag`, when present, restricts the results to links whose `tags`
     /// contain it (exact match, post-normalization).
     async fn list_links(

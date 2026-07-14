@@ -3,7 +3,6 @@ import { api } from "./api";
 import type { CreateLinkRequest, CreatePixelRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest, WellknownName } from "./types";
 
 const LINKS_QUERY_KEY = ["links"];
-const BLOCKLIST_QUERY_KEY = ["blocklist"];
 const WEBHOOKS_QUERY_KEY = ["webhooks"];
 const TAGS_QUERY_KEY = ["tags"];
 const TOKENS_QUERY_KEY = ["tokens"];
@@ -113,32 +112,6 @@ export function useTags() {
   return useQuery({
     queryKey: TAGS_QUERY_KEY,
     queryFn: () => api.listTags(),
-  });
-}
-
-/** List of blocked domains, for the Blocklist screen. */
-export function useBlocklist() {
-  return useQuery({
-    queryKey: BLOCKLIST_QUERY_KEY,
-    queryFn: () => api.listBlocked(),
-  });
-}
-
-/** Adds a domain to the blocklist; on success invalidates `useBlocklist`. */
-export function useAddBlocked() {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (domain: string) => api.addBlocked(domain),
-    onSuccess: () => { void client.invalidateQueries({ queryKey: BLOCKLIST_QUERY_KEY }); },
-  });
-}
-
-/** Removes a domain from the blocklist; on success invalidates `useBlocklist`. */
-export function useRemoveBlocked() {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (domain: string) => api.removeBlocked(domain),
-    onSuccess: () => { void client.invalidateQueries({ queryKey: BLOCKLIST_QUERY_KEY }); },
   });
 }
 

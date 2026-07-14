@@ -1,7 +1,7 @@
 import { getToken } from "./auth";
 import type {
   ListLinksResponse, CreateLinkRequest, CreateLinkResponse,
-  Stats, BlocklistResponse, PatchLinkRequest,
+  Stats, PatchLinkRequest,
   ListWebhooksResponse, CreateWebhookRequest, CreateWebhookResponse,
   PatchWebhookRequest, TestWebhookResponse,
   ImportSummary, TagsResponse,
@@ -70,19 +70,8 @@ export const api = {
   async getStats(code: string): Promise<Stats> {
     return jsonOrThrow(await req(`/${encodeURIComponent(code)}/stats`));
   },
-  async listBlocked(): Promise<BlocklistResponse> {
-    return jsonOrThrow(await req("/admin/blocklist"));
-  },
   async listTags(): Promise<TagsResponse> {
     return jsonOrThrow(await req("/admin/tags"));
-  },
-  async addBlocked(domain: string): Promise<void> {
-    const res = await req("/admin/blocklist", { method: "POST", body: JSON.stringify({ domain }) });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
-  },
-  async removeBlocked(domain: string): Promise<void> {
-    const res = await req("/admin/blocklist", { method: "DELETE", body: JSON.stringify({ domain }) });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
   async listWebhooks(): Promise<ListWebhooksResponse> {
     return jsonOrThrow(await req("/admin/webhooks"));

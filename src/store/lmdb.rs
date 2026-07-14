@@ -19,7 +19,7 @@ const LOCAL_BITS: u32 = 40 - NODE_BITS;
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1;
 
 /// Number of named LMDB sub-databases opened in the environment.
-const MAX_DBS: u32 = 11;
+const MAX_DBS: u32 = 10;
 /// Virtual address space (mmap) reserved for the LMDB environment.
 const MAP_SIZE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 
@@ -57,7 +57,6 @@ pub struct LmdbStore {
     meta: Database<Str, BeU64>,
     stats: Database<BeU64, Bytes>,
     events: Database<BeU64, Bytes>,
-    blocked: Database<Str, Str>,
     webhooks: Database<BeU64, Bytes>,
     api_tokens: Database<BeU64, Bytes>,
     visits: Database<BeU64, BeU64>,
@@ -88,7 +87,6 @@ impl LmdbStore {
         let meta = env.create_database(&mut wtxn, Some("meta"))?;
         let stats = env.create_database(&mut wtxn, Some("stats"))?;
         let events = env.create_database(&mut wtxn, Some("events"))?;
-        let blocked = env.create_database(&mut wtxn, Some("blocked"))?;
         let webhooks = env.create_database(&mut wtxn, Some("webhooks"))?;
         let api_tokens = env.create_database(&mut wtxn, Some("api_tokens"))?;
         let visits = env.create_database(&mut wtxn, Some("visits"))?;
@@ -102,7 +100,6 @@ impl LmdbStore {
             meta,
             stats,
             events,
-            blocked,
             webhooks,
             api_tokens,
             visits,
@@ -191,32 +188,6 @@ impl Store for LmdbStore {
 
     async fn delete_link_tx(&self, id: u64, _deliveries: &[OutboxRow]) -> Result<(), StoreError> {
         self.delete_link(id).await
-    }
-
-    async fn add_blocked_domain(&self, domain: &str) -> Result<(), StoreError> {
-        let d = domain.trim().to_ascii_lowercase();
-        let mut wtxn = self.env.write_txn()?;
-        self.blocked.put(&mut wtxn, &d, "")?;
-        wtxn.commit()?;
-        Ok(())
-    }
-
-    async fn remove_blocked_domain(&self, domain: &str) -> Result<(), StoreError> {
-        let d = domain.trim().to_ascii_lowercase();
-        let mut wtxn = self.env.write_txn()?;
-        self.blocked.delete(&mut wtxn, &d)?;
-        wtxn.commit()?;
-        Ok(())
-    }
-
-    async fn list_blocked_domains(&self) -> Result<Vec<String>, StoreError> {
-        let rtxn = self.env.read_txn()?;
-        let mut out = Vec::new();
-        for item in self.blocked.iter(&rtxn)? {
-            let (k, _) = item?;
-            out.push(k.to_string());
-        }
-        Ok(out)
     }
 
     async fn list_links(
@@ -668,23 +639,6 @@ mod tests {
         ));
         let rtxn = s.env.read_txn().unwrap();
         assert_eq!(s.meta.get(&rtxn, "next_id").unwrap(), Some(LOCAL_MAX));
-    }
-
-    #[tokio::test]
-    async fn blocklist_add_list_remove() {
-        let dir = tempfile::tempdir().unwrap();
-        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        s.add_blocked_domain("Evil.COM").await.unwrap();
-        s.add_blocked_domain("evil.com").await.unwrap();
-        s.add_blocked_domain("spam.net").await.unwrap();
-        let mut list = s.list_blocked_domains().await.unwrap();
-        list.sort();
-        assert_eq!(list, vec!["evil.com".to_string(), "spam.net".to_string()]);
-        s.remove_blocked_domain("evil.com").await.unwrap();
-        assert_eq!(
-            s.list_blocked_domains().await.unwrap(),
-            vec!["spam.net".to_string()]
-        );
     }
 
     #[tokio::test]

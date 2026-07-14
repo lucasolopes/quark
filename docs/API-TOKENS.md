@@ -17,7 +17,6 @@ token's scopes cover what the endpoint requires.
 |---|---|
 | `links_read` | List links (`GET /admin/links`), including search. |
 | `links_write` | Create, edit, and delete links (`POST /`, `PATCH`/`DELETE /admin/links/:code`, import, tag writes). |
-| `blocklist` | Manage the destination blocklist (`GET`/`POST`/`DELETE /admin/blocklist`). |
 | `webhooks` | Manage webhook configuration. |
 | `analytics` | Read click stats (`GET /:code/stats`). |
 | `full` | Superuser: covers every scope above, including token management (`/admin/tokens`). Only `full` tokens can create, list, or revoke other tokens. |

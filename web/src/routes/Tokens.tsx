@@ -27,7 +27,6 @@ import type { ApiToken, Scope } from "@/lib/types";
 const SCOPE_LABEL_KEY: Record<Scope, MessageKey> = {
   links_read: "tokens.scope.linksRead",
   links_write: "tokens.scope.linksWrite",
-  blocklist: "tokens.scope.blocklist",
   webhooks: "tokens.scope.webhooks",
   analytics: "tokens.scope.analytics",
   full: "tokens.scope.full",

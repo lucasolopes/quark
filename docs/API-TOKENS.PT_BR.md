@@ -17,7 +17,6 @@ escopos do token cobrirem o que o endpoint exige.
 |---|---|
 | `links_read` | Listar links (`GET /admin/links`), incluindo busca. |
 | `links_write` | Criar, editar e excluir links (`POST /`, `PATCH`/`DELETE /admin/links/:code`, importação, escrita de tags). |
-| `blocklist` | Gerenciar a blocklist de destinos (`GET`/`POST`/`DELETE /admin/blocklist`). |
 | `webhooks` | Gerenciar a configuração de webhooks. |
 | `analytics` | Ler estatísticas de cliques (`GET /:code/stats`). |
 | `full` | Superusuário: cobre todos os escopos acima, incluindo gerenciamento de tokens (`/admin/tokens`). Só tokens `full` podem criar, listar ou revogar outros tokens. |

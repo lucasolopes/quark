@@ -222,7 +222,7 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 | `QUARK_KEY` | Decimal `u64` secret, the permutation key. **Required in production** (each instance should have its own, kept out of source control). | dev fallback key (loud warning logged; not for production) |
 | `QUARK_DATA` | LMDB data directory. Only used when the store is LMDB. | `./data` (container: `/data`) |
 | `QUARK_ADDR` | HTTP bind address. | `0.0.0.0:8080` |
-| `QUARK_ADMIN_TOKEN` | Enables the token-protected admin endpoints: `GET /:code/stats` and `GET/POST/DELETE /admin/blocklist`. | unset → those endpoints off (404) |
+| `QUARK_ADMIN_TOKEN` | Enables the token-protected admin endpoints, e.g. `GET /:code/stats`. | unset → those endpoints off (404) |
 | `QUARK_VALKEY_URL` | Enable the L2 Valkey cache, e.g. `redis://host:6379`. | unset → L1 + store only |
 | `QUARK_DATABASE_URL` | Use Postgres for the store, e.g. `postgres://user:pass@host:5432/db`. | unset → LMDB |
 | `QUARK_CLICKHOUSE_URL` | Use ClickHouse for analytics, e.g. `http://user:pass@host:8123/db`. | unset → store's embedded sink |
@@ -231,7 +231,6 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 | `QUARK_REAL_IP_HEADER` | Header to read the client IP from. | `CF-Connecting-IP` |
 | `QUARK_BLOCK_PRIVATE` | Guard against internal/loop destinations; on by default, `0` disables it. | on |
 | `QUARK_PUBLIC_HOST` | This instance's own host, for anti-loop (otherwise uses the `Host` header). | unset → uses `Host` header |
-| `QUARK_BLOCKLIST_TTL` | Seconds the blocklist snapshot is cached for. | `60` |
 | `QUARK_CORS_ORIGINS` | Comma-separated origins allowed to call the API (for the web panel). | unset → no CORS (same-origin only) |
 
 > Only enable `QUARK_RATELIMIT_PER_MIN` behind a proxy that overwrites `QUARK_REAL_IP_HEADER` (e.g. Cloudflare with `CF-Connecting-IP`); exposed directly, a client can forge the header and bypass the limit.
@@ -241,7 +240,6 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 - Per-request access logging is **opt-in via `QUARK_ACCESS_LOG`** (off by default). When set, every request emits a **structured JSON log line** to stdout (`{"method","path","status","latency_ms"}`), captured as-is by Coolify/Docker, ready to `grep` or ship to a log collector. Off by default so the hot redirect path pays no synchronous `println!`/stdout-lock cost at high throughput.
 - Redirects carry a **TTL-aware `Cache-Control`** header, so a CDN/browser can cache the 302 (and never past a link's expiry). See [`docs/EDGE.md`](docs/EDGE.md) for putting Cloudflare in front.
 - A link can also expire after a maximum number of visits (`max_visits`), in addition to or instead of a TTL date; the redirect returns `410 Gone` once the limit is reached.
-- The domain blocklist is managed via `GET/POST/DELETE /admin/blocklist` (JSON body `{"domain": "..."}` for POST/DELETE), protected by `QUARK_ADMIN_TOKEN` (header `x-admin-token`; unset → 404, wrong token → 401).
 - **Import**: `POST /admin/import` bulk-creates links from a CSV or JSON export (Bitly, Kutt, YOURLS, or generic), same admin token, partial-success reporting per row. See [`docs/IMPORT.md`](docs/IMPORT.md).
 - Beyond the env admin token, named **API tokens** with per-permission scopes and an optional per-token rate limit can be managed under `/admin/tokens` (superuser scope only); see [`docs/API-TOKENS.md`](docs/API-TOKENS.md).
 
@@ -260,7 +258,7 @@ links `GET /admin/links` (filterable by `?tag=`), delete `DELETE /admin/links/:c
 A single-operator admin panel (React SPA) lives in `web/`. It's built and
 deployed **separately** from the API binary (static build → CDN/edge); the quark
 binary stays API-only. Links support CRUD, search, tags, copy, and QR code,
-plus per-link stats and a blocklist view. Dev: `cd web && npm install && npm run dev` (Vite on
+plus per-link stats. Dev: `cd web && npm install && npm run dev` (Vite on
 `:5173`), pointing `VITE_API_BASE_URL` at your quark API and setting
 `QUARK_CORS_ORIGINS=http://localhost:5173` on the API. Auth is the same
 `QUARK_ADMIN_TOKEN`, entered on the panel's login screen. The create-link dialog

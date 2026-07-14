@@ -15,8 +15,6 @@ use std::sync::Arc;
 const CACHE_CAPACITY: u64 = 100_000;
 /// Analytics channel capacity (buffered `ClickEvent`s before backpressure).
 const ANALYTICS_CHANNEL_CAPACITY: usize = 10_000;
-/// Default blocklist snapshot TTL, in seconds, when `QUARK_BLOCKLIST_TTL` is unset.
-const DEFAULT_BLOCKLIST_TTL_SECS: u64 = 60;
 
 #[tokio::main]
 async fn main() {
@@ -160,16 +158,6 @@ async fn main() {
             }
         );
     }
-    let blocklist_ttl: u64 = std::env::var("QUARK_BLOCKLIST_TTL")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_BLOCKLIST_TTL_SECS);
-    let blocklist = quark::abuse::blocklist::Blocklist::new(
-        store.clone(),
-        control_conn.clone(),
-        blocklist_ttl,
-        invalidator.clone(),
-    );
     let block_private = std::env::var("QUARK_BLOCK_PRIVATE")
         .map(|v| v != "0")
         .unwrap_or(true);
@@ -206,7 +194,6 @@ async fn main() {
         sink,
         admin_token,
         ratelimiter,
-        blocklist,
         block_private,
         public_host,
         real_ip_header,

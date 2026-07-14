@@ -41,14 +41,14 @@ bottleneck being geography/RTT, not the server).
 - **Horizontal scaling**: stateless replicas over a shared Postgres; `QUARK_NODE_ID`
   partitions the id space in LMDB (defensive guard). Doc: `docs/SCALING.md`.
 - **Abuse protection** (only on `POST /`): per-IP rate limit (`QUARK_RATELIMIT_PER_MIN`,
-  in-memory/Valkey, fail-open), destination blocklist in the store (`/admin/blocklist`, L1/L2 cache),
-  built-in guard against internal/loop networks (`QUARK_BLOCK_PRIVATE`, on by default).
+  in-memory/Valkey, fail-open), built-in guard against internal/loop networks
+  (`QUARK_BLOCK_PRIVATE`, on by default).
 - **Panel API**: `GET /admin/links` (keyset-paginated list), `DELETE`/`PATCH /admin/links/:code`,
   all under `QUARK_ADMIN_TOKEN`. **Creating (`POST /`) requires the token when `QUARK_ADMIN_TOKEN`
   is set** (otherwise it stays public). Opt-in CORS via `QUARK_CORS_ORIGINS`.
 - **Web panel (SPA)**: `web/` (React + Vite + shadcn/ui + TanStack + Recharts), deployed
   separately (static build), API-only binary. Token login → Links (CRUD, search,
-  tags, copy, **QR code**) → Per-link stats (charts) → Blocklist. UI/UX following
+  tags, copy, **QR code**) → Per-link stats (charts). UI/UX following
   Nielsen's heuristics.
 - **Tags (#7)**: links carry normalized tags (`Record.tags`: trimmed, lowercased,
   deduped, capped) to organize them; the links list filters by tag
@@ -66,7 +66,7 @@ bottleneck being geography/RTT, not the server).
   [`docs/IMPORT.md`](IMPORT.md).
 - **UTM builder + templates**: collapsible UTM section in the create-link dialog, with a live
   destination preview and named templates saved locally (`localStorage`).
-- **#9 API tokens with scopes + quota**: named tokens (`links_read`, `links_write`, `blocklist`, `webhooks`, `analytics`, `full`) with an optional per-token rate limit, managed under `/admin/tokens` and the panel's **API tokens** page; the env `QUARK_ADMIN_TOKEN` keeps behaving as `full`, unchanged. Doc: `docs/API-TOKENS.md`.
+- **#9 API tokens with scopes + quota**: named tokens (`links_read`, `links_write`, `webhooks`, `analytics`, `full`) with an optional per-token rate limit, managed under `/admin/tokens` and the panel's **API tokens** page; the env `QUARK_ADMIN_TOKEN` keeps behaving as `full`, unchanged. Doc: `docs/API-TOKENS.md`.
 - **Redirect rules (#12)**: per-link geo/device rules (first match wins, `url` stays the default), panel editor in the create/edit dialogs. Doc: `docs/REDIRECT-RULES.md`.
 - **Conversion forwarding (#14)**: instance-level GA4/Meta CAPI pixels, forwarded async from the
   analytics worker (never the redirect hot path), fail-open. Panel: `/pixels`. Doc: `docs/CONVERSION-FORWARDING.md`.
@@ -78,7 +78,7 @@ bottleneck being geography/RTT, not the server).
   carry `app_ios` / `app_android` destinations, and a click from that platform (when the OS did not
   catch it) resolves to the app destination, ahead of geo/device rules and A/B variants in the
   precedence order. Guide: `docs/DEEP-LINKING.md`.
-- **Scale hardening**: cross-node cache and blocklist invalidation over a Valkey pub/sub channel
+- **Scale hardening**: cross-node cache invalidation over a Valkey pub/sub channel
   (`src/invalidate.rs`); atomic Postgres analytics counters (`click_counters`, `INSERT ... ON
   CONFLICT`) plus append-only `click_events`, replacing the advisory-lock blob read-modify-write;
   a durable Postgres webhook outbox with a leased relay (retry/DLQ/idempotency); per-click Meta/GA4

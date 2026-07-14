@@ -41,7 +41,7 @@ flowchart TB
 
 Not every subsystem scales the same way. A "multi-node" deployment that shares
 the store but not Valkey is still degraded: rate limits become N-times the
-configured value, and cache/blocklist coordination lags. Here is what each
+configured value, and cache coordination lags. Here is what each
 subsystem actually does per deployment shape.
 
 | Subsystem | Single-node (LMDB) | Multi-node (Postgres + Valkey + ClickHouse) |
@@ -49,7 +49,6 @@ subsystem actually does per deployment shape.
 | Redirect (hot path) | fine, one node | computed code + cache tier, any replica serves any link |
 | ID allocation | per-node counter + node_id prefix (needs a unique node_id) | shared `quark_id_seq`, coordinated across replicas |
 | Rate limit | in-memory, per node (correct on one node) | atomic global counter in Valkey |
-| Blocklist | per-node snapshot + TTL | shared snapshot + Valkey L2, near-instant via pub/sub |
 | Cache | per-node L1 (correct: store is not shared) | per-node L1 + shared L2, near-instant invalidation via pub/sub |
 | Analytics aggregation | per-node blob read-modify-write (correct on one node) | atomic Postgres counters (`INSERT ... ON CONFLICT`), or ClickHouse append-only + aggregate-on-read |
 | Click ingestion | bounded channel, `try_send` drops when full (at-most-once by design) | same on every backend |
@@ -61,7 +60,7 @@ analytics is correct and needs no external dependency. This is the pure-binary
 shape.
 
 **Multi-node:** requires Postgres (shared store) plus Valkey (shared rate-limit
-and cross-node cache/blocklist invalidation). ClickHouse is recommended for
+and cross-node cache invalidation). ClickHouse is recommended for
 analytics at high volume; the Postgres analytics path is also correct at scale
 because it uses atomic per-counter increments, not a per-link read-modify-write.
 
@@ -79,7 +78,7 @@ the same `QUARK_VALKEY_URL`:
   affinity is needed (the load balancer can be plain round-robin).
 - **Shared rate-limit and invalidation**: point every replica at the same
   Valkey. Without it, each replica keeps its own in-memory counter and the
-  effective rate limit becomes N-times the configured value, and cache/blocklist
+  effective rate limit becomes N-times the configured value, and cache
   changes propagate only on the per-node TTL.
 - **Fail fast if you meant to cluster**: set `QUARK_STRICT_CLUSTER=1` on every
   replica and quark refuses to start unless both `QUARK_DATABASE_URL` and
@@ -90,9 +89,8 @@ the same `QUARK_VALKEY_URL`:
 
 ## Cross-node consistency windows
 
-Two subsystems are eventually consistent between replicas, both bounded and both
-closed by the Valkey pub/sub invalidation channel (`quark:invalidate`, in
-`src/invalidate.rs`):
+The cache is eventually consistent between replicas, bounded and closed by the
+Valkey pub/sub invalidation channel (`quark:invalidate`, in `src/invalidate.rs`):
 
 - **Cache** (`patch`/`delete`): without pub/sub, another replica's L1 can serve
   a stale link until its per-node TTL expires (60s). Each admin mutation
@@ -100,12 +98,8 @@ closed by the Valkey pub/sub invalidation channel (`quark:invalidate`, in
   window drops from up to 60s to near-instant. The TTL stays as the backstop if
   a replica misses a message. The publish is bounded by a 100ms timeout and is
   fail-open, so a slow Valkey never blocks the admin write.
-- **Blocklist**: without pub/sub, a newly blocked entry propagates on the
-  snapshot TTL (`QUARK_BLOCKLIST_TTL`, default 60s). The same channel publishes
-  `blocklist` and every replica reloads its snapshot, making it near-instant with
-  the TTL as the backstop.
 
-The subscriber applies each message to the local L1/snapshot only and never
+The subscriber applies each message to the local L1 only and never
 re-publishes, so there is no cross-node loop.
 
 ## Analytics ingestion is at-most-once

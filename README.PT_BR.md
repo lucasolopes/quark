@@ -222,7 +222,7 @@ Toda variável abaixo é opcional, exceto `QUARK_KEY` em produção. Deixe uma v
 | `QUARK_KEY` | Segredo `u64` decimal, a chave da permutação. **Obrigatória em produção** (cada instância deveria ter a sua, fora do controle de versão). | chave de dev fallback (aviso bem visível no log; não use em produção) |
 | `QUARK_DATA` | Diretório de dados do LMDB. Só usada quando o store é LMDB. | `./data` (container: `/data`) |
 | `QUARK_ADDR` | Endereço de bind do HTTP. | `0.0.0.0:8080` |
-| `QUARK_ADMIN_TOKEN` | Habilita os endpoints admin protegidos por token: `GET /:code/stats` e `GET/POST/DELETE /admin/blocklist`. | não definida → esses endpoints desligados (404) |
+| `QUARK_ADMIN_TOKEN` | Habilita os endpoints admin protegidos por token, ex.: `GET /:code/stats`. | não definida → esses endpoints desligados (404) |
 | `QUARK_VALKEY_URL` | Habilita o cache L2 Valkey, ex.: `redis://host:6379`. | não definida → só L1 + store |
 | `QUARK_DATABASE_URL` | Usa Postgres pro store, ex.: `postgres://user:pass@host:5432/db`. | não definida → LMDB |
 | `QUARK_CLICKHOUSE_URL` | Usa ClickHouse pro analytics, ex.: `http://user:pass@host:8123/db`. | não definida → sink embutido do store |
@@ -231,7 +231,6 @@ Toda variável abaixo é opcional, exceto `QUARK_KEY` em produção. Deixe uma v
 | `QUARK_REAL_IP_HEADER` | Header de onde ler o IP do cliente. | `CF-Connecting-IP` |
 | `QUARK_BLOCK_PRIVATE` | Guarda contra destinos internos/loop; ligada por default, `0` desabilita. | ligada |
 | `QUARK_PUBLIC_HOST` | O próprio host desta instância, pro anti-loop (senão usa o header `Host`). | não definida → usa o header `Host` |
-| `QUARK_BLOCKLIST_TTL` | Segundos que o snapshot da blocklist fica em cache. | `60` |
 | `QUARK_CORS_ORIGINS` | Origens separadas por vírgula com permissão de chamar a API (pro painel web). | não definida → sem CORS (só mesma origem) |
 
 > Só habilite `QUARK_RATELIMIT_PER_MIN` atrás de um proxy que sobrescreve `QUARK_REAL_IP_HEADER` (ex.: Cloudflare com `CF-Connecting-IP`); exposto direto, um cliente pode forjar o header e contornar o limite.
@@ -241,7 +240,6 @@ Toda variável abaixo é opcional, exceto `QUARK_KEY` em produção. Deixe uma v
 - O log de acesso por requisição é **opt-in via `QUARK_ACCESS_LOG`** (desligado por default). Quando definido, cada requisição emite uma **linha de log JSON estruturada** no stdout (`{"method","path","status","latency_ms"}`), capturada como está pelo Coolify/Docker, prontinha pra `grep` ou enviar a um coletor de logs. Desligado por default pra que o caminho quente de redirect não pague nenhum custo síncrono de `println!`/lock de stdout em alto throughput.
 - Redirects carregam um header **`Cache-Control` consciente do TTL**, então um CDN/browser consegue cachear o 302 (e nunca além da expiração de um link). Veja [`docs/EDGE.PT_BR.md`](docs/EDGE.PT_BR.md) pra colocar a Cloudflare na frente.
 - Um link também pode expirar depois de um número máximo de visitas (`max_visits`), além de ou em vez de um prazo TTL; o redirect retorna `410 Gone` quando o limite é atingido.
-- A blocklist de domínios é gerenciada via `GET/POST/DELETE /admin/blocklist` (corpo JSON `{"domain": "..."}` pra POST/DELETE), protegida por `QUARK_ADMIN_TOKEN` (header `x-admin-token`; não definida → 404, token errado → 401).
 - **Importação**: `POST /admin/import` cria links em lote a partir de um CSV ou JSON exportado (Bitly, Kutt, YOURLS, ou genérico), mesmo token admin, relatório de sucesso parcial por linha. Veja [`docs/IMPORT.PT_BR.md`](docs/IMPORT.PT_BR.md).
 - Além do token de admin do env, **tokens de API** nomeados com permissões por escopo e um limite de requisições opcional por token podem ser gerenciados em `/admin/tokens` (só escopo superusuário); veja [`docs/API-TOKENS.PT_BR.md`](docs/API-TOKENS.PT_BR.md).
 
@@ -260,7 +258,7 @@ links `GET /admin/links` (filtrável por `?tag=`), apagar `DELETE /admin/links/:
 Um painel admin de operador único (SPA React) vive em `web/`. Ele é construído e
 deployado **separadamente** do binário da API (build estático → CDN/edge); o binário
 do quark continua API-only. Links suportam CRUD, busca, tags, copiar e QR code,
-além de stats por link e blocklist. Dev: `cd web && npm install && npm run dev` (Vite na
+além de stats por link. Dev: `cd web && npm install && npm run dev` (Vite na
 `:5173`), apontando `VITE_API_BASE_URL` pra sua API do quark e definindo
 `QUARK_CORS_ORIGINS=http://localhost:5173` na API. A autenticação é o mesmo
 `QUARK_ADMIN_TOKEN`, digitado na tela de login do painel. O diálogo de criar link

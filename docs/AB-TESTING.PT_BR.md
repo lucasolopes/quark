@@ -49,8 +49,8 @@ No painel, abra **Criar link** ou **Editar link** e expanda a seção
 
 1. Adicione uma linha para cada destino: uma URL e um peso (padrão 1).
 2. Toda URL de variante passa pela mesma validação da URL principal (precisa
-   ser `http://` ou `https://`, e é checada contra a blocklist e a proteção
-   de rede interna no servidor).
+   ser `http://` ou `https://`, e é checada contra a mesma proteção SSRF de
+   rede interna no servidor).
 3. Até 10 variantes por link.
 4. Salve. O link passa a mostrar um selo "A/B: N" na tabela de links.
 
