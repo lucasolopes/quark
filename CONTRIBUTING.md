@@ -1,3 +1,5 @@
+**English** · [Português](CONTRIBUTING.PT_BR.md)
+
 # Contributing to quark
 
 Thanks for your interest! quark is open source under the **GNU AGPLv3** (see

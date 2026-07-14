@@ -1,3 +1,5 @@
+**English** · [Português](CLA.PT_BR.md)
+
 # quark — Contributor License Agreement
 
 Thank you for contributing to quark. This Contributor License Agreement

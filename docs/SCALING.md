@@ -1,71 +1,76 @@
-# Escala horizontal do quark
+**English** · [Português](SCALING.PT_BR.md)
 
-O quark escala horizontalmente **compartilhando o storage** entre réplicas. Há
-três formatos de deploy, com limites diferentes — escolha pelo que você precisa.
+# Horizontal scaling in quark
 
-## Os três formatos
+quark scales horizontally by **sharing storage** across replicas. There are
+three deployment shapes, with different limits — pick the one that matches
+what you need.
+
+## The three shapes
 
 ```mermaid
 flowchart TB
-    subgraph F1["1. Binário puro (default)"]
-        A1[quark único] --> L1[(LMDB local)]
+    subgraph F1["1. Pure binary (default)"]
+        A1[single quark] --> L1[(local LMDB)]
     end
-    subgraph F2["2. Réplicas + Postgres compartilhado (multi-nó recomendado)"]
+    subgraph F2["2. Replicas + shared Postgres (recommended for multi-node)"]
         LB[Load Balancer] --> R1[quark 1]
         LB --> R2[quark 2]
         LB --> R3[quark N]
-        R1 --> PG[(Postgres compartilhado)]
+        R1 --> PG[(shared Postgres)]
         R2 --> PG
         R3 --> PG
     end
-    subgraph F3["3. Vários binários LMDB (não recomendado p/ multi-nó)"]
-        N1[quark nó 0] --> D1[(LMDB local 0)]
-        N2[quark nó 1] --> D2[(LMDB local 1)]
+    subgraph F3["3. Multiple LMDB binaries (not recommended for multi-node)"]
+        N1[quark node 0] --> D1[(local LMDB 0)]
+        N2[quark node 1] --> D2[(local LMDB 1)]
     end
 ```
 
-| Formato | Storage | Multi-nó | Observação |
+| Shape | Storage | Multi-node | Note |
 |---|---|---|---|
-| **1. Binário puro** | LMDB embutido | Não (1 nó) | Recurso mínimo; capacidade ~1,1 trilhão de links |
-| **2. Réplicas + Postgres** | Postgres compartilhado | **Sim** | Caminho recomendado; qualquer réplica serve qualquer link |
-| **3. Vários LMDB** | LMDB local por nó | Não p/ leitura | Cada nó só tem os dados que ele criou (ver limites abaixo) |
+| **1. Pure binary** | Embedded LMDB | No (1 node) | Minimal footprint; ~1.1 trillion links of capacity |
+| **2. Replicas + Postgres** | Shared Postgres | **Yes** | Recommended path; any replica serves any link |
+| **3. Multiple LMDB** | Local LMDB per node | Not for reads | Each node only has the data it created (see limits below) |
 
-## Como escalar de verdade (formato 2)
+## How to actually scale (shape 2)
 
-Suba N cópias do binário atrás de um load balancer, todas com a mesma
-`QUARK_KEY` e a mesma `QUARK_DATABASE_URL` apontando pro Postgres compartilhado:
+Bring up N copies of the binary behind a load balancer, all with the same
+`QUARK_KEY` and the same `QUARK_DATABASE_URL` pointing at the shared Postgres:
 
-- **IDs únicos**: a sequência `quark_id_seq` do Postgres é atômica e cluster-wide;
-  réplicas concorrentes nunca geram o mesmo id.
-- **Dados compartilhados**: todas leem/escrevem as mesmas tabelas; não há
-  afinidade de sessão (o load balancer pode ser round-robin simples).
-- **Cache opcional**: um Valkey compartilhado (`QUARK_VALKEY_URL`) como L2 corta
-  leituras repetidas no Postgres.
+- **Unique ids**: Postgres's `quark_id_seq` sequence is atomic and cluster-wide;
+  concurrent replicas never generate the same id.
+- **Shared data**: every replica reads/writes the same tables; there's no
+  session affinity needed (the load balancer can be plain round-robin).
+- **Optional cache**: a shared Valkey (`QUARK_VALKEY_URL`) as L2 cuts down
+  repeated reads against Postgres.
 
-## `QUARK_NODE_ID` — particionamento defensivo do LMDB
+## `QUARK_NODE_ID` — defensive LMDB partitioning
 
-O espaço de código do quark tem 40 bits. Quando `QUARK_NODE_ID` está **definido**
-(0–255), os 8 bits altos passam a identificar o nó e os 32 baixos são o contador
-local daquele nó:
+quark's code space is 40 bits. When `QUARK_NODE_ID` is **set** (0–255), the
+top 8 bits identify the node and the low 32 bits become that node's local
+counter:
 
-| Bits de nó | Bits locais | Máx. de nós | Links por nó |
+| Node bits | Local bits | Max nodes | Links per node |
 |---|---|---|---|
-| 8 | 32 | 256 | ~4,3 bilhões |
+| 8 | 32 | 256 | ~4.3 billion |
 
-- **Ausente (default)**: comportamento normal, contador usa os 40 bits inteiros
-  (~1,1 trilhão de links). É o modo single-node.
-- **Regra tudo-ou-nada**: ou **todos** os nós rodam sem `QUARK_NODE_ID` (= 1 nó),
-  ou **todos** rodam com um `QUARK_NODE_ID` **distinto**. Nunca misture um nó sem
-  node-id (faixa cheia) com nós particionados — os espaços se sobrepõem.
-- `QUARK_NODE_ID` inválido (fora de 0–255) derruba o processo no startup.
+- **Unset (default)**: normal behavior, the counter uses the full 40 bits
+  (~1.1 trillion links). This is single-node mode.
+- **All-or-nothing rule**: either **every** node runs without `QUARK_NODE_ID`
+  (= 1 node), or **every** node runs with a **distinct** `QUARK_NODE_ID`.
+  Never mix an un-partitioned node (full range) with partitioned ones — the
+  spaces overlap.
+- An invalid `QUARK_NODE_ID` (outside 0–255) crashes the process at startup.
 
-## Limite honesto do formato 3
+## The honest limit of shape 3
 
-`QUARK_NODE_ID` garante que dois nós LMDB **não gerem o mesmo código** — mas
-**não** faz um nó servir os links do outro. Cada LMDB é local: um redirect que
-cai no nó errado dá 404, porque aquele nó não tem o dado. Ou seja, o node-id é um
-**guard-rail contra colisão**, não um modo multi-nó de verdade.
+`QUARK_NODE_ID` guarantees that two LMDB nodes **won't generate the same
+code** — but it does **not** make one node serve another node's links. Each
+LMDB is local: a redirect that lands on the wrong node returns 404, because
+that node doesn't have the data. In other words, node-id is a
+**collision guard-rail**, not a real multi-node mode.
 
-**Por design, um binário puro (LMDB, sem banco) é single-node** — isso é uma
-restrição consciente do sistema, não uma limitação a ser removida. **Para
-multi-nó, use o formato 2 (Postgres compartilhado).**
+**By design, a pure binary (LMDB, no database) is single-node** — this is a
+deliberate constraint of the system, not a limitation to be removed. **For
+multi-node, use shape 2 (shared Postgres).**

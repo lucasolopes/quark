@@ -1,63 +1,69 @@
-# Edge / CDN e caching de redirect
+**English** · [Português](EDGE.PT_BR.md)
 
-## Por que edge ajudaria
+# Edge / CDN and redirect caching
 
-O quark resolve um redirect em ~2 ms — o gargalo medido nunca foi o servidor,
-é a **geografia**: cada `GET /:code` faz um ida-e-volta (RTT) até a instância
-única, que fica em uma região só. Um usuário do outro lado do mundo paga esse
-RTT completo em toda clicada, mesmo que o link nunca mude.
+## Why edge would help
 
-## O que o quark manda (e isso já funciona)
+quark resolves a redirect in ~2 ms — the measured bottleneck has never been
+the server, it's **geography**: every `GET /:code` makes a round trip (RTT) to
+the single instance, which lives in one region only. A user on the other side
+of the world pays that full RTT on every click, even though the link never
+changes.
 
-Toda resposta de redirect carrega um `Cache-Control` calculado a partir do TTL
-do link (`src/api.rs`, `cache_control_for`):
+## What quark already sends (and it already works)
 
-| Situação | Status | `Cache-Control` |
+Every redirect response carries a `Cache-Control` header computed from the
+link's TTL (`src/api.rs`, `cache_control_for`):
+
+| Situation | Status | `Cache-Control` |
 |---|---|---|
-| Link sem TTL | 302 | `public, max-age=86400` (1 dia) |
-| Link com TTL, ainda vivo | 302 | `public, max-age=<segundos até expirar>` (nunca > 86400) |
-| Código/alias inexistente | 404 | `no-store` |
-| Link expirado | 410 | `no-store` |
+| Link without TTL | 302 | `public, max-age=86400` (1 day) |
+| Link with TTL, still alive | 302 | `public, max-age=<seconds until expiry>` (never > 86400) |
+| Nonexistent code/alias | 404 | `no-store` |
+| Expired link | 410 | `no-store` |
 
-**Os browsers respeitam esse header.** Quando o mesmo usuário clica no mesmo
-link de novo, o navegador dele serve o redirect **do cache local, sem tocar a
-rede**. Esse ganho é real e já está ativo — é por-usuário, não por-região.
+**Browsers respect this header.** When the same user clicks the same link
+again, their browser serves the redirect **from the local cache, without
+touching the network.** This gain is real and already active — it's
+per-user, not per-region.
 
-## Realidade medida: a Cloudflare NÃO cacheia o 302
+## Measured reality: Cloudflare does NOT cache the 302
 
-> Testado neste deploy (Cloudflare, plano free, atrás de Cloudflare Tunnel):
-> mesmo com uma **Cache Rule** marcando o path como *Eligible for cache* **e**
-> um **Edge TTL fixo forçado**, o `Cf-Cache-Status` permaneceu **`DYNAMIC`** em
-> todas as requisições. A Cloudflare trata **redirects 3xx como dinâmicos** e
-> não os coloca no cache de borda.
+> Tested on this deploy (Cloudflare, free plan, behind a Cloudflare Tunnel):
+> even with a **Cache Rule** marking the path as *Eligible for cache* **and**
+> a forced fixed **Edge TTL**, `Cf-Cache-Status` stayed **`DYNAMIC`** on every
+> request. Cloudflare treats **3xx redirects as dynamic** and never places
+> them in the edge cache.
 
-Ou seja: **não adianta criar Cache Rule pra cachear o 302** — não é
-configuração errada, é comportamento da plataforma. Não gaste tempo nisso.
+In other words: **creating a Cache Rule to cache the 302 doesn't help** —
+it's not a misconfiguration, it's platform behavior. Don't spend time on it.
 
-## Com Cloudflare Tunnel (nativo do Coolify)
+## With Cloudflare Tunnel (Coolify's native option)
 
-Se você usa o `cloudflared` do Coolify (recomendado), o tráfego **já passa
-pela borda da Cloudflare** por construção (confirmável pelo header `cf-ray` na
-resposta), e **DNS + TLS ficam por conta do túnel** — nada de registro A
-proxied, modo SSL ou certificado de origem pra configurar. Mas, pelo item
-acima, a borda continua **não** cacheando o 302.
+If you use Coolify's `cloudflared` (recommended), traffic **already passes
+through Cloudflare's edge** by construction (confirmable via the `cf-ray`
+header in the response), and **DNS + TLS are handled by the tunnel** —
+no proxied A record, SSL mode, or origin certificate to configure. But, per
+the item above, the edge still does **not** cache the 302.
 
-## Se você REALMENTE precisar de redirect cacheado na borda
+## If you REALLY need a cached redirect at the edge
 
-O único caminho confiável na Cloudflare é um **Worker**: um script na borda que
-ou (a) faz o próprio redirect lendo o par código→URL de um **Workers KV**, ou
-(b) cacheia o 302 da origem via **Cache API**. Isso é uma mudança de fase 2 de
-verdade — exige levar os dados dos links pra onde o Worker alcança (dual-write
-pro KV, ou o Worker consultando a origem e cacheando).
+The only reliable path on Cloudflare is a **Worker**: an edge script that
+either (a) performs the redirect itself, reading the code→URL pair from
+**Workers KV**, or (b) caches the origin's 302 via the **Cache API**. That's
+a genuine phase-2 change — it requires getting link data to wherever the
+Worker can reach it (dual-write to KV, or the Worker querying the origin and
+caching the result).
 
-**Vale a pena?** Só se você tiver tráfego relevante **longe** da região da VPS.
-Para um público próximo da origem (ex.: VPS na Europa + usuários europeus), o
-RTT já é baixo e o Worker não compensa. Decisão deliberada atual: **não fazer**
-— o `Cache-Control` já está pronto pra quando/se valer a pena.
+**Is it worth it?** Only if you have meaningful traffic **far** from the
+VPS's region. For an audience close to the origin (e.g. a VPS in Europe with
+European users), RTT is already low and the Worker doesn't pay off. Current
+deliberate decision: **don't build it** — `Cache-Control` is already in
+place for whenever/if it becomes worth it.
 
-## Resumo
+## Summary
 
-- `Cache-Control` correto no 302 → **cache de browser funciona** (per-usuário). ✓
-- Cache de **borda da Cloudflare para o 302** → **não funciona** (3xx é dinâmico). ✗
-- Edge de verdade p/ redirect dinâmico → **Worker** (fase 2, ROI baixo se o
-  público é perto da origem).
+- Correct `Cache-Control` on the 302 → **browser cache works** (per-user). ✓
+- **Cloudflare edge cache for the 302** → **doesn't work** (3xx is dynamic). ✗
+- Real edge for a dynamic redirect → **Worker** (phase 2, low ROI if the
+  audience is close to the origin).

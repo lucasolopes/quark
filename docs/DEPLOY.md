@@ -1,41 +1,43 @@
-# Deploy do quark no Coolify
+**English** · [Português](DEPLOY.PT_BR.md)
 
-O quark é um binário único. Neste repositório há um `Dockerfile` (multi-stage) que
-o Coolify detecta automaticamente — não precisa de Nixpacks nem buildpack.
+# Deploying quark on Coolify
 
-## Passo a passo (Coolify)
+quark is a single binary. This repository ships a multi-stage `Dockerfile` that
+Coolify auto-detects — no Nixpacks, no buildpack needed.
 
-1. **Suba o repositório no GitHub** (veja os comandos no README / no fim deste doc).
-2. No Coolify: **New Resource → Application → do seu repositório GitHub**.
-3. **Build Pack: Dockerfile** (o Coolify detecta o `Dockerfile` na raiz).
-4. **Porta exposta: `8080`** (o container escuta em `0.0.0.0:8080`).
-5. **Variáveis de ambiente:**
-   | var | valor | obrigatório |
+## Step by step (Coolify)
+
+1. **Push the repository to GitHub** (see the commands in the README / at the end of this doc).
+2. In Coolify: **New Resource → Application → from your GitHub repository**.
+3. **Build Pack: Dockerfile** (Coolify detects the `Dockerfile` at the repo root).
+4. **Exposed port: `8080`** (the container listens on `0.0.0.0:8080`).
+5. **Environment variables:**
+   | var | value | required |
    |---|---|---|
-   | `QUARK_KEY` | um `u64` aleatório — gere com `openssl rand -hex 8` e converta pra decimal, ou use um número grande. **Configure como _secret_.** | **sim** (sem ela o quark usa uma chave de dev e avisa no log) |
-   | `QUARK_ADDR` | `0.0.0.0:8080` | já é o default da imagem |
-   | `QUARK_DATA` | `/data` | já é o default da imagem |
-6. **Armazenamento persistente:** adicione um **Persistent Storage / Volume** montado em **`/data`**. É onde o LMDB guarda os links — sem isso, os links somem a cada redeploy.
-7. **Health check:** caminho **`/health`** (o quark responde `200 ok`). Configure o health check HTTP do Coolify pra esse path na porta 8080.
-8. **Deploy.** O Coolify builda a imagem e sobe. O domínio que ele te der já serve os redirects.
+   | `QUARK_KEY` | a random `u64` — generate one with `openssl rand -hex 8` and convert to decimal, or use any large number. **Set it as a _secret_.** | **yes** (without it quark falls back to a dev key and logs a warning) |
+   | `QUARK_ADDR` | `0.0.0.0:8080` | already the image default |
+   | `QUARK_DATA` | `/data` | already the image default |
+6. **Persistent storage:** add a **Persistent Storage / Volume** mounted at **`/data`**. This is where LMDB keeps the links — without it, links disappear on every redeploy.
+7. **Health check:** path **`/health`** (quark responds `200 ok`). Point Coolify's HTTP health check at that path on port 8080.
+8. **Deploy.** Coolify builds the image and brings it up. The domain it gives you already serves the redirects.
 
-## Testando após o deploy
+## Testing after deploy
 
 ```bash
-# criar um link (troque <URL> pelo domínio que o Coolify te deu)
+# create a link (replace <URL> with the domain Coolify gave you)
 curl -s -XPOST https://<URL>/ -H 'content-type: application/json' \
   -d '{"url":"https://example.com"}'
 # -> {"code":"XXXXXXX","url":"https://example.com"}
 
-# seguir o redirect
-curl -si https://<URL>/XXXXXXX   # deve responder 302 Location: https://example.com
+# follow the redirect
+curl -si https://<URL>/XXXXXXX   # should respond 302 Location: https://example.com
 
 # health
 curl -s https://<URL>/health     # -> ok
 ```
 
-## Notas de operação
+## Operating notes
 
-- **Chave por instância:** troque `QUARK_KEY` e todo o espaço de códigos muda. Mantenha-a estável em produção (trocar invalida os códigos já emitidos) e fora do controle de versão.
-- **Backup:** basta copiar o volume `/data` (é o banco LMDB inteiro).
-- **Escala:** o contador de IDs é single-node (uma instância). Rodar múltiplas réplicas exigiria particionar o espaço de IDs — fica pra fase 2.
+- **One key per instance:** changing `QUARK_KEY` remaps the entire code space. Keep it stable in production (rotating it invalidates every code already issued) and out of version control.
+- **Backup:** just copy the `/data` volume (it's the whole LMDB database).
+- **Scale:** the id counter is single-node (one instance). Running multiple replicas would require partitioning the id space — that's phase 2.

@@ -1,3 +1,5 @@
+**English** · [Português](README.PT_BR.md)
+
 # quark
 
 [![CI](https://github.com/lucasolopes/quark/actions/workflows/ci.yml/badge.svg)](https://github.com/lucasolopes/quark/actions/workflows/ci.yml)
@@ -27,12 +29,12 @@ Since the code is the permutation of the id, the store never has to index by str
 
 ```mermaid
 flowchart LR
-    C[Cliente] -->|POST /| API[api axum]
+    C[Client] -->|POST /| API[api axum]
     C -->|GET /:code| API
     API -->|encode/decode| P[permute + codec]
     API --> CA[cache moka]
     CA -->|miss| ST[(store LMDB)]
-    P -.sem I/O.-> API
+    P -.no I/O.-> API
 ```
 
 `permute` (the Feistel/ARX bijection) and `codec` (integer ↔ base62) are pure math — no I/O, no locks, off to the side of the request path. The hot path is: decode the code to an id, check the in-memory cache, fall back to a single mmap read on miss.
@@ -41,7 +43,7 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-    participant Cli as Cliente
+    participant Cli as Client
     participant Api as api
     participant Ca as cache
     participant St as store
@@ -55,11 +57,11 @@ sequenceDiagram
         St-->>Ca: Record | None
         Ca-->>Api: Record | None
     end
-    alt achado e não expirado
+    alt found and not expired
         Api-->>Cli: 302 Location: url
-    else expirado
+    else expired
         Api-->>Cli: 410 Gone
-    else não achado
+    else not found
         Api-->>Cli: 404
     end
 ```
@@ -158,7 +160,7 @@ The framing: quark **scales down to one binary with zero external dependencies**
 
 ```mermaid
 flowchart LR
-    Cli[Cliente] -->|GET /:code| Api[api axum]
+    Cli[Client] -->|GET /:code| Api[api axum]
     Api --> L1[L1 moka in-process]
     L1 -->|miss| L2{L2 Valkey opt-in}
     L2 -->|hit| Api
@@ -260,7 +262,7 @@ binary stays API-only. Dev: `cd web && npm install && npm run dev` (Vite on
 - What's next: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Full system design: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Deeper walkthrough of every component, data model and the Feistel round internals: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- Escala horizontal (réplicas + Postgres) e o `QUARK_NODE_ID`: [`docs/SCALING.md`](docs/SCALING.md)
+- Horizontal scaling (replicas + Postgres) and `QUARK_NODE_ID`: [`docs/SCALING.md`](docs/SCALING.md)
 
 ## Contributing
 

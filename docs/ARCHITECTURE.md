@@ -1,3 +1,5 @@
+**English** · [Português](ARCHITECTURE.PT_BR.md)
+
 # Architecture
 
 This document explains how quark works to someone who has never seen the code. It assumes no prior context beyond "it's a URL shortener." For the design rationale and decision log, see [`docs/specs/2026-07-12-quark-design.md`](specs/2026-07-12-quark-design.md); for the pitch and benchmark numbers, see the [README](../README.md).
@@ -8,12 +10,12 @@ quark is a single Rust binary made of a handful of small, single-purpose modules
 
 ```mermaid
 flowchart LR
-    C[Cliente] -->|POST /| API[api axum]
+    C[Client] -->|POST /| API[api axum]
     C -->|GET /:code| API
     API -->|encode / decode| P[permute + codec]
     API --> CA[cache moka]
     CA -->|miss| ST[(store LMDB/heed)]
-    P -.matemática pura, sem I/O.-> API
+    P -.pure math, no I/O.-> API
 ```
 
 | Module | Responsibility | Depends on |
@@ -33,16 +35,16 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-    participant Cli as Cliente
+    participant Cli as Client
     participant Api as api
     participant St as store
     Cli->>Api: POST / {url, alias?, ttl?}
-    Api->>Api: valida url
-    Api->>St: next_id() (id atômico persistido)
+    Api->>Api: validate url
+    Api->>St: next_id() (persisted atomic id)
     Api->>St: put_link(id, {url, expiry})
     Api->>Api: code = base62(encode(id, key))
     Api-->>Cli: {code, url}
-    Note over Api,St: sem alias = sem checagem de colisão (bijeção garante)
+    Note over Api,St: no alias = no collision check (bijection guarantees it)
 ```
 
 Walking through it: the API validates the URL is `http(s)://`, then asks the store for the next id — a counter persisted in LMDB so it survives restarts. It writes the record keyed by that raw integer id, then computes the public code by running the id through `permute::encode` and base62-encoding the result. Note what's *missing*: there is no "does this code already exist?" check. Because `encode` is a bijection, two different ids can never produce the same code — collision-checking a whole class of bugs out of existence at the type level rather than the runtime level.
@@ -59,7 +61,7 @@ Because `redirect` resolves a numeric base62 code first (see below), a custom al
 
 ```mermaid
 sequenceDiagram
-    participant Cli as Cliente
+    participant Cli as Client
     participant Api as api
     participant Ca as cache
     participant St as store
@@ -73,11 +75,11 @@ sequenceDiagram
         St-->>Ca: Record | None
         Ca-->>Api: Record | None
     end
-    alt achado e não expirado
+    alt found and not expired
         Api-->>Cli: 302 Location: url
-    else expirado
+    else expired
         Api-->>Cli: 410 Gone
-    else não achado
+    else not found
         Api-->>Cli: 404
     end
 ```
@@ -90,7 +92,7 @@ The core trick: quark needs a function `f: [0, 2^N) -> [0, 2^N)` that is a *bije
 
 ```mermaid
 flowchart TB
-    In["input: L e R"] --> Split[split into two halves]
+    In["input: L and R"] --> Split[split into two halves]
     Split --> L0[L]
     Split --> R0[R]
     R0 --> F["round_fn(R, key, round) — ARX: add + rotate + xor"]
@@ -98,7 +100,7 @@ flowchart TB
     F --> XOR
     XOR --> NewR["new R = L xor F(R)"]
     R0 --> NewL["new L = R"]
-    NewL --> Out["output: novo L e novo R"]
+    NewL --> Out["output: new L and new R"]
     NewR --> Out
     Out -->|repeat ROUNDS times| Split
 ```
