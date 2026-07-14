@@ -3,6 +3,7 @@ import { Blocklist } from "@/routes/Blocklist";
 import { LinkStats } from "@/routes/LinkStats";
 import { Links } from "@/routes/Links";
 import { Login } from "@/routes/Login";
+import { Tokens } from "@/routes/Tokens";
 import { RequireAuth } from "./RequireAuth";
 import { Shell } from "./Shell";
 
@@ -20,6 +21,7 @@ export const router = createBrowserRouter([
       { path: "links", element: <Links /> },
       { path: "links/:code", element: <LinkStats /> },
       { path: "blocklist", element: <Blocklist /> },
+      { path: "tokens", element: <Tokens /> },
     ],
   },
   { path: "*", element: <Navigate to="/links" replace /> },

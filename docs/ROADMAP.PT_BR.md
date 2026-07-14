@@ -44,6 +44,7 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 - **Licença + contribuições**: núcleo **AGPL-3.0-only**; `CLA.md` (license-grant) +
   `CONTRIBUTING.md` + bot do CLA (GitHub Action). Multi-tenancy/cloud fica proprietária, à parte.
 - **`docker-compose.yml`**: stack full (quark + Postgres + Valkey + ClickHouse) pra dev/self-host.
+- **#9 Tokens de API com escopos + quota**: tokens nomeados (`links_read`, `links_write`, `blocklist`, `webhooks`, `analytics`, `full`) com limite de requisições opcional por token, gerenciados em `/admin/tokens` e na página **Tokens de API** do painel; o `QUARK_ADMIN_TOKEN` do env continua se comportando como `full`, sem mudanças. Doc: `docs/API-TOKENS.PT_BR.md`.
 
 ## Próximo
 

@@ -22,3 +22,17 @@ export interface Aggregates {
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
 export interface BlocklistResponse { domains: string[]; }
 export interface PatchLinkRequest { url?: string; ttl?: number | null; }
+
+export type Scope = "links_read" | "links_write" | "blocklist" | "webhooks" | "analytics" | "full";
+export const ALL_SCOPES: Scope[] = ["links_read", "links_write", "blocklist", "webhooks", "analytics", "full"];
+
+export interface ApiToken {
+  id: number;
+  name: string;
+  scopes: Scope[];
+  rate_limit_per_min: number | null;
+  created: number;
+}
+export interface ListTokensResponse { tokens: ApiToken[]; }
+export interface CreateTokenRequest { name: string; scopes: Scope[]; rate_limit_per_min?: number; }
+export interface CreateTokenResponse { id: number; token: string; }

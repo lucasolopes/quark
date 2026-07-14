@@ -45,6 +45,7 @@ bottleneck being geography/RTT, not the server).
 - **License + contributions**: **AGPL-3.0-only** core; `CLA.md` (license grant) +
   `CONTRIBUTING.md` + a CLA bot (GitHub Action). Multi-tenancy/cloud stays proprietary, separate.
 - **`docker-compose.yml`**: full stack (quark + Postgres + Valkey + ClickHouse) for dev/self-host.
+- **#9 API tokens with scopes + quota**: named tokens (`links_read`, `links_write`, `blocklist`, `webhooks`, `analytics`, `full`) with an optional per-token rate limit, managed under `/admin/tokens` and the panel's **API tokens** page; the env `QUARK_ADMIN_TOKEN` keeps behaving as `full`, unchanged. Doc: `docs/API-TOKENS.md`.
 
 ## Next
 

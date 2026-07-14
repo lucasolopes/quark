@@ -2,6 +2,7 @@ import { getToken } from "./auth";
 import type {
   ListLinksResponse, CreateLinkRequest, CreateLinkResponse,
   Stats, BlocklistResponse, PatchLinkRequest,
+  ListTokensResponse, CreateTokenRequest, CreateTokenResponse,
 } from "./types";
 
 /**
@@ -72,6 +73,16 @@ export const api = {
   },
   async removeBlocked(domain: string): Promise<void> {
     const res = await req("/admin/blocklist", { method: "DELETE", body: JSON.stringify({ domain }) });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  async listTokens(): Promise<ListTokensResponse> {
+    return jsonOrThrow(await req("/admin/tokens"));
+  },
+  async createToken(body: CreateTokenRequest): Promise<CreateTokenResponse> {
+    return jsonOrThrow(await req("/admin/tokens", { method: "POST", body: JSON.stringify(body) }));
+  },
+  async deleteToken(id: number): Promise<void> {
+    const res = await req(`/admin/tokens/${id}`, { method: "DELETE" });
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
 };

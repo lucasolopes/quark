@@ -235,6 +235,7 @@ Toda variável abaixo é opcional, exceto `QUARK_KEY` em produção. Deixe uma v
 - O log de acesso por requisição é **opt-in via `QUARK_ACCESS_LOG`** (desligado por default). Quando definido, cada requisição emite uma **linha de log JSON estruturada** no stdout (`{"method","path","status","latency_ms"}`) — capturada como está pelo Coolify/Docker, prontinha pra `grep` ou enviar a um coletor de logs. Desligado por default pra que o caminho quente de redirect não pague nenhum custo síncrono de `println!`/lock de stdout em alto throughput.
 - Redirects carregam um header **`Cache-Control` consciente do TTL**, então um CDN/browser consegue cachear o 302 (e nunca além da expiração de um link). Veja [`docs/EDGE.PT_BR.md`](docs/EDGE.PT_BR.md) pra colocar a Cloudflare na frente.
 - A blocklist de domínios é gerenciada via `GET/POST/DELETE /admin/blocklist` (corpo JSON `{"domain": "..."}` pra POST/DELETE), protegida por `QUARK_ADMIN_TOKEN` (header `x-admin-token`; não definida → 404, token errado → 401).
+- Além do token de admin do env, **tokens de API** nomeados com permissões por escopo e um limite de requisições opcional por token podem ser gerenciados em `/admin/tokens` (só escopo superusuário); veja [`docs/API-TOKENS.PT_BR.md`](docs/API-TOKENS.PT_BR.md).
 
 ### Stack de dev local
 
