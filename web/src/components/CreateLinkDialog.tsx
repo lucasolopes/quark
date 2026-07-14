@@ -256,13 +256,13 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent>
-        <form onSubmit={handleSubmit}>
-          <DialogHeader>
+        <form onSubmit={handleSubmit} className="flex max-h-[85vh] flex-col">
+          <DialogHeader className="shrink-0">
             <DialogTitle>{t("dialogs.create.title")}</DialogTitle>
             <DialogDescription>{t("dialogs.create.description")}</DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-col gap-3 py-3">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto py-3">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="create-link-url" className="text-sm font-medium">
                 {t("dialogs.create.urlLabel")}
@@ -648,7 +648,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
             )}
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="shrink-0 pt-1">
             <Button type="button" variant="outline" onClick={() => handleOpenChange(false)}>
               {t("common.cancel")}
             </Button>
