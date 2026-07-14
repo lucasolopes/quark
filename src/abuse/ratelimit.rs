@@ -46,36 +46,50 @@ impl RateLimiter {
 
     /// `true` = allowed. `false` = exceeded the limit in this window.
     pub async fn check(&self, ip: &str, now_secs: u64) -> bool {
+        let per_min = match &self.0 {
+            Mode::Disabled => return true,
+            Mode::Memory { per_min, .. } => *per_min,
+            Mode::Valkey { per_min, .. } => *per_min,
+        };
+        self.check_with_limit(ip, now_secs, per_min).await
+    }
+
+    /// Same window/key mechanics as `check`, but with a limit supplied by the
+    /// caller instead of the limiter's own configured `per_min`. Used for
+    /// per-API-token quotas, where each token can carry a distinct
+    /// `rate_limit_per_min` while sharing the same underlying limiter state.
+    pub async fn check_with_limit(&self, key: &str, now_secs: u64, limit: u32) -> bool {
         let window = now_secs / WINDOW_SECS;
         match &self.0 {
             Mode::Disabled => true,
-            Mode::Memory { per_min, state } => {
+            Mode::Memory { state, .. } => {
                 let mut st = state.lock().unwrap();
                 if st.swept_window != window {
                     st.map.retain(|_, (w, _)| *w == window);
                     st.swept_window = window;
                 }
-                let entry = st.map.entry(ip.to_string()).or_insert((window, 0));
+                let entry = st.map.entry(key.to_string()).or_insert((window, 0));
                 if entry.0 != window {
                     *entry = (window, 0);
                 }
                 entry.1 += 1;
-                entry.1 <= *per_min
+                entry.1 <= limit
             }
-            Mode::Valkey { per_min, conn } => {
-                let key = format!("quark:rl:{ip}:{window}");
+            Mode::Valkey { conn, .. } => {
+                let rl_key = format!("quark:rl:{key}:{window}");
                 let mut c = conn.clone();
-                let count: Result<i64, _> = redis::cmd("INCR").arg(&key).query_async(&mut c).await;
+                let count: Result<i64, _> =
+                    redis::cmd("INCR").arg(&rl_key).query_async(&mut c).await;
                 match count {
                     Ok(n) => {
                         if n == 1 {
                             let _: Result<(), _> = redis::cmd("EXPIRE")
-                                .arg(&key)
+                                .arg(&rl_key)
                                 .arg(WINDOW_SECS as i64 * 2)
                                 .query_async(&mut c)
                                 .await;
                         }
-                        n as u32 <= *per_min
+                        n as u32 <= limit
                     }
                     Err(_) => true,
                 }
@@ -126,6 +140,24 @@ mod tests {
         let rl = RateLimiter::memory(1);
         assert!(rl.check("3.3.3.3", 600).await);
         assert!(rl.check("4.4.4.4", 600).await);
+    }
+
+    #[tokio::test]
+    async fn check_with_limit_uses_the_supplied_limit_not_the_constructor_one() {
+        let rl = RateLimiter::memory(1000);
+        let now = 600;
+        assert!(rl.check_with_limit("tok:1", now, 2).await);
+        assert!(rl.check_with_limit("tok:1", now, 2).await);
+        assert!(!rl.check_with_limit("tok:1", now, 2).await);
+    }
+
+    #[tokio::test]
+    async fn check_with_limit_keys_are_independent() {
+        let rl = RateLimiter::memory(1000);
+        let now = 600;
+        assert!(rl.check_with_limit("tok:1", now, 1).await);
+        assert!(!rl.check_with_limit("tok:1", now, 1).await);
+        assert!(rl.check_with_limit("tok:2", now, 1).await);
     }
 
     #[tokio::test]
