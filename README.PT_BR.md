@@ -257,7 +257,8 @@ do quark continua API-only. Links suportam CRUD, busca, tags, copiar e QR code,
 além de stats por link e blocklist. Dev: `cd web && npm install && npm run dev` (Vite na
 `:5173`), apontando `VITE_API_BASE_URL` pra sua API do quark e definindo
 `QUARK_CORS_ORIGINS=http://localhost:5173` na API. A autenticação é o mesmo
-`QUARK_ADMIN_TOKEN`, digitado na tela de login do painel.
+`QUARK_ADMIN_TOKEN`, digitado na tela de login do painel. O diálogo de criar link
+inclui um builder de UTM opcional com templates salvos localmente (`localStorage`).
 
 ## Mais
 

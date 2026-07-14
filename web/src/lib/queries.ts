@@ -179,6 +179,9 @@ export function useDeleteWebhook() {
 export function useTestWebhook() {
   return useMutation({
     mutationFn: (id: number) => api.testWebhook(id),
+  });
+}
+
 /** Bulk-imports links from a raw CSV/JSON body; on success invalidates `useLinks`. */
 export function useImport() {
   const client = useQueryClient();

@@ -5,7 +5,11 @@ import { CreateLinkDialog } from "./CreateLinkDialog";
 import { withProviders } from "@/test-utils";
 
 describe("CreateLinkDialog", () => {
-  beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
+  beforeEach(() => {
+    localStorage.setItem("quark_admin_token", "s");
+    localStorage.removeItem("quark.utmTemplates");
+    vi.restoreAllMocks();
+  });
 
   it("rejects a non-http(s) URL without calling the API", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
@@ -39,5 +43,50 @@ describe("CreateLinkDialog", () => {
     const [, init] = fetchMock.mock.calls[0];
     const body = JSON.parse(String(init!.body)) as { tags?: string[] };
     expect(body.tags).toEqual(["promo", "summer", "2026"]);
+  });
+
+  it("filling in UTM fields sends the utm-tagged url on submit", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
+    );
+    render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    await userEvent.type(screen.getByLabelText(/^url$/i), "https://ok.com");
+    await userEvent.click(screen.getByRole("button", { name: /utm parameters/i }));
+    await userEvent.type(screen.getByLabelText(/source/i), "newsletter");
+    await userEvent.type(screen.getByLabelText(/medium/i), "email");
+    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string) as { url: string };
+    expect(body.url).toBe("https://ok.com/?utm_source=newsletter&utm_medium=email");
+  });
+
+  it("without any utm field filled, submits the plain url unchanged", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
+    );
+    render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    await userEvent.type(screen.getByLabelText(/^url$/i), "https://ok.com");
+    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string) as { url: string };
+    expect(body.url).toBe("https://ok.com");
+  });
+
+  it("applying a saved template fills the utm fields", async () => {
+    localStorage.setItem(
+      "quark.utmTemplates",
+      JSON.stringify({ "Spring launch": { source: "twitter", medium: "social" } }),
+    );
+    render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    await userEvent.click(screen.getByRole("button", { name: /utm parameters/i }));
+    await userEvent.click(screen.getByRole("button", { name: /templates/i }));
+    await userEvent.click(await screen.findByText("Spring launch"));
+
+    expect(screen.getByLabelText(/source/i)).toHaveValue("twitter");
+    expect(screen.getByLabelText(/medium/i)).toHaveValue("social");
   });
 });

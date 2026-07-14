@@ -4,8 +4,7 @@ import type {
   Stats, BlocklistResponse, PatchLinkRequest,
   ListWebhooksResponse, CreateWebhookRequest, CreateWebhookResponse,
   PatchWebhookRequest, TestWebhookResponse,
-  Stats, BlocklistResponse, PatchLinkRequest, ImportSummary,
-  Stats, BlocklistResponse, PatchLinkRequest, TagsResponse,
+  ImportSummary, TagsResponse,
 } from "./types";
 
 /**
@@ -98,6 +97,7 @@ export const api = {
   },
   async testWebhook(id: number): Promise<TestWebhookResponse> {
     return jsonOrThrow(await req(`/admin/webhooks/${id}/test`, { method: "POST" }));
+  },
   /**
    * Bulk-imports links from a raw CSV or JSON body. `contentType` picks the
    * parser server-side (`text/csv` or `application/json`) and is sent as-is,

@@ -60,6 +60,8 @@ bottleneck being geography/RTT, not the server).
 - **Importer (#4)**: `POST /admin/import` bulk-creates links from a CSV or JSON export (Bitly, Kutt,
   YOURLS, generic), partial-success per-row report, plus a web panel "Import" tab. Doc:
   [`docs/IMPORT.md`](IMPORT.md).
+- **UTM builder + templates**: collapsible UTM section in the create-link dialog, with a live
+  destination preview and named templates saved locally (`localStorage`).
 
 ## Next
 

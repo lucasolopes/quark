@@ -60,6 +60,8 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 - **Importador (#4)**: `POST /admin/import` cria links em lote a partir de um CSV ou JSON exportado
   (Bitly, Kutt, YOURLS, genérico), relatório de sucesso parcial por linha, mais uma aba "Import" no
   painel web. Doc: [`docs/IMPORT.PT_BR.md`](IMPORT.PT_BR.md).
+- **Builder de UTM + templates**: seção colapsável de UTM no diálogo de criar link, com
+  prévia ao vivo do destino e templates nomeados salvos localmente (`localStorage`).
 
 ## Próximo
 
