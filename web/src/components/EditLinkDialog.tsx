@@ -15,11 +15,14 @@ import { ApiError } from "@/lib/api";
 import { isHttpUrl } from "@/lib/codeguard";
 import { isUnauthorized } from "@/lib/mutation-error";
 import { usePatchLink } from "@/lib/queries";
+import { draftsFromRules, parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import type { Link } from "@/lib/types";
+import { RulesEditor } from "@/components/RulesEditor";
 
 interface FormErrors {
   url?: string;
   ttl?: string;
+  rules?: string;
   form?: string;
 }
 
@@ -39,6 +42,7 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
   const [url, setUrl] = useState(link.url);
   const [ttl, setTtl] = useState("");
   const [removeExpiry, setRemoveExpiry] = useState(false);
+  const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>(() => draftsFromRules(link.rules));
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
 
@@ -72,6 +76,10 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const nextErrors = validate();
+    const { rules, error: rulesError } = parseRuleDrafts(ruleDrafts);
+    if (rulesError) {
+      nextErrors.rules = t(rulesError === "invalidUrl" ? "rules.rowInvalidUrl" : "rules.rowIncomplete");
+    }
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
       return;
@@ -83,6 +91,7 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
         body: {
           url: url.trim(),
           ...(removeExpiry ? { ttl: null } : ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
+          rules,
         },
       });
       toast.success(t("dialogs.edit.successToast"));
@@ -161,6 +170,13 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
                 {t("dialogs.edit.removeExpiryLabel")}
               </label>
             </div>
+
+            <RulesEditor idPrefix="edit-link" drafts={ruleDrafts} onChange={setRuleDrafts} />
+            {errors.rules && (
+              <p className="text-sm text-destructive" role="alert">
+                {errors.rules}
+              </p>
+            )}
 
             {errors.form && (
               <p className="text-sm text-destructive" role="alert">

@@ -66,6 +66,7 @@ export const ptBR: Messages = {
     editMenuItem: "Editar",
     deleteMenuItem: "Excluir",
     caption: "Links curtos cadastrados no sistema",
+    rulesBadge: "{count} regras",
   },
   blocklist: {
     heading: "Blocklist",
@@ -167,5 +168,22 @@ export const ptBR: Messages = {
       imageTitle: "QR code de {url}",
       download: "Baixar PNG",
     },
+  },
+  rules: {
+    sectionTitle: "Regras de redirecionamento",
+    sectionDescription:
+      "Opcional. Combine visitantes por país ou dispositivo e envie pra um destino diferente; a URL acima continua o destino padrão quando nenhuma regra combina.",
+    fieldLabel: "Combinar por",
+    fieldCountry: "País",
+    fieldDevice: "Dispositivo",
+    valuesLabel: "Valores",
+    valuesPlaceholderCountry: "BR, PT, US",
+    valuesPlaceholderDevice: "Mobile, Desktop, Other",
+    destinationLabel: "URL de destino",
+    destinationPlaceholder: "https://exemplo.com/mobile",
+    addRule: "Adicionar regra",
+    removeRuleAria: "Remover regra {index}",
+    rowIncomplete: "Preencha os valores e a URL de destino desta regra, ou remova-a.",
+    rowInvalidUrl: "O destino da regra precisa ser um endereço http:// ou https://.",
   },
 };

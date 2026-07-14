@@ -259,6 +259,7 @@ binary stays API-only. Dev: `cd web && npm install && npm run dev` (Vite on
 
 - Deploy on a VPS with Coolify (ships a `Dockerfile`): [`docs/DEPLOY.md`](docs/DEPLOY.md)
 - Edge/CDN caching guide: [`docs/EDGE.md`](docs/EDGE.md)
+- Geo/device redirect rules: [`docs/REDIRECT-RULES.md`](docs/REDIRECT-RULES.md)
 - What's next: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Full system design: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Deeper walkthrough of every component, data model and the Feistel round internals: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)

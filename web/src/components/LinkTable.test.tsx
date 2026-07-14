@@ -11,6 +11,7 @@ const link: Link = {
   url: "https://example.com/a-pretty-long-page",
   expiry: null,
   created: 1700000000,
+  rules: [],
 };
 
 describe("LinkTable — QR code", () => {
@@ -34,5 +35,21 @@ describe("LinkTable — QR code", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(screen.queryByRole("dialog", { name: /qr code for 6lB362J/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("LinkTable — redirect rules badge", () => {
+  it("shows a rule-count badge when the link has rules", () => {
+    const linkWithRules: Link = {
+      ...link,
+      rules: [{ field: "country", values: ["BR"], to: "https://example.com/br" }],
+    };
+    render(withProviders(<LinkTable links={[linkWithRules]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.getByText("1 rules")).toBeInTheDocument();
+  });
+
+  it("shows no badge when the link has no rules", () => {
+    render(withProviders(<LinkTable links={[link]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.queryByText(/rules?$/)).not.toBeInTheDocument();
   });
 });

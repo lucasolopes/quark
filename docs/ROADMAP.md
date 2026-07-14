@@ -45,6 +45,7 @@ bottleneck being geography/RTT, not the server).
 - **License + contributions**: **AGPL-3.0-only** core; `CLA.md` (license grant) +
   `CONTRIBUTING.md` + a CLA bot (GitHub Action). Multi-tenancy/cloud stays proprietary, separate.
 - **`docker-compose.yml`**: full stack (quark + Postgres + Valkey + ClickHouse) for dev/self-host.
+- **Redirect rules (#12)**: per-link geo/device rules (first match wins, `url` stays the default), panel editor in the create/edit dialogs. Doc: `docs/REDIRECT-RULES.md`.
 
 ## Next
 

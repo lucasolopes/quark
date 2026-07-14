@@ -64,6 +64,7 @@ export const en = {
     editMenuItem: "Edit",
     deleteMenuItem: "Delete",
     caption: "Short links registered in the system",
+    rulesBadge: "{count} rules",
   },
   blocklist: {
     heading: "Blocklist",
@@ -165,6 +166,23 @@ export const en = {
       imageTitle: "QR code for {url}",
       download: "Download PNG",
     },
+  },
+  rules: {
+    sectionTitle: "Redirect rules",
+    sectionDescription:
+      "Optional. Match visitors by country or device and send them to a different destination; the URL above stays the default destination when no rule matches.",
+    fieldLabel: "Match on",
+    fieldCountry: "Country",
+    fieldDevice: "Device",
+    valuesLabel: "Values",
+    valuesPlaceholderCountry: "BR, PT, US",
+    valuesPlaceholderDevice: "Mobile, Desktop, Other",
+    destinationLabel: "Destination URL",
+    destinationPlaceholder: "https://example.com/mobile",
+    addRule: "Add rule",
+    removeRuleAria: "Remove rule {index}",
+    rowIncomplete: "Fill in both values and a destination URL for this rule, or remove it.",
+    rowInvalidUrl: "Rule destination must be an http:// or https:// address.",
   },
 };
 

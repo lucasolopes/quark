@@ -44,6 +44,7 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 - **Licença + contribuições**: núcleo **AGPL-3.0-only**; `CLA.md` (license-grant) +
   `CONTRIBUTING.md` + bot do CLA (GitHub Action). Multi-tenancy/cloud fica proprietária, à parte.
 - **`docker-compose.yml`**: stack full (quark + Postgres + Valkey + ClickHouse) pra dev/self-host.
+- **Regras de redirecionamento (#12)**: regras por link de geo/dispositivo (primeira que combina vence, `url` continua o padrão), editor no painel nos diálogos de criar/editar. Doc: `docs/REDIRECT-RULES.PT_BR.md`.
 
 ## Próximo
 

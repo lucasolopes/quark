@@ -15,11 +15,14 @@ import { ApiError } from "@/lib/api";
 import { isHttpUrl, isNumericCode } from "@/lib/codeguard";
 import { isUnauthorized } from "@/lib/mutation-error";
 import { useCreateLink } from "@/lib/queries";
+import { parseRuleDrafts, type RuleDraft } from "@/lib/rules";
+import { RulesEditor } from "@/components/RulesEditor";
 
 interface FormErrors {
   url?: string;
   alias?: string;
   ttl?: string;
+  rules?: string;
   form?: string;
 }
 
@@ -38,6 +41,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
   const [url, setUrl] = useState("");
   const [alias, setAlias] = useState("");
   const [ttl, setTtl] = useState("");
+  const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>([]);
   const [errors, setErrors] = useState<FormErrors>({});
   const createLink = useCreateLink();
 
@@ -45,6 +49,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
     setUrl("");
     setAlias("");
     setTtl("");
+    setRuleDrafts([]);
     setErrors({});
   }
 
@@ -77,6 +82,10 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const nextErrors = validate();
+    const { rules, error: rulesError } = parseRuleDrafts(ruleDrafts);
+    if (rulesError) {
+      nextErrors.rules = t(rulesError === "invalidUrl" ? "rules.rowInvalidUrl" : "rules.rowIncomplete");
+    }
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
       return;
@@ -87,6 +96,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
         url: url.trim(),
         ...(alias.trim() ? { alias: alias.trim() } : {}),
         ...(ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
+        ...(rules.length > 0 ? { rules } : {}),
       });
       toast.success(t("dialogs.create.successToast"));
       reset();
@@ -174,6 +184,13 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
                 </p>
               )}
             </div>
+
+            <RulesEditor idPrefix="create-link" drafts={ruleDrafts} onChange={setRuleDrafts} />
+            {errors.rules && (
+              <p className="text-sm text-destructive" role="alert">
+                {errors.rules}
+              </p>
+            )}
 
             {errors.form && (
               <p className="text-sm text-destructive" role="alert">
