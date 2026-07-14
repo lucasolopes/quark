@@ -194,7 +194,7 @@ Everything here runs only on `POST /`. Two knobs and one always-on guard, all in
 
 ### LMDB
 
-Eleven named databases inside one LMDB environment (`heed::Env`, `max_dbs = 11`, a 64 GiB map), opened once and mmap'd for the process lifetime:
+Ten named databases inside one LMDB environment (`heed::Env`, `max_dbs = 10`, a 64 GiB map), opened once and mmap'd for the process lifetime:
 
 | Database | Key to value |
 |---|---|

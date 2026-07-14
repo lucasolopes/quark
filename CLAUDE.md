@@ -21,7 +21,7 @@ with opt-in production backends (Postgres, Valkey/Redis, ClickHouse).
 - Webhooks: `src/webhooks/` — `mod.rs` (types, Standard Webhooks signing),
   `delivery.rs` (dispatcher + delivery worker).
 - Abuse / cross-cutting guards (the closest thing to middleware): `src/abuse/`
-  — `ratelimit.rs`, `blocklist.rs`, and `mod.rs` (SSRF `is_internal_host`,
+  — `ratelimit.rs` and `mod.rs` (SSRF `is_internal_host`,
   `extract_host`). Admin auth is in `src/api.rs` (`admin_guard`,
   `require_admin_for_create`); API tokens and scopes are in `src/auth.rs`.
 - Other modules: `src/pixel.rs` (conversion forwarding), `src/import.rs`,

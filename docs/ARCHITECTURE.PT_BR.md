@@ -194,7 +194,7 @@ Tudo aqui roda só no `POST /`. Dois botões e um guard sempre ligado, todos no 
 
 ### LMDB
 
-Onze bancos nomeados dentro de um ambiente LMDB (`heed::Env`, `max_dbs = 11`, mapa de 64 GiB), abertos uma vez e mmap'd pela vida do processo:
+Dez bancos nomeados dentro de um ambiente LMDB (`heed::Env`, `max_dbs = 10`, mapa de 64 GiB), abertos uma vez e mmap'd pela vida do processo:
 
 | Banco | Chave para valor |
 |---|---|
