@@ -1023,6 +1023,10 @@ struct LinkRow {
     visits: u64,
     rules: Vec<Rule>,
     variants: Vec<Variant>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app_ios: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app_android: Option<String>,
 }
 
 async fn admin_links_list(
@@ -1082,6 +1086,8 @@ async fn admin_links_list(
             visits,
             rules: rec.rules,
             variants: rec.variants,
+            app_ios: rec.app_ios,
+            app_android: rec.app_android,
         });
     }
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()

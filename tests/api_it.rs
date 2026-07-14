@@ -73,6 +73,91 @@ async fn creates_and_redirects() {
 }
 
 #[tokio::test]
+async fn list_returns_app_destinations() {
+    // The panel's edit dialog fills its app-destination fields from the list
+    // row, so the list must carry app_ios/app_android (like it already carries
+    // rules/variants). Omitting them made the fields render blank on edit.
+    let app = app_admin("secret").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(
+                    r#"{"url":"https://example.com","app_ios":"https://apps.apple.com/app/id123","app_android":"https://play.google.com/store/apps/details?id=com.ex"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/links?limit=10")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let row = &v["links"][0];
+    assert_eq!(row["app_ios"], "https://apps.apple.com/app/id123");
+    assert_eq!(
+        row["app_android"],
+        "https://play.google.com/store/apps/details?id=com.ex"
+    );
+}
+
+#[tokio::test]
+async fn list_omits_absent_app_destinations() {
+    // A link with no app destinations must not carry null/empty app fields
+    // (skip_serializing_if keeps the common row lean).
+    let app = app_admin("secret").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(r#"{"url":"https://example.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/links?limit=10")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let row = v["links"][0].as_object().unwrap();
+    assert!(
+        !row.contains_key("app_ios"),
+        "absent app_ios must be omitted"
+    );
+    assert!(
+        !row.contains_key("app_android"),
+        "absent app_android must be omitted"
+    );
+}
+
+#[tokio::test]
 async fn nonexistent_code_404() {
     let app = app().await;
     let resp = app
