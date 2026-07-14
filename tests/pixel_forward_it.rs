@@ -4,7 +4,7 @@ use axum::Router;
 use quark::analytics::{spawn_worker, ClickEvent};
 use quark::codec;
 use quark::permute;
-use quark::pixel::{PixelBases, PixelConfig, PixelCredentials, Provider};
+use quark::pixel::{self, PixelBases, PixelConfig, PixelCredentials, Provider};
 use quark::store::open_backends;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
@@ -204,4 +204,41 @@ async fn worker_flush_is_fail_open_when_provider_returns_500() {
 
     let s = sink.stats(9).await.unwrap().unwrap();
     assert_eq!(s.aggregates.total, 1);
+}
+
+/// Security regression: a forward failure must never leak the provider URL
+/// (and therefore the credential embedded in its query string) through the
+/// `PixelError` that callers log via `Display`/`to_string()`. Points a
+/// config carrying a recognizable credential sentinel at a closed local
+/// port so the send fails, then asserts the resulting error's string form
+/// contains neither the sentinel nor a query string.
+#[tokio::test]
+async fn forward_error_display_never_contains_provider_url_or_credentials() {
+    let mut config = ga4_config(1);
+    config.credentials.api_secret = Some("SECRETSENTINEL".into());
+
+    let closed_port_base = "http://127.0.0.1:1".to_string();
+    let events = vec![ev(1, 1_752_300_000)];
+    let client = reqwest::Client::new();
+
+    let result = pixel::forward(&client, &closed_port_base, &config, &events, KEY).await;
+    let err = result.expect_err("connection to a closed port must fail");
+    let message = err.to_string();
+
+    assert!(
+        !message.contains("SECRETSENTINEL"),
+        "error message leaked the credential: {message}"
+    );
+    assert!(
+        !message.contains("api_secret"),
+        "error message leaked the query string: {message}"
+    );
+    assert!(
+        !message.contains("measurement_id"),
+        "error message leaked the provider URL: {message}"
+    );
+    assert!(
+        !message.contains('?'),
+        "error message still embeds a query string: {message}"
+    );
 }

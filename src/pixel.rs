@@ -226,7 +226,7 @@ pub async fn forward(
         .timeout(FORWARD_TIMEOUT)
         .send()
         .await
-        .map_err(PixelError::Http)?;
+        .map_err(|e| PixelError::Http(e.without_url()))?;
     if !resp.status().is_success() {
         return Err(PixelError::Status(resp.status()));
     }
