@@ -5,6 +5,7 @@ pub mod auth;
 pub mod cache;
 pub mod codec;
 pub mod import;
+pub mod invalidate;
 pub mod permute;
 pub mod pixel;
 pub mod store;

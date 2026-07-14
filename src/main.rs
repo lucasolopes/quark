@@ -2,6 +2,7 @@ use quark::analytics::spawn_worker;
 use quark::api::{router, AppState};
 use quark::cache::valkey::ValkeyTier;
 use quark::cache::Cache;
+use quark::invalidate::{spawn_invalidation_subscriber, Invalidator, INVALIDATION_CHANNEL};
 use quark::store::open_backends;
 use quark::webhooks::delivery::{
     spawn_webhook_worker, WebhookDispatcher, WEBHOOK_CHANNEL_CAPACITY,
@@ -58,6 +59,18 @@ async fn main() {
         }
         _ => {}
     }
+    let control_conn: Option<redis::aio::MultiplexedConnection> =
+        match std::env::var("QUARK_VALKEY_URL").ok() {
+            Some(url) => match redis::Client::open(url) {
+                Ok(client) => client.get_multiplexed_async_connection().await.ok(),
+                Err(_) => None,
+            },
+            None => None,
+        };
+    let invalidator = Arc::new(Invalidator {
+        conn: control_conn.clone(),
+    });
+
     let cache = match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {
             match ValkeyTier::open(&url).await {
@@ -70,15 +83,16 @@ async fn main() {
                         Arc::new(tier),
                         quark::cache::L1_TTL_SECS,
                         quark::cache::L2_TTL_SECS,
+                        Some(invalidator.clone()),
                     )
                 }
                 Err(e) => {
                     eprintln!("WARNING: failed to connect to Valkey ({e}); continuing with L1+store only.");
-                    Cache::new(store.clone(), CACHE_CAPACITY)
+                    Cache::new(store.clone(), CACHE_CAPACITY, Some(invalidator.clone()))
                 }
             }
         }
-        None => Cache::new(store.clone(), CACHE_CAPACITY),
+        None => Cache::new(store.clone(), CACHE_CAPACITY, Some(invalidator.clone())),
     };
     let (analytics_tx, analytics_rx) = tokio::sync::mpsc::channel(ANALYTICS_CHANNEL_CAPACITY);
     let pixel_client = reqwest::Client::builder()
@@ -102,14 +116,6 @@ async fn main() {
         eprintln!("per-request access log disabled (set QUARK_ACCESS_LOG=1 to enable)");
     }
 
-    let control_conn: Option<redis::aio::MultiplexedConnection> =
-        match std::env::var("QUARK_VALKEY_URL").ok() {
-            Some(url) => match redis::Client::open(url) {
-                Ok(client) => client.get_multiplexed_async_connection().await.ok(),
-                Err(_) => None,
-            },
-            None => None,
-        };
     let per_min: u32 = std::env::var("QUARK_RATELIMIT_PER_MIN")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -135,8 +141,12 @@ async fn main() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_BLOCKLIST_TTL_SECS);
-    let blocklist =
-        quark::abuse::blocklist::Blocklist::new(store.clone(), control_conn.clone(), blocklist_ttl);
+    let blocklist = quark::abuse::blocklist::Blocklist::new(
+        store.clone(),
+        control_conn.clone(),
+        blocklist_ttl,
+        Some(invalidator.clone()),
+    );
     let block_private = std::env::var("QUARK_BLOCK_PRIVATE")
         .map(|v| v != "0")
         .unwrap_or(true);
@@ -164,6 +174,14 @@ async fn main() {
         real_ip_header,
         webhooks,
     });
+    match std::env::var("QUARK_VALKEY_URL").ok() {
+        Some(url) => {
+            eprintln!("cross-node invalidation: pub/sub subscriber on {INVALIDATION_CHANNEL}");
+            let _sub = spawn_invalidation_subscriber(url, state.clone());
+        }
+        None => eprintln!("cross-node invalidation: disabled (no QUARK_VALKEY_URL)"),
+    }
+
     let app = router(state);
 
     let addr = std::env::var("QUARK_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());

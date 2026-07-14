@@ -22,7 +22,7 @@ async fn app_admin_with_dispatcher(
 ) -> (axum::Router, tokio::sync::mpsc::Receiver<WebhookEvent>) {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    let cache = Cache::new(store.clone(), 1000);
+    let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let store2 = store.clone();
     let (wh_tx, wh_rx) = tokio::sync::mpsc::channel(100);
@@ -39,7 +39,7 @@ async fn app_admin_with_dispatcher(
         sink,
         admin_token: Some(token.to_string()),
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
@@ -60,7 +60,7 @@ async fn app_admin_with_dispatcher_clicked_subscribed(
 ) -> (axum::Router, tokio::sync::mpsc::Receiver<WebhookEvent>) {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    let cache = Cache::new(store.clone(), 1000);
+    let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let store2 = store.clone();
     let (wh_tx, wh_rx) = tokio::sync::mpsc::channel(100);
@@ -77,7 +77,7 @@ async fn app_admin_with_dispatcher_clicked_subscribed(
         sink,
         admin_token: Some(token.to_string()),
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),

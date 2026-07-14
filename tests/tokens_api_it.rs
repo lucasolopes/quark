@@ -20,7 +20,7 @@ fn test_webhook_dispatcher() -> Arc<quark::webhooks::delivery::WebhookDispatcher
 async fn app_admin(token: &str) -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    let cache = Cache::new(store.clone(), 1000);
+    let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let store2 = store.clone();
     let state = Arc::new(AppState {
@@ -31,7 +31,7 @@ async fn app_admin(token: &str) -> axum::Router {
         sink,
         admin_token: Some(token.to_string()),
         ratelimiter: quark::abuse::ratelimit::RateLimiter::memory(1000),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
@@ -252,7 +252,7 @@ async fn full_scope_token_can_manage_tokens() {
 async fn api_token_works_when_no_env_admin_token_is_configured() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    let cache = Cache::new(store.clone(), 1000);
+    let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
 
     let id = store.next_api_token_id().await.unwrap();
@@ -275,7 +275,7 @@ async fn api_token_works_when_no_env_admin_token_is_configured() {
         sink,
         admin_token: None,
         ratelimiter: quark::abuse::ratelimit::RateLimiter::memory(1000),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),

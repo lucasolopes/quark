@@ -15,7 +15,7 @@ async fn app_with(
 ) {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    let cache = Cache::new(store.clone(), 1000);
+    let cache = Cache::new(store.clone(), 1000, None);
     let (tx, rx) = tokio::sync::mpsc::channel(chan_cap);
     let store2 = store.clone();
     let state = Arc::new(AppState {
@@ -26,7 +26,7 @@ async fn app_with(
         sink,
         admin_token: admin.map(|s| s.to_string()),
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),

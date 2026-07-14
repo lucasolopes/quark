@@ -1,3 +1,4 @@
+use crate::invalidate::Invalidator;
 use crate::store::Store;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ pub struct Blocklist {
     valkey: Option<redis::aio::MultiplexedConnection>,
     ttl_secs: u64,
     snap: RwLock<Snapshot>,
+    invalidator: Option<Arc<Invalidator>>,
 }
 
 impl Blocklist {
@@ -25,6 +27,7 @@ impl Blocklist {
         store: Arc<dyn Store>,
         valkey: Option<redis::aio::MultiplexedConnection>,
         ttl_secs: u64,
+        invalidator: Option<Arc<Invalidator>>,
     ) -> Blocklist {
         Blocklist {
             store,
@@ -34,6 +37,7 @@ impl Blocklist {
                 loaded_at: 0,
                 set: HashSet::new(),
             }),
+            invalidator,
         }
     }
 
@@ -43,7 +47,8 @@ impl Blocklist {
         super::host_in_blocklist(host, &snap.set)
     }
 
-    /// Forces a reload on the next check and deletes the shared Valkey key.
+    /// Forces a reload on the next check and deletes the shared Valkey key, then
+    /// publishes a `blocklist` invalidation so other replicas reload promptly.
     pub async fn invalidate(&self) {
         {
             let mut snap = self.snap.write().await;
@@ -53,6 +58,18 @@ impl Blocklist {
             let mut c = conn.clone();
             let _: Result<(), _> = redis::cmd("DEL").arg(VALKEY_KEY).query_async(&mut c).await;
         }
+        if let Some(inv) = &self.invalidator {
+            inv.publish("blocklist").await;
+        }
+    }
+
+    /// Zeroes the snapshot `loaded_at` only, forcing a reload on the next check
+    /// without touching Valkey or publishing. Called by the pub/sub subscriber
+    /// when another replica changed the blocklist: it must NOT re-publish (that
+    /// would loop across the cluster).
+    pub async fn invalidate_local(&self) {
+        let mut snap = self.snap.write().await;
+        snap.loaded_at = 0;
     }
 
     async fn ensure_fresh(&self, now_secs: u64) {
@@ -109,7 +126,7 @@ mod tests {
             Arc::new(LmdbStore::open_with_node_id(dir.path(), None).unwrap());
         store.add_blocked_domain("evil.com").await.unwrap();
 
-        let bl = Blocklist::new(store.clone(), None, 60);
+        let bl = Blocklist::new(store.clone(), None, 60, None);
         assert!(bl.is_blocked("evil.com", 100).await);
         assert!(bl.is_blocked("x.evil.com", 100).await);
         assert!(!bl.is_blocked("ok.com", 100).await);
@@ -120,7 +137,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> =
             Arc::new(LmdbStore::open_with_node_id(dir.path(), None).unwrap());
-        let bl = Blocklist::new(store.clone(), None, 3600);
+        let bl = Blocklist::new(store.clone(), None, 3600, None);
 
         assert!(!bl.is_blocked("late.com", 100).await);
         store.add_blocked_domain("late.com").await.unwrap();
@@ -130,11 +147,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalidate_local_forces_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> =
+            Arc::new(LmdbStore::open_with_node_id(dir.path(), None).unwrap());
+        let bl = Blocklist::new(store.clone(), None, 3600, None);
+
+        assert!(!bl.is_blocked("soon.com", 100).await);
+        store.add_blocked_domain("soon.com").await.unwrap();
+        assert!(!bl.is_blocked("soon.com", 101).await);
+        bl.invalidate_local().await;
+        assert!(bl.is_blocked("soon.com", 102).await);
+    }
+
+    #[tokio::test]
     async fn reloads_after_ttl() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> =
             Arc::new(LmdbStore::open_with_node_id(dir.path(), None).unwrap());
-        let bl = Blocklist::new(store.clone(), None, 10);
+        let bl = Blocklist::new(store.clone(), None, 10, None);
         assert!(!bl.is_blocked("z.com", 100).await);
         store.add_blocked_domain("z.com").await.unwrap();
         assert!(!bl.is_blocked("z.com", 105).await);

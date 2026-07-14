@@ -50,7 +50,7 @@ fn bench(c: &mut Criterion) {
             )
             .await
             .unwrap();
-        let cache = Cache::new(store.clone(), 100_000);
+        let cache = Cache::new(store.clone(), 100_000, None);
         let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(10_000);
         let worker = spawn_worker(
             rx,
@@ -68,7 +68,7 @@ fn bench(c: &mut Criterion) {
             sink,
             admin_token: None,
             ratelimiter: RateLimiter::disabled(),
-            blocklist: Blocklist::new(store, None, 60),
+            blocklist: Blocklist::new(store, None, 60, None),
             block_private: true,
             public_host: None,
             real_ip_header: "cf-connecting-ip".to_string(),

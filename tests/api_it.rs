@@ -10,7 +10,7 @@ use tower::ServiceExt;
 async fn app() -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    let cache = Cache::new(store.clone(), 1000);
+    let cache = Cache::new(store.clone(), 1000, None);
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let store2 = store.clone();
     let state = Arc::new(AppState {
@@ -21,7 +21,7 @@ async fn app() -> axum::Router {
         sink,
         admin_token: None,
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
@@ -202,7 +202,7 @@ async fn blocks_domain_on_blocklist_403() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     store.add_blocked_domain("evil.com").await.unwrap();
-    let cache = Cache::new(store.clone(), 1000);
+    let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         cache,
@@ -212,7 +212,7 @@ async fn blocks_domain_on_blocklist_403() {
         sink,
         admin_token: None,
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store, None, 60),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
@@ -235,7 +235,7 @@ async fn blocks_domain_on_blocklist_403() {
 async fn rate_limit_429_after_exceeding() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    let cache = Cache::new(store.clone(), 1000);
+    let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let store2 = store.clone();
     let state = Arc::new(AppState {
@@ -246,7 +246,7 @@ async fn rate_limit_429_after_exceeding() {
         sink,
         admin_token: None,
         ratelimiter: quark::abuse::ratelimit::RateLimiter::memory(1),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
@@ -360,7 +360,7 @@ async fn nonexistent_code_404_has_no_store_cache_control() {
 async fn app_admin(token: &str) -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    let cache = Cache::new(store.clone(), 1000);
+    let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let store2 = store.clone();
     let state = Arc::new(AppState {
@@ -371,7 +371,7 @@ async fn app_admin(token: &str) -> axum::Router {
         sink,
         admin_token: Some(token.to_string()),
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
@@ -911,7 +911,7 @@ async fn create_with_token_when_configured_ok() {
 async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<ClickEvent>) {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    let cache = Cache::new(store.clone(), 1000);
+    let cache = Cache::new(store.clone(), 1000, None);
     let (analytics_tx, rx) = tokio::sync::mpsc::channel(100);
     let store2 = store.clone();
     let state = Arc::new(AppState {
@@ -922,7 +922,7 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
         sink,
         admin_token: None,
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
@@ -1604,7 +1604,7 @@ async fn patch_adds_app_android_used_for_android_ua() {
 async fn cors_header_present_when_configured() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    let cache = Cache::new(store.clone(), 1000);
+    let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let store2 = store.clone();
     let state = Arc::new(AppState {
@@ -1615,7 +1615,7 @@ async fn cors_header_present_when_configured() {
         sink,
         admin_token: None,
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".into(),

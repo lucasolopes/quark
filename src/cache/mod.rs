@@ -1,5 +1,6 @@
 pub mod valkey;
 
+use crate::invalidate::Invalidator;
 use crate::now;
 use crate::store::{Record, Store, StoreError};
 use moka::sync::Cache as Moka;
@@ -85,11 +86,16 @@ pub struct Cache {
     l2: Option<Arc<dyn CacheTier>>,
     l2_ttl_secs: u64,
     breaker: Breaker,
+    invalidator: Option<Arc<Invalidator>>,
 }
 
 impl Cache {
-    pub fn new(store: Arc<dyn Store>, capacity: u64) -> Cache {
-        Cache::build(store, capacity, None, L1_TTL_SECS, L2_TTL_SECS)
+    pub fn new(
+        store: Arc<dyn Store>,
+        capacity: u64,
+        invalidator: Option<Arc<Invalidator>>,
+    ) -> Cache {
+        Cache::build(store, capacity, None, L1_TTL_SECS, L2_TTL_SECS, invalidator)
     }
 
     pub fn with_l2(
@@ -98,8 +104,16 @@ impl Cache {
         l2: Arc<dyn CacheTier>,
         l1_ttl_secs: u64,
         l2_ttl_secs: u64,
+        invalidator: Option<Arc<Invalidator>>,
     ) -> Cache {
-        Cache::build(store, capacity, Some(l2), l1_ttl_secs, l2_ttl_secs)
+        Cache::build(
+            store,
+            capacity,
+            Some(l2),
+            l1_ttl_secs,
+            l2_ttl_secs,
+            invalidator,
+        )
     }
 
     fn build(
@@ -108,6 +122,7 @@ impl Cache {
         l2: Option<Arc<dyn CacheTier>>,
         l1_ttl: u64,
         l2_ttl: u64,
+        invalidator: Option<Arc<Invalidator>>,
     ) -> Cache {
         let hot = Moka::builder()
             .max_capacity(capacity)
@@ -119,6 +134,7 @@ impl Cache {
             l2,
             l2_ttl_secs: l2_ttl,
             breaker: Breaker::new(),
+            invalidator,
         }
     }
 
@@ -180,6 +196,17 @@ impl Cache {
                 }
             }
         }
+        if let Some(inv) = &self.invalidator {
+            inv.publish(&format!("link:{id}")).await;
+        }
+    }
+
+    /// Drops only the L1 (moka) entry for `id`, without touching L2 or
+    /// publishing. Called by the pub/sub subscriber when another replica
+    /// invalidated this id: it clears the local stale copy and must NOT
+    /// re-publish (that would loop across the cluster).
+    pub async fn invalidate_local(&self, id: u64) {
+        self.hot.invalidate(&id);
     }
 }
 
@@ -243,7 +270,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
         store.put_link(9, &rec("hung")).await.unwrap();
-        let c = Cache::with_l2(store, 1000, Arc::new(HangingTier), 60, 3600);
+        let c = Cache::with_l2(store, 1000, Arc::new(HangingTier), 60, 3600, None);
         let got = c.get(9).await.unwrap().unwrap();
         assert_eq!(got.url, "hung");
     }
@@ -253,7 +280,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
         store.put_link(1, &rec("u1")).await.unwrap();
-        let c = Cache::new(store.clone(), 1000);
+        let c = Cache::new(store.clone(), 1000, None);
         assert_eq!(c.get(1).await.unwrap().unwrap().url, "u1");
         store.delete_link(1).await.unwrap();
         c.invalidate(1).await;
@@ -261,11 +288,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalidate_local_removes_from_l1() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
+        store.put_link(2, &rec("u2")).await.unwrap();
+        let c = Cache::new(store.clone(), 1000, None);
+        assert_eq!(c.get(2).await.unwrap().unwrap().url, "u2");
+        store.delete_link(2).await.unwrap();
+        c.invalidate_local(2).await;
+        assert!(c.get(2).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn without_l2_behaves_as_today() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
         store.put_link(3, &rec("u")).await.unwrap();
-        let c = Cache::new(store, 1000);
+        let c = Cache::new(store, 1000, None);
         assert_eq!(c.get(3).await.unwrap().unwrap().url, "u");
         assert!(c.get(404).await.unwrap().is_none());
     }
@@ -278,7 +317,7 @@ mod tests {
         let tier = Arc::new(FailingTier {
             calls: AtomicU32::new(0),
         });
-        let c = Cache::with_l2(store, 1000, tier.clone(), 60, 3600);
+        let c = Cache::with_l2(store, 1000, tier.clone(), 60, 3600, None);
         for _ in 0..7 {
             let _ = c.get(7).await.unwrap();
         }

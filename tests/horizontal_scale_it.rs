@@ -22,7 +22,7 @@ async fn pg_replica(url: &str) -> axum::Router {
     let pg = Arc::new(PostgresStore::open(url).await.unwrap());
     let store: Arc<dyn Store> = pg.clone();
     let sink: Arc<dyn AnalyticsSink> = pg;
-    let cache = Cache::new(store.clone(), 1000);
+    let cache = Cache::new(store.clone(), 1000, None);
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let store2 = store.clone();
     let state = Arc::new(AppState {
@@ -33,7 +33,7 @@ async fn pg_replica(url: &str) -> axum::Router {
         sink,
         admin_token: None,
         ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60, None),
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),

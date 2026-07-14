@@ -1740,6 +1740,7 @@ dependencies = [
  "clickhouse",
  "criterion",
  "csv",
+ "futures-util",
  "getrandom 0.4.3",
  "harsh",
  "heed",
