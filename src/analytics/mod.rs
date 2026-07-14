@@ -13,6 +13,7 @@ pub struct ClickEvent {
     pub referer: Option<String>,
     pub country: Option<String>,
     pub user_agent: Option<String>,
+    pub city: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -23,6 +24,10 @@ pub struct Aggregates {
     pub per_day: BTreeMap<String, u64>,
     pub per_country: BTreeMap<String, u64>,
     pub per_device: BTreeMap<String, u64>,
+    pub per_os: BTreeMap<String, u64>,
+    pub per_browser: BTreeMap<String, u64>,
+    pub per_referer: BTreeMap<String, u64>,
+    pub per_city: BTreeMap<String, u64>,
 }
 
 impl Aggregates {
@@ -40,6 +45,17 @@ impl Aggregates {
         }
         let dev = device_from_ua(ev.user_agent.as_deref());
         *self.per_device.entry(dev.to_string()).or_insert(0) += 1;
+        let os = os_from_ua(ev.user_agent.as_deref());
+        *self.per_os.entry(os.to_string()).or_insert(0) += 1;
+        let browser = browser_from_ua(ev.user_agent.as_deref());
+        *self.per_browser.entry(browser.to_string()).or_insert(0) += 1;
+        let referer = referer_host(ev.referer.as_deref());
+        *self.per_referer.entry(referer).or_insert(0) += 1;
+        if let Some(city) = &ev.city {
+            if !city.is_empty() {
+                *self.per_city.entry(city.clone()).or_insert(0) += 1;
+            }
+        }
     }
 }
 
@@ -70,6 +86,79 @@ pub fn device_from_ua(ua: Option<&str>) -> &'static str {
             }
         }
         None => "Other",
+    }
+}
+
+/// Lightweight OS heuristic from the User-Agent (no external dep).
+///
+/// Order matters: iPhone/iPad match before Macintosh (both mention Mac-ish
+/// tokens on iOS Safari's UA string), and Android matches before Linux
+/// (Android UAs also contain "linux").
+pub fn os_from_ua(ua: Option<&str>) -> &'static str {
+    match ua {
+        Some(s) => {
+            let s = s.to_ascii_lowercase();
+            if s.contains("iphone") || s.contains("ipad") {
+                "iOS"
+            } else if s.contains("android") {
+                "Android"
+            } else if s.contains("windows") {
+                "Windows"
+            } else if s.contains("macintosh") || s.contains("mac os") {
+                "macOS"
+            } else if s.contains("linux") {
+                "Linux"
+            } else {
+                "Other"
+            }
+        }
+        None => "Other",
+    }
+}
+
+/// Lightweight browser heuristic from the User-Agent (no external dep).
+///
+/// Order matters: Edge (Chromium-based) mentions "edg" alongside "chrome",
+/// so it must match first; Chrome mentions "safari" too, so it must match
+/// before Safari.
+pub fn browser_from_ua(ua: Option<&str>) -> &'static str {
+    match ua {
+        Some(s) => {
+            let s = s.to_ascii_lowercase();
+            if s.contains("edg/")
+                || s.contains("edge/")
+                || s.contains("edga/")
+                || s.contains("edgios/")
+            {
+                "Edge"
+            } else if s.contains("chrome") || s.contains("crios") {
+                "Chrome"
+            } else if s.contains("firefox") {
+                "Firefox"
+            } else if s.contains("safari") {
+                "Safari"
+            } else {
+                "Other"
+            }
+        }
+        None => "Other",
+    }
+}
+
+/// Groups a referer by hostname (no scheme/port/path), to keep cardinality
+/// bounded. Absent or empty referer becomes `"direct"`; an unparseable
+/// referer falls back to `"other"`.
+pub fn referer_host(referer: Option<&str>) -> String {
+    match referer {
+        None => "direct".to_string(),
+        Some(s) if s.trim().is_empty() => "direct".to_string(),
+        Some(s) => match url::Url::parse(s) {
+            Ok(u) => match u.host_str() {
+                Some(h) => h.to_string(),
+                None => "other".to_string(),
+            },
+            Err(_) => "other".to_string(),
+        },
     }
 }
 
@@ -161,6 +250,7 @@ mod tests {
             referer: None,
             country: Some(country.into()),
             user_agent: Some(ua.into()),
+            city: None,
         }
     }
 
@@ -224,6 +314,7 @@ mod tests {
                 referer: None,
                 country: Some("BR".into()),
                 user_agent: Some("iPhone".into()),
+                city: None,
             })
             .await
             .unwrap();
@@ -245,6 +336,7 @@ mod tests {
             referer: None,
             country: None,
             user_agent: None,
+            city: None,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -252,8 +344,135 @@ mod tests {
             referer: None,
             country: None,
             user_agent: None,
+            city: None,
         });
         assert_eq!(a.first_ts, 0);
         assert_eq!(a.last_ts, 5_000_000_000);
+    }
+
+    #[test]
+    fn os_heuristic() {
+        assert_eq!(
+            os_from_ua(Some(
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"
+            )),
+            "iOS"
+        );
+        assert_eq!(
+            os_from_ua(Some("Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X)")),
+            "iOS"
+        );
+        assert_eq!(
+            os_from_ua(Some("Mozilla/5.0 (Linux; Android 14; Pixel 8)")),
+            "Android"
+        );
+        assert_eq!(
+            os_from_ua(Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")),
+            "Windows"
+        );
+        assert_eq!(
+            os_from_ua(Some("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")),
+            "macOS"
+        );
+        assert_eq!(os_from_ua(Some("Mozilla/5.0 (X11; Linux x86_64)")), "Linux");
+        assert_eq!(os_from_ua(Some("curl/8.0")), "Other");
+        assert_eq!(os_from_ua(None), "Other");
+    }
+
+    #[test]
+    fn browser_heuristic() {
+        assert_eq!(
+            browser_from_ua(Some(
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+            )),
+            "Safari"
+        );
+        assert_eq!(
+            browser_from_ua(Some(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )),
+            "Chrome"
+        );
+        assert_eq!(
+            browser_from_ua(Some(
+                "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+            )),
+            "Chrome"
+        );
+        assert_eq!(
+            browser_from_ua(Some(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
+            )),
+            "Edge"
+        );
+        assert_eq!(
+            browser_from_ua(Some(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+            )),
+            "Firefox"
+        );
+        assert_eq!(browser_from_ua(Some("curl/8.0")), "Other");
+        assert_eq!(browser_from_ua(None), "Other");
+    }
+
+    #[test]
+    fn referer_host_variants() {
+        assert_eq!(
+            referer_host(Some("https://news.ycombinator.com/x")),
+            "news.ycombinator.com"
+        );
+        assert_eq!(
+            referer_host(Some("https://sub.example.com:8443/path?q=1")),
+            "sub.example.com"
+        );
+        assert_eq!(referer_host(None), "direct");
+        assert_eq!(referer_host(Some("")), "direct");
+        assert_eq!(referer_host(Some("not a url")), "other");
+    }
+
+    #[test]
+    fn aggregates_populates_os_browser_referer_city() {
+        let mut a = Aggregates::default();
+        a.apply(&ClickEvent {
+            id: 1,
+            ts: 1_752_300_000,
+            referer: Some("https://news.ycombinator.com/x".into()),
+            country: Some("BR".into()),
+            user_agent: Some(
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1".into(),
+            ),
+            city: Some("Sao Paulo".into()),
+        });
+        a.apply(&ClickEvent {
+            id: 1,
+            ts: 1_752_300_050,
+            referer: None,
+            country: Some("US".into()),
+            user_agent: Some(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".into(),
+            ),
+            city: None,
+        });
+        a.apply(&ClickEvent {
+            id: 1,
+            ts: 1_752_300_100,
+            referer: Some("https://news.ycombinator.com/y".into()),
+            country: Some("US".into()),
+            user_agent: Some(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+                    .into(),
+            ),
+            city: Some("".into()),
+        });
+
+        assert_eq!(a.per_os.get("iOS"), Some(&1));
+        assert_eq!(a.per_os.get("Windows"), Some(&2));
+        assert_eq!(a.per_browser.get("Safari"), Some(&1));
+        assert_eq!(a.per_browser.get("Chrome"), Some(&1));
+        assert_eq!(a.per_browser.get("Firefox"), Some(&1));
+        assert_eq!(a.per_referer.get("news.ycombinator.com"), Some(&2));
+        assert_eq!(a.per_referer.get("direct"), Some(&1));
+        assert_eq!(a.per_city.get("Sao Paulo"), Some(&1));
+        assert_eq!(a.per_city.len(), 1, "empty city must not pollute per_city");
     }
 }
