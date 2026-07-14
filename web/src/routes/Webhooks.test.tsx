@@ -14,6 +14,7 @@ const SAMPLE_WEBHOOK = {
   events: ["link.created", "link.clicked"],
   active: true,
   created: 1700000000,
+  kind: "generic",
   secret_masked: "whsec_••••",
 };
 
@@ -34,7 +35,7 @@ describe("Webhooks", () => {
     expect(await screen.findByText(/no webhooks yet/i)).toBeInTheDocument();
   });
 
-  it("create flow calls the API and reveals the secret once", async () => {
+  it("create flow calls the API and reveals the secret once (generic)", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
       const method = init?.method ?? "GET";
       if (method === "POST") return Promise.resolve(jsonResponse({ id: 2, secret: "whsec_rawsecret123" }));
@@ -45,18 +46,50 @@ describe("Webhooks", () => {
     await screen.findByText(/no webhooks yet/i);
 
     await userEvent.click(screen.getAllByRole("button", { name: /add webhook/i })[0]);
-    await userEvent.type(screen.getByLabelText(/^url$/i), "https://sink.example.com/hook");
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/a signing secret will be generated/i)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(/endpoint url/i), "https://sink.example.com/hook");
     await userEvent.click(screen.getByRole("checkbox", { name: /link created/i }));
 
-    const dialog = screen.getByRole("dialog");
     await userEvent.click(within(dialog).getByRole("button", { name: /add webhook/i }));
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/admin/webhooks"),
       expect.objectContaining({ method: "POST" }),
     );
+    const [, requestInit] = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(requestInit!.body as string)).toMatchObject({ kind: "generic" });
     expect(await screen.findByDisplayValue("whsec_rawsecret123")).toBeInTheDocument();
     expect(screen.getByText(/won't be shown again/i)).toBeInTheDocument();
+  });
+
+  it("selecting Slack sends kind: slack, adapts the URL field and hides the secret notice", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      const method = init?.method ?? "GET";
+      if (method === "POST") return Promise.resolve(jsonResponse({ id: 3, secret: "" }));
+      return Promise.resolve(jsonResponse({ webhooks: [] }));
+    });
+
+    render(withProviders(<Webhooks />, { withRouter: false }));
+    await screen.findByText(/no webhooks yet/i);
+
+    await userEvent.click(screen.getAllByRole("button", { name: /add webhook/i })[0]);
+    const dialog = screen.getByRole("dialog");
+
+    await userEvent.selectOptions(within(dialog).getByLabelText(/^type$/i), "slack");
+
+    expect(within(dialog).getByLabelText(/slack incoming webhook url/i)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/a signing secret will be generated/i)).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/no signing secret/i)).toBeInTheDocument();
+
+    await userEvent.type(within(dialog).getByLabelText(/slack incoming webhook url/i), "https://hooks.slack.com/services/x");
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: /link created/i }));
+    await userEvent.click(within(dialog).getByRole("button", { name: /add webhook/i }));
+
+    const [, requestInit] = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(requestInit!.body as string)).toMatchObject({ kind: "slack" });
+
+    expect(screen.queryByText(/won't be shown again/i)).not.toBeInTheDocument();
   });
 
   it("rejects submitting with no event selected", async () => {
@@ -65,7 +98,7 @@ describe("Webhooks", () => {
     await screen.findByText(/no webhooks yet/i);
 
     await userEvent.click(screen.getAllByRole("button", { name: /add webhook/i })[0]);
-    await userEvent.type(screen.getByLabelText(/^url$/i), "https://sink.example.com/hook");
+    await userEvent.type(screen.getByLabelText(/endpoint url/i), "https://sink.example.com/hook");
     const dialog = screen.getByRole("dialog");
     await userEvent.click(within(dialog).getByRole("button", { name: /add webhook/i }));
 

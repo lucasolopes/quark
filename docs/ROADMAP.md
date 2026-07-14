@@ -19,6 +19,10 @@ bottleneck being geography/RTT, not the server).
   Standard Webhooks HMAC signing, best-effort delivery (queue → worker → retry with backoff/jitter,
   SSRF-guarded), subscriptions managed in the panel or via `/admin/webhooks`. This is the foundation
   for #6 (Slack/Discord/Telegram) and #10 (n8n/Zapier). Doc: `docs/WEBHOOKS.md`.
+- **Notification channels (#6):** Slack/Discord/Telegram as a `kind` on the webhook subscription
+  (built on #1); an unsigned, plain-text message POSTed in each channel's own shape (Slack/Telegram
+  `{"text": ...}`, Discord `{"content": ...}`), authenticated by the channel's secret URL instead
+  of HMAC. Doc: `docs/WEBHOOKS.md` ("Notification channels").
 - **Core (v0.1):** create + redirect + custom alias + expiration (TTL). The short code
   is a calibrated Feistel/ARX permutation (`ROUNDS=4`); codes are **computed, not
   stored** (store keyed by `u64`).

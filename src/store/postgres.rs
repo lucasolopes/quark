@@ -1,6 +1,6 @@
 use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::store::{Record, Store, StoreError};
-use crate::webhooks::WebhookSubscription;
+use crate::webhooks::{SubscriptionKind, WebhookSubscription};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{PgPool, Row};
 
@@ -40,6 +40,7 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
     let secret: String = r.try_get("secret").map_err(StoreError::backend)?;
     let active: bool = r.try_get("active").map_err(StoreError::backend)?;
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    let kind: String = r.try_get("kind").map_err(StoreError::backend)?;
     Ok(WebhookSubscription {
         id: id as u64,
         url,
@@ -47,6 +48,7 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
         secret,
         active,
         created: created as u64,
+        kind: SubscriptionKind::from_str_or_generic(&kind),
     })
 }
 
@@ -88,7 +90,13 @@ impl PostgresStore {
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS blocked_domains (domain TEXT PRIMARY KEY)",
-                "CREATE TABLE IF NOT EXISTS webhooks (id BIGINT PRIMARY KEY, url TEXT NOT NULL, events JSONB NOT NULL, secret TEXT NOT NULL, active BOOLEAN NOT NULL, created BIGINT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS webhooks (id BIGINT PRIMARY KEY, url TEXT NOT NULL, events JSONB NOT NULL, secret TEXT NOT NULL, active BOOLEAN NOT NULL, created BIGINT NOT NULL, kind TEXT NOT NULL DEFAULT 'generic')",
+                // `kind` (#6, native chat channels) is added after the fact for
+                // deployments whose `webhooks` table predates it; pre-existing
+                // rows have no kind opinion, so they default to `generic`
+                // (same fallback `SubscriptionKind::from_str_or_generic` and
+                // the LMDB/serde `#[serde(default)]` path use).
+                "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'generic'",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -326,7 +334,7 @@ impl Store for PostgresStore {
 
     async fn list_webhooks(&self) -> Result<Vec<WebhookSubscription>, StoreError> {
         let rows = sqlx::query(
-            "SELECT id, url, events, secret, active, created FROM webhooks ORDER BY id",
+            "SELECT id, url, events, secret, active, created, kind FROM webhooks ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await
@@ -336,7 +344,7 @@ impl Store for PostgresStore {
 
     async fn get_webhook(&self, id: u64) -> Result<Option<WebhookSubscription>, StoreError> {
         let row = sqlx::query(
-            "SELECT id, url, events, secret, active, created FROM webhooks WHERE id = $1",
+            "SELECT id, url, events, secret, active, created, kind FROM webhooks WHERE id = $1",
         )
         .bind(id as i64)
         .fetch_optional(&self.pool)
@@ -351,8 +359,8 @@ impl Store for PostgresStore {
     async fn put_webhook(&self, sub: &WebhookSubscription) -> Result<(), StoreError> {
         let events = serde_json::to_value(&sub.events)?;
         sqlx::query(
-            "INSERT INTO webhooks (id, url, events, secret, active, created) VALUES ($1,$2,$3,$4,$5,$6) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6",
+            "INSERT INTO webhooks (id, url, events, secret, active, created, kind) VALUES ($1,$2,$3,$4,$5,$6,$7) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6, kind=$7",
         )
         .bind(sub.id as i64)
         .bind(&sub.url)
@@ -360,6 +368,7 @@ impl Store for PostgresStore {
         .bind(&sub.secret)
         .bind(sub.active)
         .bind(sub.created as i64)
+        .bind(sub.kind.as_str())
         .execute(&self.pool)
         .await
         .map_err(StoreError::backend)?;

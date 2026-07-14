@@ -1,5 +1,5 @@
 use quark::store::{postgres::PostgresStore, Store};
-use quark::webhooks::{EventType, WebhookSubscription};
+use quark::webhooks::{EventType, SubscriptionKind, WebhookSubscription};
 use serial_test::serial;
 
 async fn fresh() -> Option<PostgresStore> {
@@ -24,6 +24,7 @@ async fn webhook_crud_round_trip_pg() {
         secret: "whsec_a".into(),
         active: true,
         created: 1,
+        kind: SubscriptionKind::Generic,
     };
     store.put_webhook(&sub).await.unwrap();
     assert_eq!(

@@ -18,6 +18,10 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
   assinatura HMAC Standard Webhooks, entrega best-effort (fila → worker → retry com backoff/jitter,
   guardada contra SSRF), assinaturas gerenciadas no painel ou via `/admin/webhooks`. É a base
   pro #6 (Slack/Discord/Telegram) e o #10 (n8n/Zapier). Doc: `docs/WEBHOOKS.PT_BR.md`.
+- **Canais de notificação (#6):** Slack/Discord/Telegram como um `kind` na assinatura de webhook
+  (construído sobre o #1); mensagem em texto plano, não assinada, no formato de cada canal
+  (Slack/Telegram `{"text": ...}`, Discord `{"content": ...}`), autenticada pela URL secreta do
+  canal em vez de HMAC. Doc: `docs/WEBHOOKS.PT_BR.md` ("Canais de notificação").
 - **Núcleo (v0.1):** criar + redirecionar + alias customizado + expiração (TTL). O short-code
   é uma permutação Feistel/ARX calibrada (`ROUNDS=4`); códigos são **calculados, não
   armazenados** (store chaveado por `u64`).

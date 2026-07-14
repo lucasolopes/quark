@@ -222,3 +222,88 @@ ou loopback: a mesma guarda contra SSRF (`is_internal_host`) que protege os
 destinos de link se aplica aqui, checada tanto na criação da assinatura
 quanto de novo no momento da entrega. Um deployment tem um teto de 50
 assinaturas.
+
+## Canais de notificação
+
+Uma assinatura tem um `kind`: `generic` (default, descrito acima) ou um dos
+três canais de chat, `slack`, `discord`, `telegram`. Escolha um canal no
+seletor "Type" do diálogo de criação (ou passe `kind` na API) quando tudo que
+você quer é uma mensagem simples num chat, não uma integração assinada.
+
+A diferença central: **canais não são assinados**. Não há HMAC, não há
+headers `webhook-*`, e não há `secret`. A autenticação é a própria URL: a URL
+de entrada de cada canal é uma credencial portadora, então quem tiver essa
+URL consegue postar no seu canal. Trate ela com o mesmo cuidado que uma
+senha. A guarda contra SSRF e a política de não seguir redirect continuam
+valendo pras URLs de canal, igual ao Generic.
+
+### Como conseguir a URL de cada canal
+
+**Slack.** Adicione o app "Incoming Webhooks" no seu workspace (ou abra a
+configuração de um app já existente), ative incoming webhooks e crie um pro
+canal que você quer. O Slack te dá uma URL no formato
+`https://hooks.slack.com/services/T000/B000/XXXXXXXX`. Cole isso como a URL
+da assinatura.
+
+**Discord.** No canal alvo, abra Server Settings > Integrations > Webhooks,
+crie um webhook novo e copie a URL dele
+(`https://discord.com/api/webhooks/<id>/<token>`). Cole isso como a URL da
+assinatura.
+
+**Telegram.** Mande mensagem pro [@BotFather](https://t.me/BotFather) pra
+criar um bot e pegar o token dele. Encontre o `chat_id` numérico do chat onde
+você quer as mensagens (um chat privado, grupo, ou canal do qual seu bot é
+membro). Monte a URL você mesmo:
+
+```
+https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>
+```
+
+Cole essa URL inteira como a URL da assinatura. O quark faz POST de `text` no
+corpo JSON; o Telegram lê `chat_id` da query string e `text` do corpo.
+
+### Formato da mensagem
+
+O quark deriva uma mensagem curta em texto plano a partir dos mesmos dados de
+evento que as assinaturas Generic recebem, e embrulha ela no formato que cada
+canal espera:
+
+| Evento | Mensagem |
+|---|---|
+| `link.created` | `New short link: {code} -> {url}` |
+| `link.updated` | `Short link updated: {code} -> {url}` |
+| `link.deleted` | `Short link deleted: {code}` |
+| `link.expired` | `Short link expired: {code}` |
+| `link.clicked` | `Click on {code} -> {url}`, com ` ({country})` acrescentado quando o clique carregava um país |
+
+Slack e Telegram recebem os dois:
+
+```json
+{"text": "New short link: aB3xZ9k -> https://example.com/dest"}
+```
+
+Discord recebe:
+
+```json
+{"content": "New short link: aB3xZ9k -> https://example.com/dest"}
+```
+
+É texto plano, sem marcação de formatação. O Block Kit do Slack e os embeds
+ricos do Discord são formatos de mensagem mais elaborados que os dois canais
+suportam; o quark não constrói eles hoje. Isso é uma melhoria de formatação
+futura, não algo que você já pode ativar.
+
+### API
+
+Assinaturas de canal usam os mesmos endpoints do Generic, com `kind` na
+requisição de criação:
+
+```bash
+curl -X POST localhost:8080/admin/webhooks \
+  -H 'x-admin-token: <token>' -H 'content-type: application/json' \
+  -d '{"url": "https://hooks.slack.com/services/T000/B000/XXXXXXXX", "events": ["link.created"], "kind": "slack"}'
+# => {"id": 2}   (sem o campo "secret": canais não são assinados)
+```
+
+`kind` é um de `"generic"`, `"slack"`, `"discord"`, `"telegram"`; o default é
+`"generic"` quando omitido.

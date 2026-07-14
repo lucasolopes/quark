@@ -216,3 +216,88 @@ curl -X POST localhost:8080/admin/webhooks/1/test -H 'x-admin-token: <token>'
 loopback host: the same SSRF guard (`is_internal_host`) that protects link
 destinations applies here, checked both at subscription-create time and
 again at delivery time. A deployment caps out at 50 subscriptions.
+
+## Notification channels
+
+A subscription has a `kind`: `generic` (default, described above) or one of
+three chat channels, `slack`, `discord`, `telegram`. Pick a channel in the
+create dialog's "Type" selector (or pass `kind` to the API) when all you want
+is a plain message in a chat, not a signed integration.
+
+The core difference: **channel kinds are not signed**. There is no HMAC, no
+`webhook-*` headers, and no `secret`. Authentication is the URL itself: each
+channel's incoming URL is a bearer credential, so anyone who has it can post
+to your channel. Keep it as secret as you would a password. The SSRF guard
+and the no-redirect policy still apply to channel URLs, same as Generic.
+
+### Getting each channel's URL
+
+**Slack.** Add the "Incoming Webhooks" app to your workspace (or open an
+existing app's configuration), enable incoming webhooks, and create one for
+the channel you want. Slack gives you a URL shaped like
+`https://hooks.slack.com/services/T000/B000/XXXXXXXX`. Paste that as the
+subscription URL.
+
+**Discord.** In the target channel, open Server Settings > Integrations >
+Webhooks, create a new webhook, and copy its URL
+(`https://discord.com/api/webhooks/<id>/<token>`). Paste that as the
+subscription URL.
+
+**Telegram.** Message [@BotFather](https://t.me/BotFather) to create a bot
+and get its token. Find the numeric `chat_id` of the chat you want messages
+in (a private chat, group, or channel your bot is a member of). Build the
+URL yourself:
+
+```
+https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>
+```
+
+Paste that whole URL as the subscription URL. quark POSTs `text` in the JSON
+body; Telegram reads `chat_id` from the query string and `text` from the
+body.
+
+### Message format
+
+quark derives a short plain-text message from the same event data that
+Generic subscriptions receive, then wraps it in the shape each channel
+expects:
+
+| Event | Message |
+|---|---|
+| `link.created` | `New short link: {code} -> {url}` |
+| `link.updated` | `Short link updated: {code} -> {url}` |
+| `link.deleted` | `Short link deleted: {code}` |
+| `link.expired` | `Short link expired: {code}` |
+| `link.clicked` | `Click on {code} -> {url}`, with ` ({country})` appended when the click carried a country |
+
+Slack and Telegram both receive:
+
+```json
+{"text": "New short link: aB3xZ9k -> https://example.com/dest"}
+```
+
+Discord receives:
+
+```json
+{"content": "New short link: aB3xZ9k -> https://example.com/dest"}
+```
+
+This is plain text, no formatting markup. Slack's Block Kit and Discord's
+rich embeds are richer message formats both channels support; quark doesn't
+build them today. That's a future formatting upgrade, not something you can
+opt into now.
+
+### API
+
+Channel subscriptions use the same endpoints as Generic, with `kind` in the
+create request:
+
+```bash
+curl -X POST localhost:8080/admin/webhooks \
+  -H 'x-admin-token: <token>' -H 'content-type: application/json' \
+  -d '{"url": "https://hooks.slack.com/services/T000/B000/XXXXXXXX", "events": ["link.created"], "kind": "slack"}'
+# => {"id": 2}   (no "secret" field: channel kinds aren't signed)
+```
+
+`kind` is one of `"generic"`, `"slack"`, `"discord"`, `"telegram"`; it
+defaults to `"generic"` when omitted.

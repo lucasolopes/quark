@@ -7,7 +7,10 @@
 
 use crate::abuse::{extract_host, is_internal_host};
 use crate::store::Store;
-use crate::webhooks::{matches, sign, EventType, WebhookEvent, WebhookSubscription};
+use crate::webhooks::{
+    channel_payload, format_message, matches, sign, EventType, SubscriptionKind, WebhookEvent,
+    WebhookSubscription,
+};
 use reqwest::redirect::Policy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -171,34 +174,82 @@ async fn deliver_to_matching_guarded(
     }
 }
 
-/// Signs and POSTs `ev.body` verbatim to `sub.url`, retrying up to
-/// `DELIVERY_ATTEMPTS` times with exponential backoff + jitter on non-2xx
-/// responses or transport errors. Fail-open: exhausting the budget only
-/// logs, it never propagates an error.
-async fn deliver_one(client: &reqwest::Client, sub: &WebhookSubscription, ev: &WebhookEvent) {
-    let msg_id = generate_msg_id();
-    let ts = crate::now() as i64;
-    let signature = match sign(&sub.secret, &msg_id, ts, &ev.body) {
-        Ok(sig) => sig,
-        Err(e) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({"webhook_sign_error": e.to_string(), "url": &sub.url})
-            );
-            return;
+/// The per-attempt body plus any extra headers to send with it, computed
+/// once per delivery (not per retry attempt) by `deliver_one`.
+pub(crate) struct OutgoingRequest {
+    pub(crate) body: String,
+    pub(crate) extra_headers: Vec<(&'static str, String)>,
+}
+
+/// Builds the outgoing request for `sub`/`ev`, branching on the
+/// subscription kind: `Generic` signs `ev.body` verbatim per Standard
+/// Webhooks and adds the three `webhook-*` headers; the native chat kinds
+/// (Slack/Discord/Telegram) format a plain-text message from `ev.body` and
+/// wrap it in that channel's JSON shape, unsigned, with no extra headers
+/// (the receiver authenticates by the secret URL itself). Returns `None`
+/// only if signing fails for `Generic` (invalid secret encoding).
+///
+/// Shared with `api::admin_webhooks_test`, so the "send test event" admin
+/// endpoint produces byte-for-byte the same request shape a real delivery
+/// would (see review Task 1 of #6: the test-send previously always sent a
+/// signed Generic envelope, which is the wrong shape for channel kinds).
+pub(crate) fn build_outgoing_request(
+    sub: &WebhookSubscription,
+    ev: &WebhookEvent,
+) -> Option<OutgoingRequest> {
+    match sub.kind {
+        SubscriptionKind::Generic => {
+            let msg_id = generate_msg_id();
+            let ts = crate::now() as i64;
+            let signature = match sign(&sub.secret, &msg_id, ts, &ev.body) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({"webhook_sign_error": e.to_string(), "url": &sub.url})
+                    );
+                    return None;
+                }
+            };
+            Some(OutgoingRequest {
+                body: ev.body.clone(),
+                extra_headers: vec![
+                    ("webhook-id", msg_id),
+                    ("webhook-timestamp", ts.to_string()),
+                    ("webhook-signature", signature),
+                ],
+            })
         }
+        kind => {
+            let message = format_message(ev.event_type, &ev.body);
+            // `channel_payload` only returns `None` for `Generic`, which
+            // this branch never sees.
+            let body = channel_payload(kind, &message)
+                .expect("channel_payload is Some for non-Generic kinds");
+            Some(OutgoingRequest {
+                body,
+                extra_headers: Vec::new(),
+            })
+        }
+    }
+}
+
+/// Delivers `ev` to `sub`, retrying up to `DELIVERY_ATTEMPTS` times with
+/// exponential backoff + jitter on non-2xx responses or transport errors.
+/// Fail-open: exhausting the budget only logs, it never propagates an error.
+async fn deliver_one(client: &reqwest::Client, sub: &WebhookSubscription, ev: &WebhookEvent) {
+    let Some(req) = build_outgoing_request(sub, ev) else {
+        return;
     };
 
     for attempt in 0..DELIVERY_ATTEMPTS {
-        let res = client
+        let mut builder = client
             .post(&sub.url)
-            .header("content-type", "application/json")
-            .header("webhook-id", &msg_id)
-            .header("webhook-timestamp", ts.to_string())
-            .header("webhook-signature", &signature)
-            .body(ev.body.clone())
-            .send()
-            .await;
+            .header("content-type", "application/json");
+        for (name, value) in &req.extra_headers {
+            builder = builder.header(*name, value);
+        }
+        let res = builder.body(req.body.clone()).send().await;
 
         match res {
             Ok(resp) if resp.status().is_success() => return,
@@ -229,6 +280,13 @@ async fn deliver_one(client: &reqwest::Client, sub: &WebhookSubscription, ev: &W
         }
     }
 
+    // `webhook-id` is only present for `Generic` (Standard Webhooks signing);
+    // channel kinds have no per-attempt id to report.
+    let msg_id = req
+        .extra_headers
+        .iter()
+        .find(|(name, _)| *name == "webhook-id")
+        .map(|(_, value)| value.as_str());
     eprintln!(
         "{}",
         serde_json::json!({"webhook_delivery_exhausted": &sub.url, "msg_id": msg_id})
@@ -421,6 +479,7 @@ mod tests {
             secret: secret.to_string(),
             active,
             created: 0,
+            kind: SubscriptionKind::Generic,
         }
     }
 
@@ -466,6 +525,116 @@ mod tests {
             .expect("webhook-signature header");
         let expected = sign(&secret, msg_id, ts, &body).unwrap();
         assert_eq!(sig, &expected);
+    }
+
+    /// A Slack-kind subscription must receive the formatted `{"text": ...}`
+    /// payload (not `ev.body` verbatim) and must NOT carry any of the
+    /// Standard Webhooks signing headers: the receiving Slack incoming
+    /// webhook authenticates by the secret URL itself, so signing would be
+    /// meaningless (and would leak nothing useful to a Slack client anyway).
+    #[tokio::test]
+    async fn worker_delivers_slack_payload_unsigned() {
+        let (url, state) = spawn_test_server(vec![200]).await;
+        let mut slack_sub = sub(1, &url, vec![EventType::LinkCreated], true, "");
+        slack_sub.kind = SubscriptionKind::Slack;
+        let subs = vec![slack_sub];
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
+            .redirect(Policy::none())
+            .build()
+            .unwrap();
+        let body =
+            r#"{"type":"link.created","data":{"code":"abc123","url":"https://e.com"}}"#.to_string();
+        let ev = WebhookEvent {
+            event_type: EventType::LinkCreated,
+            body,
+        };
+
+        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+
+        let captured = state.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let req = &captured[0];
+        assert_eq!(
+            req.body,
+            r#"{"text":"New short link: abc123 -> https://e.com"}"#
+        );
+        assert!(!req.headers.contains_key("webhook-signature"));
+        assert!(!req.headers.contains_key("webhook-id"));
+        assert!(!req.headers.contains_key("webhook-timestamp"));
+    }
+
+    /// A Discord-kind subscription must receive the formatted
+    /// `{"content": ...}` payload (Discord's shape, not Slack/Telegram's
+    /// `{"text": ...}`) and must NOT carry any Standard Webhooks signing
+    /// headers, for the same reason as Slack: the incoming webhook URL is
+    /// the authentication.
+    #[tokio::test]
+    async fn worker_delivers_discord_payload_unsigned() {
+        let (url, state) = spawn_test_server(vec![200]).await;
+        let mut discord_sub = sub(1, &url, vec![EventType::LinkCreated], true, "");
+        discord_sub.kind = SubscriptionKind::Discord;
+        let subs = vec![discord_sub];
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
+            .redirect(Policy::none())
+            .build()
+            .unwrap();
+        let body =
+            r#"{"type":"link.created","data":{"code":"abc123","url":"https://e.com"}}"#.to_string();
+        let ev = WebhookEvent {
+            event_type: EventType::LinkCreated,
+            body,
+        };
+
+        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+
+        let captured = state.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let req = &captured[0];
+        assert_eq!(
+            req.body,
+            r#"{"content":"New short link: abc123 -> https://e.com"}"#
+        );
+        assert!(!req.headers.contains_key("webhook-signature"));
+        assert!(!req.headers.contains_key("webhook-id"));
+        assert!(!req.headers.contains_key("webhook-timestamp"));
+    }
+
+    /// A Telegram-kind subscription must receive the formatted
+    /// `{"text": ...}` payload (same shape as Slack) and must NOT carry any
+    /// Standard Webhooks signing headers, for the same reason as Slack: the
+    /// incoming webhook URL is the authentication.
+    #[tokio::test]
+    async fn worker_delivers_telegram_payload_unsigned() {
+        let (url, state) = spawn_test_server(vec![200]).await;
+        let mut telegram_sub = sub(1, &url, vec![EventType::LinkCreated], true, "");
+        telegram_sub.kind = SubscriptionKind::Telegram;
+        let subs = vec![telegram_sub];
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
+            .redirect(Policy::none())
+            .build()
+            .unwrap();
+        let body =
+            r#"{"type":"link.created","data":{"code":"abc123","url":"https://e.com"}}"#.to_string();
+        let ev = WebhookEvent {
+            event_type: EventType::LinkCreated,
+            body,
+        };
+
+        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+
+        let captured = state.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let req = &captured[0];
+        assert_eq!(
+            req.body,
+            r#"{"text":"New short link: abc123 -> https://e.com"}"#
+        );
+        assert!(!req.headers.contains_key("webhook-signature"));
+        assert!(!req.headers.contains_key("webhook-id"));
+        assert!(!req.headers.contains_key("webhook-timestamp"));
     }
 
     /// Matching is enforced regardless of the SSRF guard: an inactive
