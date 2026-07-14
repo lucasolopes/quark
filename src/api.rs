@@ -36,6 +36,8 @@ pub struct CreateReq {
     url: String,
     alias: Option<String>,
     ttl: Option<u64>,
+    app_ios: Option<String>,
+    app_android: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -117,6 +119,16 @@ async fn create(
     if st.blocklist.is_blocked(&host, now()).await {
         return (StatusCode::FORBIDDEN, "blocked destination").into_response();
     }
+    if let Some(app) = req.app_ios.as_deref() {
+        if !app_destination_ok(&st, &headers, app).await {
+            return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
+        }
+    }
+    if let Some(app) = req.app_android.as_deref() {
+        if !app_destination_ok(&st, &headers, app).await {
+            return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
+        }
+    }
 
     let expiry = match req.ttl {
         Some(t) => match now().checked_add(t) {
@@ -129,8 +141,8 @@ async fn create(
         url: req.url.clone(),
         expiry,
         created: now(),
-        app_ios: None,
-        app_android: None,
+        app_ios: req.app_ios.clone(),
+        app_android: req.app_android.clone(),
     };
 
     if let Some(alias) = req.alias {
@@ -199,7 +211,6 @@ fn client_ip(
 /// Click platform inferred from the User-Agent, used to pick an app destination.
 /// Consumed by the redirect handler (wired in the device-redirect task).
 #[derive(Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 enum Platform {
     Ios,
     Android,
@@ -209,7 +220,6 @@ enum Platform {
 /// Classifies a click by User-Agent. Apple device tokens win over Android;
 /// anything else (desktop, bots, missing header) is `Other`. Case-sensitive
 /// substring match on the raw UA: these vendor tokens are stable.
-#[allow(dead_code)]
 fn classify_platform(ua: Option<&str>) -> Platform {
     match ua {
         Some(ua) if ua.contains("iPhone") || ua.contains("iPad") || ua.contains("iPod") => {
@@ -222,7 +232,6 @@ fn classify_platform(ua: Option<&str>) -> Platform {
 
 /// Resolves the app-specific destination for a click, or `None` when the record
 /// has none for the click's platform (the caller then falls back to `rec.url`).
-#[allow(dead_code)]
 fn app_destination<'a>(rec: &'a Record, ua: Option<&str>) -> Option<&'a str> {
     match classify_platform(ua) {
         Platform::Ios => rec.app_ios.as_deref(),
@@ -243,6 +252,22 @@ fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
             .map(|h| h.split(':').next().unwrap_or(h).to_ascii_lowercase())
     });
     matches!(self_host, Some(sh) if sh == host)
+}
+
+/// Validates an app destination URL with the same rules as the main link URL:
+/// http/https scheme, a resolvable host, not an internal/self target, not
+/// blocklisted. Returns `true` when the URL passes every check.
+async fn app_destination_ok(st: &AppState, headers: &HeaderMap, url: &str) -> bool {
+    if !is_valid_url(url) {
+        return false;
+    }
+    let Some(host) = extract_host(url) else {
+        return false;
+    };
+    if st.block_private && is_blocked_target(&host, headers, st) {
+        return false;
+    }
+    !st.blocklist.is_blocked(&host, now()).await
 }
 
 /// Resolves a URL code into an id: first tries a numeric code (base62 in the
@@ -287,6 +312,16 @@ async fn redirect(
             }
             let cache_control = cache_control_for(rec.expiry, now);
 
+            let ua = headers
+                .get(header::USER_AGENT)
+                .and_then(|v| v.to_str().ok());
+            let dest = if rec.app_ios.is_some() || rec.app_android.is_some() {
+                app_destination(&rec, ua).map(str::to_string)
+            } else {
+                None
+            };
+            let location = dest.unwrap_or(rec.url);
+
             let ev = ClickEvent {
                 id,
                 ts: now,
@@ -308,7 +343,7 @@ async fn redirect(
             (
                 StatusCode::FOUND,
                 [
-                    (header::LOCATION, rec.url),
+                    (header::LOCATION, location),
                     (header::CACHE_CONTROL, cache_control),
                 ],
             )
@@ -587,6 +622,30 @@ async fn admin_link_patch(
             }
         } else {
             return (StatusCode::BAD_REQUEST, "invalid ttl").into_response();
+        }
+    }
+    if let Some(v) = patch.get("app_ios") {
+        if v.is_null() {
+            rec.app_ios = None;
+        } else if let Some(s) = v.as_str() {
+            if !app_destination_ok(&st, &headers, s).await {
+                return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
+            }
+            rec.app_ios = Some(s.to_string());
+        } else {
+            return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
+        }
+    }
+    if let Some(v) = patch.get("app_android") {
+        if v.is_null() {
+            rec.app_android = None;
+        } else if let Some(s) = v.as_str() {
+            if !app_destination_ok(&st, &headers, s).await {
+                return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
+            }
+            rec.app_android = Some(s.to_string());
+        } else {
+            return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
         }
     }
     if st.store.put_link(id, &rec).await.is_err() {

@@ -863,6 +863,140 @@ async fn wellknown_aasa_served_on_legacy_root() {
     assert_eq!(&bytes[..], body.as_bytes());
 }
 
+const IPHONE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)";
+const ANDROID_UA: &str = "Mozilla/5.0 (Linux; Android 14; Pixel 8)";
+const DESKTOP_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+
+async fn post_code(app: &axum::Router, body: &str) -> String {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    v["code"].as_str().unwrap().to_string()
+}
+
+async fn location_for_ua(app: &axum::Router, code: &str, ua: &str) -> (StatusCode, String) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .header("user-agent", ua)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let loc = resp
+        .headers()
+        .get("location")
+        .map(|v| v.to_str().unwrap().to_string())
+        .unwrap_or_default();
+    (status, loc)
+}
+
+#[tokio::test]
+async fn app_ios_destination_used_for_iphone_but_not_desktop() {
+    let app = app().await;
+    let code = post_code(
+        &app,
+        r#"{"url":"https://example.com","app_ios":"https://apps.apple.com/app/x"}"#,
+    )
+    .await;
+
+    let (status, loc) = location_for_ua(&app, &code, IPHONE_UA).await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert_eq!(loc, "https://apps.apple.com/app/x");
+
+    let (status, loc) = location_for_ua(&app, &code, DESKTOP_UA).await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert_eq!(loc, "https://example.com");
+}
+
+#[tokio::test]
+async fn no_app_fields_redirects_to_url_regardless_of_ua() {
+    let app = app().await;
+    let code = post_code(&app, r#"{"url":"https://example.com"}"#).await;
+
+    let (status, loc) = location_for_ua(&app, &code, IPHONE_UA).await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert_eq!(loc, "https://example.com");
+
+    let (status, loc) = location_for_ua(&app, &code, ANDROID_UA).await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert_eq!(loc, "https://example.com");
+}
+
+#[tokio::test]
+async fn create_internal_app_ios_400() {
+    let app = app().await;
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://example.com","app_ios":"http://127.0.0.1/"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn patch_internal_app_android_400() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://ok.com").await;
+    let r = app
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"app_android":"http://127.0.0.1/"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn patch_adds_app_android_used_for_android_ua() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://example.com").await;
+    let r = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"app_android":"https://play.google.com/store/apps/x"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    let (status, loc) = location_for_ua(&app, &code, ANDROID_UA).await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert_eq!(loc, "https://play.google.com/store/apps/x");
+}
+
 #[tokio::test]
 async fn cors_header_present_when_configured() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
