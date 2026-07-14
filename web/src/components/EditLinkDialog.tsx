@@ -20,6 +20,8 @@ import type { Link } from "@/lib/types";
 interface FormErrors {
   url?: string;
   ttl?: string;
+  appIos?: string;
+  appAndroid?: string;
   form?: string;
 }
 
@@ -39,6 +41,8 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
   const [url, setUrl] = useState(link.url);
   const [ttl, setTtl] = useState("");
   const [removeExpiry, setRemoveExpiry] = useState(false);
+  const [appIos, setAppIos] = useState(link.app_ios ?? "");
+  const [appAndroid, setAppAndroid] = useState(link.app_android ?? "");
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
 
@@ -66,6 +70,12 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
         next.ttl = t("dialogs.edit.ttlInvalid");
       }
     }
+    if (appIos.trim() && !isHttpUrl(appIos)) {
+      next.appIos = t("dialogs.edit.appDestInvalid");
+    }
+    if (appAndroid.trim() && !isHttpUrl(appAndroid)) {
+      next.appAndroid = t("dialogs.edit.appDestInvalid");
+    }
     return next;
   }
 
@@ -83,6 +93,8 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
         body: {
           url: url.trim(),
           ...(removeExpiry ? { ttl: null } : ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
+          ...(appIos.trim() ? { app_ios: appIos.trim() } : {}),
+          ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : {}),
         },
       });
       toast.success(t("dialogs.edit.successToast"));
@@ -160,6 +172,43 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
                 />
                 {t("dialogs.edit.removeExpiryLabel")}
               </label>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium">{t("dialogs.edit.appDestLabel")}</span>
+              <p className="text-sm text-muted-foreground">{t("dialogs.edit.appDestNote")}</p>
+              <label htmlFor="edit-link-app-ios" className="text-sm font-medium">
+                {t("dialogs.edit.appIosLabel")}
+              </label>
+              <Input
+                id="edit-link-app-ios"
+                type="text"
+                placeholder={t("dialogs.edit.appIosPlaceholder")}
+                value={appIos}
+                onChange={(e) => setAppIos(e.target.value)}
+                aria-invalid={errors.appIos != null}
+              />
+              {errors.appIos && (
+                <p className="text-sm text-destructive" role="alert">
+                  {errors.appIos}
+                </p>
+              )}
+              <label htmlFor="edit-link-app-android" className="text-sm font-medium">
+                {t("dialogs.edit.appAndroidLabel")}
+              </label>
+              <Input
+                id="edit-link-app-android"
+                type="text"
+                placeholder={t("dialogs.edit.appAndroidPlaceholder")}
+                value={appAndroid}
+                onChange={(e) => setAppAndroid(e.target.value)}
+                aria-invalid={errors.appAndroid != null}
+              />
+              {errors.appAndroid && (
+                <p className="text-sm text-destructive" role="alert">
+                  {errors.appAndroid}
+                </p>
+              )}
             </div>
 
             {errors.form && (

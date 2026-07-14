@@ -20,6 +20,8 @@ interface FormErrors {
   url?: string;
   alias?: string;
   ttl?: string;
+  appIos?: string;
+  appAndroid?: string;
   form?: string;
 }
 
@@ -38,6 +40,8 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
   const [url, setUrl] = useState("");
   const [alias, setAlias] = useState("");
   const [ttl, setTtl] = useState("");
+  const [appIos, setAppIos] = useState("");
+  const [appAndroid, setAppAndroid] = useState("");
   const [errors, setErrors] = useState<FormErrors>({});
   const createLink = useCreateLink();
 
@@ -45,6 +49,8 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
     setUrl("");
     setAlias("");
     setTtl("");
+    setAppIos("");
+    setAppAndroid("");
     setErrors({});
   }
 
@@ -71,6 +77,12 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
         next.ttl = t("dialogs.create.ttlInvalid");
       }
     }
+    if (appIos.trim() && !isHttpUrl(appIos)) {
+      next.appIos = t("dialogs.create.appDestInvalid");
+    }
+    if (appAndroid.trim() && !isHttpUrl(appAndroid)) {
+      next.appAndroid = t("dialogs.create.appDestInvalid");
+    }
     return next;
   }
 
@@ -87,6 +99,8 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
         url: url.trim(),
         ...(alias.trim() ? { alias: alias.trim() } : {}),
         ...(ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
+        ...(appIos.trim() ? { app_ios: appIos.trim() } : {}),
+        ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : {}),
       });
       toast.success(t("dialogs.create.successToast"));
       reset();
@@ -171,6 +185,45 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
               {errors.ttl && (
                 <p className="text-sm text-destructive" role="alert">
                   {errors.ttl}
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium">
+                {t("dialogs.create.appDestLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
+              </span>
+              <p className="text-sm text-muted-foreground">{t("dialogs.create.appDestNote")}</p>
+              <label htmlFor="create-link-app-ios" className="text-sm font-medium">
+                {t("dialogs.create.appIosLabel")}
+              </label>
+              <Input
+                id="create-link-app-ios"
+                type="text"
+                placeholder={t("dialogs.create.appIosPlaceholder")}
+                value={appIos}
+                onChange={(e) => setAppIos(e.target.value)}
+                aria-invalid={errors.appIos != null}
+              />
+              {errors.appIos && (
+                <p className="text-sm text-destructive" role="alert">
+                  {errors.appIos}
+                </p>
+              )}
+              <label htmlFor="create-link-app-android" className="text-sm font-medium">
+                {t("dialogs.create.appAndroidLabel")}
+              </label>
+              <Input
+                id="create-link-app-android"
+                type="text"
+                placeholder={t("dialogs.create.appAndroidPlaceholder")}
+                value={appAndroid}
+                onChange={(e) => setAppAndroid(e.target.value)}
+                aria-invalid={errors.appAndroid != null}
+              />
+              {errors.appAndroid && (
+                <p className="text-sm text-destructive" role="alert">
+                  {errors.appAndroid}
                 </p>
               )}
             </div>
