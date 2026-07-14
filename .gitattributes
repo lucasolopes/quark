@@ -1,10 +1,15 @@
-*.rs text eol=lf
-*.toml text eol=lf
-*.md text eol=lf
-*.js text eol=lf
-*.yml text eol=lf
-*.yaml text eol=lf
-*.sh text eol=lf
-Dockerfile text eol=lf
-.gitignore text eol=lf
-.dockerignore text eol=lf
+# Additive/append-only files across parallel feature branches: keep both sides.
+README.md            merge=union
+README.PT_BR.md      merge=union
+docs/ROADMAP.md      merge=union
+docs/ROADMAP.PT_BR.md merge=union
+Cargo.toml           merge=union
+web/src/i18n/en.ts       merge=union
+web/src/i18n/pt-BR.ts    merge=union
+web/src/app/Shell.tsx    merge=union
+web/src/app/router.tsx   merge=union
+web/src/lib/api.ts       merge=union
+web/src/lib/queries.ts   merge=union
+web/src/lib/types.ts     merge=union
+# Cargo.lock is regenerated from Cargo.toml, never union-merged.
+Cargo.lock           merge=binary
