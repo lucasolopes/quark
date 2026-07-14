@@ -4,6 +4,7 @@ import type {
   Stats, BlocklistResponse, PatchLinkRequest,
   ListWebhooksResponse, CreateWebhookRequest, CreateWebhookResponse,
   PatchWebhookRequest, TestWebhookResponse,
+  Stats, BlocklistResponse, PatchLinkRequest, ImportSummary,
 } from "./types";
 
 /**
@@ -29,7 +30,7 @@ async function req(path: string, opts: RequestInit = {}): Promise<Response> {
   const headers = new Headers(opts.headers);
   const token = getToken();
   if (token) headers.set("x-admin-token", token);
-  if (opts.body) headers.set("content-type", "application/json");
+  if (opts.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   const res = await fetch(BASE + path, { ...opts, headers });
   if (res.status === 401) { onUnauthorized(); throw new ApiError(401, "unauthorized"); }
   return res;
@@ -92,5 +93,15 @@ export const api = {
   },
   async testWebhook(id: number): Promise<TestWebhookResponse> {
     return jsonOrThrow(await req(`/admin/webhooks/${id}/test`, { method: "POST" }));
+  /**
+   * Bulk-imports links from a raw CSV or JSON body. `contentType` picks the
+   * parser server-side (`text/csv` or `application/json`) and is sent as-is,
+   * overriding the default `application/json` the shared `req` helper would
+   * otherwise set for any request with a body.
+   */
+  async importLinks(body: string, contentType: string): Promise<ImportSummary> {
+    return jsonOrThrow(
+      await req("/admin/import", { method: "POST", body, headers: { "content-type": contentType } }),
+    );
   },
 };

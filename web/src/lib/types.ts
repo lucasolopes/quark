@@ -51,3 +51,5 @@ export interface CreateWebhookRequest { url: string; events: WebhookEvent[]; act
 export interface CreateWebhookResponse { id: number; secret: string; }
 export interface PatchWebhookRequest { url?: string; events?: WebhookEvent[]; active?: boolean; }
 export interface TestWebhookResponse { delivered: boolean; status: number; }
+export interface ImportFailure { index: number; url: string; reason: string; }
+export interface ImportSummary { imported: number; failed: ImportFailure[]; }

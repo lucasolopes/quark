@@ -10,7 +10,7 @@
 
 > Os short codes são **calculados, não armazenados** — uma bijeção chaveada. Um binário estático minúsculo (~1 MB), sem Redis, sem banco de dados, sem serviços externos.
 
-**Links rápidos:** [Deploy](docs/DEPLOY.PT_BR.md) · [Arquitetura](docs/ARCHITECTURE.PT_BR.md) · [Edge/CDN](docs/EDGE.PT_BR.md) · [Roadmap](docs/ROADMAP.PT_BR.md)
+**Links rápidos:** [Deploy](docs/DEPLOY.PT_BR.md) · [Arquitetura](docs/ARCHITECTURE.PT_BR.md) · [Edge/CDN](docs/EDGE.PT_BR.md) · [Importação](docs/IMPORT.PT_BR.md) · [Roadmap](docs/ROADMAP.PT_BR.md)
 
 Um encurtador de URL cujo short code é uma **permutação ARX de rounds reduzidos e calibrada** do id inteiro interno. O código não é procurado em um índice — ele é **calculado**, nas duas direções, a partir de uma função bijetora minúscula. Essa única decisão de design remove uma classe inteira de problemas (colisões) e um índice inteiro (string → id) de uma vez.
 
@@ -237,6 +237,7 @@ Toda variável abaixo é opcional, exceto `QUARK_KEY` em produção. Deixe uma v
 - O log de acesso por requisição é **opt-in via `QUARK_ACCESS_LOG`** (desligado por default). Quando definido, cada requisição emite uma **linha de log JSON estruturada** no stdout (`{"method","path","status","latency_ms"}`) — capturada como está pelo Coolify/Docker, prontinha pra `grep` ou enviar a um coletor de logs. Desligado por default pra que o caminho quente de redirect não pague nenhum custo síncrono de `println!`/lock de stdout em alto throughput.
 - Redirects carregam um header **`Cache-Control` consciente do TTL**, então um CDN/browser consegue cachear o 302 (e nunca além da expiração de um link). Veja [`docs/EDGE.PT_BR.md`](docs/EDGE.PT_BR.md) pra colocar a Cloudflare na frente.
 - A blocklist de domínios é gerenciada via `GET/POST/DELETE /admin/blocklist` (corpo JSON `{"domain": "..."}` pra POST/DELETE), protegida por `QUARK_ADMIN_TOKEN` (header `x-admin-token`; não definida → 404, token errado → 401).
+- **Importação**: `POST /admin/import` cria links em lote a partir de um CSV ou JSON exportado (Bitly, Kutt, YOURLS, ou genérico), mesmo token admin, relatório de sucesso parcial por linha. Veja [`docs/IMPORT.PT_BR.md`](docs/IMPORT.PT_BR.md).
 
 ### Stack de dev local
 
@@ -263,6 +264,7 @@ do quark continua API-only. Dev: `cd web && npm install && npm run dev` (Vite na
 - Guia de cache Edge/CDN: [`docs/EDGE.PT_BR.md`](docs/EDGE.PT_BR.md)
 - Webhooks de saída assinados (eventos, payload, verificação de assinatura): [`docs/WEBHOOKS.PT_BR.md`](docs/WEBHOOKS.PT_BR.md)
 - Analytics de cliques e postura de privacidade (o que é capturado, o que nunca é armazenado): [`docs/ANALYTICS.PT_BR.md`](docs/ANALYTICS.PT_BR.md)
+- Migrando do Bitly/Kutt/YOURLS: [`docs/IMPORT.PT_BR.md`](docs/IMPORT.PT_BR.md)
 - O que vem a seguir: [`docs/ROADMAP.PT_BR.md`](docs/ROADMAP.PT_BR.md)
 - Design de sistema completo: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Passo a passo mais profundo de cada componente, modelo de dados e os internos do round Feistel: [`docs/ARCHITECTURE.PT_BR.md`](docs/ARCHITECTURE.PT_BR.md)

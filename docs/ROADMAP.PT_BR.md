@@ -48,6 +48,9 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 - **Licença + contribuições**: núcleo **AGPL-3.0-only**; `CLA.md` (license-grant) +
   `CONTRIBUTING.md` + bot do CLA (GitHub Action). Multi-tenancy/cloud fica proprietária, à parte.
 - **`docker-compose.yml`**: stack full (quark + Postgres + Valkey + ClickHouse) pra dev/self-host.
+- **Importador (#4)**: `POST /admin/import` cria links em lote a partir de um CSV ou JSON exportado
+  (Bitly, Kutt, YOURLS, genérico), relatório de sucesso parcial por linha, mais uma aba "Import" no
+  painel web. Doc: [`docs/IMPORT.PT_BR.md`](IMPORT.PT_BR.md).
 
 ## Próximo
 
