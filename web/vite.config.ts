@@ -16,5 +16,9 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: './src/test-setup.ts',
+    // Multi-step userEvent flows (dialogs with typing + clicks) can exceed the
+    // 5s default on a loaded machine; give them headroom so the suite is not
+    // flaky under load.
+    testTimeout: 20000,
   },
 })
