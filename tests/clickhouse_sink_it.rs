@@ -15,6 +15,7 @@ fn ev(id: u64, ts: u64, c: &str, ua: &str) -> ClickEvent {
         referer: None,
         country: Some(c.into()),
         user_agent: Some(ua.into()),
+        variant: None,
     }
 }
 
@@ -56,4 +57,30 @@ async fn recent_limits_to_n_ch() {
     let st = s.stats(7).await.unwrap().unwrap();
     assert_eq!(st.aggregates.total, 1200);
     assert_eq!(st.recent.len(), 1000);
+}
+
+#[tokio::test]
+#[serial(ch)]
+async fn per_variant_aggregates_and_recent_ch() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_CLICKHOUSE_URL not set");
+        return;
+    };
+    let mut a = ev(20, 1_752_300_000, "BR", "iPhone");
+    a.variant = Some(0);
+    let mut b = ev(20, 1_752_300_001, "BR", "iPhone");
+    b.variant = Some(0);
+    let mut c = ev(20, 1_752_300_002, "BR", "iPhone");
+    c.variant = Some(1);
+    let mut d = ev(20, 1_752_300_003, "BR", "iPhone");
+    d.variant = None;
+    s.record_batch(&[a, b, c, d]).await.unwrap();
+    let st = s.stats(20).await.unwrap().unwrap();
+    assert_eq!(st.aggregates.per_variant.get("0"), Some(&2));
+    assert_eq!(st.aggregates.per_variant.get("1"), Some(&1));
+    assert_eq!(st.aggregates.per_variant.get("-1"), None);
+    let variants: Vec<Option<u32>> = st.recent.iter().map(|e| e.variant).collect();
+    assert!(variants.contains(&Some(0)));
+    assert!(variants.contains(&Some(1)));
+    assert!(variants.contains(&None));
 }

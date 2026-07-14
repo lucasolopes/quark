@@ -15,6 +15,7 @@ async fn set_get_round_trip() {
         url: "https://example.com/valkey".into(),
         expiry: None,
         created: 1,
+        variants: Vec::new(),
     };
     tier.set(id, &rec, 60).await.unwrap();
     let got = tier.get(id).await.unwrap().unwrap();

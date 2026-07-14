@@ -195,6 +195,7 @@ mod tests {
             url: url.into(),
             expiry: None,
             created: 0,
+            variants: Vec::new(),
         }
     }
 
@@ -298,7 +299,8 @@ mod tests {
                 &Record {
                     url: "".into(),
                     expiry: None,
-                    created: 0
+                    created: 0,
+                    variants: Vec::new()
                 },
                 now,
                 3600
@@ -310,7 +312,8 @@ mod tests {
                 &Record {
                     url: "".into(),
                     expiry: Some(now + 100),
-                    created: 0
+                    created: 0,
+                    variants: Vec::new()
                 },
                 now,
                 3600
@@ -322,7 +325,8 @@ mod tests {
                 &Record {
                     url: "".into(),
                     expiry: Some(now + 999_999),
-                    created: 0
+                    created: 0,
+                    variants: Vec::new()
                 },
                 now,
                 3600
@@ -334,7 +338,8 @@ mod tests {
                 &Record {
                     url: "".into(),
                     expiry: Some(now - 1),
-                    created: 0
+                    created: 0,
+                    variants: Vec::new()
                 },
                 now,
                 3600

@@ -426,6 +426,7 @@ mod tests {
             url: u.into(),
             expiry: None,
             created: 0,
+            variants: Vec::new(),
         };
         for id in 1..=5u64 {
             s.put_link(id, &rec(&format!("https://e{id}.com")))

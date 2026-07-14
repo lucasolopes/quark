@@ -1,7 +1,7 @@
 use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
-use crate::store::{Record, Store, StoreError};
+use crate::store::{pick_variant, Record, Store, StoreError, Variant};
 use crate::{codec, now, permute};
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
@@ -36,6 +36,7 @@ pub struct CreateReq {
     url: String,
     alias: Option<String>,
     ttl: Option<u64>,
+    variants: Option<Vec<Variant>>,
 }
 
 #[derive(Serialize)]
@@ -53,6 +54,40 @@ const DEFAULT_MAX_AGE: u64 = 86400;
 const DEFAULT_PAGE_LIMIT: usize = 50;
 /// Maximum page size accepted for admin listing/search endpoints (clamp ceiling).
 const MAX_PAGE_LIMIT: usize = 500;
+/// Cap on the number of A/B variants a single link may have.
+const MAX_VARIANTS: usize = 10;
+
+/// Validates a set of A/B variants against the same rules as the main `url`:
+/// count cap, `is_valid_url`, SSRF guard (`is_blocked_target` + blocklist),
+/// and a minimum weight of 1. Shared by `create` and `admin_link_patch` so the
+/// two paths can never drift out of sync on SSRF coverage.
+async fn validate_variants(
+    variants: &[Variant],
+    headers: &HeaderMap,
+    st: &AppState,
+) -> Result<(), Response> {
+    if variants.len() > MAX_VARIANTS {
+        return Err((StatusCode::BAD_REQUEST, "too many variants").into_response());
+    }
+    for variant in variants {
+        if variant.weight < 1 {
+            return Err((StatusCode::BAD_REQUEST, "variant weight must be >= 1").into_response());
+        }
+        if !is_valid_url(&variant.url) {
+            return Err((StatusCode::BAD_REQUEST, "invalid variant url").into_response());
+        }
+        let Some(host) = extract_host(&variant.url) else {
+            return Err((StatusCode::BAD_REQUEST, "variant url without host").into_response());
+        };
+        if st.block_private && is_blocked_target(&host, headers, st) {
+            return Err((StatusCode::FORBIDDEN, "variant destination not allowed").into_response());
+        }
+        if st.blocklist.is_blocked(&host, now()).await {
+            return Err((StatusCode::FORBIDDEN, "blocked variant destination").into_response());
+        }
+    }
+    Ok(())
+}
 
 /// Computes the Cache-Control header value for a redirect response,
 /// respecting the link's TTL: never caches past expiry. Pure function,
@@ -112,6 +147,10 @@ async fn create(
     if st.blocklist.is_blocked(&host, now()).await {
         return (StatusCode::FORBIDDEN, "blocked destination").into_response();
     }
+    let variants = req.variants.clone().unwrap_or_default();
+    if let Err(resp) = validate_variants(&variants, &headers, &st).await {
+        return resp;
+    }
 
     let expiry = match req.ttl {
         Some(t) => match now().checked_add(t) {
@@ -124,6 +163,7 @@ async fn create(
         url: req.url.clone(),
         expiry,
         created: now(),
+        variants,
     };
 
     if let Some(alias) = req.alias {
@@ -245,6 +285,22 @@ async fn redirect(
             }
             let cache_control = cache_control_for(rec.expiry, now);
 
+            // Stateless weighted A/B pick: one getrandom draw, no store write.
+            // Links without variants (the common case) pay only the
+            // `is_empty()` check and move `rec.url` as before.
+            let (location, variant): (String, Option<u32>) = if rec.variants.is_empty() {
+                (rec.url, None)
+            } else {
+                let mut buf = [0u8; 8];
+                let r = if getrandom::getrandom(&mut buf).is_ok() {
+                    u64::from_le_bytes(buf)
+                } else {
+                    0
+                };
+                let i = pick_variant(&rec.variants, r);
+                (rec.variants[i].url.clone(), Some(i as u32))
+            };
+
             let ev = ClickEvent {
                 id,
                 ts: now,
@@ -260,13 +316,14 @@ async fn redirect(
                     .get(header::USER_AGENT)
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string()),
+                variant,
             };
             let _ = st.analytics_tx.try_send(ev);
 
             (
                 StatusCode::FOUND,
                 [
-                    (header::LOCATION, rec.url),
+                    (header::LOCATION, location),
                     (header::CACHE_CONTROL, cache_control),
                 ],
             )
@@ -404,6 +461,7 @@ struct LinkRow {
     url: String,
     expiry: Option<u64>,
     created: u64,
+    variants: Vec<Variant>,
 }
 
 async fn admin_links_list(
@@ -448,6 +506,7 @@ async fn admin_links_list(
             url: rec.url,
             expiry: rec.expiry,
             created: rec.created,
+            variants: rec.variants,
         })
         .collect();
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
@@ -546,6 +605,16 @@ async fn admin_link_patch(
         } else {
             return (StatusCode::BAD_REQUEST, "invalid ttl").into_response();
         }
+    }
+    if let Some(v) = patch.get("variants") {
+        let variants: Vec<Variant> = match serde_json::from_value(v.clone()) {
+            Ok(vs) => vs,
+            Err(_) => return (StatusCode::BAD_REQUEST, "invalid variants").into_response(),
+        };
+        if let Err(resp) = validate_variants(&variants, &headers, &st).await {
+            return resp;
+        }
+        rec.variants = variants;
     }
     if st.store.put_link(id, &rec).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

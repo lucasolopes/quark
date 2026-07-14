@@ -1,5 +1,6 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use quark::analytics::ClickEvent;
 use quark::api::{router, AppState};
 use quark::cache::Cache;
 use quark::store::open_backends;
@@ -723,6 +724,235 @@ async fn create_with_token_when_configured_ok() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// Builds an app like `app()` but returns the analytics receiver too, so
+/// tests can inspect the `ClickEvent` (in particular `variant`) that the
+/// redirect handler sends.
+async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<ClickEvent>) {
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000);
+    let (analytics_tx, rx) = tokio::sync::mpsc::channel(100);
+    let store2 = store.clone();
+    let state = Arc::new(AppState {
+        cache,
+        store,
+        key: 0x1234,
+        analytics_tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        blocklist: quark::abuse::blocklist::Blocklist::new(store2, None, 60),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+    });
+    (router(state), rx)
+}
+
+#[tokio::test]
+async fn redirect_with_two_variants_picks_one_of_the_urls_and_sets_click_event_variant() {
+    let (app, mut rx) = app_with_analytics_rx().await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://default.com","variants":[
+                        {"url":"https://variant-a.com","weight":1},
+                        {"url":"https://variant-b.com","weight":1}
+                    ]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    let resp = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    let location = resp.headers()["location"].to_str().unwrap().to_string();
+    assert!(
+        location == "https://variant-a.com" || location == "https://variant-b.com",
+        "unexpected location: {location}"
+    );
+
+    let ev = rx.try_recv().expect("redirect should send a ClickEvent");
+    assert!(
+        ev.variant == Some(0) || ev.variant == Some(1),
+        "expected Some(0|1), got {:?}",
+        ev.variant
+    );
+}
+
+#[tokio::test]
+async fn redirect_without_variants_uses_url_and_variant_is_none() {
+    let (app, mut rx) = app_with_analytics_rx().await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"https://plain.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    let resp = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    assert_eq!(resp.headers()["location"], "https://plain.com");
+
+    let ev = rx.try_recv().expect("redirect should send a ClickEvent");
+    assert_eq!(ev.variant, None);
+}
+
+#[tokio::test]
+async fn create_with_internal_variant_url_is_rejected() {
+    let app = app().await;
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://ok.com","variants":[
+                        {"url":"http://127.0.0.1:8080","weight":1}
+                    ]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn create_with_too_many_variants_400() {
+    let app = app().await;
+    let variants: Vec<String> = (0..11)
+        .map(|i| format!(r#"{{"url":"https://v{i}.com","weight":1}}"#))
+        .collect();
+    let body = format!(
+        r#"{{"url":"https://ok.com","variants":[{}]}}"#,
+        variants.join(",")
+    );
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_with_zero_weight_variant_400() {
+    let app = app().await;
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://ok.com","variants":[
+                        {"url":"https://a.com","weight":0}
+                    ]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn patch_with_internal_variant_url_is_rejected() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://ok.com").await;
+    let r = app
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"variants":[{"url":"http://127.0.0.1:9000","weight":1}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn patch_variants_round_trips_through_admin_list() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://ok.com").await;
+    let r = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"variants":[{"url":"https://x.com","weight":2}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    let r = app
+        .oneshot(
+            Request::get("/admin/links")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let links = v["links"].as_array().unwrap();
+    let link = links
+        .iter()
+        .find(|l| l["code"].as_str().unwrap() == code)
+        .unwrap();
+    assert_eq!(link["variants"][0]["url"], "https://x.com");
+    assert_eq!(link["variants"][0]["weight"], 2);
 }
 
 #[tokio::test]

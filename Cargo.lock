@@ -1664,6 +1664,7 @@ dependencies = [
  "axum",
  "clickhouse",
  "criterion",
+ "getrandom 0.2.17",
  "harsh",
  "heed",
  "hmac 0.13.0",
