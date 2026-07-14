@@ -45,6 +45,10 @@ bottleneck being geography/RTT, not the server).
 - **License + contributions**: **AGPL-3.0-only** core; `CLA.md` (license grant) +
   `CONTRIBUTING.md` + a CLA bot (GitHub Action). Multi-tenancy/cloud stays proprietary, separate.
 - **`docker-compose.yml`**: full stack (quark + Postgres + Valkey + ClickHouse) for dev/self-host.
+- **Deep linking (#20), core done**: hosts the iOS `apple-app-site-association` and Android
+  `assetlinks.json` files at their well-known paths, editable in the panel (**App Links**), served
+  as `application/json` over HTTPS with no redirect. Delivered on branch `feat/deep-linking` (not
+  merged). Guide: `docs/DEEP-LINKING.md`. The device-aware redirect is a follow-up (see Backlog).
 
 ## Next
 
@@ -56,6 +60,9 @@ bottleneck being geography/RTT, not the server).
 ## Backlog
 
 - **Custom domains**: `mydomain.com/abc`.
+- **Deep linking (#20) follow-up, device-aware redirect**: detect iOS/Android and open the app (an
+  app URI or the store) with a web fallback. Builds on the hosted association files (core done);
+  needs product decisions, so it is left for an interactive round.
 
 ## Design constraints (deliberate)
 

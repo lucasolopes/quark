@@ -44,6 +44,10 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 - **Licença + contribuições**: núcleo **AGPL-3.0-only**; `CLA.md` (license-grant) +
   `CONTRIBUTING.md` + bot do CLA (GitHub Action). Multi-tenancy/cloud fica proprietária, à parte.
 - **`docker-compose.yml`**: stack full (quark + Postgres + Valkey + ClickHouse) pra dev/self-host.
+- **Deep linking (#20), núcleo feito**: hospeda os arquivos `apple-app-site-association` (iOS) e
+  `assetlinks.json` (Android) nos caminhos well-known, editáveis no painel (**App Links**), servidos
+  como `application/json` sobre HTTPS sem redirect. Entregue na branch `feat/deep-linking` (não
+  mergeada). Guia: `docs/DEEP-LINKING.PT_BR.md`. O redirect ciente do aparelho é follow-up (veja Backlog).
 
 ## Próximo
 
@@ -55,6 +59,9 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 ## Backlog
 
 - **Domínios customizados**: `meudominio.com/abc`.
+- **Deep linking (#20) follow-up, redirect ciente do aparelho**: detectar iOS/Android e abrir o app
+  (uma URI de app ou a loja) com fallback web. Se apoia nos arquivos de associação hospedados
+  (núcleo feito); precisa de decisões de produto, então fica pra uma rodada interativa.
 
 ## Restrições de design (conscientes)
 
