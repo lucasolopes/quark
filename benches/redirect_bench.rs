@@ -59,6 +59,14 @@ fn bench(c: &mut Criterion) {
             block_private: true,
             public_host: None,
             real_ip_header: "cf-connecting-ip".to_string(),
+            webhooks: {
+                let (wh_tx, _wh_rx) = tokio::sync::mpsc::channel(1);
+                Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
+                    wh_tx,
+                    Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                ))
+            },
         });
         let code = to_base62(encode(1, key));
         (state, code, tx, worker)

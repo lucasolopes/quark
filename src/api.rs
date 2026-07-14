@@ -2,6 +2,8 @@ use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
 use crate::store::{Record, Store, StoreError};
+use crate::webhooks::delivery::WebhookDispatcher;
+use crate::webhooks::{self, EventType, WebhookEvent, WebhookSubscription};
 use crate::{codec, now, permute};
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
@@ -13,6 +15,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 use tower_http::cors::{Any, CorsLayer};
@@ -29,6 +32,7 @@ pub struct AppState {
     pub block_private: bool,
     pub public_host: Option<String>,
     pub real_ip_header: String,
+    pub webhooks: Arc<WebhookDispatcher>,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +57,83 @@ const DEFAULT_MAX_AGE: u64 = 86400;
 const DEFAULT_PAGE_LIMIT: usize = 50;
 /// Maximum page size accepted for admin listing/search endpoints (clamp ceiling).
 const MAX_PAGE_LIMIT: usize = 500;
+/// Maximum number of webhook subscriptions a deployment may register.
+const MAX_WEBHOOK_SUBSCRIPTIONS: usize = 50;
+/// Timeout for the synchronous one-shot delivery used by the "test" endpoint.
+const WEBHOOK_TEST_TIMEOUT_SECS: u64 = 5;
+
+/// A random id embedded in an outbound event payload's `id` field.
+/// Distinct from the `webhook-id` header the delivery worker assigns per
+/// attempt (see `webhooks::delivery::deliver_one`): this one identifies the
+/// event as recorded at emission time, before it is queued for delivery.
+fn generate_event_id() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("system RNG must be available");
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("evt_{hex}")
+}
+
+/// Builds the JSON body for an outbound webhook event, per the schema in
+/// `docs/specs/2026-07-13-webhooks-design.md`: `{id, type, timestamp, data}`,
+/// where `data` carries `code`, `url`, an optional `alias`, an optional
+/// `expiry`, and `created`. Optional fields are omitted (not `null`) when absent.
+fn webhook_event_payload(
+    event_type: EventType,
+    code: &str,
+    url: &str,
+    alias: Option<&str>,
+    expiry: Option<u64>,
+    created: u64,
+) -> String {
+    let mut data = serde_json::Map::new();
+    data.insert(
+        "code".to_string(),
+        serde_json::Value::String(code.to_string()),
+    );
+    data.insert(
+        "url".to_string(),
+        serde_json::Value::String(url.to_string()),
+    );
+    if let Some(a) = alias {
+        data.insert(
+            "alias".to_string(),
+            serde_json::Value::String(a.to_string()),
+        );
+    }
+    if let Some(e) = expiry {
+        data.insert("expiry".to_string(), serde_json::Value::from(e));
+    }
+    data.insert("created".to_string(), serde_json::Value::from(created));
+    serde_json::json!({
+        "id": generate_event_id(),
+        "type": event_type.as_str(),
+        "timestamp": now(),
+        "data": serde_json::Value::Object(data),
+    })
+    .to_string()
+}
+
+/// Validates a webhook subscription's target URL: must be http/https and must
+/// not resolve to an internal/loopback host (SSRF guard, reused from the link
+/// destination checks).
+fn validate_webhook_url(url: &str) -> Result<(), (StatusCode, &'static str)> {
+    if !is_valid_url(url) {
+        return Err((StatusCode::BAD_REQUEST, "invalid url"));
+    }
+    let Some(host) = extract_host(url) else {
+        return Err((StatusCode::BAD_REQUEST, "url without host"));
+    };
+    if is_internal_host(&host) {
+        return Err((StatusCode::BAD_REQUEST, "internal destination not allowed"));
+    }
+    Ok(())
+}
+
+/// Masks a webhook secret for display: the raw value is only ever returned
+/// once, at creation time.
+fn mask_secret(_secret: &str) -> String {
+    "whsec_••••".to_string()
+}
 
 /// Computes the Cache-Control header value for a redirect response,
 /// respecting the link's TTL: never caches past expiry. Pure function,
@@ -146,6 +227,18 @@ async fn create(
             Ok(false) => return (StatusCode::CONFLICT, "alias in use").into_response(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
+        let canonical_code = codec::to_base62(permute::encode(id, st.key));
+        st.webhooks.emit(WebhookEvent {
+            event_type: EventType::LinkCreated,
+            body: webhook_event_payload(
+                EventType::LinkCreated,
+                &canonical_code,
+                &rec.url,
+                Some(&alias),
+                rec.expiry,
+                rec.created,
+            ),
+        });
         return Json(CreateResp {
             code: alias,
             url: req.url,
@@ -167,6 +260,17 @@ async fn create(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let code = codec::to_base62(permute::encode(id, st.key));
+    st.webhooks.emit(WebhookEvent {
+        event_type: EventType::LinkCreated,
+        body: webhook_event_payload(
+            EventType::LinkCreated,
+            &code,
+            &rec.url,
+            None,
+            rec.expiry,
+            rec.created,
+        ),
+    });
     Json(CreateResp { code, url: req.url }).into_response()
 }
 
@@ -235,6 +339,19 @@ async fn redirect(
             let now = now();
             if let Some(exp) = rec.expiry {
                 if now >= exp {
+                    if st.webhooks.expired_subscribed.load(Ordering::Relaxed) {
+                        st.webhooks.emit(WebhookEvent {
+                            event_type: EventType::LinkExpired,
+                            body: webhook_event_payload(
+                                EventType::LinkExpired,
+                                &code,
+                                &rec.url,
+                                None,
+                                rec.expiry,
+                                rec.created,
+                            ),
+                        });
+                    }
                     return (
                         StatusCode::GONE,
                         [(header::CACHE_CONTROL, "no-store".to_string())],
@@ -262,6 +379,20 @@ async fn redirect(
                     .map(|s| s.to_string()),
             };
             let _ = st.analytics_tx.try_send(ev);
+
+            if st.webhooks.clicked_subscribed.load(Ordering::Relaxed) {
+                st.webhooks.emit(WebhookEvent {
+                    event_type: EventType::LinkClicked,
+                    body: webhook_event_payload(
+                        EventType::LinkClicked,
+                        &code,
+                        &rec.url,
+                        None,
+                        rec.expiry,
+                        rec.created,
+                    ),
+                });
+            }
 
             (
                 StatusCode::FOUND,
@@ -481,18 +612,30 @@ async fn admin_link_delete(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    match st.store.get_link(id).await {
-        Ok(Some(_)) => {}
+    let rec = match st.store.get_link(id).await {
+        Ok(Some(r)) => r,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    }
+    };
     if st.store.delete_link(id).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    if let Some(a) = alias {
-        let _ = st.store.delete_alias(&a).await;
+    if let Some(a) = &alias {
+        let _ = st.store.delete_alias(a).await;
     }
     st.cache.invalidate(id).await;
+    let canonical_code = codec::to_base62(permute::encode(id, st.key));
+    st.webhooks.emit(WebhookEvent {
+        event_type: EventType::LinkDeleted,
+        body: webhook_event_payload(
+            EventType::LinkDeleted,
+            &canonical_code,
+            &rec.url,
+            alias.as_deref(),
+            rec.expiry,
+            rec.created,
+        ),
+    });
     StatusCode::OK.into_response()
 }
 
@@ -505,7 +648,7 @@ async fn admin_link_patch(
     if let Err(status) = admin_guard(&st, &headers) {
         return status.into_response();
     }
-    let (id, _) = match resolve_for_admin(&st, &code).await {
+    let (id, alias) = match resolve_for_admin(&st, &code).await {
         Ok(Some(v)) => v,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -551,7 +694,215 @@ async fn admin_link_patch(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     st.cache.invalidate(id).await;
+    let canonical_code = codec::to_base62(permute::encode(id, st.key));
+    st.webhooks.emit(WebhookEvent {
+        event_type: EventType::LinkUpdated,
+        body: webhook_event_payload(
+            EventType::LinkUpdated,
+            &canonical_code,
+            &rec.url,
+            alias.as_deref(),
+            rec.expiry,
+            rec.created,
+        ),
+    });
     StatusCode::OK.into_response()
+}
+
+#[derive(Deserialize)]
+struct WebhookCreateReq {
+    url: String,
+    events: Vec<EventType>,
+    active: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct WebhookPatchReq {
+    url: Option<String>,
+    events: Option<Vec<EventType>>,
+    active: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct WebhookRow {
+    id: u64,
+    url: String,
+    events: Vec<EventType>,
+    active: bool,
+    created: u64,
+    secret_masked: String,
+}
+
+async fn admin_webhooks_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    match st.store.list_webhooks().await {
+        Ok(subs) => {
+            let rows: Vec<WebhookRow> = subs
+                .into_iter()
+                .map(|s| WebhookRow {
+                    id: s.id,
+                    url: s.url,
+                    events: s.events,
+                    active: s.active,
+                    created: s.created,
+                    secret_masked: mask_secret(&s.secret),
+                })
+                .collect();
+            Json(serde_json::json!({ "webhooks": rows })).into_response()
+        }
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn admin_webhooks_create(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<WebhookCreateReq>,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    if let Err((status, msg)) = validate_webhook_url(&req.url) {
+        return (status, msg).into_response();
+    }
+    let count = match st.store.list_webhooks().await {
+        Ok(subs) => subs.len(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if count >= MAX_WEBHOOK_SUBSCRIPTIONS {
+        return (StatusCode::BAD_REQUEST, "webhook subscription cap reached").into_response();
+    }
+    let id = match st.store.next_webhook_id().await {
+        Ok(id) => id,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let secret = webhooks::generate_secret();
+    let sub = WebhookSubscription {
+        id,
+        url: req.url,
+        events: req.events,
+        secret: secret.clone(),
+        active: req.active.unwrap_or(true),
+        created: now(),
+    };
+    if st.store.put_webhook(&sub).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "id": id, "secret": secret })),
+    )
+        .into_response()
+}
+
+async fn admin_webhooks_patch(
+    State(st): State<Arc<AppState>>,
+    Path(id): Path<u64>,
+    headers: HeaderMap,
+    Json(req): Json<WebhookPatchReq>,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    let mut sub = match st.store.get_webhook(id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if let Some(url) = req.url {
+        if let Err((status, msg)) = validate_webhook_url(&url) {
+            return (status, msg).into_response();
+        }
+        sub.url = url;
+    }
+    if let Some(events) = req.events {
+        sub.events = events;
+    }
+    if let Some(active) = req.active {
+        sub.active = active;
+    }
+    if st.store.put_webhook(&sub).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    StatusCode::OK.into_response()
+}
+
+async fn admin_webhooks_delete(
+    State(st): State<Arc<AppState>>,
+    Path(id): Path<u64>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    match st.store.delete_webhook(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// Sends a synthetic `link.created` event straight to a single subscription,
+/// bypassing the queue: unlike `emit`, the caller (an admin, testing their
+/// endpoint) wants to see the outcome, so this delivers once, synchronously,
+/// and reports the result instead of fire-and-forget.
+async fn admin_webhooks_test(
+    State(st): State<Arc<AppState>>,
+    Path(id): Path<u64>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    let sub = match st.store.get_webhook(id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let body = webhook_event_payload(
+        EventType::LinkCreated,
+        "TEST0000",
+        "https://example.com/test",
+        None,
+        None,
+        now(),
+    );
+    let msg_id = generate_event_id();
+    let ts = now() as i64;
+    let signature = match webhooks::sign(&sub.secret, &msg_id, ts, &body) {
+        Ok(s) => s,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(WEBHOOK_TEST_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let result = client
+        .post(&sub.url)
+        .header("webhook-id", &msg_id)
+        .header("webhook-timestamp", ts.to_string())
+        .header("webhook-signature", &signature)
+        .body(body)
+        .send()
+        .await;
+    match result {
+        Ok(resp) => Json(serde_json::json!({
+            "delivered": resp.status().is_success(),
+            "status": resp.status().as_u16(),
+        }))
+        .into_response(),
+        Err(e) => Json(serde_json::json!({
+            "delivered": false,
+            "error": e.to_string(),
+        }))
+        .into_response(),
+    }
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -631,6 +982,15 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             "/admin/links/:code",
             axum::routing::delete(admin_link_delete).patch(admin_link_patch),
         )
+        .route(
+            "/admin/webhooks",
+            get(admin_webhooks_list).post(admin_webhooks_create),
+        )
+        .route(
+            "/admin/webhooks/:id",
+            axum::routing::patch(admin_webhooks_patch).delete(admin_webhooks_delete),
+        )
+        .route("/admin/webhooks/:id/test", post(admin_webhooks_test))
         .with_state(state);
 
     let app = if origins.is_empty() {
