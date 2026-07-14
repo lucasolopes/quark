@@ -23,12 +23,14 @@ async fn put_get_link_pg() {
         max_visits: None,
         rules: Vec::new(),
         variants: Vec::new(),
+        app_ios: Some("https://apps.apple.com/x".into()),
+        app_android: None,
     };
     s.put_link(7, &rec).await.unwrap();
-    assert_eq!(
-        s.get_link(7).await.unwrap().unwrap().url,
-        "https://example.com"
-    );
+    let got = s.get_link(7).await.unwrap().unwrap();
+    assert_eq!(got.url, "https://example.com");
+    assert_eq!(got.app_ios.as_deref(), Some("https://apps.apple.com/x"));
+    assert_eq!(got.app_android, None);
     assert!(s.get_link(999).await.unwrap().is_none());
 }
 
@@ -58,6 +60,8 @@ async fn rules_round_trip_pg() {
             },
         ],
         variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
     };
     s.put_link(42, &rec).await.unwrap();
     let got = s.get_link(42).await.unwrap().unwrap();
@@ -79,6 +83,8 @@ async fn link_without_rules_round_trips_to_empty_vec_pg() {
         max_visits: None,
         rules: Vec::new(),
         variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
     };
     s.put_link(43, &rec).await.unwrap();
     let got = s.get_link(43).await.unwrap().unwrap();
@@ -110,6 +116,8 @@ async fn alias_is_atomic_no_orphan_pg() {
         max_visits: None,
         rules: Vec::new(),
         variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
     };
     assert!(s.put_alias_and_link("promo", 5, &rec).await.unwrap());
     assert!(!s.put_alias_and_link("promo", 9, &rec).await.unwrap());
@@ -131,6 +139,8 @@ async fn tags_round_trip_filter_and_distinct_pg() {
         max_visits: None,
         rules: Vec::new(),
         variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
     };
     s.put_link(1, &rec("https://a.com", &["rust", "web"]))
         .await
@@ -174,6 +184,8 @@ async fn visits_round_trip_pg() {
         max_visits: Some(5),
         rules: Vec::new(),
         variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
     };
     s.put_link(11, &rec).await.unwrap();
     assert_eq!(s.visits(11).await.unwrap(), 0);
@@ -195,6 +207,8 @@ async fn bump_visits_is_atomic_and_increments_pg() {
         max_visits: None,
         rules: Vec::new(),
         variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
     };
     s.put_link(12, &rec).await.unwrap();
     assert_eq!(s.bump_visits(12).await.unwrap(), 1);
@@ -242,6 +256,8 @@ async fn variants_round_trip_pg() {
                 weight: 3,
             },
         ],
+        app_ios: None,
+        app_android: None,
     };
     s.put_link(11, &rec).await.unwrap();
     let got = s.get_link(11).await.unwrap().unwrap();
@@ -261,7 +277,27 @@ async fn variants_round_trip_pg() {
         max_visits: None,
         rules: Vec::new(),
         variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
     };
     s.put_link(12, &plain).await.unwrap();
     assert!(s.get_link(12).await.unwrap().unwrap().variants.is_empty());
+}
+
+#[tokio::test]
+#[serial(pg)]
+async fn wellknown_round_trip_pg() {
+    let Some(s) = fresh().await else {
+        return;
+    };
+    assert_eq!(s.get_wellknown("assetlinks.json").await.unwrap(), None);
+    let body = r#"{"relation":["delegate_permission/common.handle_all_urls"]}"#;
+    s.put_wellknown("assetlinks.json", body).await.unwrap();
+    assert_eq!(
+        s.get_wellknown("assetlinks.json").await.unwrap(),
+        Some(body.to_string())
+    );
+    s.delete_wellknown("assetlinks.json").await.unwrap();
+    assert_eq!(s.get_wellknown("assetlinks.json").await.unwrap(), None);
+    s.delete_wellknown("assetlinks.json").await.unwrap();
 }

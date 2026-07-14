@@ -44,6 +44,8 @@ fn bench(c: &mut Criterion) {
                     max_visits: None,
                     rules: Vec::new(),
                     variants: Vec::new(),
+                    app_ios: None,
+                    app_android: None,
                 },
             )
             .await

@@ -16,6 +16,8 @@ async fn put_get_link() {
         max_visits: None,
         rules: Vec::new(),
         variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
     };
     store.put_link(7, &rec).await.unwrap();
     let got = store.get_link(7).await.unwrap().unwrap();
@@ -47,6 +49,8 @@ async fn put_alias_and_link_is_atomic() {
         max_visits: None,
         rules: Vec::new(),
         variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
     };
     let rec2 = Record {
         url: "https://other.com".into(),
@@ -56,6 +60,8 @@ async fn put_alias_and_link_is_atomic() {
         max_visits: None,
         rules: Vec::new(),
         variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
     };
 
     assert!(store.put_alias_and_link("promo", 5, &rec).await.unwrap());

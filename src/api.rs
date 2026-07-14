@@ -49,6 +49,8 @@ pub struct CreateReq {
     max_visits: Option<u32>,
     rules: Option<Vec<Rule>>,
     variants: Option<Vec<Variant>>,
+    app_ios: Option<String>,
+    app_android: Option<String>,
 }
 
 /// Normalizes the `max_visits` request field into the persisted representation:
@@ -270,6 +272,11 @@ async fn validate_variants(
     Ok(())
 }
 
+/// Document names accepted on the well-known routes (exact, no others).
+const WELLKNOWN_NAMES: [&str; 2] = ["apple-app-site-association", "assetlinks.json"];
+/// Maximum accepted body size for a well-known document (64 KiB).
+const WELLKNOWN_MAX: usize = 65536;
+
 /// Computes the Cache-Control header value for a redirect response,
 /// respecting the link's TTL: never caches past expiry. Pure function,
 /// a TDD target.
@@ -339,6 +346,8 @@ pub async fn create_link_core(
     max_visits: Option<u32>,
     rules: Vec<Rule>,
     variants: Vec<Variant>,
+    app_ios: Option<String>,
+    app_android: Option<String>,
     headers: &HeaderMap,
 ) -> Result<String, CreateError> {
     if !is_valid_url(url) {
@@ -369,6 +378,8 @@ pub async fn create_link_core(
         max_visits,
         rules,
         variants,
+        app_ios,
+        app_android,
     };
 
     if let Some(alias) = alias {
@@ -485,6 +496,16 @@ async fn create(
     if let Err(resp) = validate_variants(&variants, &headers, &st).await {
         return resp;
     }
+    if let Some(app) = req.app_ios.as_deref() {
+        if let Err(status) = app_destination_ok(&st, &headers, app).await {
+            return (status, "invalid app destination").into_response();
+        }
+    }
+    if let Some(app) = req.app_android.as_deref() {
+        if let Err(status) = app_destination_ok(&st, &headers, app).await {
+            return (status, "invalid app destination").into_response();
+        }
+    }
     match create_link_core(
         &st,
         &req.url,
@@ -494,6 +515,8 @@ async fn create(
         normalize_max_visits(req.max_visits),
         rules,
         variants,
+        req.app_ios.clone(),
+        req.app_android.clone(),
         &headers,
     )
     .await
@@ -555,6 +578,8 @@ async fn admin_import(
             None,
             Vec::new(),
             Vec::new(),
+            None,
+            None,
             &headers,
         )
         .await
@@ -589,6 +614,38 @@ fn client_ip(
     "unknown".to_string()
 }
 
+/// Click platform inferred from the User-Agent, used to pick an app destination.
+/// Consumed by the redirect handler (wired in the device-redirect task).
+#[derive(Debug, PartialEq, Eq)]
+enum Platform {
+    Ios,
+    Android,
+    Other,
+}
+
+/// Classifies a click by User-Agent. Apple device tokens win over Android;
+/// anything else (desktop, bots, missing header) is `Other`. Case-sensitive
+/// substring match on the raw UA: these vendor tokens are stable.
+fn classify_platform(ua: Option<&str>) -> Platform {
+    match ua {
+        Some(ua) if ua.contains("iPhone") || ua.contains("iPad") || ua.contains("iPod") => {
+            Platform::Ios
+        }
+        Some(ua) if ua.contains("Android") => Platform::Android,
+        _ => Platform::Other,
+    }
+}
+
+/// Resolves the app-specific destination for a click, or `None` when the record
+/// has none for the click's platform (the caller then falls back to `rec.url`).
+fn app_destination<'a>(rec: &'a Record, ua: Option<&str>) -> Option<&'a str> {
+    match classify_platform(ua) {
+        Platform::Ios => rec.app_ios.as_deref(),
+        Platform::Android => rec.app_android.as_deref(),
+        Platform::Other => None,
+    }
+}
+
 /// Built-in guard: internal network destination, or a loop back to quark's own host.
 fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
     if is_internal_host(host) {
@@ -601,6 +658,30 @@ fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
             .map(|h| h.split(':').next().unwrap_or(h).to_ascii_lowercase())
     });
     matches!(self_host, Some(sh) if sh == host)
+}
+
+/// Validates an app destination URL with the same rules — and the same status
+/// codes — as the main link URL: 400 for a malformed URL (bad scheme / no host),
+/// 403 for a policy denial (internal/self target or a blocklisted host). Mirrors
+/// the create/patch main-`url` arms exactly, in the same order.
+async fn app_destination_ok(
+    st: &AppState,
+    headers: &HeaderMap,
+    url: &str,
+) -> Result<(), StatusCode> {
+    if !is_valid_url(url) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let Some(host) = extract_host(url) else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+    if st.block_private && is_blocked_target(&host, headers, st) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if st.blocklist.is_blocked(&host, now()).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(())
 }
 
 /// Resolves a URL code into an id: first tries a numeric code (base62 in the
@@ -695,13 +776,23 @@ async fn redirect(
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
 
-            // Destination resolution composes geo/device rules (#12) with A/B
-            // variants (#17): a matching geo/device rule is a targeted redirect
-            // and takes precedence (no variant recorded); when no rule matches,
-            // the link's variants (if any) drive a stateless weighted A/B pick
-            // — one getrandom draw, no store write. Links with neither rules nor
-            // variants (the common case) just clone `rec.url`.
-            let (location, variant): (String, Option<u32>) =
+            // Destination resolution composes three targeting mechanisms in
+            // priority order: (1) device-aware app deep-links (#20) — a
+            // visitor on iOS/Android with a matching `app_ios`/`app_android`
+            // is the most specific intent and wins; then (2) geo/device
+            // redirect rules (#12), a targeted web redirect; then (3) A/B
+            // variants (#17), a stateless weighted pick (one getrandom draw,
+            // no store write). Links with none of these (the common case)
+            // just clone `rec.url`. `variant` is only recorded for the A/B
+            // branch.
+            let app_dest = if rec.app_ios.is_some() || rec.app_android.is_some() {
+                app_destination(&rec, user_agent.as_deref()).map(str::to_string)
+            } else {
+                None
+            };
+            let (location, variant): (String, Option<u32>) = if let Some(app) = app_dest {
+                (app, None)
+            } else {
                 match matched_rule_index(&rec.rules, country.as_deref(), user_agent.as_deref()) {
                     Some(i) => (rec.rules[i].to.clone(), None),
                     None if rec.variants.is_empty() => (rec.url.clone(), None),
@@ -715,7 +806,8 @@ async fn redirect(
                         let i = pick_variant(&rec.variants, r);
                         (rec.variants[i].url.clone(), Some(i as u32))
                     }
-                };
+                }
+            };
 
             let ev = ClickEvent {
                 id,
@@ -1173,6 +1265,30 @@ async fn admin_link_patch(
         }
         rec.variants = variants;
     }
+    if let Some(v) = patch.get("app_ios") {
+        if v.is_null() {
+            rec.app_ios = None;
+        } else if let Some(s) = v.as_str() {
+            if let Err(status) = app_destination_ok(&st, &headers, s).await {
+                return (status, "invalid app destination").into_response();
+            }
+            rec.app_ios = Some(s.to_string());
+        } else {
+            return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
+        }
+    }
+    if let Some(v) = patch.get("app_android") {
+        if v.is_null() {
+            rec.app_android = None;
+        } else if let Some(s) = v.as_str() {
+            if let Err(status) = app_destination_ok(&st, &headers, s).await {
+                return (status, "invalid app destination").into_response();
+            }
+            rec.app_android = Some(s.to_string());
+        } else {
+            return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
+        }
+    }
     if st.store.put_link(id, &rec).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
@@ -1241,6 +1357,16 @@ async fn admin_webhooks_list(State(st): State<Arc<AppState>>, headers: HeaderMap
                 .collect();
             Json(serde_json::json!({ "webhooks": rows })).into_response()
         }
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// Serves a stored well-known document as `application/json`. Public, no auth.
+/// `Some(body)` -> 200 verbatim; `None` -> 404; store error -> 503.
+async fn serve_wellknown(st: &AppState, name: &str) -> Response {
+    match st.store.get_wellknown(name).await {
+        Ok(Some(body)) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
@@ -1453,6 +1579,60 @@ async fn admin_webhooks_patch(
         _ => sub.secret = String::new(),
     }
     if st.store.put_webhook(&sub).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    StatusCode::OK.into_response()
+}
+
+async fn wellknown_aasa(State(st): State<Arc<AppState>>) -> Response {
+    serve_wellknown(&st, "apple-app-site-association").await
+}
+
+async fn wellknown_assetlinks(State(st): State<Arc<AppState>>) -> Response {
+    serve_wellknown(&st, "assetlinks.json").await
+}
+
+async fn admin_wellknown_get(
+    State(st): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
+        return status.into_response();
+    }
+    if !WELLKNOWN_NAMES.contains(&name.as_str()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match st.store.get_wellknown(&name).await {
+        Ok(Some(body)) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn admin_wellknown_put(
+    State(st): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
+        return status.into_response();
+    }
+    if !WELLKNOWN_NAMES.contains(&name.as_str()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if body.len() > WELLKNOWN_MAX {
+        return (StatusCode::BAD_REQUEST, "body too large").into_response();
+    }
+    let text = match std::str::from_utf8(&body) {
+        Ok(t) => t,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
+    };
+    if serde_json::from_str::<serde_json::Value>(text).is_err() {
+        return (StatusCode::BAD_REQUEST, "invalid json").into_response();
+    }
+    if st.store.put_wellknown(&name, text).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     StatusCode::OK.into_response()
@@ -1700,6 +1880,23 @@ async fn send_test_event_guarded(
     }
 }
 
+async fn admin_wellknown_delete(
+    State(st): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
+        return status.into_response();
+    }
+    if !WELLKNOWN_NAMES.contains(&name.as_str()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if st.store.delete_wellknown(&name).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -1804,6 +2001,18 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             "/admin/pixels/:id",
             axum::routing::delete(admin_pixels_delete),
         )
+        .route(
+            "/.well-known/apple-app-site-association",
+            get(wellknown_aasa),
+        )
+        .route("/apple-app-site-association", get(wellknown_aasa))
+        .route("/.well-known/assetlinks.json", get(wellknown_assetlinks))
+        .route(
+            "/admin/wellknown/:name",
+            get(admin_wellknown_get)
+                .put(admin_wellknown_put)
+                .delete(admin_wellknown_delete),
+        )
         .with_state(state);
 
     let app = if origins.is_empty() {
@@ -1828,10 +2037,11 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::{
-        access_log_line, cache_control_for, fbclid_from_query, normalize_max_visits,
-        parse_cors_origins, send_test_event_guarded, EventType, SubscriptionKind,
-        WebhookSubscription,
+        access_log_line, app_destination, cache_control_for, classify_platform, fbclid_from_query,
+        normalize_max_visits, parse_cors_origins, send_test_event_guarded, EventType, Platform,
+        SubscriptionKind, WebhookSubscription,
     };
+    use crate::store::Record;
     use axum::body::Bytes;
     use axum::extract::State;
     use axum::http::HeaderMap as ReqHeaderMap;
@@ -1839,6 +2049,26 @@ mod tests {
     use axum::Router as TestRouter;
     use std::sync::Mutex;
     use tokio::net::TcpListener;
+
+    fn rec(app_ios: Option<&str>, app_android: Option<&str>) -> Record {
+        Record {
+            url: "https://example.com".into(),
+            expiry: None,
+            created: 0,
+            tags: Vec::new(),
+            max_visits: None,
+            rules: Vec::new(),
+            variants: Vec::new(),
+            app_ios: app_ios.map(str::to_string),
+            app_android: app_android.map(str::to_string),
+        }
+    }
+
+    const IPHONE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)";
+    const IPAD_UA: &str = "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X)";
+    const IPOD_UA: &str = "Mozilla/5.0 (iPod touch; CPU iPhone OS 17_0 like Mac OS X)";
+    const ANDROID_UA: &str = "Mozilla/5.0 (Linux; Android 14; Pixel 8)";
+    const DESKTOP_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
 
     #[test]
     fn normalize_max_visits_zero_or_absent_is_unlimited() {
@@ -1878,6 +2108,55 @@ mod tests {
     fn fbclid_from_query_empty_is_none() {
         assert_eq!(fbclid_from_query(Some("")), None);
         assert_eq!(fbclid_from_query(Some("fbclid=")), None);
+    }
+
+    #[test]
+    fn classify_platform_detects_apple_devices() {
+        assert_eq!(classify_platform(Some(IPHONE_UA)), Platform::Ios);
+        assert_eq!(classify_platform(Some(IPAD_UA)), Platform::Ios);
+        assert_eq!(classify_platform(Some(IPOD_UA)), Platform::Ios);
+    }
+
+    #[test]
+    fn classify_platform_detects_android() {
+        assert_eq!(classify_platform(Some(ANDROID_UA)), Platform::Android);
+    }
+
+    #[test]
+    fn classify_platform_falls_back_to_other() {
+        assert_eq!(classify_platform(Some(DESKTOP_UA)), Platform::Other);
+        assert_eq!(classify_platform(Some("")), Platform::Other);
+        assert_eq!(classify_platform(None), Platform::Other);
+    }
+
+    #[test]
+    fn app_destination_returns_platform_match() {
+        let r = rec(
+            Some("https://apps.apple.com/x"),
+            Some("https://play.google.com/y"),
+        );
+        assert_eq!(
+            app_destination(&r, Some(IPHONE_UA)),
+            Some("https://apps.apple.com/x")
+        );
+        assert_eq!(
+            app_destination(&r, Some(ANDROID_UA)),
+            Some("https://play.google.com/y")
+        );
+    }
+
+    #[test]
+    fn app_destination_falls_back_when_platform_unset() {
+        let r = rec(Some("https://apps.apple.com/x"), None);
+        assert_eq!(app_destination(&r, Some(ANDROID_UA)), None);
+        assert_eq!(app_destination(&r, Some(DESKTOP_UA)), None);
+    }
+
+    #[test]
+    fn app_destination_none_when_no_fields() {
+        let r = rec(None, None);
+        assert_eq!(app_destination(&r, Some(IPHONE_UA)), None);
+        assert_eq!(app_destination(&r, Some(ANDROID_UA)), None);
     }
 
     #[test]

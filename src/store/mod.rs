@@ -33,6 +33,14 @@ pub struct Record {
     /// old blobs/rows without this field deserialize to an empty `Vec`.
     #[serde(default)]
     pub variants: Vec<Variant>,
+    /// Deep-link app destinations (roadmap #20): when set, a matching mobile
+    /// platform is redirected here instead of the web `url`. `#[serde(default,
+    /// skip_serializing_if)]` so old blobs deserialize to `None` and the field
+    /// is omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_ios: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_android: Option<String>,
 }
 
 /// Maximum number of tags kept per link (extra tags beyond this are dropped).
@@ -257,6 +265,13 @@ pub trait Store: Send + Sync + 'static {
     async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError>;
     async fn delete_pixel(&self, id: u64) -> Result<bool, StoreError>;
     async fn list_pixels(&self) -> Result<Vec<PixelConfig>, StoreError>;
+    /// Reads a well-known app-association document by name. The raw JSON is
+    /// returned verbatim (no parsing here; validation lives at the HTTP layer).
+    async fn get_wellknown(&self, name: &str) -> Result<Option<String>, StoreError>;
+    /// Stores a well-known document, replacing any existing body for `name`.
+    async fn put_wellknown(&self, name: &str, body: &str) -> Result<(), StoreError>;
+    /// Deletes a well-known document; a missing document is not an error.
+    async fn delete_wellknown(&self, name: &str) -> Result<(), StoreError>;
 }
 
 /// Opens only the Store on LMDB (used by tests that don't need the AnalyticsSink).
@@ -370,6 +385,8 @@ mod rules_tests {
             max_visits: None,
             rules,
             variants: Vec::new(),
+            app_ios: None,
+            app_android: None,
         }
     }
 

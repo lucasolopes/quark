@@ -42,6 +42,8 @@ interface FormErrors {
   ttl?: string;
   maxVisits?: string;
   rules?: string;
+  appIos?: string;
+  appAndroid?: string;
   form?: string;
   variants?: string;
 }
@@ -67,6 +69,8 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
   const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>(() => draftsFromRules(link.rules));
   const [showVariants, setShowVariants] = useState(link.variants.length > 0);
   const [variantRows, setVariantRows] = useState<VariantRow[]>(() => toVariantRows(link.variants));
+  const [appIos, setAppIos] = useState(link.app_ios ?? "");
+  const [appAndroid, setAppAndroid] = useState(link.app_android ?? "");
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
 
@@ -132,6 +136,12 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
         }
       }
     }
+    if (appIos.trim() && !isHttpUrl(appIos)) {
+      next.appIos = t("dialogs.edit.appDestInvalid");
+    }
+    if (appAndroid.trim() && !isHttpUrl(appAndroid)) {
+      next.appAndroid = t("dialogs.edit.appDestInvalid");
+    }
     return next;
   }
 
@@ -165,6 +175,8 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
               : {}),
           rules,
           variants: buildVariants(),
+          ...(appIos.trim() ? { app_ios: appIos.trim() } : link.app_ios?.trim() ? { app_ios: null } : {}),
+          ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : link.app_android?.trim() ? { app_android: null } : {}),
         },
       });
       toast.success(t("dialogs.edit.successToast"));
@@ -278,6 +290,43 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
               )}
             </div>
 
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium">{t("dialogs.edit.appDestLabel")}</span>
+              <p className="text-sm text-muted-foreground">{t("dialogs.edit.appDestNote")}</p>
+              <label htmlFor="edit-link-app-ios" className="text-sm font-medium">
+                {t("dialogs.edit.appIosLabel")}
+              </label>
+              <Input
+                id="edit-link-app-ios"
+                type="text"
+                placeholder={t("dialogs.edit.appIosPlaceholder")}
+                value={appIos}
+                onChange={(e) => setAppIos(e.target.value)}
+                aria-invalid={errors.appIos != null}
+              />
+              {errors.appIos && (
+                <p className="text-sm text-destructive" role="alert">
+                  {errors.appIos}
+                </p>
+              )}
+              <label htmlFor="edit-link-app-android" className="text-sm font-medium">
+                {t("dialogs.edit.appAndroidLabel")}
+              </label>
+              <Input
+                id="edit-link-app-android"
+                type="text"
+                placeholder={t("dialogs.edit.appAndroidPlaceholder")}
+                value={appAndroid}
+                onChange={(e) => setAppAndroid(e.target.value)}
+                aria-invalid={errors.appAndroid != null}
+              />
+              {errors.appAndroid && (
+                <p className="text-sm text-destructive" role="alert">
+                  {errors.appAndroid}
+                </p>
+              )}
+            </div>
+
             <RulesEditor idPrefix="edit-link" drafts={ruleDrafts} onChange={setRuleDrafts} />
             {errors.rules && (
               <p className="text-sm text-destructive" role="alert">
@@ -285,7 +334,6 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
               </p>
             )}
 
-=======
             <div className="flex flex-col gap-2">
               <Button
                 type="button"

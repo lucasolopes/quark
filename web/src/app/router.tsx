@@ -1,4 +1,5 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
+import { AppLinks } from "@/routes/AppLinks";
 import { Blocklist } from "@/routes/Blocklist";
 import { Import } from "@/routes/Import";
 import { LinkStats } from "@/routes/LinkStats";
@@ -28,6 +29,7 @@ export const router = createBrowserRouter([
       { path: "import", element: <Import /> },
       { path: "tokens", element: <Tokens /> },
       { path: "pixels", element: <Pixels /> },
+      { path: "app-links", element: <AppLinks /> },
     ],
   },
   { path: "*", element: <Navigate to="/links" replace /> },

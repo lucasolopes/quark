@@ -7,6 +7,7 @@ import type {
   ImportSummary, TagsResponse,
   ListTokensResponse, CreateTokenRequest, CreateTokenResponse,
   ListPixelsResponse, CreatePixelRequest, Pixel,
+  WellknownName,
 } from "./types";
 
 /**
@@ -129,6 +130,20 @@ export const api = {
   },
   async deletePixel(id: number): Promise<void> {
     const res = await req(`/admin/pixels/${encodeURIComponent(String(id))}`, { method: "DELETE" });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  async getWellknown(name: WellknownName): Promise<string | null> {
+    const res = await req(`/admin/wellknown/${encodeURIComponent(name)}`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    return res.text();
+  },
+  async putWellknown(name: WellknownName, body: string): Promise<void> {
+    const res = await req(`/admin/wellknown/${encodeURIComponent(name)}`, { method: "PUT", body });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  async deleteWellknown(name: WellknownName): Promise<void> {
+    const res = await req(`/admin/wellknown/${encodeURIComponent(name)}`, { method: "DELETE" });
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
 };

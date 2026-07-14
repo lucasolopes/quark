@@ -19,6 +19,8 @@ export interface Link {
   code: string;
   alias?: string;
   url: string;
+  app_ios?: string;
+  app_android?: string;
   expiry: number | null;
   created: number;
   tags: string[];
@@ -28,7 +30,7 @@ export interface Link {
   variants: Variant[];
 }
 export interface ListLinksResponse { links: Link[]; next_after: number | null; }
-export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; max_visits?: number; rules?: Rule[]; variants?: Variant[]; }
+export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; max_visits?: number; rules?: Rule[]; variants?: Variant[]; app_ios?: string; app_android?: string; }
 export interface CreateLinkResponse { code: string; url: string; }
 export interface TagsResponse { tags: string[]; }
 export interface ClickEvent {
@@ -51,7 +53,7 @@ export interface Aggregates {
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
 export interface BlocklistResponse { domains: string[]; }
-export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; variants?: Variant[]; }
+export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; variants?: Variant[]; app_ios?: string | null; app_android?: string | null; }
 
 /** The 5 link lifecycle events a webhook subscription can be notified about. */
 export const WEBHOOK_EVENTS = [
@@ -124,3 +126,6 @@ export interface CreatePixelRequest {
   credentials: PixelCredentials;
   active?: boolean;
 }
+
+/** The two well-known app-association document names the backend accepts. */
+export type WellknownName = "apple-app-site-association" | "assetlinks.json";

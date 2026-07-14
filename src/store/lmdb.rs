@@ -19,7 +19,7 @@ const LOCAL_BITS: u32 = 40 - NODE_BITS;
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1;
 
 /// Number of named LMDB sub-databases opened in the environment.
-const MAX_DBS: u32 = 10;
+const MAX_DBS: u32 = 11;
 /// Virtual address space (mmap) reserved for the LMDB environment.
 const MAP_SIZE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 
@@ -62,6 +62,7 @@ pub struct LmdbStore {
     api_tokens: Database<BeU64, Bytes>,
     visits: Database<BeU64, BeU64>,
     pixels: Database<BeU64, Bytes>,
+    wellknown: Database<Str, Str>,
     node_id: Option<u8>,
 }
 
@@ -92,6 +93,7 @@ impl LmdbStore {
         let api_tokens = env.create_database(&mut wtxn, Some("api_tokens"))?;
         let visits = env.create_database(&mut wtxn, Some("visits"))?;
         let pixels = env.create_database(&mut wtxn, Some("pixels"))?;
+        let wellknown = env.create_database(&mut wtxn, Some("wellknown"))?;
         wtxn.commit()?;
         Ok(LmdbStore {
             env,
@@ -105,6 +107,7 @@ impl LmdbStore {
             api_tokens,
             visits,
             pixels,
+            wellknown,
             node_id,
         })
     }
@@ -410,6 +413,25 @@ impl Store for LmdbStore {
         }
         Ok(out)
     }
+
+    async fn get_wellknown(&self, name: &str) -> Result<Option<String>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        Ok(self.wellknown.get(&rtxn, name)?.map(|s| s.to_string()))
+    }
+
+    async fn put_wellknown(&self, name: &str, body: &str) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        self.wellknown.put(&mut wtxn, name, body)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn delete_wellknown(&self, name: &str) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        self.wellknown.delete(&mut wtxn, name)?;
+        wtxn.commit()?;
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -603,6 +625,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wellknown_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        assert_eq!(s.get_wellknown("assetlinks.json").await.unwrap(), None);
+        let body = r#"{"relation":["delegate_permission/common.handle_all_urls"]}"#;
+        s.put_wellknown("assetlinks.json", body).await.unwrap();
+        assert_eq!(
+            s.get_wellknown("assetlinks.json").await.unwrap(),
+            Some(body.to_string())
+        );
+        s.delete_wellknown("assetlinks.json").await.unwrap();
+        assert_eq!(s.get_wellknown("assetlinks.json").await.unwrap(), None);
+        s.delete_wellknown("assetlinks.json").await.unwrap();
+    }
+
+    #[tokio::test]
     async fn search_links_is_unsupported_on_lmdb() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
@@ -622,6 +660,8 @@ mod tests {
             max_visits: None,
             rules: Vec::new(),
             variants: Vec::new(),
+            app_ios: None,
+            app_android: None,
         };
         for id in 1..=5u64 {
             s.put_link(id, &rec(&format!("https://e{id}.com")))
@@ -688,6 +728,8 @@ mod tests {
             max_visits: None,
             rules: Vec::new(),
             variants: Vec::new(),
+            app_ios: None,
+            app_android: None,
         };
         s.put_link(1, &rec("https://a.com", &["rust", "web"]))
             .await
@@ -804,5 +846,34 @@ mod tests {
         assert!(!s.delete_pixel(1).await.unwrap());
         assert!(s.get_pixel(1).await.unwrap().is_none());
         assert!(s.list_pixels().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn app_destinations_survive_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let rec = Record {
+            url: "https://example.com".into(),
+            expiry: None,
+            created: 0,
+            tags: Vec::new(),
+            max_visits: None,
+            rules: Vec::new(),
+            variants: Vec::new(),
+            app_ios: Some("https://apps.apple.com/x".into()),
+            app_android: None,
+        };
+        s.put_link(1, &rec).await.unwrap();
+        let got = s.get_link(1).await.unwrap().unwrap();
+        assert_eq!(got.app_ios.as_deref(), Some("https://apps.apple.com/x"));
+        assert_eq!(got.app_android, None);
+    }
+
+    #[test]
+    fn record_without_app_fields_deserializes_to_none() {
+        let blob = r#"{"url":"https://example.com","expiry":null,"created":7}"#;
+        let rec: Record = serde_json::from_str(blob).unwrap();
+        assert_eq!(rec.app_ios, None);
+        assert_eq!(rec.app_android, None);
     }
 }

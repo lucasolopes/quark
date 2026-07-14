@@ -510,6 +510,15 @@ mod tests {
         async fn list_pixels(&self) -> Result<Vec<crate::pixel::PixelConfig>, StoreError> {
             unimplemented!()
         }
+        async fn get_wellknown(&self, _name: &str) -> Result<Option<String>, StoreError> {
+            unimplemented!()
+        }
+        async fn put_wellknown(&self, _name: &str, _body: &str) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn delete_wellknown(&self, _name: &str) -> Result<(), StoreError> {
+            unimplemented!()
+        }
     }
 
     fn sub(

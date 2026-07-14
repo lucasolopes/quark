@@ -276,6 +276,7 @@ includes an optional UTM builder with locally saved templates (`localStorage`).
 - Migrating from Bitly/Kutt/YOURLS: [`docs/IMPORT.md`](docs/IMPORT.md)
 - Geo/device redirect rules: [`docs/REDIRECT-RULES.md`](docs/REDIRECT-RULES.md)
 - Server-side conversion forwarding (GA4/Meta CAPI, no client-side pixel): [`docs/CONVERSION-FORWARDING.md`](docs/CONVERSION-FORWARDING.md)
+- Deep linking (hosting the iOS/Android app-association files): [`docs/DEEP-LINKING.md`](docs/DEEP-LINKING.md)
 - What's next: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Full system design: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Deeper walkthrough of every component, data model and the Feistel round internals: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)

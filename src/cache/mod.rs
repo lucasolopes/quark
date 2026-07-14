@@ -199,6 +199,8 @@ mod tests {
             max_visits: None,
             rules: Vec::new(),
             variants: Vec::new(),
+            app_ios: None,
+            app_android: None,
         }
     }
 
@@ -306,7 +308,9 @@ mod tests {
                     tags: Vec::new(),
                     max_visits: None,
                     rules: Vec::new(),
-                    variants: Vec::new()
+                    variants: Vec::new(),
+                    app_ios: None,
+                    app_android: None
                 },
                 now,
                 3600
@@ -322,7 +326,9 @@ mod tests {
                     tags: Vec::new(),
                     max_visits: None,
                     rules: Vec::new(),
-                    variants: Vec::new()
+                    variants: Vec::new(),
+                    app_ios: None,
+                    app_android: None
                 },
                 now,
                 3600
@@ -338,7 +344,9 @@ mod tests {
                     tags: Vec::new(),
                     max_visits: None,
                     rules: Vec::new(),
-                    variants: Vec::new()
+                    variants: Vec::new(),
+                    app_ios: None,
+                    app_android: None
                 },
                 now,
                 3600
@@ -354,7 +362,9 @@ mod tests {
                     tags: Vec::new(),
                     max_visits: None,
                     rules: Vec::new(),
-                    variants: Vec::new()
+                    variants: Vec::new(),
+                    app_ios: None,
+                    app_android: None
                 },
                 now,
                 3600

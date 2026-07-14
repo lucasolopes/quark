@@ -1,6 +1,6 @@
 import { QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import type { CreateLinkRequest, CreatePixelRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest } from "./types";
+import type { CreateLinkRequest, CreatePixelRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest, WellknownName } from "./types";
 
 const LINKS_QUERY_KEY = ["links"];
 const BLOCKLIST_QUERY_KEY = ["blocklist"];
@@ -242,5 +242,33 @@ export function useDeletePixel() {
   return useMutation({
     mutationFn: (id: number) => api.deletePixel(id),
     onSuccess: () => { void client.invalidateQueries({ queryKey: PIXELS_QUERY_KEY }); },
+  });
+}
+
+const wellknownKey = (name: WellknownName) => ["wellknown", name];
+
+/** Current body of a well-known app-association document (`null` when unset). */
+export function useWellknown(name: WellknownName) {
+  return useQuery({
+    queryKey: wellknownKey(name),
+    queryFn: () => api.getWellknown(name),
+  });
+}
+
+/** Stores a well-known document; on success invalidates its query. */
+export function usePutWellknown(name: WellknownName) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: string) => api.putWellknown(name, body),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: wellknownKey(name) }); },
+  });
+}
+
+/** Removes a well-known document; on success invalidates its query. */
+export function useDeleteWellknown(name: WellknownName) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.deleteWellknown(name),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: wellknownKey(name) }); },
   });
 }

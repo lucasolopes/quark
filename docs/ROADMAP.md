@@ -69,6 +69,10 @@ bottleneck being geography/RTT, not the server).
   analytics worker (never the redirect hot path), fail-open. Panel: `/pixels`. Doc: `docs/CONVERSION-FORWARDING.md`.
 - **A/B testing (#17)**: a link can carry weighted variants; redirects split traffic by a
   stateless weighted pick, with per-variant click stats. Doc: `docs/AB-TESTING.md`.
+- **Deep linking (#20), core done**: hosts the iOS `apple-app-site-association` and Android
+  `assetlinks.json` files at their well-known paths, editable in the panel (**App Links**), served
+  as `application/json` over HTTPS with no redirect. Delivered on branch `feat/deep-linking` (not
+  merged). Guide: `docs/DEEP-LINKING.md`. The device-aware redirect is a follow-up (see Backlog).
 
 ## Next
 
@@ -80,6 +84,9 @@ bottleneck being geography/RTT, not the server).
 ## Backlog
 
 - **Custom domains**: `mydomain.com/abc`.
+- **Deep linking (#20) follow-up, device-aware redirect**: detect iOS/Android and open the app (an
+  app URI or the store) with a web fallback. Builds on the hosted association files (core done);
+  needs product decisions, so it is left for an interactive round.
 
 ## Design constraints (deliberate)
 
