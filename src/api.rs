@@ -918,6 +918,7 @@ async fn admin_webhooks_test(
     };
     let result = client
         .post(&sub.url)
+        .header("content-type", "application/json")
         .header("webhook-id", &msg_id)
         .header("webhook-timestamp", ts.to_string())
         .header("webhook-signature", &signature)

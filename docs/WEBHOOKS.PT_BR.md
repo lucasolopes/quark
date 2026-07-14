@@ -81,7 +81,7 @@ Toda requisição carrega três headers, seguindo o esquema simétrico do
 
 | Header | Significado |
 |---|---|
-| `webhook-id` | Único por tentativa de entrega. Use como chave de idempotência: se você já processou esse id, ignore a requisição. |
+| `webhook-id` | Estável por entrega, reusado em toda tentativa de retry dessa entrega. Use como chave de idempotência: se você já processou esse id, ignore a requisição. |
 | `webhook-timestamp` | Unix seconds de quando a requisição foi assinada. Rejeite requisições com mais de 5 minutos de idade (ou visivelmente no futuro): essa é a janela de replay. |
 | `webhook-signature` | `v1,<base64>`. Uma lista separada por espaço de entradas `v1,...`; basta uma delas bater na verificação. Várias entradas só aparecem durante rotação de segredo. |
 

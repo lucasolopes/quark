@@ -300,3 +300,58 @@ async fn link_clicked_emits_payload_with_click_context() {
     assert_eq!(payload["data"]["device"], "Mobile");
     assert!(payload["data"]["ts"].is_u64());
 }
+
+/// Hot-path coverage for the no-subscriber case: `app_admin_with_dispatcher`
+/// starts `clicked_subscribed` at `false` (no active `link.clicked`
+/// subscription), so a redirect must not enqueue a `WebhookEvent` at all.
+/// This is the gate in `api::redirect` (`st.webhooks.clicked_subscribed.load`)
+/// that keeps the hot path from paying for a payload build when nobody is
+/// listening; regressing it back to always-emit wouldn't fail any other test
+/// in this file, since the other click test presets the flag to `true`.
+#[tokio::test]
+async fn link_clicked_does_not_emit_without_subscriber() {
+    let (app, mut wh_rx) = app_admin_with_dispatcher("secret").await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(r#"{"url":"https://example.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = created["code"].as_str().unwrap().to_string();
+    // Drain the link.created event emitted by the POST above.
+    let _ = wh_rx
+        .try_recv()
+        .expect("expected a link.created event from creation");
+
+    // Keep `app` alive (clone rather than consume) so the `AppState`'s
+    // `WebhookDispatcher` sender is still held open when we check the
+    // channel below; otherwise dropping the last `Router` closes the
+    // channel and `try_recv` reports `Disconnected` instead of `Empty`,
+    // even though the real signal (no message was queued) is the same.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+
+    assert!(matches!(
+        wh_rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+}

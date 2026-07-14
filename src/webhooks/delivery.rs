@@ -192,6 +192,7 @@ async fn deliver_one(client: &reqwest::Client, sub: &WebhookSubscription, ev: &W
     for attempt in 0..DELIVERY_ATTEMPTS {
         let res = client
             .post(&sub.url)
+            .header("content-type", "application/json")
             .header("webhook-id", &msg_id)
             .header("webhook-timestamp", ts.to_string())
             .header("webhook-signature", &signature)

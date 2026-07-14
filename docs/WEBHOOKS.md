@@ -79,7 +79,7 @@ Every request carries three headers, following the
 
 | Header | Meaning |
 |---|---|
-| `webhook-id` | Unique per delivery attempt. Use it as the idempotency key: if you've already processed this id, skip it. |
+| `webhook-id` | Stable per delivery, reused across every retry attempt for that delivery. Use it as the idempotency key: if you've already processed this id, skip it. |
 | `webhook-timestamp` | Unix seconds when the request was signed. Reject requests where this is more than 5 minutes old (or noticeably in the future): that's the replay window. |
 | `webhook-signature` | `v1,<base64>`. A space-delimited list of `v1,...` entries; checking any one that matches is enough. Multiple entries only appear during secret rotation. |
 
