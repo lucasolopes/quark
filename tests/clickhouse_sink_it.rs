@@ -46,14 +46,65 @@ async fn record_and_stats_ch() {
     .await
     .unwrap();
     let st = s.stats(1).await.unwrap().unwrap();
-    assert_eq!(st.aggregates.total, 3);
+    assert_eq!(st.aggregates.total, 3, "total counts the bot click too");
+    assert_eq!(st.aggregates.bots, 1, "curl/8 is flagged as a bot");
     assert_eq!(st.aggregates.per_country.get("BR"), Some(&2));
-    assert_eq!(st.aggregates.per_country.get("US"), Some(&1));
+    assert_eq!(
+        st.aggregates.per_country.get("US"),
+        None,
+        "bot click excluded from the human-only breakdown"
+    );
     assert_eq!(st.aggregates.per_device.get("Mobile"), Some(&1));
     assert_eq!(st.aggregates.per_device.get("Desktop"), Some(&1));
-    assert_eq!(st.aggregates.per_device.get("Other"), Some(&1));
-    assert_eq!(st.recent.len(), 3);
+    assert_eq!(
+        st.aggregates.per_device.get("Other"),
+        None,
+        "bot click excluded from the human-only breakdown"
+    );
+    assert_eq!(st.recent.len(), 3, "recent includes bots too");
+    assert!(!st.recent[0].bot);
+    assert!(!st.recent[1].bot);
+    assert!(st.recent[2].bot, "curl/8 recent event flagged as bot");
     assert!(s.stats(999).await.unwrap().is_none());
+}
+
+#[tokio::test]
+#[serial(ch)]
+async fn bot_filter_ch() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_CLICKHOUSE_URL not set");
+        return;
+    };
+    s.record_batch(&[
+        ev(3, 1_752_300_000, "BR", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        ev(
+            3,
+            1_752_300_050,
+            "JP",
+            "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        ),
+        ev(3, 1_752_300_100, "DE", "curl/8.4.0"),
+    ])
+    .await
+    .unwrap();
+    let st = s.stats(3).await.unwrap().unwrap();
+    assert_eq!(st.aggregates.total, 3, "total counts bots too");
+    assert_eq!(st.aggregates.bots, 2, "Googlebot and curl are both bots");
+    assert_eq!(st.aggregates.per_country.get("BR"), Some(&1));
+    assert_eq!(
+        st.aggregates.per_country.get("JP"),
+        None,
+        "Googlebot excluded from human breakdown"
+    );
+    assert_eq!(
+        st.aggregates.per_country.get("DE"),
+        None,
+        "curl excluded from human breakdown"
+    );
+    assert_eq!(st.recent.len(), 3);
+    assert!(!st.recent[0].bot, "Chrome recent event is not a bot");
+    assert!(st.recent[1].bot, "Googlebot recent event flagged as bot");
+    assert!(st.recent[2].bot, "curl recent event flagged as bot");
 }
 
 #[tokio::test]

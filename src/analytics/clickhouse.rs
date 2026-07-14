@@ -1,5 +1,5 @@
 use crate::analytics::{
-    browser_from_ua, device_from_ua, os_from_ua, referer_host, Aggregates, AnalyticsSink,
+    browser_from_ua, device_from_ua, is_bot, os_from_ua, referer_host, Aggregates, AnalyticsSink,
     ClickEvent, Stats, EVENTS_MAX,
 };
 use crate::store::StoreError;
@@ -17,6 +17,7 @@ struct ClickRow<'a> {
     browser: &'a str,
     city: &'a str,
     referer_host: String,
+    bot: u8,
 }
 
 #[derive(Row, Deserialize)]
@@ -24,6 +25,7 @@ struct Totals {
     total: u64,
     first_ts: u64,
     last_ts: u64,
+    bots: u64,
 }
 #[derive(Row, Deserialize)]
 struct Kv {
@@ -38,6 +40,7 @@ struct RecentRow {
     device: String,
     referer: String,
     city: String,
+    bot: u8,
 }
 
 /// Empty string becomes `None`, otherwise `Some(s)`. Shortens the empty-field pattern.
@@ -96,7 +99,7 @@ impl ClickHouseSink {
     async fn init_schema(&self) -> Result<(), StoreError> {
         self.client
             .query(
-                "CREATE TABLE IF NOT EXISTS clicks (id UInt64, ts UInt64, country String, device String, referer String, os String, browser String, city String, referer_host String) ENGINE = MergeTree ORDER BY (id, ts)"
+                "CREATE TABLE IF NOT EXISTS clicks (id UInt64, ts UInt64, country String, device String, referer String, os String, browser String, city String, referer_host String, bot UInt8) ENGINE = MergeTree ORDER BY (id, ts)"
             )
             .execute()
             .await
@@ -112,6 +115,13 @@ impl ClickHouseSink {
                  ADD COLUMN IF NOT EXISTS city String, \
                  ADD COLUMN IF NOT EXISTS referer_host String",
             )
+            .execute()
+            .await
+            .map_err(StoreError::backend)?;
+        // Migration for tables created before the `bot` column existed
+        // (#5). Same idempotent `IF NOT EXISTS` pattern as above.
+        self.client
+            .query("ALTER TABLE clicks ADD COLUMN IF NOT EXISTS bot UInt8")
             .execute()
             .await
             .map_err(StoreError::backend)
@@ -139,6 +149,7 @@ impl AnalyticsSink for ClickHouseSink {
             let os = os_from_ua(e.user_agent.as_deref());
             let browser = browser_from_ua(e.user_agent.as_deref());
             let host = referer_host(e.referer.as_deref());
+            let bot = u8::from(is_bot(e.user_agent.as_deref()));
             let row = ClickRow {
                 id: e.id,
                 ts: e.ts,
@@ -149,6 +160,7 @@ impl AnalyticsSink for ClickHouseSink {
                 browser,
                 city: e.city.as_deref().unwrap_or(""),
                 referer_host: host,
+                bot,
             };
             insert.write(&row).await.map_err(StoreError::backend)?;
         }
@@ -159,7 +171,10 @@ impl AnalyticsSink for ClickHouseSink {
     async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError> {
         let totals: Totals = self
             .client
-            .query("SELECT count() AS total, min(ts) AS first_ts, max(ts) AS last_ts FROM clicks WHERE id = ?")
+            .query(
+                "SELECT count() AS total, min(ts) AS first_ts, max(ts) AS last_ts, \
+                 countIf(bot = 1) AS bots FROM clicks WHERE id = ?",
+            )
             .bind(id)
             .fetch_one()
             .await
@@ -168,17 +183,21 @@ impl AnalyticsSink for ClickHouseSink {
             return Ok(None);
         }
 
+        // `total` (and `bots`) count every click, bot included, matching the
+        // LMDB/Postgres path (Task 1). Every `per_*` breakdown below is
+        // human-only: `WHERE bot = 0` excludes flagged clicks.
         let mut agg = Aggregates {
             total: totals.total,
             first_ts: totals.first_ts,
             last_ts: totals.last_ts,
+            bots: totals.bots,
             ..Default::default()
         };
 
         let per_day: Vec<Kv> = self
             .client
             .query(
-                "SELECT formatDateTime(toDateTime(ts,'UTC'),'%F') AS k, count() AS c FROM clicks WHERE id = ? GROUP BY k",
+                "SELECT formatDateTime(toDateTime(ts,'UTC'),'%F') AS k, count() AS c FROM clicks WHERE id = ? AND bot = 0 GROUP BY k",
             )
             .bind(id)
             .fetch_all()
@@ -190,7 +209,9 @@ impl AnalyticsSink for ClickHouseSink {
 
         let per_country: Vec<Kv> = self
             .client
-            .query("SELECT country AS k, count() AS c FROM clicks WHERE id = ? GROUP BY k")
+            .query(
+                "SELECT country AS k, count() AS c FROM clicks WHERE id = ? AND bot = 0 GROUP BY k",
+            )
             .bind(id)
             .fetch_all()
             .await
@@ -203,7 +224,9 @@ impl AnalyticsSink for ClickHouseSink {
 
         let per_device: Vec<Kv> = self
             .client
-            .query("SELECT device AS k, count() AS c FROM clicks WHERE id = ? GROUP BY k")
+            .query(
+                "SELECT device AS k, count() AS c FROM clicks WHERE id = ? AND bot = 0 GROUP BY k",
+            )
             .bind(id)
             .fetch_all()
             .await
@@ -218,7 +241,7 @@ impl AnalyticsSink for ClickHouseSink {
         let per_os: Vec<Kv> = self
             .client
             .query(
-                "SELECT if(os = '', 'Other', os) AS k, count() AS c FROM clicks WHERE id = ? GROUP BY k",
+                "SELECT if(os = '', 'Other', os) AS k, count() AS c FROM clicks WHERE id = ? AND bot = 0 GROUP BY k",
             )
             .bind(id)
             .fetch_all()
@@ -231,7 +254,7 @@ impl AnalyticsSink for ClickHouseSink {
         let per_browser: Vec<Kv> = self
             .client
             .query(
-                "SELECT if(browser = '', 'Other', browser) AS k, count() AS c FROM clicks WHERE id = ? GROUP BY k",
+                "SELECT if(browser = '', 'Other', browser) AS k, count() AS c FROM clicks WHERE id = ? AND bot = 0 GROUP BY k",
             )
             .bind(id)
             .fetch_all()
@@ -248,7 +271,7 @@ impl AnalyticsSink for ClickHouseSink {
         let per_referer: Vec<Kv> = self
             .client
             .query(
-                "SELECT if(referer_host = '', 'direct', referer_host) AS k, count() AS c FROM clicks WHERE id = ? GROUP BY k",
+                "SELECT if(referer_host = '', 'direct', referer_host) AS k, count() AS c FROM clicks WHERE id = ? AND bot = 0 GROUP BY k",
             )
             .bind(id)
             .fetch_all()
@@ -261,7 +284,7 @@ impl AnalyticsSink for ClickHouseSink {
         let per_city: Vec<Kv> = self
             .client
             .query(
-                "SELECT city AS k, count() AS c FROM clicks WHERE id = ? AND city != '' GROUP BY k",
+                "SELECT city AS k, count() AS c FROM clicks WHERE id = ? AND city != '' AND bot = 0 GROUP BY k",
             )
             .bind(id)
             .fetch_all()
@@ -273,7 +296,7 @@ impl AnalyticsSink for ClickHouseSink {
 
         let mut recent_rows: Vec<RecentRow> = self
             .client
-            .query("SELECT ts, country, device, referer, city FROM clicks WHERE id = ? ORDER BY ts DESC LIMIT ?")
+            .query("SELECT ts, country, device, referer, city, bot FROM clicks WHERE id = ? ORDER BY ts DESC LIMIT ?")
             .bind(id)
             .bind(EVENTS_MAX as u64)
             .fetch_all()
@@ -289,10 +312,7 @@ impl AnalyticsSink for ClickHouseSink {
                 country: non_empty(r.country),
                 user_agent: None,
                 city: non_empty(r.city),
-                // ClickHouse does not select the user agent for recent
-                // rows, so the bot flag cannot be recomputed here yet; a
-                // dedicated `bot` column (Task 2) will carry it instead.
-                bot: false,
+                bot: r.bot != 0,
             })
             .collect();
 
