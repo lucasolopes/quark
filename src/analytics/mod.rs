@@ -15,6 +15,13 @@ pub struct ClickEvent {
     pub referer: Option<String>,
     pub country: Option<String>,
     pub user_agent: Option<String>,
+    /// Captured only to forward server-side conversions (Meta CAPI user_data).
+    /// `serde(skip)` keeps them in memory for the worker but out of the
+    /// persisted recent-events buffer, so the raw IP never lands on disk.
+    #[serde(skip)]
+    pub ip: Option<String>,
+    #[serde(skip)]
+    pub fbc: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -245,6 +252,8 @@ mod tests {
             referer: None,
             country: Some(country.into()),
             user_agent: Some(ua.into()),
+            ip: None,
+            fbc: None,
         }
     }
 
@@ -315,6 +324,8 @@ mod tests {
                 referer: None,
                 country: Some("BR".into()),
                 user_agent: Some("iPhone".into()),
+                ip: None,
+                fbc: None,
             })
             .await
             .unwrap();
@@ -328,6 +339,34 @@ mod tests {
     }
 
     #[test]
+    fn old_clickevent_json_without_ip_fbc_deserializes_with_none() {
+        let blob = r#"{"id":1,"ts":2,"referer":null,"country":"BR","user_agent":"UA"}"#;
+        let ev: ClickEvent = serde_json::from_str(blob).unwrap();
+        assert_eq!(ev.id, 1);
+        assert_eq!(ev.country.as_deref(), Some("BR"));
+        assert_eq!(ev.ip, None);
+        assert_eq!(ev.fbc, None);
+    }
+
+    #[test]
+    fn serialized_clickevent_never_contains_ip_or_fbc() {
+        let ev = ClickEvent {
+            id: 7,
+            ts: 100,
+            referer: None,
+            country: Some("BR".into()),
+            user_agent: Some("UA".into()),
+            ip: Some("203.0.113.9".into()),
+            fbc: Some("fb.1.100000.abc123".into()),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(!json.contains("203.0.113.9"));
+        assert!(!json.contains("fb.1.100000.abc123"));
+        assert!(!json.contains("\"ip\""));
+        assert!(!json.contains("\"fbc\""));
+    }
+
+    #[test]
     fn first_ts_handles_epoch_zero() {
         let mut a = Aggregates::default();
         a.apply(&ClickEvent {
@@ -336,6 +375,8 @@ mod tests {
             referer: None,
             country: None,
             user_agent: None,
+            ip: None,
+            fbc: None,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -343,6 +384,8 @@ mod tests {
             referer: None,
             country: None,
             user_agent: None,
+            ip: None,
+            fbc: None,
         });
         assert_eq!(a.first_ts, 0);
         assert_eq!(a.last_ts, 5_000_000_000);

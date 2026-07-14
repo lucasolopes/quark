@@ -27,6 +27,7 @@ clickhouse = "0.13"
 url = "2"
 tower-http = { version = "0.6", features = ["cors"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.11.0"
 
 [dev-dependencies]
 serial_test = "3"
@@ -37,7 +38,6 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 sqids = "0.4.2"
 harsh = "0.2.2"
 hmac = "0.13.0"
-sha2 = "0.11.0"
 
 [[bench]]
 name = "permute_bench"

@@ -145,13 +145,39 @@ pub fn ga4_payload(events: &[ClickEvent], key: u64) -> Value {
     })
 }
 
+/// Lowercase hex SHA-256 of the lowercased input. Used for the Meta
+/// `user_data` fields the Conversions API requires hashed (e.g. country).
+fn sha256_hex(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(s.to_lowercase().as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Builds the Meta Conversions API batch body for a slice of events.
 /// `link_code` is the real short code (`key`-derived), not the internal
-/// numeric id.
+/// numeric id. Each event carries a `user_data` object with only the keys
+/// present on the click: `client_ip_address`, `client_user_agent` and `fbc`
+/// are sent plain (Meta hashes the IP server-side and the others are not
+/// PII to hash), while `country` is sent as a SHA-256 hex of its lowercased
+/// value (Meta requires that field hashed). Absent keys are omitted, never
+/// emitted as null.
 pub fn meta_payload(events: &[ClickEvent], key: u64) -> Value {
     let data: Vec<Value> = events
         .iter()
         .map(|e| {
+            let mut user_data = serde_json::Map::new();
+            if let Some(ip) = &e.ip {
+                user_data.insert("client_ip_address".to_string(), json!(ip));
+            }
+            if let Some(ua) = &e.user_agent {
+                user_data.insert("client_user_agent".to_string(), json!(ua));
+            }
+            if let Some(fbc) = &e.fbc {
+                user_data.insert("fbc".to_string(), json!(fbc));
+            }
+            if let Some(country) = &e.country {
+                user_data.insert("country".to_string(), json!(sha256_hex(country)));
+            }
             json!({
                 "event_name": META_EVENT_NAME,
                 "event_time": e.ts,
@@ -159,6 +185,7 @@ pub fn meta_payload(events: &[ClickEvent], key: u64) -> Value {
                 "custom_data": {
                     "link_code": link_code(e.id, key),
                 },
+                "user_data": Value::Object(user_data),
             })
         })
         .collect();
@@ -256,6 +283,8 @@ mod tests {
             referer: None,
             country: country.map(str::to_string),
             user_agent: None,
+            ip: None,
+            fbc: None,
         }
     }
 
@@ -347,7 +376,18 @@ mod tests {
 
     #[test]
     fn meta_payload_has_expected_shape_and_batches() {
-        let events = vec![ev(20, 200, Some("BR")), ev(21, 201, Some("US"))];
+        let events = vec![
+            ClickEvent {
+                id: 20,
+                ts: 200,
+                referer: None,
+                country: Some("BR".into()),
+                user_agent: Some("Mozilla/5.0 (iPhone)".into()),
+                ip: Some("203.0.113.5".into()),
+                fbc: Some("fb.1.200000.abc".into()),
+            },
+            ev(21, 201, Some("US")),
+        ];
         let payload = meta_payload(&events, TEST_KEY);
         let data = payload["data"].as_array().unwrap();
         assert_eq!(data.len(), 2);
@@ -356,6 +396,20 @@ mod tests {
         assert_eq!(data[0]["action_source"], "website");
         assert_eq!(data[0]["custom_data"]["link_code"], link_code(20, TEST_KEY));
         assert_eq!(data[1]["custom_data"]["link_code"], link_code(21, TEST_KEY));
+
+        let ud = &data[0]["user_data"];
+        assert_eq!(ud["client_ip_address"], "203.0.113.5");
+        assert_eq!(ud["client_user_agent"], "Mozilla/5.0 (iPhone)");
+        assert_eq!(ud["fbc"], "fb.1.200000.abc");
+        assert_eq!(ud["country"], sha256_hex("BR"));
+        assert_eq!(sha256_hex("BR"), sha256_hex("br"));
+        assert_ne!(ud["client_user_agent"], sha256_hex("Mozilla/5.0 (iPhone)"));
+
+        let ud1 = &data[1]["user_data"];
+        assert!(ud1.get("client_ip_address").is_none());
+        assert!(ud1.get("client_user_agent").is_none());
+        assert!(ud1.get("fbc").is_none());
+        assert_eq!(ud1["country"], sha256_hex("US"));
     }
 
     #[test]

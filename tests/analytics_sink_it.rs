@@ -8,6 +8,8 @@ fn ev(id: u64, ts: u64) -> ClickEvent {
         referer: None,
         country: Some("BR".into()),
         user_agent: Some("iPhone".into()),
+        ip: None,
+        fbc: None,
     }
 }
 

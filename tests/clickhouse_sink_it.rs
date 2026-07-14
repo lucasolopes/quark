@@ -15,6 +15,8 @@ fn ev(id: u64, ts: u64, c: &str, ua: &str) -> ClickEvent {
         referer: None,
         country: Some(c.into()),
         user_agent: Some(ua.into()),
+        ip: None,
+        fbc: None,
     }
 }
 

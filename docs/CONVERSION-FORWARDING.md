@@ -49,21 +49,42 @@ note at the bottom).
 
 ## Privacy posture
 
-Only fields quark already captures for the click analytics feature are
-forwarded:
+**GA4** stays coarse. Only fields quark already captures for the click
+analytics feature are forwarded:
 
 - the link's short code (not the internal id),
 - the click's country (already derived server-side, e.g. from a CDN
   geo-header),
 - the event's timestamp.
 
-**Not sent**: the visitor's IP address, their raw User-Agent string, or any
-other client-side identifier. GA4 receives a synthetic `client_id`
-(generated per quark instance, not per visitor) instead of a real user id;
-Meta receives no user-data hashing pass in this version, so treat what
-arrives at either provider as an **anonymous conversion ping**, not an
-attributable user event. Advanced matching (hashed email/phone) is
-explicitly out of scope for now.
+GA4 gets no IP, no User-Agent, and a synthetic `client_id` generated per
+quark instance (not per visitor), so what arrives there is an **anonymous
+conversion ping**, not an attributable user event.
+
+**Meta CAPI** additionally carries a `user_data` object to raise match
+quality. Each forwarded event sends only the keys present on that click:
+
+- `client_ip_address`: the client IP, **plain** (Meta hashes IP server-side,
+  so quark must not pre-hash it),
+- `client_user_agent`: the raw User-Agent, **plain**,
+- `fbc`: the Meta click identifier, **plain**. It is derived from the
+  `fbclid` query parameter that Meta ads append to the destination URL,
+  formatted as `fb.1.<click_time_ms>.<fbclid>`,
+- `country`: **SHA-256 hashed** (hex of the lowercased country code, e.g.
+  `br`), because Meta requires that field hashed.
+
+Absent keys are omitted, never sent as null. Advanced matching (hashed
+email/phone) is still out of scope.
+
+### Privacy note: IP and fbc never touch disk
+
+The client IP and `fbc` are captured at click time for the sole purpose of
+forwarding the conversion to Meta. They are held **in memory only** and
+travel to the analytics worker through the in-process channel. They are
+marked `#[serde(skip)]` on the click event, so they are **not written** to
+quark's stored analytics (the persisted recent-events buffer). The raw IP is
+never persisted anywhere in quark; it exists only for the lifetime of the
+forward and is dropped afterward.
 
 ## Async, fail-open, never on the hot path
 

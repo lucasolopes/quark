@@ -200,6 +200,8 @@ impl AnalyticsSink for ClickHouseSink {
                 referer: non_empty(r.referer),
                 country: non_empty(r.country),
                 user_agent: None,
+                ip: None,
+                fbc: None,
             })
             .collect();
 

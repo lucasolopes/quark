@@ -52,22 +52,44 @@ a nota de follow-up no final).
 
 ## Postura de privacidade
 
-Só os campos que o quark já captura pra funcionalidade de analytics de
-clique são encaminhados:
+O **GA4** continua grosso. Só os campos que o quark já captura pra
+funcionalidade de analytics de clique são encaminhados:
 
 - o código curto do link (não o id interno),
 - o país do clique (já derivado no servidor, por exemplo a partir de um
   header de geo do CDN),
 - o timestamp do evento.
 
-**Não é enviado**: o endereço IP do visitante, o User-Agent bruto dele, ou
-qualquer outro identificador client-side. O GA4 recebe um `client_id`
-sintético (gerado por instância do quark, não por visitante) em vez de um id
-real de usuário; o Meta não recebe nenhuma etapa de hashing de dado do
-usuário nesta versão, então trate o que chega em qualquer um dos dois
-provedores como um **ping de conversão anônimo**, não um evento de usuário
-atribuível. Advanced matching (email/telefone com hash) fica explicitamente
-fora de escopo por enquanto.
+O GA4 não recebe IP, não recebe User-Agent, e recebe um `client_id`
+sintético gerado por instância do quark (não por visitante), então o que
+chega ali é um **ping de conversão anônimo**, não um evento de usuário
+atribuível.
+
+O **Meta CAPI** leva, além disso, um objeto `user_data` pra melhorar a
+qualidade de correspondência. Cada evento encaminhado envia só as chaves
+presentes naquele clique:
+
+- `client_ip_address`: o IP do cliente, **em texto puro** (o Meta faz o hash
+  do IP no lado dele, então o quark não deve pré-hashear),
+- `client_user_agent`: o User-Agent bruto, **em texto puro**,
+- `fbc`: o identificador de clique do Meta, **em texto puro**. Ele é
+  derivado do parâmetro de query `fbclid` que os anúncios do Meta acrescentam
+  na URL de destino, formatado como `fb.1.<tempo_do_clique_ms>.<fbclid>`,
+- `country`: **com hash SHA-256** (hex do código de país em minúsculo, por
+  exemplo `br`), porque o Meta exige esse campo hasheado.
+
+Chaves ausentes são omitidas, nunca enviadas como null. Advanced matching
+(email/telefone com hash) segue fora de escopo.
+
+### Nota de privacidade: IP e fbc nunca tocam o disco
+
+O IP do cliente e o `fbc` são capturados no momento do clique com o único
+propósito de encaminhar a conversão pro Meta. Eles ficam **só em memória** e
+viajam até o worker de analytics pelo canal em processo. Estão marcados com
+`#[serde(skip)]` no evento de clique, então **não são gravados** no analytics
+armazenado do quark (o buffer persistido de eventos recentes). O IP bruto
+nunca é persistido em lugar nenhum do quark; ele existe apenas durante o
+encaminhamento e é descartado depois.
 
 ## Assíncrono, fail-open, nunca no caminho quente
 

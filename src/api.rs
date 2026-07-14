@@ -5,7 +5,7 @@ use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::store::{Record, Store, StoreError};
 use crate::{codec, now, permute};
 use axum::body::Bytes;
-use axum::extract::{ConnectInfo, Path, Query, Request, State};
+use axum::extract::{ConnectInfo, Path, Query, RawQuery, Request, State};
 use axum::http::Method;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
@@ -215,9 +215,22 @@ async fn resolve_code(st: &AppState, code: &str) -> Result<Option<u64>, StoreErr
     }
 }
 
+/// Extracts and percent-decodes the `fbclid` query parameter Meta ads append
+/// to a click URL, if present. Used only to build the Meta `fbc` cookie value
+/// for server-side conversion forwarding; never persisted.
+fn fbclid_from_query(raw: Option<&str>) -> Option<String> {
+    let raw = raw?;
+    url::form_urlencoded::parse(raw.as_bytes())
+        .find(|(k, _)| k == "fbclid")
+        .map(|(_, v)| v.into_owned())
+        .filter(|v| !v.is_empty())
+}
+
 async fn redirect(
     State(st): State<Arc<AppState>>,
     Path(code): Path<String>,
+    conn: Option<ConnectInfo<SocketAddr>>,
+    RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
     let id = match resolve_code(&st, &code).await {
@@ -261,6 +274,12 @@ async fn redirect(
                     .get(header::USER_AGENT)
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string()),
+                ip: match client_ip(&headers, &st.real_ip_header, conn.as_ref()) {
+                    s if s == "unknown" => None,
+                    s => Some(s),
+                },
+                fbc: fbclid_from_query(raw_query.as_deref())
+                    .map(|fbclid| format!("fb.1.{}.{}", now.saturating_mul(1000), fbclid)),
             };
             let _ = st.analytics_tx.try_send(ev);
 
@@ -799,7 +818,35 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::{access_log_line, cache_control_for, parse_cors_origins};
+    use super::{access_log_line, cache_control_for, fbclid_from_query, parse_cors_origins};
+
+    #[test]
+    fn fbclid_from_query_present() {
+        assert_eq!(
+            fbclid_from_query(Some("a=1&fbclid=abc123&b=2")),
+            Some("abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn fbclid_from_query_absent() {
+        assert_eq!(fbclid_from_query(Some("a=1&b=2")), None);
+        assert_eq!(fbclid_from_query(None), None);
+    }
+
+    #[test]
+    fn fbclid_from_query_urlencoded_value_is_decoded() {
+        assert_eq!(
+            fbclid_from_query(Some("fbclid=IwAR%2Bx%20y")),
+            Some("IwAR+x y".to_string())
+        );
+    }
+
+    #[test]
+    fn fbclid_from_query_empty_is_none() {
+        assert_eq!(fbclid_from_query(Some("")), None);
+        assert_eq!(fbclid_from_query(Some("fbclid=")), None);
+    }
 
     #[test]
     fn parse_cors_origins_splits_and_trims() {
