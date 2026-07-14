@@ -134,7 +134,7 @@ export function CreateTokenDialog({ open, onOpenChange }: CreateTokenDialogProps
             <div className="flex items-center gap-2">
               <Input id="created-token-value" type="text" readOnly value={createdToken} className="font-mono text-xs" />
               <Button type="button" variant="outline" onClick={handleCopy}>
-                {justCopied ? <Check className="size-4 text-primary" /> : <Copy className="size-4" />}
+                {justCopied ? <Check className="size-4 text-brand-ink" /> : <Copy className="size-4" />}
                 {t("tokens.copyButton")}
               </Button>
             </div>

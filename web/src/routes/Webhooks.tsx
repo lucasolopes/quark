@@ -322,7 +322,7 @@ export function Webhooks() {
                 aria-label={t("webhooks.secret.copyAria")}
                 onClick={handleCopySecret}
               >
-                {justCopiedSecret ? <Check className="size-4 text-primary" /> : <Copy className="size-4" />}
+                {justCopiedSecret ? <Check className="size-4 text-brand-ink" /> : <Copy className="size-4" />}
               </Button>
             </div>
           </div>

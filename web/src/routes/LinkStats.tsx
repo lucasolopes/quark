@@ -128,7 +128,7 @@ function StatCard({ icon, label, value, accent = false }: StatCardProps) {
         <div
           className={cn(
             "flex size-9 shrink-0 items-center justify-center rounded-full",
-            accent ? "bg-primary/12 text-primary" : "bg-muted text-muted-foreground",
+            accent ? "bg-primary/12 text-brand-ink" : "bg-muted text-muted-foreground",
           )}
         >
           {icon}
@@ -138,7 +138,7 @@ function StatCard({ icon, label, value, accent = false }: StatCardProps) {
           <p
             className={cn(
               "font-heading font-bold tracking-tight tabular-nums",
-              accent ? "text-3xl text-primary" : "text-xl",
+              accent ? "text-3xl text-brand-ink" : "text-xl",
             )}
           >
             {value}

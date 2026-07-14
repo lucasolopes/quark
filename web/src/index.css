@@ -43,6 +43,7 @@ body {
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
+  --color-brand-ink: var(--brand-ink);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -72,8 +73,12 @@ body {
   --card-foreground: #12141c;
   --popover: #ffffff;
   --popover-foreground: #12141c;
-  --primary: #8fd12e; /* accent-dim: readable lime over light backgrounds */
+  --primary: #8fd12e; /* accent-dim: lime as a button FILL (dark text on top) */
   --primary-foreground: #0a0b0f;
+  /* Brand-colored TEXT/icons on light surfaces. The lime above is a fill color;
+     as text on white it only hits ~1.9:1, so brand text uses this darker green
+     (~5.1:1 on white). Dark theme keeps the lime (see .dark). */
+  --brand-ink: #4a7a17;
   --secondary: #f4f5f8;
   --secondary-foreground: #12141c;
   --muted: #f4f5f8;
@@ -115,6 +120,7 @@ body {
   --popover-foreground: #e8eaf2;
   --primary: #c6f94e; /* plasma-lime */
   --primary-foreground: #0a0b0f; /* on-accent */
+  --brand-ink: #c6f94e; /* brand text = the lime itself; high contrast on deep ink */
   --secondary: #1a1d2b; /* panel-2 */
   --secondary-foreground: #e8eaf2;
   --muted: #1a1d2b; /* panel-2 — neutral hovers */

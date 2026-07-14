@@ -64,7 +64,7 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
       cell: ({ row }) => (
         <RouterLink
           to={`/links/${row.original.code}`}
-          className="font-mono text-sm font-medium text-primary hover:underline"
+          className="font-mono text-sm font-medium text-brand-ink hover:underline"
           aria-label={t("linkTable.viewStatsAria", { code: row.original.code })}
         >
           {row.original.code}
@@ -156,7 +156,7 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
               aria-label={t("linkTable.copyAria", { code: link.code })}
               onClick={() => handleCopy(link)}
             >
-              {justCopied ? <Check className="size-3.5 text-primary" /> : <Copy className="size-3.5" />}
+              {justCopied ? <Check className="size-3.5 text-brand-ink" /> : <Copy className="size-3.5" />}
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger
