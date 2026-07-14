@@ -1,16 +1,38 @@
 name: CLA Assistant
 
-# Coleta a assinatura do Contributor License Agreement (CLA.md) em cada PR.
-# Self-hosted: as assinaturas ficam num arquivo no próprio repo
-# (signatures/version1/cla.json), sem serviço externo.
+# Collects the Contributor License Agreement (CLA.md) signature on every PR.
+# Self-hosted: signatures live in a file inside this repo
+# (signatures/version1/cla.json), no external service involved.
 #
-# SETUP (uma vez, no GitHub):
-#   1. Crie um Personal Access Token (classic) com escopo `repo`, ou um
-#      fine-grained token com permissão de Contents (read/write) neste repo.
-#   2. Em Settings → Secrets and variables → Actions, adicione um secret
-#      chamado PERSONAL_ACCESS_TOKEN com esse token.
-# Sem o secret o workflow falha ao gravar a assinatura; o GITHUB_TOKEN padrão
-# sozinho não basta a partir do contexto pull_request_target em alguns casos.
+# SETUP (once, on GitHub):
+#   1. Create a Personal Access Token (classic) with `repo` scope, or a
+#      fine-grained token with Contents (read/write) permission on this repo.
+#   2. Under Settings -> Secrets and variables -> Actions, add a secret
+#      named PERSONAL_ACCESS_TOKEN with that token.
+# Without the secret the workflow fails to persist signatures; the default
+# GITHUB_TOKEN alone isn't enough from the pull_request_target context in
+# some cases.
+#
+# COMMENT LAYOUT (deliberate, see research in cleanup-cla-report.md):
+# The contributor-assistant/github-action manages a SINGLE comment that it
+# finds by matching "CLA Assistant Lite bot" in the PR's existing comments,
+# and it EDITS that same comment in place (not-signed -> all-signed) once
+# everyone has signed. It has no built-in option to post a separate
+# confirmation comment instead of editing.
+#
+# To keep the original signing request permanently visible, we post it
+# ourselves as its own comment on `pull_request_target: opened` (the
+# "Post CLA request" step below). That comment is never touched by the
+# action, since it doesn't contain the action's own bot marker. The
+# action's own managed comment is kept minimal on both ends
+# (custom-notsigned-prcomment / custom-allsigned-prcomment), since it is
+# only there for the action's internal bookkeeping/status-check duties.
+#
+# When a contributor signs, the action still edits its own minimal comment,
+# but we additionally post a brand-new confirmation comment (the
+# "Post signature confirmation" step below) via actions/github-script, so
+# the confirmation never overwrites the original request or any other
+# comment.
 
 on:
   issue_comment:
@@ -21,6 +43,7 @@ on:
 permissions:
   actions: write
   contents: write
+  issues: write
   pull-requests: write
   statuses: write
 
@@ -28,6 +51,23 @@ jobs:
   cla-assistant:
     runs-on: ubuntu-latest
     steps:
+      - name: Post CLA request
+        if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body:
+                'Thanks for the PR! Before we can merge it, we need you to accept the ' +
+                '[Contributor License Agreement](https://github.com/lucasolopes/quark/blob/main/CLA.md). ' +
+                "It's a license grant only — **you keep ownership of your code**.\n\n" +
+                'To sign, comment exactly:\n\n' +
+                '> I have read the CLA Document and I hereby sign the CLA'
+            })
+
       - name: CLA Assistant
         if: >
           (github.event.comment.body == 'recheck' ||
@@ -41,12 +81,31 @@ jobs:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/lucasolopes/quark/blob/main/CLA.md'
           branch: 'main'
-          # o próprio dono não precisa assinar; bots idem
+          # the repo owner doesn't need to sign; neither do bots
           allowlist: lucasolopes,bot*,dependabot[bot]
-          custom-notsigned-prcomment: >
-            Obrigado pelo PR! Antes do merge, precisamos que você aceite o
-            [Contributor License Agreement](https://github.com/lucasolopes/quark/blob/main/CLA.md).
-            É uma concessão de licença — **você mantém a titularidade do seu código**.
-            Para assinar, comente exatamente:
+          # Kept minimal on purpose: this is the action's own managed
+          # comment, which it edits in place. The full request lives in the
+          # separate "Post CLA request" comment above, which is never
+          # edited.
+          custom-notsigned-prcomment: 'CLA status for this PR (see the request comment above for details and how to sign):'
           custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
-          custom-allsigned-prcomment: 'Todos os contribuidores assinaram o CLA. ✅'
+          custom-allsigned-prcomment: 'CLA status: all contributors have signed. ✅'
+
+      - name: Post signature confirmation
+        if: >
+          github.event_name == 'issue_comment' &&
+          github.event.action == 'created' &&
+          github.event.issue.pull_request != null &&
+          github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const signedAt = new Date(context.payload.comment.created_at).toISOString();
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body:
+                `✅ @${context.payload.comment.user.login} signed the CLA on ${signedAt} — ` +
+                '"I have read the CLA Document and I hereby sign the CLA"'
+            })
