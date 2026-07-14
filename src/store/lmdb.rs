@@ -464,6 +464,8 @@ mod tests {
             url: u.into(),
             expiry: None,
             created: 0,
+            app_ios: None,
+            app_android: None,
         };
         for id in 1..=5u64 {
             s.put_link(id, &rec(&format!("https://e{id}.com")))
@@ -492,5 +494,30 @@ mod tests {
         assert!(s.get_link(2).await.unwrap().is_none());
         s.delete_alias("promo").await.unwrap();
         assert_eq!(s.get_alias("promo").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn app_destinations_survive_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let rec = Record {
+            url: "https://example.com".into(),
+            expiry: None,
+            created: 0,
+            app_ios: Some("https://apps.apple.com/x".into()),
+            app_android: None,
+        };
+        s.put_link(1, &rec).await.unwrap();
+        let got = s.get_link(1).await.unwrap().unwrap();
+        assert_eq!(got.app_ios.as_deref(), Some("https://apps.apple.com/x"));
+        assert_eq!(got.app_android, None);
+    }
+
+    #[test]
+    fn record_without_app_fields_deserializes_to_none() {
+        let blob = r#"{"url":"https://example.com","expiry":null,"created":7}"#;
+        let rec: Record = serde_json::from_str(blob).unwrap();
+        assert_eq!(rec.app_ios, None);
+        assert_eq!(rec.app_android, None);
     }
 }

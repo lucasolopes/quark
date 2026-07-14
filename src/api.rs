@@ -129,6 +129,8 @@ async fn create(
         url: req.url.clone(),
         expiry,
         created: now(),
+        app_ios: None,
+        app_android: None,
     };
 
     if let Some(alias) = req.alias {
@@ -192,6 +194,41 @@ fn client_ip(
         return addr.ip().to_string();
     }
     "unknown".to_string()
+}
+
+/// Click platform inferred from the User-Agent, used to pick an app destination.
+/// Consumed by the redirect handler (wired in the device-redirect task).
+#[derive(Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+enum Platform {
+    Ios,
+    Android,
+    Other,
+}
+
+/// Classifies a click by User-Agent. Apple device tokens win over Android;
+/// anything else (desktop, bots, missing header) is `Other`. Case-sensitive
+/// substring match on the raw UA: these vendor tokens are stable.
+#[allow(dead_code)]
+fn classify_platform(ua: Option<&str>) -> Platform {
+    match ua {
+        Some(ua) if ua.contains("iPhone") || ua.contains("iPad") || ua.contains("iPod") => {
+            Platform::Ios
+        }
+        Some(ua) if ua.contains("Android") => Platform::Android,
+        _ => Platform::Other,
+    }
+}
+
+/// Resolves the app-specific destination for a click, or `None` when the record
+/// has none for the click's platform (the caller then falls back to `rec.url`).
+#[allow(dead_code)]
+fn app_destination<'a>(rec: &'a Record, ua: Option<&str>) -> Option<&'a str> {
+    match classify_platform(ua) {
+        Platform::Ios => rec.app_ios.as_deref(),
+        Platform::Android => rec.app_android.as_deref(),
+        Platform::Other => None,
+    }
 }
 
 /// Built-in guard: internal network destination, or a loop back to quark's own host.
@@ -752,7 +789,76 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::{access_log_line, cache_control_for, parse_cors_origins};
+    use super::{
+        access_log_line, app_destination, cache_control_for, classify_platform, parse_cors_origins,
+        Platform,
+    };
+    use crate::store::Record;
+
+    fn rec(app_ios: Option<&str>, app_android: Option<&str>) -> Record {
+        Record {
+            url: "https://example.com".into(),
+            expiry: None,
+            created: 0,
+            app_ios: app_ios.map(str::to_string),
+            app_android: app_android.map(str::to_string),
+        }
+    }
+
+    const IPHONE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)";
+    const IPAD_UA: &str = "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X)";
+    const IPOD_UA: &str = "Mozilla/5.0 (iPod touch; CPU iPhone OS 17_0 like Mac OS X)";
+    const ANDROID_UA: &str = "Mozilla/5.0 (Linux; Android 14; Pixel 8)";
+    const DESKTOP_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+
+    #[test]
+    fn classify_platform_detects_apple_devices() {
+        assert_eq!(classify_platform(Some(IPHONE_UA)), Platform::Ios);
+        assert_eq!(classify_platform(Some(IPAD_UA)), Platform::Ios);
+        assert_eq!(classify_platform(Some(IPOD_UA)), Platform::Ios);
+    }
+
+    #[test]
+    fn classify_platform_detects_android() {
+        assert_eq!(classify_platform(Some(ANDROID_UA)), Platform::Android);
+    }
+
+    #[test]
+    fn classify_platform_falls_back_to_other() {
+        assert_eq!(classify_platform(Some(DESKTOP_UA)), Platform::Other);
+        assert_eq!(classify_platform(Some("")), Platform::Other);
+        assert_eq!(classify_platform(None), Platform::Other);
+    }
+
+    #[test]
+    fn app_destination_returns_platform_match() {
+        let r = rec(
+            Some("https://apps.apple.com/x"),
+            Some("https://play.google.com/y"),
+        );
+        assert_eq!(
+            app_destination(&r, Some(IPHONE_UA)),
+            Some("https://apps.apple.com/x")
+        );
+        assert_eq!(
+            app_destination(&r, Some(ANDROID_UA)),
+            Some("https://play.google.com/y")
+        );
+    }
+
+    #[test]
+    fn app_destination_falls_back_when_platform_unset() {
+        let r = rec(Some("https://apps.apple.com/x"), None);
+        assert_eq!(app_destination(&r, Some(ANDROID_UA)), None);
+        assert_eq!(app_destination(&r, Some(DESKTOP_UA)), None);
+    }
+
+    #[test]
+    fn app_destination_none_when_no_fields() {
+        let r = rec(None, None);
+        assert_eq!(app_destination(&r, Some(IPHONE_UA)), None);
+        assert_eq!(app_destination(&r, Some(ANDROID_UA)), None);
+    }
 
     #[test]
     fn parse_cors_origins_splits_and_trims() {

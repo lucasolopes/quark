@@ -19,12 +19,14 @@ async fn put_get_link_pg() {
         url: "https://example.com".into(),
         expiry: None,
         created: 100,
+        app_ios: Some("https://apps.apple.com/x".into()),
+        app_android: None,
     };
     s.put_link(7, &rec).await.unwrap();
-    assert_eq!(
-        s.get_link(7).await.unwrap().unwrap().url,
-        "https://example.com"
-    );
+    let got = s.get_link(7).await.unwrap().unwrap();
+    assert_eq!(got.url, "https://example.com");
+    assert_eq!(got.app_ios.as_deref(), Some("https://apps.apple.com/x"));
+    assert_eq!(got.app_android, None);
     assert!(s.get_link(999).await.unwrap().is_none());
 }
 
@@ -49,6 +51,8 @@ async fn alias_is_atomic_no_orphan_pg() {
         url: "u".into(),
         expiry: None,
         created: 0,
+        app_ios: None,
+        app_android: None,
     };
     assert!(s.put_alias_and_link("promo", 5, &rec).await.unwrap());
     assert!(!s.put_alias_and_link("promo", 9, &rec).await.unwrap());

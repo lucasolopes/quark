@@ -40,6 +40,8 @@ fn bench(c: &mut Criterion) {
                     url: "https://example.com/destination".into(),
                     expiry: None,
                     created: 0,
+                    app_ios: None,
+                    app_android: None,
                 },
             )
             .await

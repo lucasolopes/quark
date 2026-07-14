@@ -15,6 +15,8 @@ async fn set_get_round_trip() {
         url: "https://example.com/valkey".into(),
         expiry: None,
         created: 1,
+        app_ios: None,
+        app_android: None,
     };
     tier.set(id, &rec, 60).await.unwrap();
     let got = tier.get(id).await.unwrap().unwrap();

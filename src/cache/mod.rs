@@ -195,6 +195,8 @@ mod tests {
             url: url.into(),
             expiry: None,
             created: 0,
+            app_ios: None,
+            app_android: None,
         }
     }
 
@@ -298,7 +300,9 @@ mod tests {
                 &Record {
                     url: "".into(),
                     expiry: None,
-                    created: 0
+                    created: 0,
+                    app_ios: None,
+                    app_android: None
                 },
                 now,
                 3600
@@ -310,7 +314,9 @@ mod tests {
                 &Record {
                     url: "".into(),
                     expiry: Some(now + 100),
-                    created: 0
+                    created: 0,
+                    app_ios: None,
+                    app_android: None
                 },
                 now,
                 3600
@@ -322,7 +328,9 @@ mod tests {
                 &Record {
                     url: "".into(),
                     expiry: Some(now + 999_999),
-                    created: 0
+                    created: 0,
+                    app_ios: None,
+                    app_android: None
                 },
                 now,
                 3600
@@ -334,7 +342,9 @@ mod tests {
                 &Record {
                     url: "".into(),
                     expiry: Some(now - 1),
-                    created: 0
+                    created: 0,
+                    app_ios: None,
+                    app_android: None
                 },
                 now,
                 3600

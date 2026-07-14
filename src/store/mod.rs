@@ -11,6 +11,10 @@ pub struct Record {
     pub url: String,
     pub expiry: Option<u64>,
     pub created: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_ios: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_android: Option<String>,
 }
 
 #[derive(Debug)]

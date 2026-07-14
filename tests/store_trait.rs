@@ -11,6 +11,8 @@ async fn round_trip_via_trait_object() {
         url: "https://example.com/dyn".into(),
         expiry: None,
         created: 1,
+        app_ios: None,
+        app_android: None,
     };
     store.put_link(id, &rec).await.unwrap();
 

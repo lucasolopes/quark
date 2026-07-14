@@ -21,12 +21,16 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let url: String = r.try_get("url").map_err(StoreError::backend)?;
     let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    let app_ios: Option<String> = r.try_get("app_ios").map_err(StoreError::backend)?;
+    let app_android: Option<String> = r.try_get("app_android").map_err(StoreError::backend)?;
     Ok((
         id as u64,
         Record {
             url,
             expiry: expiry.map(|v| v as u64),
             created: created as u64,
+            app_ios,
+            app_android,
         },
     ))
 }
@@ -64,6 +68,8 @@ impl PostgresStore {
             for ddl in [
                 "CREATE SEQUENCE IF NOT EXISTS quark_id_seq",
                 "CREATE TABLE IF NOT EXISTS links (id BIGINT PRIMARY KEY, url TEXT NOT NULL, expiry BIGINT, created BIGINT NOT NULL)",
+                "ALTER TABLE links ADD COLUMN IF NOT EXISTS app_ios TEXT",
+                "ALTER TABLE links ADD COLUMN IF NOT EXISTS app_android TEXT",
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
@@ -115,20 +121,27 @@ impl Store for PostgresStore {
     }
 
     async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError> {
-        let row = sqlx::query("SELECT url, expiry, created FROM links WHERE id = $1")
-            .bind(id as i64)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(StoreError::backend)?;
+        let row = sqlx::query(
+            "SELECT url, expiry, created, app_ios, app_android FROM links WHERE id = $1",
+        )
+        .bind(id as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
         match row {
             Some(r) => {
                 let url: String = r.try_get("url").map_err(StoreError::backend)?;
                 let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
                 let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+                let app_ios: Option<String> = r.try_get("app_ios").map_err(StoreError::backend)?;
+                let app_android: Option<String> =
+                    r.try_get("app_android").map_err(StoreError::backend)?;
                 Ok(Some(Record {
                     url,
                     expiry: expiry.map(|v| v as u64),
                     created: created as u64,
+                    app_ios,
+                    app_android,
                 }))
             }
             None => Ok(None),
@@ -137,13 +150,15 @@ impl Store for PostgresStore {
 
     async fn put_link(&self, id: u64, rec: &Record) -> Result<(), StoreError> {
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created) VALUES ($1,$2,$3,$4) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4",
+            "INSERT INTO links (id, url, expiry, created, app_ios, app_android) VALUES ($1,$2,$3,$4,$5,$6) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, app_ios=$5, app_android=$6",
         )
         .bind(id as i64)
         .bind(&rec.url)
         .bind(rec.expiry.map(|v| v as i64))
         .bind(rec.created as i64)
+        .bind(&rec.app_ios)
+        .bind(&rec.app_android)
         .execute(&self.pool)
         .await
         .map_err(StoreError::backend)?;
@@ -184,13 +199,15 @@ impl Store for PostgresStore {
             return Ok(false);
         }
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created) VALUES ($1,$2,$3,$4) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4",
+            "INSERT INTO links (id, url, expiry, created, app_ios, app_android) VALUES ($1,$2,$3,$4,$5,$6) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, app_ios=$5, app_android=$6",
         )
         .bind(id as i64)
         .bind(&rec.url)
         .bind(rec.expiry.map(|v| v as i64))
         .bind(rec.created as i64)
+        .bind(&rec.app_ios)
+        .bind(&rec.app_android)
         .execute(&mut *tx)
         .await
         .map_err(StoreError::backend)?;
@@ -237,7 +254,7 @@ impl Store for PostgresStore {
         limit: usize,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let rows = sqlx::query(
-            "SELECT id, url, expiry, created FROM links \
+            "SELECT id, url, expiry, created, app_ios, app_android FROM links \
              WHERE ($1::bigint IS NULL OR id > $1) ORDER BY id LIMIT $2",
         )
         .bind(after.map(|a| a as i64))
@@ -256,7 +273,7 @@ impl Store for PostgresStore {
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let pattern = format!("%{}%", like_escape(q));
         let rows = sqlx::query(
-            "SELECT DISTINCT l.id, l.url, l.expiry, l.created \
+            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.app_ios, l.app_android \
              FROM links l LEFT JOIN aliases a ON a.id = l.id \
              WHERE ($1::bigint IS NULL OR l.id > $1) \
                AND (l.url ILIKE $2 OR a.alias ILIKE $2) \
