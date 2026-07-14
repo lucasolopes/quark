@@ -62,6 +62,7 @@ fn ga4_config(id: u64) -> PixelConfig {
 fn ev(id: u64, ts: u64) -> ClickEvent {
     ClickEvent {
         id,
+        event_id: format!("clk_ev_{id}"),
         ts,
         referer: None,
         country: Some("BR".into()),

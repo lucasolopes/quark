@@ -11,6 +11,15 @@ pub mod clickhouse;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClickEvent {
     pub id: u64,
+    /// Stable per-click id, generated once at capture in the redirect handler
+    /// (`clk_` + 16 random bytes hex). Carried through the in-memory channel to
+    /// the worker, so the same value is sent on every retry of this click. Used
+    /// as the Meta CAPI `event_id` (real dedup) and the GA4 `transaction_id`
+    /// param. `serde(default)` keeps old recent-events blobs deserializing
+    /// (empty string); unlike `ip`/`fbc` it DOES persist in the recent buffer,
+    /// since a replay-safe id is exactly what idempotent sink writes will reuse.
+    #[serde(default)]
+    pub event_id: String,
     pub ts: u64,
     pub referer: Option<String>,
     pub country: Option<String>,
@@ -405,6 +414,7 @@ mod tests {
     fn ev(id: u64, ts: u64, country: &str, ua: &str) -> ClickEvent {
         ClickEvent {
             id,
+            event_id: String::new(),
             ts,
             referer: None,
             country: Some(country.into()),
@@ -484,6 +494,7 @@ mod tests {
         for i in 0..250u64 {
             tx.send(ClickEvent {
                 id: 5,
+                event_id: String::new(),
                 ts: 1_752_300_000 + i,
                 referer: None,
                 country: Some("BR".into()),
@@ -513,12 +524,17 @@ mod tests {
         assert_eq!(ev.country.as_deref(), Some("BR"));
         assert_eq!(ev.ip, None);
         assert_eq!(ev.fbc, None);
+        assert_eq!(
+            ev.event_id, "",
+            "old blob without `event_id` must default to empty"
+        );
     }
 
     #[test]
     fn serialized_clickevent_never_contains_ip_or_fbc() {
         let ev = ClickEvent {
             id: 7,
+            event_id: "clk_persisted".into(),
             ts: 100,
             referer: None,
             country: Some("BR".into()),
@@ -541,6 +557,7 @@ mod tests {
         let mut a = Aggregates::default();
         a.apply(&ClickEvent {
             id: 1,
+            event_id: String::new(),
             ts: 0,
             referer: None,
             country: None,
@@ -553,6 +570,7 @@ mod tests {
         });
         a.apply(&ClickEvent {
             id: 1,
+            event_id: String::new(),
             ts: 5_000_000_000,
             referer: None,
             country: None,
@@ -652,6 +670,7 @@ mod tests {
         let mut a = Aggregates::default();
         a.apply(&ClickEvent {
             id: 1,
+            event_id: String::new(),
             ts: 1_752_300_000,
             referer: Some("https://news.ycombinator.com/x".into()),
             country: Some("BR".into()),
@@ -666,6 +685,7 @@ mod tests {
         });
         a.apply(&ClickEvent {
             id: 1,
+            event_id: String::new(),
             ts: 1_752_300_050,
             referer: None,
             country: Some("US".into()),
@@ -680,6 +700,7 @@ mod tests {
         });
         a.apply(&ClickEvent {
             id: 1,
+            event_id: String::new(),
             ts: 1_752_300_100,
             referer: Some("https://news.ycombinator.com/y".into()),
             country: Some("US".into()),
@@ -803,6 +824,7 @@ mod tests {
         let mut a = Aggregates::default();
         a.apply(&ClickEvent {
             id: 1,
+            event_id: String::new(),
             ts: 1,
             referer: None,
             country: None,
@@ -815,6 +837,7 @@ mod tests {
         });
         a.apply(&ClickEvent {
             id: 1,
+            event_id: String::new(),
             ts: 2,
             referer: None,
             country: None,
@@ -827,6 +850,7 @@ mod tests {
         });
         a.apply(&ClickEvent {
             id: 1,
+            event_id: String::new(),
             ts: 3,
             referer: None,
             country: None,
@@ -839,6 +863,7 @@ mod tests {
         });
         a.apply(&ClickEvent {
             id: 1,
+            event_id: String::new(),
             ts: 4,
             referer: None,
             country: None,

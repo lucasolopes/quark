@@ -4,6 +4,7 @@ use quark::store::open_backends;
 fn ev(id: u64, ts: u64) -> ClickEvent {
     ClickEvent {
         id,
+        event_id: String::new(),
         ts,
         referer: None,
         country: Some("BR".into()),

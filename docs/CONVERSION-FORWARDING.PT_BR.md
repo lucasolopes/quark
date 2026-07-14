@@ -109,6 +109,38 @@ conversões dessa janela simplesmente se perdem, não são recuperadas depois.
 É uma escolha deliberada de simplicidade nesta etapa; veja a nota de
 follow-up abaixo.
 
+## Chaves de dedup
+
+Todo clique ganha um id estável no momento da captura: `event_id` no evento
+de clique, `clk_` seguido de 16 bytes aleatórios em hex. Ele é gerado uma
+vez, no handler do redirect, e viaja sem mudar pelo canal de analytics até o
+worker. O mesmo clique sempre encaminha o mesmo id, então se o worker um dia
+mandar um clique duas vezes, as duas cópias carregam a mesma chave.
+
+Os dois provedores recebem essa chave, mas só um consegue de fato usá-la pra
+juntar duplicatas:
+
+- O **Meta CAPI** recebe ela como o campo `event_id` no nível do evento. Essa
+  é a chave que o Meta usa pra deduplicar uma conversão, tanto entre retries
+  do mesmo evento server-side quanto contra o Pixel do navegador, se um
+  também estiver disparando. Com ela, mandar o mesmo clique duas vezes é
+  seguro: o Meta fica com um e descarta a duplicata. Veja
+  https://developers.facebook.com/docs/marketing-api/conversions-api/deduplicate-pixel-and-server-events.
+- O **GA4** recebe ela como o param `transaction_id` em cada evento. Seja
+  claro sobre o que isso compra e o que não compra: o Measurement Protocol do
+  GA4 só deduplica eventos `purchase` pelo `transaction_id`. Ele **não**
+  deduplica um evento customizado genérico como o `quark_click`. Então no GA4
+  o id está ali por completude e pra reconciliação do lado do operador, mas o
+  GA4 não junta duplicatas por ele. Um retry no GA4 ainda pode contar em
+  dobro.
+
+A consequência prática: o caminho do Meta é de fato seguro pra retry hoje, o
+caminho do GA4 não. Esse id é o pré-requisito que torna seguro adicionar no
+futuro uma entrega at-least-once (fila de retry ou outbox) pro Meta sem
+inflar a contagem de conversões. Pro GA4 essa mesma durabilidade ainda
+correria risco de contar em dobro, e precisaria de outra abordagem (por
+exemplo trocar pra um evento `purchase` ou deduplicar antes do envio).
+
 ## Sem superfície de SSRF
 
 Os hosts dos provedores (`https://www.google-analytics.com` pro GA4,

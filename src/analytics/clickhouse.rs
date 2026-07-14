@@ -331,6 +331,7 @@ impl AnalyticsSink for ClickHouseSink {
             .into_iter()
             .map(|r| ClickEvent {
                 id,
+                event_id: String::new(),
                 ts: r.ts,
                 referer: non_empty(r.referer),
                 country: non_empty(r.country),

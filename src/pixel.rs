@@ -135,6 +135,7 @@ pub fn ga4_payload(events: &[ClickEvent], key: u64) -> Value {
                 "params": {
                     "link_code": link_code(e.id, key),
                     "country": e.country,
+                    "transaction_id": e.event_id,
                 },
             })
         })
@@ -181,6 +182,7 @@ pub fn meta_payload(events: &[ClickEvent], key: u64) -> Value {
             json!({
                 "event_name": META_EVENT_NAME,
                 "event_time": e.ts,
+                "event_id": e.event_id,
                 "action_source": "website",
                 "custom_data": {
                     "link_code": link_code(e.id, key),
@@ -279,6 +281,7 @@ mod tests {
     fn ev(id: u64, ts: u64, country: Option<&str>) -> ClickEvent {
         ClickEvent {
             id,
+            event_id: format!("clk_ev_{id}"),
             ts,
             referer: None,
             country: country.map(str::to_string),
@@ -351,11 +354,29 @@ mod tests {
             link_code(10, TEST_KEY)
         );
         assert_eq!(events_arr[0]["params"]["country"], "BR");
+        assert_eq!(events_arr[0]["params"]["transaction_id"], "clk_ev_10");
         assert_eq!(
             events_arr[1]["params"]["link_code"],
             link_code(11, TEST_KEY)
         );
+        assert_eq!(events_arr[1]["params"]["transaction_id"], "clk_ev_11");
         assert_eq!(events_arr[2]["params"]["country"], Value::Null);
+    }
+
+    #[test]
+    fn ga4_payload_transaction_id_matches_event_id_and_is_stable() {
+        let events = vec![ev(10, 100, Some("BR"))];
+        let a = ga4_payload(&events, TEST_KEY);
+        let b = ga4_payload(&events, TEST_KEY);
+        assert_eq!(a["events"][0]["params"]["transaction_id"], "clk_ev_10");
+        assert_eq!(
+            a["events"][0]["params"]["transaction_id"],
+            events[0].event_id
+        );
+        assert_eq!(
+            a["events"][0]["params"]["transaction_id"],
+            b["events"][0]["params"]["transaction_id"]
+        );
     }
 
     #[test]
@@ -382,6 +403,7 @@ mod tests {
         let events = vec![
             ClickEvent {
                 id: 20,
+                event_id: "clk_ev_20".into(),
                 ts: 200,
                 referer: None,
                 country: Some("BR".into()),
@@ -400,6 +422,17 @@ mod tests {
         assert_eq!(data[0]["event_name"], "Lead");
         assert_eq!(data[0]["event_time"], 200);
         assert_eq!(data[0]["action_source"], "website");
+        assert_eq!(data[0]["event_id"], "clk_ev_20");
+        assert_eq!(data[0]["event_id"], events[0].event_id);
+        assert_eq!(data[1]["event_id"], "clk_ev_21");
+        assert!(
+            data[0]["custom_data"].get("event_id").is_none(),
+            "event_id belongs at the event level, not inside custom_data"
+        );
+        assert!(
+            data[0]["user_data"].get("event_id").is_none(),
+            "event_id belongs at the event level, not inside user_data"
+        );
         assert_eq!(data[0]["custom_data"]["link_code"], link_code(20, TEST_KEY));
         assert_eq!(data[1]["custom_data"]["link_code"], link_code(21, TEST_KEY));
 
@@ -416,6 +449,16 @@ mod tests {
         assert!(ud1.get("client_user_agent").is_none());
         assert!(ud1.get("fbc").is_none());
         assert_eq!(ud1["country"], sha256_hex("US"));
+    }
+
+    #[test]
+    fn meta_payload_event_id_matches_event_id_and_is_stable() {
+        let events = vec![ev(20, 200, Some("BR"))];
+        let a = meta_payload(&events, TEST_KEY);
+        let b = meta_payload(&events, TEST_KEY);
+        assert_eq!(a["data"][0]["event_id"], "clk_ev_20");
+        assert_eq!(a["data"][0]["event_id"], events[0].event_id);
+        assert_eq!(a["data"][0]["event_id"], b["data"][0]["event_id"]);
     }
 
     #[test]

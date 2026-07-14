@@ -113,6 +113,7 @@ fn bench(c: &mut Criterion) {
             async move {
                 let ev = ClickEvent {
                     id: 1,
+                    event_id: String::new(),
                     ts: 0,
                     referer: None,
                     country: None,

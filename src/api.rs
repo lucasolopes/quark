@@ -147,6 +147,18 @@ fn generate_event_id() -> String {
     format!("evt_{hex}")
 }
 
+/// A stable per-click id (`clk_` + 16 random bytes hex), generated once when a
+/// redirect captures a click. Mirrors `generate_event_id` / the webhook
+/// `generate_msg_id`. Carried on the `ClickEvent` through the analytics channel
+/// so a future at-least-once retry sends the same id, which Meta uses to
+/// deduplicate the conversion.
+fn generate_click_id() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("system RNG must be available");
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("clk_{hex}")
+}
+
 /// Builds the JSON body for an outbound webhook event, per the schema in
 /// `docs/specs/2026-07-13-webhooks-design.md`: `{id, type, timestamp, data}`,
 /// where `data` carries `code`, `url`, an optional `alias`, an optional
@@ -843,6 +855,7 @@ async fn redirect(
 
             let ev = ClickEvent {
                 id,
+                event_id: generate_click_id(),
                 ts: now,
                 referer: headers
                     .get(header::REFERER)

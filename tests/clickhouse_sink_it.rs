@@ -11,6 +11,7 @@ async fn fresh() -> Option<ClickHouseSink> {
 fn ev(id: u64, ts: u64, c: &str, ua: &str) -> ClickEvent {
     ClickEvent {
         id,
+        event_id: String::new(),
         ts,
         referer: None,
         country: Some(c.into()),
@@ -25,6 +26,7 @@ fn ev(id: u64, ts: u64, c: &str, ua: &str) -> ClickEvent {
 fn ev_full(id: u64, ts: u64, ua: &str, referer: Option<&str>, city: Option<&str>) -> ClickEvent {
     ClickEvent {
         id,
+        event_id: String::new(),
         ts,
         referer: referer.map(String::from),
         country: Some("BR".into()),

@@ -103,6 +103,37 @@ retried. If a provider is down for an extended period, the conversions for
 that window are simply lost, not backfilled. That's a deliberate simplicity
 tradeoff for this pass; see the follow-up note below.
 
+## Dedup keys
+
+Every click gets a stable id at capture time: `event_id` on the click event,
+`clk_` followed by 16 random bytes in hex. It is generated once, in the
+redirect handler, and carried unchanged through the analytics channel to the
+worker. The same click always forwards the same id, so if the worker ever
+sends a click twice, both copies carry the same key.
+
+Both providers receive it, but only one of them can actually use it to
+collapse duplicates:
+
+- **Meta CAPI** gets it as the event-level `event_id` field. This is the key
+  Meta uses to deduplicate a conversion, both across retries of the same
+  server event and against the browser Pixel if one is also firing. With it,
+  sending the same click twice is safe: Meta keeps one and drops the
+  duplicate. See
+  https://developers.facebook.com/docs/marketing-api/conversions-api/deduplicate-pixel-and-server-events.
+- **GA4** gets it as the `transaction_id` param on each event. Be clear about
+  what this does and does not buy you: GA4 Measurement Protocol only
+  deduplicates `purchase` events by `transaction_id`. It does **not**
+  deduplicate a generic custom event like `quark_click`. So for GA4 the id is
+  there for completeness and for operator-side reconciliation, but GA4 does
+  not collapse duplicates on it. A GA4 retry can still double-count.
+
+The practical consequence: the Meta path is genuinely retry-safe today, the
+GA4 path is not. This id is the prerequisite that makes a future
+at-least-once delivery (a retry queue or outbox) safe to add for Meta without
+inflating conversion counts. For GA4 that same durability would still risk
+double-counting, and would need a different approach (for example switching
+to a `purchase` event or deduplicating before the send).
+
 ## No SSRF surface
 
 The provider hosts (`https://www.google-analytics.com` for GA4,
