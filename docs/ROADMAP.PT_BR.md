@@ -44,6 +44,8 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 - **Licença + contribuições**: núcleo **AGPL-3.0-only**; `CLA.md` (license-grant) +
   `CONTRIBUTING.md` + bot do CLA (GitHub Action). Multi-tenancy/cloud fica proprietária, à parte.
 - **`docker-compose.yml`**: stack full (quark + Postgres + Valkey + ClickHouse) pra dev/self-host.
+- **Builder de UTM + templates**: seção colapsável de UTM no diálogo de criar link, com
+  prévia ao vivo do destino e templates nomeados salvos localmente (`localStorage`).
 
 ## Próximo
 

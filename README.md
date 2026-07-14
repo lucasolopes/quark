@@ -253,7 +253,8 @@ deployed **separately** from the API binary (static build → CDN/edge); the qua
 binary stays API-only. Dev: `cd web && npm install && npm run dev` (Vite on
 `:5173`), pointing `VITE_API_BASE_URL` at your quark API and setting
 `QUARK_CORS_ORIGINS=http://localhost:5173` on the API. Auth is the same
-`QUARK_ADMIN_TOKEN`, entered on the panel's login screen.
+`QUARK_ADMIN_TOKEN`, entered on the panel's login screen. The create-link dialog
+includes an optional UTM builder with locally saved templates (`localStorage`).
 
 ## More
 
