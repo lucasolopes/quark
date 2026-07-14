@@ -41,4 +41,4 @@ curl -s https://<URL>/health     # -> ok
 
 - **Chave por instância:** troque `QUARK_KEY` e todo o espaço de códigos muda. Mantenha-a estável em produção (trocar invalida os códigos já emitidos) e fora do controle de versão.
 - **Backup:** basta copiar o volume `/data` (é o banco LMDB inteiro).
-- **Escala:** o contador de IDs é single-node (uma instância). Rodar múltiplas réplicas exigiria particionar o espaço de IDs: fica pra fase 2.
+- **Escala:** o binário LMDB puro é single-node por design. Para múltiplas réplicas, aponte todas pra um Postgres compartilhado (`QUARK_DATABASE_URL`) e um Valkey (`QUARK_VALKEY_URL`), e seta `QUARK_STRICT_CLUSTER=1` pra uma dependência faltando falhar rápido. Veja [`docs/SCALING.PT_BR.md`](SCALING.PT_BR.md).

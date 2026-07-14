@@ -10,8 +10,7 @@
 
 > Short codes are **computed, not stored**: a keyed bijection. One tiny static binary (~1 MB), no Redis, no database, no external services.
 
-**Quick links:** [Deploy](docs/DEPLOY.md) · [Architecture](docs/ARCHITECTURE.md) · [Edge/CDN](docs/EDGE.md) · [Import](docs/IMPORT.md) · [Roadmap](docs/ROADMAP.md)
-**Quick links:** [Deploy](docs/DEPLOY.md) · [Architecture](docs/ARCHITECTURE.md) · [Edge/CDN](docs/EDGE.md) · [Conversion forwarding](docs/CONVERSION-FORWARDING.md) · [Roadmap](docs/ROADMAP.md)
+**Quick links:** [API](docs/API.md) · [Configuration](docs/CONFIGURATION.md) · [Architecture](docs/ARCHITECTURE.md) · [Deploy](docs/DEPLOY.md) · [Scaling](docs/SCALING.md) · [Development](docs/DEVELOPMENT.md) · [Roadmap](docs/ROADMAP.md)
 
 A URL shortener whose short code is a **calibrated, reduced-round ARX permutation** of the internal integer id. The code is not looked up in an index. It is **computed**, in both directions, from a tiny bijective function. That one design choice removes an entire class of problems (collisions) and an entire index (string → id) at once.
 
@@ -157,7 +156,7 @@ quark's persistence, cache, and analytics are each behind a trait (`Store`, `Cac
 
 Store and AnalyticsSink are selected **independently**: e.g. Postgres store + ClickHouse analytics, or Postgres store + its own embedded analytics, are both valid combinations.
 
-- **Webhooks**: signed outgoing HTTP events (`link.created/updated/deleted/expired/clicked`) to any endpoint (Zapier, Make, n8n, Slack, custom), best-effort delivery with retry, config persisted via `Store`. See [`docs/WEBHOOKS.md`](docs/WEBHOOKS.md).
+- **Webhooks**: signed outgoing HTTP events (`link.created/updated/deleted/expired/clicked`) to any endpoint (Zapier, Make, n8n, Slack, custom). On Postgres the lifecycle events are delivered durably (outbox + leased relay + retry/DLQ); `link.clicked`/`link.expired` stay best-effort by design. Config persisted via `Store`. See [`docs/WEBHOOKS.md`](docs/WEBHOOKS.md).
 
 The framing: quark **scales down to one binary with zero external dependencies**, and **scales up to a distributed stack** (Valkey + Postgres + ClickHouse) **one opt-in piece at a time**, never all-or-nothing. Compare that to heavier shorteners (e.g. Dub) that require Postgres + Redis + ClickHouse from day one, even for a single low-traffic instance.
 
@@ -216,7 +215,7 @@ quark's non-enumerability is a **measured statistical property** (avalanche/SAC 
 
 ## Configuration
 
-Every var below is optional except `QUARK_KEY` in production. Unset a backend var and quark falls back to the zero-dep default.
+Every var below is optional except `QUARK_KEY` in production. Unset a backend var and quark falls back to the zero-dep default. This table is the common subset; the complete reference (including `QUARK_STRICT_CLUSTER`, `QUARK_NODE_ID`, and the baked-in defaults) is [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
 
 | Var | Purpose | Default |
 |---|---|---|
@@ -280,7 +279,10 @@ includes an optional UTM builder with locally saved templates (`localStorage`).
 - What's next: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Full system design: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Deeper walkthrough of every component, data model and the Feistel round internals: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- Horizontal scaling (replicas + Postgres) and `QUARK_NODE_ID`: [`docs/SCALING.md`](docs/SCALING.md)
+- Full HTTP API reference (every route, scope, request/response shape, status codes): [`docs/API.md`](docs/API.md)
+- Every `QUARK_*` environment variable with defaults and purpose: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
+- Building, running, the Docker stack, and the gated integration tests: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
+- Horizontal scaling (replicas + Postgres + Valkey) and `QUARK_NODE_ID`: [`docs/SCALING.md`](docs/SCALING.md)
 - A/B testing (weighted variants + per-variant stats): [`docs/AB-TESTING.md`](docs/AB-TESTING.md)
 
 ## Contributing

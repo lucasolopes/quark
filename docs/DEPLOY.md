@@ -41,4 +41,4 @@ curl -s https://<URL>/health     # -> ok
 
 - **One key per instance:** changing `QUARK_KEY` remaps the entire code space. Keep it stable in production (rotating it invalidates every code already issued) and out of version control.
 - **Backup:** just copy the `/data` volume (it's the whole LMDB database).
-- **Scale:** the id counter is single-node (one instance). Running multiple replicas would require partitioning the id space: that's phase 2.
+- **Scale:** the pure LMDB binary is single-node by design. For multiple replicas, point them all at a shared Postgres (`QUARK_DATABASE_URL`) and Valkey (`QUARK_VALKEY_URL`), and set `QUARK_STRICT_CLUSTER=1` so a missing dependency fails fast. See [`docs/SCALING.md`](SCALING.md).

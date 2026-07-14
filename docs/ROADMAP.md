@@ -16,9 +16,12 @@ bottleneck being geography/RTT, not the server).
 ## Done
 
 - **Webhooks (#1):** signed outgoing HTTP events on `link.created/updated/deleted/expired/clicked`,
-  Standard Webhooks HMAC signing, best-effort delivery (queue → worker → retry with backoff/jitter,
-  SSRF-guarded), subscriptions managed in the panel or via `/admin/webhooks`. This is the foundation
-  for #6 (Slack/Discord/Telegram) and #10 (n8n/Zapier). Doc: `docs/WEBHOOKS.md`.
+  Standard Webhooks HMAC signing, SSRF-guarded. On Postgres the lifecycle events are delivered
+  durably (a `webhook_deliveries` outbox + a leased relay with `FOR UPDATE SKIP LOCKED`, persisted
+  retry/backoff, dead-letter after 8 attempts, and a stable idempotency key); `link.clicked` and
+  `link.expired` stay best-effort in-memory by design (they fire on the redirect hot path). On LMDB
+  every event rides the in-memory best-effort channel. Subscriptions managed in the panel or via
+  `/admin/webhooks`. Foundation for #6 (Slack/Discord/Telegram) and #10 (n8n/Zapier). Doc: `docs/WEBHOOKS.md`.
 - **Notification channels (#6):** Slack/Discord/Telegram as a `kind` on the webhook subscription
   (built on #1); an unsigned, plain-text message POSTed in each channel's own shape (Slack/Telegram
   `{"text": ...}`, Discord `{"content": ...}`), authenticated by the channel's secret URL instead
@@ -69,10 +72,18 @@ bottleneck being geography/RTT, not the server).
   analytics worker (never the redirect hot path), fail-open. Panel: `/pixels`. Doc: `docs/CONVERSION-FORWARDING.md`.
 - **A/B testing (#17)**: a link can carry weighted variants; redirects split traffic by a
   stateless weighted pick, with per-variant click stats. Doc: `docs/AB-TESTING.md`.
-- **Deep linking (#20), core done**: hosts the iOS `apple-app-site-association` and Android
+- **Deep linking (#20)**: hosts the iOS `apple-app-site-association` and Android
   `assetlinks.json` files at their well-known paths, editable in the panel (**App Links**), served
-  as `application/json` over HTTPS with no redirect. Delivered on branch `feat/deep-linking` (not
-  merged). Guide: `docs/DEEP-LINKING.md`. The device-aware redirect is a follow-up (see Backlog).
+  as `application/json` over HTTPS with no redirect. The device-aware redirect ships too: a link can
+  carry `app_ios` / `app_android` destinations, and a click from that platform (when the OS did not
+  catch it) resolves to the app destination, ahead of geo/device rules and A/B variants in the
+  precedence order. Guide: `docs/DEEP-LINKING.md`.
+- **Scale hardening**: cross-node cache and blocklist invalidation over a Valkey pub/sub channel
+  (`src/invalidate.rs`); atomic Postgres analytics counters (`click_counters`, `INSERT ... ON
+  CONFLICT`) plus append-only `click_events`, replacing the advisory-lock blob read-modify-write;
+  a durable Postgres webhook outbox with a leased relay (retry/DLQ/idempotency); per-click Meta/GA4
+  dedup ids; and a cluster preflight (`QUARK_STRICT_CLUSTER`) that fails fast when a strict multi-node
+  deployment is missing Postgres or Valkey. Doc: `docs/SCALING.md`, audit: `docs/research/2026-07-14-scale-audit.md`.
 
 ## Next
 
@@ -84,9 +95,12 @@ bottleneck being geography/RTT, not the server).
 ## Backlog
 
 - **Custom domains**: `mydomain.com/abc`.
-- **Deep linking (#20) follow-up, device-aware redirect**: detect iOS/Android and open the app (an
-  app URI or the store) with a web fallback. Builds on the hosted association files (core done);
-  needs product decisions, so it is left for an interactive round.
+- **Deep linking follow-ups**: deferred deep linking (send a user without the app to the store, then
+  open it on the right screen after install) and in-app-browser routing (steering clicks out of an
+  Instagram/TikTok webview). Both need a mobile SDK quark does not ship. The device-aware redirect
+  itself is done (see Done).
+- **Same-transaction webhook outbox**: fold the outbox insert into the link mutation's transaction
+  so the narrow post-commit crash window cannot lose a lifecycle event (see `docs/SCALING.md`).
 
 ## Design constraints (deliberate)
 

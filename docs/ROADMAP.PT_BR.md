@@ -15,9 +15,13 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 ## Feito
 
 - **Webhooks (#1):** eventos HTTP de saída assinados em `link.created/updated/deleted/expired/clicked`,
-  assinatura HMAC Standard Webhooks, entrega best-effort (fila → worker → retry com backoff/jitter,
-  guardada contra SSRF), assinaturas gerenciadas no painel ou via `/admin/webhooks`. É a base
-  pro #6 (Slack/Discord/Telegram) e o #10 (n8n/Zapier). Doc: `docs/WEBHOOKS.PT_BR.md`.
+  assinatura HMAC Standard Webhooks, guardada contra SSRF. No Postgres os eventos de ciclo de vida
+  são entregues de forma durável (um outbox `webhook_deliveries` + um relay com lease usando
+  `FOR UPDATE SKIP LOCKED`, retry/backoff persistido, dead-letter após 8 tentativas e uma chave de
+  idempotência estável); `link.clicked` e `link.expired` ficam best-effort em memória por design
+  (disparam no caminho quente do redirect). No LMDB todo evento vai pelo canal best-effort em
+  memória. Assinaturas gerenciadas no painel ou via `/admin/webhooks`. Base pro #6
+  (Slack/Discord/Telegram) e o #10 (n8n/Zapier). Doc: `docs/WEBHOOKS.PT_BR.md`.
 - **Canais de notificação (#6):** Slack/Discord/Telegram como um `kind` na assinatura de webhook
   (construído sobre o #1); mensagem em texto plano, não assinada, no formato de cada canal
   (Slack/Telegram `{"text": ...}`, Discord `{"content": ...}`), autenticada pela URL secreta do
@@ -70,10 +74,19 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
   Doc: `docs/CONVERSION-FORWARDING.PT_BR.md`.
 - **Teste A/B (#17)**: um link pode carregar variantes com peso; o redirect divide o tráfego por
   um sorteio ponderado sem estado, com estatísticas de cliques por variante. Doc: `docs/AB-TESTING.PT_BR.md`.
-- **Deep linking (#20), núcleo feito**: hospeda os arquivos `apple-app-site-association` (iOS) e
+- **Deep linking (#20)**: hospeda os arquivos `apple-app-site-association` (iOS) e
   `assetlinks.json` (Android) nos caminhos well-known, editáveis no painel (**App Links**), servidos
-  como `application/json` sobre HTTPS sem redirect. Entregue na branch `feat/deep-linking` (não
-  mergeada). Guia: `docs/DEEP-LINKING.PT_BR.md`. O redirect ciente do aparelho é follow-up (veja Backlog).
+  como `application/json` sobre HTTPS sem redirect. O redirect ciente do aparelho também está pronto:
+  um link pode carregar destinos `app_ios` / `app_android`, e um clique daquela plataforma (quando o
+  SO não pegou) resolve pro destino do app, na frente das regras geo/dispositivo e das variantes A/B
+  na ordem de precedência. Guia: `docs/DEEP-LINKING.PT_BR.md`.
+- **Reforço de escala**: invalidação de cache e blocklist cross-node por um canal pub/sub do Valkey
+  (`src/invalidate.rs`); contadores atômicos de analytics no Postgres (`click_counters`, `INSERT ...
+  ON CONFLICT`) mais `click_events` append-only, substituindo o read-modify-write de blob sob
+  advisory lock; um outbox durável de webhook no Postgres com relay por lease (retry/DLQ/idempotência);
+  ids de dedup Meta/GA4 por clique; e um preflight de cluster (`QUARK_STRICT_CLUSTER`) que falha rápido
+  quando um deploy multi-nó estrito está sem Postgres ou Valkey. Doc: `docs/SCALING.PT_BR.md`,
+  auditoria: `docs/research/2026-07-14-scale-audit.md`.
 
 ## Próximo
 
@@ -85,9 +98,13 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 ## Backlog
 
 - **Domínios customizados**: `meudominio.com/abc`.
-- **Deep linking (#20) follow-up, redirect ciente do aparelho**: detectar iOS/Android e abrir o app
-  (uma URI de app ou a loja) com fallback web. Se apoia nos arquivos de associação hospedados
-  (núcleo feito); precisa de decisões de produto, então fica pra uma rodada interativa.
+- **Follow-ups de deep linking**: deferred deep linking (mandar um usuário sem o app pra loja e abrir
+  na tela certa após instalar) e roteamento de in-app-browser (tirar cliques de um webview do
+  Instagram/TikTok). Os dois precisam de um SDK móvel que o quark não entrega. O redirect ciente do
+  aparelho em si está feito (veja Feito).
+- **Outbox de webhook na mesma transação**: dobrar a inserção no outbox dentro da transação da
+  mutação do link para a janela estreita de crash pós-commit não perder um evento de ciclo de vida
+  (veja `docs/SCALING.PT_BR.md`).
 
 ## Restrições de design (conscientes)
 
