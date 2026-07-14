@@ -35,8 +35,13 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
   está configurado** (senão continua público). CORS opt-in via `QUARK_CORS_ORIGINS`.
 - **Painel web (SPA)**: `web/` (React + Vite + shadcn/ui + TanStack + Recharts), deploy
   separado (build estático), binário API-only. Login por token → Links (CRUD, busca,
-  copiar, **QR code**) → Stats por link (gráficos) → Blocklist. UI/UX seguindo
+  tags, copiar, **QR code**) → Stats por link (gráficos) → Blocklist. UI/UX seguindo
   heurísticas de Nielsen.
+- **Tags (#7)**: links carregam tags normalizadas (`Record.tags`: aparadas,
+  minúsculas, deduplicadas, com limite) pra organizar; a lista de links filtra
+  por tag (`GET /admin/links?tag=`), e `GET /admin/tags` lista o conjunto
+  distinto pro painel. Um dashboard de stats agregado cross-tag fica como
+  follow-up.
 - **Busca server-side (Postgres)**: `GET /admin/links?q=` faz `ILIKE` em url+alias
   (keyset paginado, curingas escapados). Recurso do Postgres; o LMDB responde `501` e o
   painel cai pro filtro **client-side** (debounce ~300ms, fallback automático). Estado de

@@ -36,8 +36,12 @@ bottleneck being geography/RTT, not the server).
   is set** (otherwise it stays public). Opt-in CORS via `QUARK_CORS_ORIGINS`.
 - **Web panel (SPA)**: `web/` (React + Vite + shadcn/ui + TanStack + Recharts), deployed
   separately (static build), API-only binary. Token login → Links (CRUD, search,
-  copy, **QR code**) → Per-link stats (charts) → Blocklist. UI/UX following
+  tags, copy, **QR code**) → Per-link stats (charts) → Blocklist. UI/UX following
   Nielsen's heuristics.
+- **Tags (#7)**: links carry normalized tags (`Record.tags`: trimmed, lowercased,
+  deduped, capped) to organize them; the links list filters by tag
+  (`GET /admin/links?tag=`), and `GET /admin/tags` lists the distinct set for the
+  panel. A cross-tag aggregate stats dashboard stays a follow-up.
 - **Server-side search (Postgres)**: `GET /admin/links?q=` runs `ILIKE` over url+alias
   (keyset-paginated, wildcards escaped). A Postgres-only feature; LMDB returns `501` and the
   panel falls back to **client-side** filtering (~300ms debounce, automatic fallback). A distinct

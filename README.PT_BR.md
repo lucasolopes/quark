@@ -242,15 +242,16 @@ Toda variável abaixo é opcional, exceto `QUARK_KEY` em produção. Deixe uma v
 (Postgres, Valkey, ClickHouse) já conectados — útil pra desenvolvimento, pra
 rodar os testes de integração gated, e como referência de self-host full-stack.
 A API admin/painel vive sob `/admin/*` (token `QUARK_ADMIN_TOKEN`): listar
-links `GET /admin/links`, apagar `DELETE /admin/links/:code`, editar
-`PATCH /admin/links/:code`. Um painel web separado (SPA) consome essa API; configure
+links `GET /admin/links` (filtrável por `?tag=`), apagar `DELETE /admin/links/:code`, editar
+`PATCH /admin/links/:code`, e listar tags distintas `GET /admin/tags`. Um painel web separado (SPA) consome essa API; configure
 `QUARK_CORS_ORIGINS` pra origem do painel.
 
 ### Painel web (`web/`)
 
 Um painel admin de operador único (SPA React) vive em `web/`. Ele é construído e
 deployado **separadamente** do binário da API (build estático → CDN/edge); o binário
-do quark continua API-only. Dev: `cd web && npm install && npm run dev` (Vite na
+do quark continua API-only. Links suportam CRUD, busca, tags, copiar e QR code,
+além de stats por link e blocklist. Dev: `cd web && npm install && npm run dev` (Vite na
 `:5173`), apontando `VITE_API_BASE_URL` pra sua API do quark e definindo
 `QUARK_CORS_ORIGINS=http://localhost:5173` na API. A autenticação é o mesmo
 `QUARK_ADMIN_TOKEN`, digitado na tela de login do painel.
