@@ -1,4 +1,4 @@
-import { Link2, LogOut, Moon, ShieldBan, Sun } from "lucide-react";
+import { Link2, LogOut, Moon, ShieldBan, Smartphone, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { QuarkMark } from "@/components/brand/QuarkMark";
@@ -18,6 +18,7 @@ export function Shell() {
   const nav = [
     { to: "/links", label: t("shell.navLinks"), icon: Link2 },
     { to: "/blocklist", label: t("shell.navBlocklist"), icon: ShieldBan },
+    { to: "/app-links", label: t("shell.navAppLinks"), icon: Smartphone },
   ];
 
   function handleLogout() {

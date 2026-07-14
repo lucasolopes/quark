@@ -1,7 +1,7 @@
 import { getToken } from "./auth";
 import type {
   ListLinksResponse, CreateLinkRequest, CreateLinkResponse,
-  Stats, BlocklistResponse, PatchLinkRequest,
+  Stats, BlocklistResponse, PatchLinkRequest, WellknownName,
 } from "./types";
 
 /**
@@ -72,6 +72,20 @@ export const api = {
   },
   async removeBlocked(domain: string): Promise<void> {
     const res = await req("/admin/blocklist", { method: "DELETE", body: JSON.stringify({ domain }) });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  async getWellknown(name: WellknownName): Promise<string | null> {
+    const res = await req(`/admin/wellknown/${encodeURIComponent(name)}`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    return res.text();
+  },
+  async putWellknown(name: WellknownName, body: string): Promise<void> {
+    const res = await req(`/admin/wellknown/${encodeURIComponent(name)}`, { method: "PUT", body });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  async deleteWellknown(name: WellknownName): Promise<void> {
+    const res = await req(`/admin/wellknown/${encodeURIComponent(name)}`, { method: "DELETE" });
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
 };

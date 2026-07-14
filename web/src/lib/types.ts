@@ -22,3 +22,6 @@ export interface Aggregates {
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
 export interface BlocklistResponse { domains: string[]; }
 export interface PatchLinkRequest { url?: string; ttl?: number | null; }
+
+/** The two well-known app-association document names the backend accepts. */
+export type WellknownName = "apple-app-site-association" | "assetlinks.json";
