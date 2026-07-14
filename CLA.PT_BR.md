@@ -2,19 +2,19 @@
 
 > Esta é uma tradução de cortesia. A versão em inglês ([CLA.md](CLA.md)) é a autoritativa.
 
-# quark — Contributor License Agreement (Acordo de Licença do Contribuidor)
+# quark: Contributor License Agreement (Acordo de Licença do Contribuidor)
 
 Obrigado por contribuir com o quark. Este Contributor License Agreement
 ("Acordo") documenta os direitos concedidos pelos contribuidores ao projeto. Ele
 protege tanto você quanto o projeto.
 
-**Isto é uma concessão de licença, não uma transferência de copyright — você mantém a
+**Isto é uma concessão de licença, não uma transferência de copyright: você mantém a
 propriedade total das suas Contribuições.** É adaptado do Apache Software Foundation
 Individual CLA v2.2 e é fornecido como um modelo inicial; **não é aconselhamento
 jurídico**.
 
 Ao submeter uma Contribuição ao projeto quark mantido por **Lucas Olopes**
-("o Mantenedor") — por exemplo, ao abrir um pull request — você aceita e
+("o Mantenedor"), por exemplo, ao abrir um pull request, você aceita e
 concorda com os termos abaixo para suas Contribuições presentes e futuras.
 
 ## 1. Definições
@@ -25,8 +25,8 @@ concorda com os termos abaixo para suas Contribuições presentes e futuras.
   quaisquer modificações ou adições a um trabalho existente, que Você intencionalmente
   submete ao Mantenedor para inclusão em, ou documentação de, o projeto quark.
   "Submeter" significa qualquer forma de comunicação eletrônica, verbal ou escrita enviada
-  ao Mantenedor ou seus representantes — incluindo pull requests, patches e
-  código — mas excluindo comunicação conspicuamente marcada como "Not a Contribution."
+  ao Mantenedor ou seus representantes, incluindo pull requests, patches e
+  código, mas excluindo comunicação conspicuamente marcada como "Not a Contribution."
 
 ## 2. Você mantém a propriedade
 

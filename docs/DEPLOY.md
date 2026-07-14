@@ -3,7 +3,7 @@
 # Deploying quark on Coolify
 
 quark is a single binary. This repository ships a multi-stage `Dockerfile` that
-Coolify auto-detects — no Nixpacks, no buildpack needed.
+Coolify auto-detects: no Nixpacks, no buildpack needed.
 
 ## Step by step (Coolify)
 
@@ -14,10 +14,10 @@ Coolify auto-detects — no Nixpacks, no buildpack needed.
 5. **Environment variables:**
    | var | value | required |
    |---|---|---|
-   | `QUARK_KEY` | a random `u64` — generate one with `openssl rand -hex 8` and convert to decimal, or use any large number. **Set it as a _secret_.** | **yes** (without it quark falls back to a dev key and logs a warning) |
+   | `QUARK_KEY` | a random `u64`: generate one with `openssl rand -hex 8` and convert to decimal, or use any large number. **Set it as a _secret_.** | **yes** (without it quark falls back to a dev key and logs a warning) |
    | `QUARK_ADDR` | `0.0.0.0:8080` | already the image default |
    | `QUARK_DATA` | `/data` | already the image default |
-6. **Persistent storage:** add a **Persistent Storage / Volume** mounted at **`/data`**. This is where LMDB keeps the links — without it, links disappear on every redeploy.
+6. **Persistent storage:** add a **Persistent Storage / Volume** mounted at **`/data`**. This is where LMDB keeps the links; without it, links disappear on every redeploy.
 7. **Health check:** path **`/health`** (quark responds `200 ok`). Point Coolify's HTTP health check at that path on port 8080.
 8. **Deploy.** Coolify builds the image and brings it up. The domain it gives you already serves the redirects.
 
@@ -40,4 +40,4 @@ curl -s https://<URL>/health     # -> ok
 
 - **One key per instance:** changing `QUARK_KEY` remaps the entire code space. Keep it stable in production (rotating it invalidates every code already issued) and out of version control.
 - **Backup:** just copy the `/data` volume (it's the whole LMDB database).
-- **Scale:** the id counter is single-node (one instance). Running multiple replicas would require partitioning the id space — that's phase 2.
+- **Scale:** the id counter is single-node (one instance). Running multiple replicas would require partitioning the id space: that's phase 2.

@@ -1,18 +1,18 @@
 **English** · [Português](CLA.PT_BR.md)
 
-# quark — Contributor License Agreement
+# quark: Contributor License Agreement
 
 Thank you for contributing to quark. This Contributor License Agreement
 ("Agreement") documents the rights granted by contributors to the project. It
 protects both you and the project.
 
-**This is a license grant, not a copyright transfer — you keep full ownership of
+**This is a license grant, not a copyright transfer: you keep full ownership of
 your Contributions.** It is adapted from the Apache Software Foundation
 Individual CLA v2.2 and is provided as a starting template; it is **not legal
 advice**.
 
 By submitting a Contribution to the quark project maintained by **Lucas Olopes**
-("the Maintainer") — for example, by opening a pull request — you accept and
+("the Maintainer"), for example, by opening a pull request, you accept and
 agree to the following terms for your present and future Contributions.
 
 ## 1. Definitions
@@ -23,8 +23,8 @@ agree to the following terms for your present and future Contributions.
   modifications or additions to an existing work, that You intentionally submit
   to the Maintainer for inclusion in, or documentation of, the quark project.
   "Submit" means any form of electronic, verbal, or written communication sent to
-  the Maintainer or its representatives — including pull requests, patches, and
-  code — but excluding communication conspicuously marked "Not a Contribution."
+  the Maintainer or its representatives, including pull requests, patches, and
+  code, but excluding communication conspicuously marked "Not a Contribution."
 
 ## 2. You retain ownership
 

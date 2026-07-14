@@ -3,7 +3,7 @@
 # Horizontal scaling in quark
 
 quark scales horizontally by **sharing storage** across replicas. There are
-three deployment shapes, with different limits — pick the one that matches
+three deployment shapes, with different limits: pick the one that matches
 what you need.
 
 ## The three shapes
@@ -45,7 +45,7 @@ Bring up N copies of the binary behind a load balancer, all with the same
 - **Optional cache**: a shared Valkey (`QUARK_VALKEY_URL`) as L2 cuts down
   repeated reads against Postgres.
 
-## `QUARK_NODE_ID` — defensive LMDB partitioning
+## `QUARK_NODE_ID`: defensive LMDB partitioning
 
 quark's code space is 40 bits. When `QUARK_NODE_ID` is **set** (0–255), the
 top 8 bits identify the node and the low 32 bits become that node's local
@@ -59,18 +59,18 @@ counter:
   (~1.1 trillion links). This is single-node mode.
 - **All-or-nothing rule**: either **every** node runs without `QUARK_NODE_ID`
   (= 1 node), or **every** node runs with a **distinct** `QUARK_NODE_ID`.
-  Never mix an un-partitioned node (full range) with partitioned ones — the
+  Never mix an un-partitioned node (full range) with partitioned ones: the
   spaces overlap.
 - An invalid `QUARK_NODE_ID` (outside 0–255) crashes the process at startup.
 
 ## The honest limit of shape 3
 
 `QUARK_NODE_ID` guarantees that two LMDB nodes **won't generate the same
-code** — but it does **not** make one node serve another node's links. Each
+code**, but it does **not** make one node serve another node's links. Each
 LMDB is local: a redirect that lands on the wrong node returns 404, because
 that node doesn't have the data. In other words, node-id is a
 **collision guard-rail**, not a real multi-node mode.
 
-**By design, a pure binary (LMDB, no database) is single-node** — this is a
+**By design, a pure binary (LMDB, no database) is single-node**: this is a
 deliberate constraint of the system, not a limitation to be removed. **For
 multi-node, use shape 2 (shared Postgres).**

@@ -18,48 +18,48 @@ bottleneck being geography/RTT, not the server).
 - **Core (v0.1):** create + redirect + custom alias + expiration (TTL). The short code
   is a calibrated Feistel/ARX permutation (`ROUNDS=4`); codes are **computed, not
   stored** (store keyed by `u64`).
-- **Pluggable architecture** — `Store` / `CacheTier` / `AnalyticsSink` traits:
-  - **L2 Valkey** (`QUARK_VALKEY_URL`) — shared cache, circuit breaker + timeout, fail-open.
-  - **Postgres** (`QUARK_DATABASE_URL`) — multi-node relational store (atomic id sequence).
-  - **ClickHouse** (`QUARK_CLICKHOUSE_URL`) — OLAP analytics sink (analytics-only).
-- **Click analytics** — fire-and-forget capture on the 302 (~180ns) → worker → sink;
+- **Pluggable architecture**: `Store` / `CacheTier` / `AnalyticsSink` traits:
+  - **L2 Valkey** (`QUARK_VALKEY_URL`): shared cache, circuit breaker + timeout, fail-open.
+  - **Postgres** (`QUARK_DATABASE_URL`): multi-node relational store (atomic id sequence).
+  - **ClickHouse** (`QUARK_CLICKHOUSE_URL`): OLAP analytics sink (analytics-only).
+- **Click analytics**: fire-and-forget capture on the 302 (~180ns) → worker → sink;
   `GET /:code/stats` (aggregates + last N events).
-- **Observability** — opt-in per-request JSON access log (`QUARK_ACCESS_LOG`).
-- **Edge/CDN** — TTL-aware `Cache-Control` on redirects (guide in `docs/EDGE.md`).
-- **Horizontal scaling** — stateless replicas over a shared Postgres; `QUARK_NODE_ID`
+- **Observability**: opt-in per-request JSON access log (`QUARK_ACCESS_LOG`).
+- **Edge/CDN**: TTL-aware `Cache-Control` on redirects (guide in `docs/EDGE.md`).
+- **Horizontal scaling**: stateless replicas over a shared Postgres; `QUARK_NODE_ID`
   partitions the id space in LMDB (defensive guard). Doc: `docs/SCALING.md`.
-- **Abuse protection** (only on `POST /`) — per-IP rate limit (`QUARK_RATELIMIT_PER_MIN`,
+- **Abuse protection** (only on `POST /`): per-IP rate limit (`QUARK_RATELIMIT_PER_MIN`,
   in-memory/Valkey, fail-open), destination blocklist in the store (`/admin/blocklist`, L1/L2 cache),
   built-in guard against internal/loop networks (`QUARK_BLOCK_PRIVATE`, on by default).
-- **Panel API** — `GET /admin/links` (keyset-paginated list), `DELETE`/`PATCH /admin/links/:code`,
+- **Panel API**: `GET /admin/links` (keyset-paginated list), `DELETE`/`PATCH /admin/links/:code`,
   all under `QUARK_ADMIN_TOKEN`. **Creating (`POST /`) requires the token when `QUARK_ADMIN_TOKEN`
   is set** (otherwise it stays public). Opt-in CORS via `QUARK_CORS_ORIGINS`.
-- **Web panel (SPA)** — `web/` (React + Vite + shadcn/ui + TanStack + Recharts), deployed
+- **Web panel (SPA)**: `web/` (React + Vite + shadcn/ui + TanStack + Recharts), deployed
   separately (static build), API-only binary. Token login → Links (CRUD, search,
   copy, **QR code**) → Per-link stats (charts) → Blocklist. UI/UX following
   Nielsen's heuristics.
-- **Server-side search (Postgres)** — `GET /admin/links?q=` runs `ILIKE` over url+alias
+- **Server-side search (Postgres)**: `GET /admin/links?q=` runs `ILIKE` over url+alias
   (keyset-paginated, wildcards escaped). A Postgres-only feature; LMDB returns `501` and the
   panel falls back to **client-side** filtering (~300ms debounce, automatic fallback). A distinct
   error state from "nothing found".
-- **License + contributions** — **AGPL-3.0-only** core; `CLA.md` (license grant) +
+- **License + contributions**: **AGPL-3.0-only** core; `CLA.md` (license grant) +
   `CONTRIBUTING.md` + a CLA bot (GitHub Action). Multi-tenancy/cloud stays proprietary, separate.
-- **`docker-compose.yml`** — full stack (quark + Postgres + Valkey + ClickHouse) for dev/self-host.
+- **`docker-compose.yml`**: full stack (quark + Postgres + Valkey + ClickHouse) for dev/self-host.
 
 ## Next
 
-- **Accounts + multi-user panel** — this is a **cloud-phase** feature (multi-tenant, proprietary). OSS
+- **Accounts + multi-user panel**: this is a **cloud-phase** feature (multi-tenant, proprietary). OSS
   stays single-account (single operator). Deserves its own brainstorming when the time comes.
-- **Deploying the full version on the VPS** — the API + panel aren't in production yet
+- **Deploying the full version on the VPS**: the API + panel aren't in production yet
   (`quark.meuchat.ai` runs an older version); bring it up via Coolify.
 
 ## Backlog
 
-- **Custom domains** — `mydomain.com/abc`.
+- **Custom domains**: `mydomain.com/abc`.
 
 ## Design constraints (deliberate)
 
-- **A pure binary (LMDB, no database) is single-node by design** — this is not a limitation to remove.
+- **A pure binary (LMDB, no database) is single-node by design**: this is not a limitation to remove.
   Scaling means stateless replicas over a shared Postgres (`docs/SCALING.md`).
 - **Abuse protection** runs only on `POST /`; the redirect (hot path) pays nothing for it.
 - **Creating a link is public when there's no `QUARK_ADMIN_TOKEN`** (a zero-config open shortener);
@@ -67,9 +67,9 @@ bottleneck being geography/RTT, not the server).
 
 ## Parked (future, not planned)
 
-- **Full-edge cloud on Cloudflare Workers** — the direction for the cloud edition (permute compiled to WASM;
+- **Full-edge cloud on Cloudflare Workers**: the direction for the cloud edition (permute compiled to WASM;
   Store becomes KV/D1/Durable Objects). Parked until it becomes a priority.
-- **Shared-nothing proxy** (multi-node LMDB without a database) — not planned; Postgres already covers multi-node.
+- **Shared-nothing proxy** (multi-node LMDB without a database): not planned; Postgres already covers multi-node.
 
 ## Notes
 

@@ -4,7 +4,7 @@
 
 ## Why edge would help
 
-quark resolves a redirect in ~2 ms — the measured bottleneck has never been
+quark resolves a redirect in ~2 ms: the measured bottleneck has never been
 the server, it's **geography**: every `GET /:code` makes a round trip (RTT) to
 the single instance, which lives in one region only. A user on the other side
 of the world pays that full RTT on every click, even though the link never
@@ -24,7 +24,7 @@ link's TTL (`src/api.rs`, `cache_control_for`):
 
 **Browsers respect this header.** When the same user clicks the same link
 again, their browser serves the redirect **from the local cache, without
-touching the network.** This gain is real and already active — it's
+touching the network.** This gain already works and is active now: it's
 per-user, not per-region.
 
 ## Measured reality: Cloudflare does NOT cache the 302
@@ -35,14 +35,14 @@ per-user, not per-region.
 > request. Cloudflare treats **3xx redirects as dynamic** and never places
 > them in the edge cache.
 
-In other words: **creating a Cache Rule to cache the 302 doesn't help** —
+In other words: **creating a Cache Rule to cache the 302 doesn't help**:
 it's not a misconfiguration, it's platform behavior. Don't spend time on it.
 
 ## With Cloudflare Tunnel (Coolify's native option)
 
 If you use Coolify's `cloudflared` (recommended), traffic **already passes
 through Cloudflare's edge** by construction (confirmable via the `cf-ray`
-header in the response), and **DNS + TLS are handled by the tunnel** —
+header in the response), and **DNS + TLS are handled by the tunnel**:
 no proxied A record, SSL mode, or origin certificate to configure. But, per
 the item above, the edge still does **not** cache the 302.
 
@@ -51,14 +51,14 @@ the item above, the edge still does **not** cache the 302.
 The only reliable path on Cloudflare is a **Worker**: an edge script that
 either (a) performs the redirect itself, reading the code→URL pair from
 **Workers KV**, or (b) caches the origin's 302 via the **Cache API**. That's
-a phase-2 change — it requires getting link data to wherever the
+a phase-2 change: it requires getting link data to wherever the
 Worker can reach it (dual-write to KV, or the Worker querying the origin and
 caching the result).
 
 **Is it worth it?** Only if you have meaningful traffic **far** from the
 VPS's region. For an audience close to the origin (e.g. a VPS in Europe with
 European users), RTT is already low and the Worker doesn't pay off. Current
-deliberate decision: **don't build it** — `Cache-Control` is already in
+deliberate decision: **don't build it**. `Cache-Control` is already in
 place for whenever/if it becomes worth it.
 
 ## Summary

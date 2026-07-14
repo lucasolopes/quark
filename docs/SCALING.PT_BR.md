@@ -3,7 +3,7 @@
 # Escala horizontal do quark
 
 O quark escala horizontalmente **compartilhando o storage** entre réplicas. Há
-três formatos de deploy, com limites diferentes — escolha pelo que você precisa.
+três formatos de deploy, com limites diferentes: escolha pelo que você precisa.
 
 ## Os três formatos
 
@@ -44,7 +44,7 @@ Suba N cópias do binário atrás de um load balancer, todas com a mesma
 - **Cache opcional**: um Valkey compartilhado (`QUARK_VALKEY_URL`) como L2 corta
   leituras repetidas no Postgres.
 
-## `QUARK_NODE_ID` — particionamento defensivo do LMDB
+## `QUARK_NODE_ID`: particionamento defensivo do LMDB
 
 O espaço de código do quark tem 40 bits. Quando `QUARK_NODE_ID` está **definido**
 (0–255), os 8 bits altos passam a identificar o nó e os 32 baixos são o contador
@@ -58,16 +58,16 @@ local daquele nó:
   (~1,1 trilhão de links). É o modo single-node.
 - **Regra tudo-ou-nada**: ou **todos** os nós rodam sem `QUARK_NODE_ID` (= 1 nó),
   ou **todos** rodam com um `QUARK_NODE_ID` **distinto**. Nunca misture um nó sem
-  node-id (faixa cheia) com nós particionados — os espaços se sobrepõem.
+  node-id (faixa cheia) com nós particionados: os espaços se sobrepõem.
 - `QUARK_NODE_ID` inválido (fora de 0–255) derruba o processo no startup.
 
 ## Limite honesto do formato 3
 
-`QUARK_NODE_ID` garante que dois nós LMDB **não gerem o mesmo código** — mas
+`QUARK_NODE_ID` garante que dois nós LMDB **não gerem o mesmo código**, mas
 **não** faz um nó servir os links do outro. Cada LMDB é local: um redirect que
 cai no nó errado dá 404, porque aquele nó não tem o dado. Ou seja, o node-id é um
 **guard-rail contra colisão**, não um modo multi-nó de verdade.
 
-**Por design, um binário puro (LMDB, sem banco) é single-node** — isso é uma
+**Por design, um binário puro (LMDB, sem banco) é single-node**: isso é uma
 restrição consciente do sistema, não uma limitação a ser removida. **Para
 multi-nó, use o formato 2 (Postgres compartilhado).**
