@@ -33,17 +33,22 @@ export const WEBHOOK_EVENTS = [
 ] as const;
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
 
+/** The channel a webhook subscription delivers to. `generic` signs with an HMAC secret; the others POST a channel-shaped payload straight to the pasted URL, unsigned. */
+export const WEBHOOK_KINDS = ["generic", "slack", "discord", "telegram"] as const;
+export type SubscriptionKind = (typeof WEBHOOK_KINDS)[number];
+
 export interface Webhook {
   id: number;
   url: string;
   events: WebhookEvent[];
   active: boolean;
   created: number;
-  /** Masked form of the signing secret, e.g. `whsec_••••` — the raw secret is only ever returned once, at creation. */
+  kind: SubscriptionKind;
+  /** Masked form of the signing secret, e.g. `whsec_••••` — the raw secret is only ever returned once, at creation. Empty for channel kinds (no signing secret). */
   secret_masked: string;
 }
 export interface ListWebhooksResponse { webhooks: Webhook[]; }
-export interface CreateWebhookRequest { url: string; events: WebhookEvent[]; active?: boolean; }
+export interface CreateWebhookRequest { url: string; events: WebhookEvent[]; active?: boolean; kind: SubscriptionKind; }
 export interface CreateWebhookResponse { id: number; secret: string; }
 export interface PatchWebhookRequest { url?: string; events?: WebhookEvent[]; active?: boolean; }
 export interface TestWebhookResponse { delivered: boolean; status: number; }
