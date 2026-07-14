@@ -41,6 +41,21 @@ impl EventType {
             EventType::LinkClicked => "link.clicked",
         }
     }
+
+    /// Parses the wire string back into an `EventType`, inverse of `as_str`.
+    /// Used by the durable relay to reconstruct the event kind from the
+    /// `event_type` column persisted in the outbox. Returns `None` on an
+    /// unrecognized value.
+    pub fn from_wire(s: &str) -> Option<EventType> {
+        match s {
+            "link.created" => Some(EventType::LinkCreated),
+            "link.updated" => Some(EventType::LinkUpdated),
+            "link.deleted" => Some(EventType::LinkDeleted),
+            "link.expired" => Some(EventType::LinkExpired),
+            "link.clicked" => Some(EventType::LinkClicked),
+            _ => None,
+        }
+    }
 }
 
 /// Kind of channel a webhook subscription delivers to. `Generic` is a raw,

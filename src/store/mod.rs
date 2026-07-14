@@ -162,6 +162,35 @@ pub fn pick_variant(variants: &[Variant], rand: u64) -> usize {
     variants.len() - 1
 }
 
+/// A durable webhook delivery to enqueue into the Postgres outbox: one row per
+/// (event, subscription). `delivery_key` is the stable idempotency id
+/// (`"<event_id>.<subscription_id>"`) that a duplicate enqueue collides on
+/// (`ON CONFLICT (delivery_key) DO NOTHING`) and that the relay sends as the
+/// `webhook-id` header (stable across attempts and nodes). `next_attempt_at`
+/// is when the relay may first try it (usually `now` at insert time).
+#[derive(Debug, Clone)]
+pub struct OutboxRow {
+    pub delivery_key: String,
+    pub subscription_id: u64,
+    pub event_type: String,
+    pub payload: String,
+    pub created: u64,
+    pub next_attempt_at: u64,
+}
+
+/// A claimed (leased) outbox delivery the relay is about to attempt. `id` is
+/// the `BIGSERIAL` primary key used by `mark_delivered`/`mark_retry`/`mark_dead`;
+/// `attempts` is the count of failed attempts so far (0 on the first try).
+#[derive(Debug, Clone)]
+pub struct OutboxDelivery {
+    pub id: i64,
+    pub delivery_key: String,
+    pub subscription_id: u64,
+    pub event_type: String,
+    pub payload: String,
+    pub attempts: u32,
+}
+
 #[derive(Debug)]
 pub enum StoreError {
     Db(heed::Error),
@@ -272,6 +301,41 @@ pub trait Store: Send + Sync + 'static {
     async fn put_wellknown(&self, name: &str, body: &str) -> Result<(), StoreError>;
     /// Deletes a well-known document; a missing document is not an error.
     async fn delete_wellknown(&self, name: &str) -> Result<(), StoreError>;
+
+    /// Durable webhook outbox (scale-audit #3), Postgres-only. Inserts one
+    /// delivery row per (event, subscription) with `ON CONFLICT (delivery_key)
+    /// DO NOTHING`, so a duplicate enqueue of the same (event, sub) is a no-op.
+    /// The LMDB backend implements this as a no-op: `main.rs` never routes
+    /// lifecycle events to the outbox on LMDB (the in-memory channel handles
+    /// everything there), so it is never invoked.
+    async fn enqueue_deliveries(&self, rows: &[OutboxRow]) -> Result<(), StoreError>;
+    /// Atomically claims (leases) up to `limit` due deliveries for the relay:
+    /// `dead = false AND delivered_at IS NULL AND next_attempt_at <= now`,
+    /// via `FOR UPDATE SKIP LOCKED` so two relays never claim the same row.
+    /// The claim pushes `next_attempt_at` out by a visibility lease, so a
+    /// relay that crashes mid-delivery has the row re-claimed after the lease
+    /// expires (at-least-once). LMDB returns an empty vec (never invoked).
+    async fn claim_due_deliveries(
+        &self,
+        now: u64,
+        limit: i64,
+    ) -> Result<Vec<OutboxDelivery>, StoreError>;
+    /// Marks a delivery delivered (sets `delivered_at`). LMDB: no-op.
+    async fn mark_delivered(&self, id: i64) -> Result<(), StoreError>;
+    /// Reschedules a failed delivery: persists the incremented `attempts` and
+    /// the next `next_attempt_at` (exponential backoff, survives restart).
+    /// LMDB: no-op.
+    async fn mark_retry(
+        &self,
+        id: i64,
+        next_attempt_at: u64,
+        attempts: u32,
+    ) -> Result<(), StoreError>;
+    /// Dead-letters a delivery (`dead = true`): it stops being claimed. Used
+    /// after `MAX_DELIVERY_ATTEMPTS`, or when the subscription no longer exists
+    /// or its destination is SSRF-blocked. `attempts` records the final count
+    /// on the DLQ row for observability. LMDB: no-op.
+    async fn mark_dead(&self, id: i64, attempts: u32) -> Result<(), StoreError>;
 }
 
 /// Opens only the Store on LMDB (used by tests that don't need the AnalyticsSink).

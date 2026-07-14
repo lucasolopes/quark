@@ -1,13 +1,19 @@
 use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::auth::ApiToken;
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
-use crate::store::{Record, Store, StoreError, Variant};
+use crate::store::{OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant};
 use crate::webhooks::{SubscriptionKind, WebhookSubscription};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{PgPool, Row};
 
 /// Key of the pg_advisory_lock that serializes idempotent schema creation across instances.
 const QUARK_SCHEMA_LOCK_ID: i64 = 727271;
+
+/// Visibility lease (seconds) applied by `claim_due_deliveries`: a claimed row
+/// has its `next_attempt_at` pushed this far out so a concurrent relay skips
+/// it, while a relay that crashes mid-delivery has the row re-claimed once the
+/// lease expires (at-least-once). Comfortably longer than one delivery attempt.
+const CLAIM_LEASE_SECS: u64 = 60;
 
 /// Escapes `LIKE`/`ILIKE` wildcards (default escape char = `\`) so that the
 /// user's term is treated literally. Order matters: escape `\` first.
@@ -67,6 +73,25 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
         active,
         created: created as u64,
         kind: SubscriptionKind::from_str_or_generic(&kind),
+    })
+}
+
+/// Maps a `webhook_deliveries` row (the columns `claim_due_deliveries`
+/// returns) into an `OutboxDelivery`.
+fn row_to_delivery(r: &PgRow) -> Result<OutboxDelivery, StoreError> {
+    let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+    let delivery_key: String = r.try_get("delivery_key").map_err(StoreError::backend)?;
+    let subscription_id: i64 = r.try_get("subscription_id").map_err(StoreError::backend)?;
+    let event_type: String = r.try_get("event_type").map_err(StoreError::backend)?;
+    let payload: String = r.try_get("payload").map_err(StoreError::backend)?;
+    let attempts: i32 = r.try_get("attempts").map_err(StoreError::backend)?;
+    Ok(OutboxDelivery {
+        id,
+        delivery_key,
+        subscription_id: subscription_id as u64,
+        event_type,
+        payload,
+        attempts: attempts as u32,
     })
 }
 
@@ -196,6 +221,12 @@ impl PostgresStore {
                 "CREATE TABLE IF NOT EXISTS stats_meta (id BIGINT PRIMARY KEY, first_ts BIGINT NOT NULL, last_ts BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS click_events (seq BIGSERIAL PRIMARY KEY, id BIGINT NOT NULL, ts BIGINT NOT NULL, referer TEXT, country TEXT, user_agent TEXT, city TEXT, variant INT, event_id TEXT NOT NULL DEFAULT '')",
                 "CREATE INDEX IF NOT EXISTS click_events_id_seq_idx ON click_events (id, seq DESC)",
+                // Durable webhook outbox (scale-audit #3): one row per (event,
+                // subscription) delivery attempt-set. `delivery_key` UNIQUE
+                // gives insert-time idempotency; the relay poll filters on
+                // (dead, delivered_at, next_attempt_at), hence the index.
+                "CREATE TABLE IF NOT EXISTS webhook_deliveries (id BIGSERIAL PRIMARY KEY, delivery_key TEXT UNIQUE NOT NULL, subscription_id BIGINT NOT NULL, event_type TEXT NOT NULL, payload TEXT NOT NULL, created BIGINT NOT NULL, attempts INT NOT NULL DEFAULT 0, next_attempt_at BIGINT NOT NULL, delivered_at BIGINT, dead BOOLEAN NOT NULL DEFAULT FALSE)",
+                "CREATE INDEX IF NOT EXISTS webhook_deliveries_poll_idx ON webhook_deliveries (dead, delivered_at, next_attempt_at)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -218,7 +249,7 @@ impl PostgresStore {
     /// Used in tests: resets all state.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events RESTART IDENTITY",
+            "TRUNCATE links, aliases, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
@@ -708,6 +739,94 @@ impl Store for PostgresStore {
     async fn delete_wellknown(&self, name: &str) -> Result<(), StoreError> {
         sqlx::query("DELETE FROM wellknown_documents WHERE name = $1")
             .bind(name)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn enqueue_deliveries(&self, rows: &[OutboxRow]) -> Result<(), StoreError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
+        for row in rows {
+            sqlx::query(
+                "INSERT INTO webhook_deliveries (delivery_key, subscription_id, event_type, payload, created, next_attempt_at) \
+                 VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (delivery_key) DO NOTHING",
+            )
+            .bind(&row.delivery_key)
+            .bind(row.subscription_id as i64)
+            .bind(&row.event_type)
+            .bind(&row.payload)
+            .bind(row.created as i64)
+            .bind(row.next_attempt_at as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(StoreError::backend)?;
+        }
+        tx.commit().await.map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn claim_due_deliveries(
+        &self,
+        now: u64,
+        limit: i64,
+    ) -> Result<Vec<OutboxDelivery>, StoreError> {
+        let lease_until = now.saturating_add(CLAIM_LEASE_SECS);
+        let rows = sqlx::query(
+            "UPDATE webhook_deliveries SET next_attempt_at = $1 \
+             WHERE id IN ( \
+                 SELECT id FROM webhook_deliveries \
+                 WHERE dead = false AND delivered_at IS NULL AND next_attempt_at <= $2 \
+                 ORDER BY next_attempt_at \
+                 FOR UPDATE SKIP LOCKED \
+                 LIMIT $3 \
+             ) \
+             RETURNING id, delivery_key, subscription_id, event_type, payload, attempts",
+        )
+        .bind(lease_until as i64)
+        .bind(now as i64)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        rows.iter().map(row_to_delivery).collect()
+    }
+
+    async fn mark_delivered(&self, id: i64) -> Result<(), StoreError> {
+        sqlx::query("UPDATE webhook_deliveries SET delivered_at = $1 WHERE id = $2")
+            .bind(crate::now() as i64)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn mark_retry(
+        &self,
+        id: i64,
+        next_attempt_at: u64,
+        attempts: u32,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "UPDATE webhook_deliveries SET next_attempt_at = $1, attempts = $2 WHERE id = $3",
+        )
+        .bind(next_attempt_at as i64)
+        .bind(attempts as i32)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn mark_dead(&self, id: i64, attempts: u32) -> Result<(), StoreError> {
+        sqlx::query("UPDATE webhook_deliveries SET dead = true, attempts = $1 WHERE id = $2")
+            .bind(attempts as i32)
+            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(StoreError::backend)?;

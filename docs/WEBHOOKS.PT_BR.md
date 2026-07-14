@@ -4,16 +4,27 @@
 
 Uma instância quark de operador único pode enviar eventos HTTP assinados para
 um endpoint externo (Zapier, Make, n8n, Slack ou qualquer receptor
-customizado). A entrega é best-effort: os eventos passam por uma fila
-limitada em memória, um worker assina e envia via POST com retry (backoff
-exponencial mais jitter), e uma assinatura que fica fora do ar além do
-orçamento de retry simplesmente perde aquele evento. A *configuração* da
-assinatura (URL, conjunto de eventos, segredo, flag de ativo) é durável,
-persistida no store (LMDB ou Postgres); a entrega em si não é.
+customizado). Como a entrega se comporta depende do backend:
 
-Se você precisa de entrega durável, que sobrevive a um restart, com log de
-tentativas persistido, isso é uma melhoria futura condicionada ao Postgres,
-não o que este documento cobre hoje.
+- No backend **Postgres**, os eventos de ciclo de vida (`link.created`,
+  `link.updated`, `link.deleted`) são entregues de forma **durável**: eles
+  caem numa outbox no Postgres e um worker de relay com lease os entrega
+  pelo menos uma vez, com retry persistido e uma fila de mortos
+  (dead-letter). Veja [Entrega durável
+  (Postgres)](#entrega-durável-postgres).
+- `link.clicked` (e `link.expired`, que também dispara no caminho quente do
+  redirect) continuam **best-effort** em todo backend: uma fila limitada em
+  memória alimenta um worker que assina e envia via POST com retry, e um
+  evento descartado numa fila cheia ou num restart é simplesmente perdido.
+  Adicionar uma escrita síncrona no banco ao caminho do redirect derrubaria
+  o propósito dele, então esses dois eventos são best-effort por decisão de
+  projeto.
+- No backend **LMDB** de nó único não há outbox; todo evento, incluindo os
+  de ciclo de vida, anda pelo canal best-effort em memória.
+
+A *configuração* da assinatura (URL, conjunto de eventos, segredo, flag de
+ativo) é sempre durável, persistida no store (LMDB ou Postgres),
+independente de como os eventos em si são entregues.
 
 ## Eventos
 
@@ -179,6 +190,55 @@ Note o espaço literal depois dos dois-pontos no corpo; um
   quark pode reentregar o mesmo evento (timeout de rede, resposta 5xx, e por
   aí vai), então o seu receptor deve tratar um id repetido como no-op, não
   como um novo efeito colateral.
+
+## Entrega durável (Postgres)
+
+No backend Postgres os eventos de ciclo de vida (`link.created`,
+`link.updated`, `link.deleted`) não andam pela fila em memória. Cada um é
+escrito numa outbox durável e entregue por um worker de relay, então um
+receptor fora do ar, ou um restart do quark, deixa de te custar o evento.
+
+**A outbox.** Quando um evento de ciclo de vida dispara, o quark escreve uma
+linha por assinatura ativa que casa na tabela `webhook_deliveries` (corpo do
+evento, assinatura de destino, contagem de tentativas, horário da próxima
+tentativa, uma flag de morto). A escrita comita antes da requisição admin
+retornar. Se uma assinatura fica uma hora fora do ar, as linhas dela ficam na
+outbox e são retentadas o tempo todo; nada se perde numa fila cheia.
+
+**O relay com lease.** Um worker em background consulta a outbox num intervalo
+curto e reivindica um lote de linhas devidas com `SELECT ... FOR UPDATE SKIP
+LOCKED`. Daí saem duas coisas:
+
+- Rode o quark em vários nós e cada relay reivindica um conjunto disjunto de
+  linhas, então a mesma entrega nunca é enviada duas vezes por dois nós ao
+  mesmo tempo.
+- Um endpoint lento ou quebrado só trava as próprias linhas. As outras
+  assinaturas são reivindicadas e entregues em paralelo, sem bloqueio de
+  cabeça de fila.
+
+Para cada linha reivindicada o relay busca a assinatura, aplica a mesma guarda
+de SSRF de qualquer outra entrega, assina o corpo (Generic) ou o formata para
+o canal (Slack/Discord/Telegram), e faz o POST. Num 2xx a linha é marcada como
+entregue. Numa falha a contagem de tentativas sobe e o horário da próxima
+tentativa é empurrado com backoff exponencial mais jitter, tudo persistido,
+então o cronograma sobrevive a um restart. Esgotado o orçamento de tentativas,
+a linha é marcada `dead`: vai pra fila de mortos e para de ser reivindicada.
+
+**Pelo menos uma vez, e idempotência.** Isto é entrega pelo menos uma vez: um
+crash entre um POST bem-sucedido e a linha ser marcada como entregue vai
+reentregar na próxima consulta. Deduplique pelo header `webhook-id`. Numa
+entrega pela outbox esse header é a chave de entrega estável da linha,
+`"<event_id>.<subscription_id>"`, idêntica em toda tentativa e em todo nó.
+Trate um `webhook-id` repetido como no-op (é a mesma regra de [Replay e
+idempotência](#replay-e-idempotência); o caminho durável só torna o id estável
+e persistido em vez de aleatório por tentativa).
+
+**Uma brecha honesta.** A linha da outbox é inserida logo depois de a mutação
+do link comitar, não dentro da mesma transação (a camada de armazenamento não
+conhece webhooks de outra forma). Um crash na janela estreita entre o commit
+do link e a inserção na outbox perde aquele evento. Isso é bem menor que a
+brecha em memória que substitui, e dobrar a inserção pra dentro da mesma
+transação é um follow-up planejado.
 
 ## Configurando uma assinatura
 

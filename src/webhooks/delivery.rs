@@ -6,7 +6,7 @@
 //! caller (in particular the redirect hot path).
 
 use crate::abuse::{extract_host, is_internal_host};
-use crate::store::Store;
+use crate::store::{OutboxDelivery, OutboxRow, Store};
 use crate::webhooks::{
     channel_payload, format_message, matches, sign, EventType, SubscriptionKind, WebhookEvent,
     WebhookSubscription,
@@ -32,15 +32,25 @@ const REFRESH_INTERVAL_SECS: u64 = 10;
 const BACKOFF_BASE_MS: u64 = 200;
 
 /// Front door for emitting webhook events: cheap, non-blocking, fail-open.
+///
+/// `outbox` is `Some` only on the Postgres backend (wired via `with_outbox`),
+/// where lifecycle events (created/updated/deleted) are routed through the
+/// durable outbox by `emit_lifecycle`. On LMDB it is `None` and every event
+/// rides the in-memory channel. `emit` (the in-memory path) is still used for
+/// `link.clicked` (hot path) and `link.expired` (also emitted on the redirect
+/// hot path, so it must stay off any synchronous DB write) on every backend.
 pub struct WebhookDispatcher {
     tx: Sender<WebhookEvent>,
     pub clicked_subscribed: Arc<AtomicBool>,
     pub expired_subscribed: Arc<AtomicBool>,
+    outbox: Option<Arc<dyn Store>>,
 }
 
 impl WebhookDispatcher {
     /// Builds a dispatcher over an existing channel sender and the pair of
-    /// atomics the worker keeps refreshed (see `spawn_webhook_worker`).
+    /// atomics the worker keeps refreshed (see `spawn_webhook_worker`). The
+    /// durable outbox is off by default (`emit_lifecycle` falls back to the
+    /// in-memory channel); call `with_outbox` on the Postgres backend.
     pub fn new(
         tx: Sender<WebhookEvent>,
         clicked_subscribed: Arc<AtomicBool>,
@@ -50,7 +60,15 @@ impl WebhookDispatcher {
             tx,
             clicked_subscribed,
             expired_subscribed,
+            outbox: None,
         }
+    }
+
+    /// Enables durable lifecycle routing through the Postgres outbox. Only
+    /// `main.rs` calls this, and only on the Postgres backend.
+    pub fn with_outbox(mut self, store: Arc<dyn Store>) -> Self {
+        self.outbox = Some(store);
+        self
     }
 
     /// Enqueues `ev` for async delivery. Non-blocking: if the worker is
@@ -64,6 +82,69 @@ impl WebhookDispatcher {
             );
         }
     }
+
+    /// Routes a lifecycle event (created/updated/deleted). On the Postgres
+    /// backend (`outbox` set) it fans the event out into one durable delivery
+    /// row per matching active subscription (`delivery_key =
+    /// "<event_id>.<sub_id>"`) via `enqueue_deliveries`, so the leased relay
+    /// delivers it at-least-once with persisted retry and a DLQ. On LMDB (no
+    /// outbox) it falls back to the in-memory `emit`.
+    ///
+    /// Best-effort at the admin layer: a store error is logged and swallowed,
+    /// it never fails the admin request. This must NOT be called from the
+    /// redirect hot path (it does a synchronous DB read+write); `link.clicked`
+    /// and `link.expired` use `emit` instead.
+    pub async fn emit_lifecycle(&self, ev: WebhookEvent) {
+        let Some(store) = &self.outbox else {
+            self.emit(ev);
+            return;
+        };
+        let subs = match store.list_webhooks().await {
+            Ok(subs) => subs,
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({"webhook_outbox_snapshot_error": e.to_string()})
+                );
+                return;
+            }
+        };
+        let event_id = outbox_event_id(&ev.body);
+        let now = crate::now();
+        let rows: Vec<OutboxRow> = subs
+            .iter()
+            .filter(|s| matches(s, &ev.event_type))
+            .map(|s| OutboxRow {
+                delivery_key: format!("{event_id}.{}", s.id),
+                subscription_id: s.id,
+                event_type: ev.event_type.as_str().to_string(),
+                payload: ev.body.clone(),
+                created: now,
+                next_attempt_at: now,
+            })
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        if let Err(e) = store.enqueue_deliveries(&rows).await {
+            eprintln!(
+                "{}",
+                serde_json::json!({"webhook_outbox_enqueue_error": e.to_string()})
+            );
+        }
+    }
+}
+
+/// Extracts the event id from a built webhook payload (the `id` field set by
+/// `api::webhook_event_payload`, e.g. `evt_<hex>`), for use as the stable
+/// `delivery_key` prefix. Falls back to a fresh random id if the body has no
+/// parseable `id`, so a malformed payload can never collapse two distinct
+/// events onto one `delivery_key` (which `ON CONFLICT DO NOTHING` would drop).
+fn outbox_event_id(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("id").and_then(|id| id.as_str()).map(str::to_string))
+        .unwrap_or_else(generate_msg_id)
 }
 
 /// Background worker: mirrors `analytics::spawn_worker`'s `tokio::select!`
@@ -193,13 +274,24 @@ pub(crate) struct OutgoingRequest {
 /// endpoint produces byte-for-byte the same request shape a real delivery
 /// would (see review Task 1 of #6: the test-send previously always sent a
 /// signed Generic envelope, which is the wrong shape for channel kinds).
+/// `id_override` supplies the Standard Webhooks message id (the `webhook-id`
+/// header, which is also what the signature is computed over). The in-memory
+/// path passes `None` and a fresh random id is generated per delivery; the
+/// durable relay passes `Some(delivery_key)` so `webhook-id` is stable across
+/// attempts and nodes (the idempotency win) AND the signature stays valid
+/// (both header and signed content use the same id). Ignored for channel
+/// kinds, which send no `webhook-id`.
 pub(crate) fn build_outgoing_request(
     sub: &WebhookSubscription,
     ev: &WebhookEvent,
+    id_override: Option<&str>,
 ) -> Option<OutgoingRequest> {
     match sub.kind {
         SubscriptionKind::Generic => {
-            let msg_id = generate_msg_id();
+            let msg_id = match id_override {
+                Some(id) => id.to_string(),
+                None => generate_msg_id(),
+            };
             let ts = crate::now() as i64;
             let signature = match sign(&sub.secret, &msg_id, ts, &ev.body) {
                 Ok(sig) => sig,
@@ -238,7 +330,7 @@ pub(crate) fn build_outgoing_request(
 /// exponential backoff + jitter on non-2xx responses or transport errors.
 /// Fail-open: exhausting the budget only logs, it never propagates an error.
 async fn deliver_one(client: &reqwest::Client, sub: &WebhookSubscription, ev: &WebhookEvent) {
-    let Some(req) = build_outgoing_request(sub, ev) else {
+    let Some(req) = build_outgoing_request(sub, ev, None) else {
         return;
     };
 
@@ -291,6 +383,266 @@ async fn deliver_one(client: &reqwest::Client, sub: &WebhookSubscription, ev: &W
         "{}",
         serde_json::json!({"webhook_delivery_exhausted": &sub.url, "msg_id": msg_id})
     );
+}
+
+/// How often the relay polls the outbox for due deliveries.
+pub const RELAY_POLL_INTERVAL_MS: u64 = 1000;
+/// Max deliveries claimed per poll (bounds a single relay's per-tick work).
+pub const RELAY_BATCH: i64 = 64;
+/// Max delivery attempts before a row is dead-lettered (`dead = true`).
+pub const MAX_DELIVERY_ATTEMPTS: u32 = 8;
+/// Base of the persisted exponential backoff, in seconds: the delay before the
+/// n-th retry is `RELAY_BACKOFF_BASE_SECS * 2^(attempts-1)` plus jitter, capped
+/// at `RELAY_BACKOFF_CAP_SECS`. Unlike the in-memory worker's millisecond
+/// sleeps, this schedule is persisted in `next_attempt_at` and survives
+/// restarts, so it spans up to minutes.
+const RELAY_BACKOFF_BASE_SECS: u64 = 2;
+/// Upper bound on a single backoff interval (seconds).
+const RELAY_BACKOFF_CAP_SECS: u64 = 600;
+
+/// Spawns the durable relay (Postgres-only): on a short interval it claims a
+/// batch of due deliveries (`SELECT ... FOR UPDATE SKIP LOCKED`, so replicas
+/// never double-deliver) and attempts each one, persisting retry/backoff and
+/// dead-lettering after `MAX_DELIVERY_ATTEMPTS`. It keeps a subscription
+/// snapshot refreshed off a ticker, like `spawn_webhook_worker`. Wired in
+/// `main.rs` only when a Postgres backend is configured.
+pub fn spawn_webhook_relay(store: Arc<dyn Store>, client: reqwest::Client) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut subs = refresh_relay_snapshot(&store).await;
+        let mut poll = tokio::time::interval(Duration::from_millis(RELAY_POLL_INTERVAL_MS));
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut refresh = tokio::time::interval(Duration::from_secs(REFRESH_INTERVAL_SECS));
+        refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                _ = poll.tick() => {
+                    let now = crate::now();
+                    poll_once(&store, &client, &subs, now, RELAY_BATCH, is_internal_host).await;
+                }
+                _ = refresh.tick() => {
+                    subs = refresh_relay_snapshot(&store).await;
+                }
+            }
+        }
+    })
+}
+
+/// Reads the subscription snapshot the relay resolves claimed deliveries
+/// against. On store error, logs and keeps an empty snapshot (a claimed
+/// delivery whose subscription is not found is dead-lettered by
+/// `deliver_claimed`, so a transient snapshot miss does not silently drop it
+/// permanently: the row is only ever dead-lettered against a real, refreshed
+/// snapshot on a later tick... see the note in `deliver_claimed`).
+async fn refresh_relay_snapshot(store: &Arc<dyn Store>) -> Vec<WebhookSubscription> {
+    match store.list_webhooks().await {
+        Ok(subs) => subs,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"webhook_relay_snapshot_error": e.to_string()})
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// One relay poll: claims up to `limit` due deliveries and attempts each. The
+/// SSRF host-block predicate is injected (`is_blocked`) exactly like
+/// `deliver_to_matching_guarded`: production passes `is_internal_host`; the
+/// gated integration test passes a permissive predicate so it can drive real
+/// delivery against a loopback mock server (which the real guard, correctly,
+/// always blocks). Returns the number of rows claimed this poll.
+pub async fn poll_once(
+    store: &Arc<dyn Store>,
+    client: &reqwest::Client,
+    subs: &[WebhookSubscription],
+    now: u64,
+    limit: i64,
+    is_blocked: impl Fn(&str) -> bool,
+) -> usize {
+    let claimed = match store.claim_due_deliveries(now, limit).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"webhook_relay_claim_error": e.to_string()})
+            );
+            return 0;
+        }
+    };
+    let n = claimed.len();
+    for delivery in &claimed {
+        deliver_claimed(store, client, subs, delivery, &is_blocked, now).await;
+    }
+    n
+}
+
+/// Attempts a single claimed delivery and persists the outcome. Resolves the
+/// subscription from `subs`; a subscription deleted since enqueue is
+/// dead-lettered (nothing to deliver to). SSRF-guards the destination (a
+/// blocked host is dead-lettered: it is undeliverable by policy and would
+/// otherwise be re-claimed forever). On a 2xx the row is marked delivered; on
+/// any failure `attempts` is incremented and the row is either dead-lettered
+/// (at `MAX_DELIVERY_ATTEMPTS`) or rescheduled with persisted exponential
+/// backoff. The `webhook-id` header is the persisted `delivery_key`, stable
+/// across attempts and nodes.
+async fn deliver_claimed(
+    store: &Arc<dyn Store>,
+    client: &reqwest::Client,
+    subs: &[WebhookSubscription],
+    delivery: &OutboxDelivery,
+    is_blocked: impl Fn(&str) -> bool,
+    now: u64,
+) {
+    let Some(sub) = subs.iter().find(|s| s.id == delivery.subscription_id) else {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "webhook_relay_sub_missing": delivery.subscription_id,
+                "delivery_key": &delivery.delivery_key,
+            })
+        );
+        mark_dead_logged(store, delivery.id, delivery.attempts).await;
+        return;
+    };
+
+    let host = match extract_host(&sub.url) {
+        Some(h) => h,
+        None => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"webhook_relay_invalid_url": &sub.url})
+            );
+            mark_dead_logged(store, delivery.id, delivery.attempts).await;
+            return;
+        }
+    };
+    if is_blocked(&host) {
+        eprintln!(
+            "{}",
+            serde_json::json!({"webhook_relay_ssrf_blocked": &sub.url})
+        );
+        mark_dead_logged(store, delivery.id, delivery.attempts).await;
+        return;
+    }
+
+    let Some(event_type) = EventType::from_wire(&delivery.event_type) else {
+        eprintln!(
+            "{}",
+            serde_json::json!({"webhook_relay_bad_event_type": &delivery.event_type})
+        );
+        mark_dead_logged(store, delivery.id, delivery.attempts).await;
+        return;
+    };
+    let ev = WebhookEvent {
+        event_type,
+        body: delivery.payload.clone(),
+    };
+    let Some(req) = build_outgoing_request(sub, &ev, Some(&delivery.delivery_key)) else {
+        eprintln!(
+            "{}",
+            serde_json::json!({"webhook_relay_build_failed": &delivery.delivery_key})
+        );
+        mark_dead_logged(store, delivery.id, delivery.attempts).await;
+        return;
+    };
+
+    if post_once(client, sub, &req).await {
+        if let Err(e) = store.mark_delivered(delivery.id).await {
+            eprintln!(
+                "{}",
+                serde_json::json!({"webhook_relay_mark_delivered_error": e.to_string()})
+            );
+        }
+        return;
+    }
+
+    let attempts = delivery.attempts.saturating_add(1);
+    if attempts >= MAX_DELIVERY_ATTEMPTS {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "webhook_relay_dead_letter": &delivery.delivery_key,
+                "attempts": attempts,
+            })
+        );
+        mark_dead_logged(store, delivery.id, attempts).await;
+        return;
+    }
+    let next_attempt_at = now.saturating_add(relay_backoff_secs(attempts));
+    if let Err(e) = store
+        .mark_retry(delivery.id, next_attempt_at, attempts)
+        .await
+    {
+        eprintln!(
+            "{}",
+            serde_json::json!({"webhook_relay_mark_retry_error": e.to_string()})
+        );
+    }
+}
+
+/// Sends `req` once (no in-attempt retry: the persisted schedule owns retry).
+/// Returns `true` on a 2xx, `false` on a non-2xx or transport error.
+async fn post_once(
+    client: &reqwest::Client,
+    sub: &WebhookSubscription,
+    req: &OutgoingRequest,
+) -> bool {
+    let mut builder = client
+        .post(&sub.url)
+        .header("content-type", "application/json");
+    for (name, value) in &req.extra_headers {
+        builder = builder.header(*name, value);
+    }
+    match builder.body(req.body.clone()).send().await {
+        Ok(resp) if resp.status().is_success() => true,
+        Ok(resp) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "webhook_relay_non_2xx": resp.status().as_u16(),
+                    "url": &sub.url,
+                })
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"webhook_relay_error": e.to_string(), "url": &sub.url})
+            );
+            false
+        }
+    }
+}
+
+/// `mark_dead` with its error logged and swallowed (a failed dead-letter is a
+/// leased row that will simply be re-claimed and re-tried after the lease).
+async fn mark_dead_logged(store: &Arc<dyn Store>, id: i64, attempts: u32) {
+    if let Err(e) = store.mark_dead(id, attempts).await {
+        eprintln!(
+            "{}",
+            serde_json::json!({"webhook_relay_mark_dead_error": e.to_string()})
+        );
+    }
+}
+
+/// Persisted backoff for the `attempts`-th retry (`attempts >= 1`):
+/// `base * 2^(attempts-1)` seconds, capped, plus up to 50% jitter (so many
+/// failing deliveries do not retry in lockstep).
+fn relay_backoff_secs(attempts: u32) -> u64 {
+    let shift = attempts.saturating_sub(1).min(16);
+    let base = RELAY_BACKOFF_BASE_SECS
+        .saturating_mul(1u64 << shift)
+        .min(RELAY_BACKOFF_CAP_SECS);
+    let mut jitter_byte = [0u8; 1];
+    let jitter = if getrandom::fill(&mut jitter_byte).is_ok() {
+        (jitter_byte[0] as u64) % (base / 2 + 1)
+    } else {
+        0
+    };
+    base + jitter
 }
 
 /// `msg_<32 hex chars>` from 16 random bytes.
@@ -517,6 +869,30 @@ mod tests {
             unimplemented!()
         }
         async fn delete_wellknown(&self, _name: &str) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn enqueue_deliveries(&self, _rows: &[OutboxRow]) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn claim_due_deliveries(
+            &self,
+            _now: u64,
+            _limit: i64,
+        ) -> Result<Vec<OutboxDelivery>, StoreError> {
+            unimplemented!()
+        }
+        async fn mark_delivered(&self, _id: i64) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn mark_retry(
+            &self,
+            _id: i64,
+            _next_attempt_at: u64,
+            _attempts: u32,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn mark_dead(&self, _id: i64, _attempts: u32) -> Result<(), StoreError> {
             unimplemented!()
         }
     }

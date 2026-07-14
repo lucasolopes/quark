@@ -5,7 +5,8 @@ use quark::cache::Cache;
 use quark::invalidate::{spawn_invalidation_subscriber, Invalidator, INVALIDATION_CHANNEL};
 use quark::store::open_backends;
 use quark::webhooks::delivery::{
-    spawn_webhook_worker, WebhookDispatcher, WEBHOOK_CHANNEL_CAPACITY,
+    spawn_webhook_relay, spawn_webhook_worker, WebhookDispatcher, DELIVERY_TIMEOUT_SECS,
+    WEBHOOK_CHANNEL_CAPACITY,
 };
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -180,7 +181,22 @@ async fn main() {
     let clicked = Arc::new(AtomicBool::new(false));
     let expired = Arc::new(AtomicBool::new(false));
     spawn_webhook_worker(wh_rx, store.clone(), clicked.clone(), expired.clone());
-    let webhooks = Arc::new(WebhookDispatcher::new(wh_tx, clicked, expired));
+    let dispatcher = WebhookDispatcher::new(wh_tx, clicked, expired);
+    let webhooks = if std::env::var("QUARK_DATABASE_URL").is_ok() {
+        let relay_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(DELIVERY_TIMEOUT_SECS))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("build webhook relay client");
+        spawn_webhook_relay(store.clone(), relay_client);
+        eprintln!(
+            "webhook delivery: durable Postgres outbox + leased relay (lifecycle events); clicked/expired best-effort in-memory"
+        );
+        Arc::new(dispatcher.with_outbox(store.clone()))
+    } else {
+        eprintln!("webhook delivery: in-memory best-effort channel (LMDB backend)");
+        Arc::new(dispatcher)
+    };
 
     let state = Arc::new(AppState {
         cache,

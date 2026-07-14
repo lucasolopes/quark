@@ -1,7 +1,7 @@
 use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::auth::ApiToken;
 use crate::pixel::PixelConfig;
-use crate::store::{Record, Store, StoreError};
+use crate::store::{OutboxDelivery, OutboxRow, Record, Store, StoreError};
 use crate::webhooks::WebhookSubscription;
 use heed::byteorder::BigEndian;
 use heed::types::{Bytes, Str, U64};
@@ -430,6 +430,41 @@ impl Store for LmdbStore {
         let mut wtxn = self.env.write_txn()?;
         self.wellknown.delete(&mut wtxn, name)?;
         wtxn.commit()?;
+        Ok(())
+    }
+
+    // The durable webhook outbox is Postgres-only. On the single-node LMDB
+    // backend every event (lifecycle and clicked) rides the in-memory
+    // best-effort channel, and `main.rs` never spawns the relay nor routes
+    // lifecycle events to the outbox here, so these are never invoked. They
+    // are implemented as no-ops (rather than `unimplemented!()`) to keep the
+    // trait total and avoid any chance of a panic if wiring ever changes.
+    async fn enqueue_deliveries(&self, _rows: &[OutboxRow]) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn claim_due_deliveries(
+        &self,
+        _now: u64,
+        _limit: i64,
+    ) -> Result<Vec<OutboxDelivery>, StoreError> {
+        Ok(Vec::new())
+    }
+
+    async fn mark_delivered(&self, _id: i64) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn mark_retry(
+        &self,
+        _id: i64,
+        _next_attempt_at: u64,
+        _attempts: u32,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn mark_dead(&self, _id: i64, _attempts: u32) -> Result<(), StoreError> {
         Ok(())
     }
 }

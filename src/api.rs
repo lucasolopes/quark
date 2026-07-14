@@ -431,18 +431,20 @@ pub async fn create_link_core(
             Err(_) => return Err(CreateError::Backend),
         };
         let canonical_code = codec::to_base62(permute::encode(id, st.key));
-        st.webhooks.emit(WebhookEvent {
-            event_type: EventType::LinkCreated,
-            body: webhook_event_payload(
-                EventType::LinkCreated,
-                &canonical_code,
-                &rec.url,
-                Some(alias),
-                rec.expiry,
-                rec.created,
-                None,
-            ),
-        });
+        st.webhooks
+            .emit_lifecycle(WebhookEvent {
+                event_type: EventType::LinkCreated,
+                body: webhook_event_payload(
+                    EventType::LinkCreated,
+                    &canonical_code,
+                    &rec.url,
+                    Some(alias),
+                    rec.expiry,
+                    rec.created,
+                    None,
+                ),
+            })
+            .await;
         return Ok(alias.to_string());
     }
 
@@ -458,18 +460,20 @@ pub async fn create_link_core(
         return Err(CreateError::Backend);
     }
     let code = codec::to_base62(permute::encode(id, st.key));
-    st.webhooks.emit(WebhookEvent {
-        event_type: EventType::LinkCreated,
-        body: webhook_event_payload(
-            EventType::LinkCreated,
-            &code,
-            &rec.url,
-            None,
-            rec.expiry,
-            rec.created,
-            None,
-        ),
-    });
+    st.webhooks
+        .emit_lifecycle(WebhookEvent {
+            event_type: EventType::LinkCreated,
+            body: webhook_event_payload(
+                EventType::LinkCreated,
+                &code,
+                &rec.url,
+                None,
+                rec.expiry,
+                rec.created,
+                None,
+            ),
+        })
+        .await;
     Ok(code)
 }
 
@@ -1202,18 +1206,20 @@ async fn admin_link_delete(
     }
     st.cache.invalidate(id).await;
     let canonical_code = codec::to_base62(permute::encode(id, st.key));
-    st.webhooks.emit(WebhookEvent {
-        event_type: EventType::LinkDeleted,
-        body: webhook_event_payload(
-            EventType::LinkDeleted,
-            &canonical_code,
-            &rec.url,
-            alias.as_deref(),
-            rec.expiry,
-            rec.created,
-            None,
-        ),
-    });
+    st.webhooks
+        .emit_lifecycle(WebhookEvent {
+            event_type: EventType::LinkDeleted,
+            body: webhook_event_payload(
+                EventType::LinkDeleted,
+                &canonical_code,
+                &rec.url,
+                alias.as_deref(),
+                rec.expiry,
+                rec.created,
+                None,
+            ),
+        })
+        .await;
     StatusCode::OK.into_response()
 }
 
@@ -1341,18 +1347,20 @@ async fn admin_link_patch(
     }
     st.cache.invalidate(id).await;
     let canonical_code = codec::to_base62(permute::encode(id, st.key));
-    st.webhooks.emit(WebhookEvent {
-        event_type: EventType::LinkUpdated,
-        body: webhook_event_payload(
-            EventType::LinkUpdated,
-            &canonical_code,
-            &rec.url,
-            alias.as_deref(),
-            rec.expiry,
-            rec.created,
-            None,
-        ),
-    });
+    st.webhooks
+        .emit_lifecycle(WebhookEvent {
+            event_type: EventType::LinkUpdated,
+            body: webhook_event_payload(
+                EventType::LinkUpdated,
+                &canonical_code,
+                &rec.url,
+                alias.as_deref(),
+                rec.expiry,
+                rec.created,
+                None,
+            ),
+        })
+        .await;
     StatusCode::OK.into_response()
 }
 
@@ -1898,7 +1906,7 @@ async fn send_test_event_guarded(
     // a signed envelope, channel kinds get an unsigned, channel-formatted
     // payload. This is what review Task 1 of #6 required — the test-send
     // must exercise the same branch a real event would take.
-    let req = match webhooks::delivery::build_outgoing_request(sub, &ev) {
+    let req = match webhooks::delivery::build_outgoing_request(sub, &ev, None) {
         Some(r) => r,
         None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };

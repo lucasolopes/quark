@@ -3,15 +3,26 @@
 # Webhooks
 
 A single-operator quark instance can push signed HTTP events to an external
-endpoint (Zapier, Make, n8n, Slack, or any custom receiver). Delivery is
-best-effort: events go through an in-memory bounded queue, a worker signs and
-POSTs them with retry (exponential backoff plus jitter), and a subscription
-that stays down past the retry budget just misses that event. Subscription
-*configuration* (URL, event set, secret, active flag) is durable, persisted
-via the store (LMDB or Postgres); delivery itself is not.
+endpoint (Zapier, Make, n8n, Slack, or any custom receiver). How delivery
+behaves depends on the backend:
 
-If you need durable, restart-surviving delivery with a persisted attempt log,
-that's a future Postgres-gated enhancement, not what this covers today.
+- On the **Postgres** backend, the lifecycle events (`link.created`,
+  `link.updated`, `link.deleted`) are delivered **durably**: they land in a
+  Postgres outbox and a leased relay worker delivers them at-least-once with
+  persisted retry and a dead-letter queue. See [Durable delivery
+  (Postgres)](#durable-delivery-postgres).
+- `link.clicked` (and `link.expired`, which also fires on the redirect hot
+  path) stay **best-effort** on every backend: an in-memory bounded queue
+  feeds a worker that signs and POSTs with retry, and an event dropped on a
+  full queue or a restart is simply missed. Adding a synchronous database
+  write to the redirect path would defeat its whole purpose, so those two
+  events are best-effort by design.
+- On the **LMDB** single-node backend there is no outbox; every event,
+  lifecycle included, rides the in-memory best-effort channel.
+
+Subscription *configuration* (URL, event set, secret, active flag) is always
+durable, persisted via the store (LMDB or Postgres), independent of how the
+events themselves are delivered.
 
 ## Events
 
@@ -176,6 +187,53 @@ Note the literal space after the colon in the body; a compact
   redeliver the same event (network timeout, 5xx response, and so on), so
   your receiver should treat a repeated id as a no-op, not a duplicate
   side effect.
+
+## Durable delivery (Postgres)
+
+On the Postgres backend the lifecycle events (`link.created`, `link.updated`,
+`link.deleted`) do not ride the in-memory queue. Each one is written to a
+durable outbox and handed to a relay worker, so a receiver that is down, or a
+quark restart, no longer costs you the event.
+
+**The outbox.** When a lifecycle event fires, quark writes one row per matching
+active subscription into the `webhook_deliveries` table (event body, target
+subscription, attempt count, next-attempt time, a dead flag). The write commits
+before the admin request returns. If a subscription is down for an hour, its
+rows sit in the outbox and are retried the whole time; nothing is lost to a
+full queue.
+
+**The leased relay.** A background worker polls the outbox on a short interval
+and claims a batch of due rows with `SELECT ... FOR UPDATE SKIP LOCKED`. Two
+things fall out of that:
+
+- Run quark on several nodes and each relay claims a disjoint set of rows, so
+  the same delivery is never sent twice by two nodes at once.
+- A slow or broken endpoint only holds up its own rows. Other subscriptions
+  are claimed and delivered in parallel, with no head-of-line blocking.
+
+For each claimed row the relay looks up the subscription, applies the same SSRF
+guard as every other delivery, signs the body (Generic) or formats it for the
+channel (Slack/Discord/Telegram), and POSTs it. On a 2xx the row is marked
+delivered. On a failure the attempt count is bumped and the next-attempt time
+is pushed out with exponential backoff plus jitter, all persisted, so the
+schedule survives a restart. After the attempt budget is exhausted the row is
+flagged `dead`: it moves to the dead-letter queue and stops being claimed.
+
+**At-least-once, and idempotency.** This is at-least-once delivery: a crash
+between a successful POST and the row being marked delivered will redeliver on
+the next poll. Deduplicate on the `webhook-id` header. For an outbox delivery
+that header is the row's stable delivery key, `"<event_id>.<subscription_id>"`,
+identical across every attempt and every node. Treat a repeated `webhook-id` as
+a no-op (this is the same rule as [Replay and
+idempotency](#replay-and-idempotency); the durable path just makes the id
+stable and persisted rather than random per attempt).
+
+**One honest gap.** The outbox row is inserted right after the link mutation
+commits, not inside the same transaction (the storage layer does not otherwise
+know about webhooks). A crash in the narrow window between the link commit and
+the outbox insert loses that one event. This is far smaller than the in-memory
+gap it replaces, and folding the insert into the same transaction is a planned
+follow-up.
 
 ## Configuring a subscription
 
