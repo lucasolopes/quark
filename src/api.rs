@@ -426,26 +426,25 @@ pub async fn create_link_core(
             Err(_) => return Err(CreateError::Backend),
         };
         let canonical_code = codec::to_base62(permute::encode(id, st.key));
-        let rows = st
-            .webhooks
-            .lifecycle_deliveries(WebhookEvent {
-                event_type: EventType::LinkCreated,
-                body: webhook_event_payload(
-                    EventType::LinkCreated,
-                    &canonical_code,
-                    &rec.url,
-                    Some(alias),
-                    rec.expiry,
-                    rec.created,
-                    None,
-                ),
-            })
-            .await;
+        let ev = WebhookEvent {
+            event_type: EventType::LinkCreated,
+            body: webhook_event_payload(
+                EventType::LinkCreated,
+                &canonical_code,
+                &rec.url,
+                Some(alias),
+                rec.expiry,
+                rec.created,
+                None,
+            ),
+        };
+        let rows = st.webhooks.lifecycle_deliveries(&ev).await;
         match st.store.put_alias_and_link_tx(alias, id, &rec, &rows).await {
             Ok(true) => {}
             Ok(false) => return Err(CreateError::AliasInUse),
             Err(_) => return Err(CreateError::Backend),
         };
+        st.webhooks.emit_if_in_memory(ev);
         return Ok(alias.to_string());
     }
 
@@ -458,24 +457,23 @@ pub async fn create_link_core(
         return Err(CreateError::IdExhausted);
     }
     let code = codec::to_base62(permute::encode(id, st.key));
-    let rows = st
-        .webhooks
-        .lifecycle_deliveries(WebhookEvent {
-            event_type: EventType::LinkCreated,
-            body: webhook_event_payload(
-                EventType::LinkCreated,
-                &code,
-                &rec.url,
-                None,
-                rec.expiry,
-                rec.created,
-                None,
-            ),
-        })
-        .await;
+    let ev = WebhookEvent {
+        event_type: EventType::LinkCreated,
+        body: webhook_event_payload(
+            EventType::LinkCreated,
+            &code,
+            &rec.url,
+            None,
+            rec.expiry,
+            rec.created,
+            None,
+        ),
+    };
+    let rows = st.webhooks.lifecycle_deliveries(&ev).await;
     if st.store.put_link_tx(id, &rec, &rows).await.is_err() {
         return Err(CreateError::Backend);
     }
+    st.webhooks.emit_if_in_memory(ev);
     Ok(code)
 }
 
@@ -1201,21 +1199,19 @@ async fn admin_link_delete(
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     let canonical_code = codec::to_base62(permute::encode(id, st.key));
-    let rows = st
-        .webhooks
-        .lifecycle_deliveries(WebhookEvent {
-            event_type: EventType::LinkDeleted,
-            body: webhook_event_payload(
-                EventType::LinkDeleted,
-                &canonical_code,
-                &rec.url,
-                alias.as_deref(),
-                rec.expiry,
-                rec.created,
-                None,
-            ),
-        })
-        .await;
+    let ev = WebhookEvent {
+        event_type: EventType::LinkDeleted,
+        body: webhook_event_payload(
+            EventType::LinkDeleted,
+            &canonical_code,
+            &rec.url,
+            alias.as_deref(),
+            rec.expiry,
+            rec.created,
+            None,
+        ),
+    };
+    let rows = st.webhooks.lifecycle_deliveries(&ev).await;
     if st.store.delete_link_tx(id, &rows).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
@@ -1223,6 +1219,7 @@ async fn admin_link_delete(
         let _ = st.store.delete_alias(a).await;
     }
     st.cache.invalidate(id).await;
+    st.webhooks.emit_if_in_memory(ev);
     StatusCode::OK.into_response()
 }
 
@@ -1346,25 +1343,24 @@ async fn admin_link_patch(
         }
     }
     let canonical_code = codec::to_base62(permute::encode(id, st.key));
-    let rows = st
-        .webhooks
-        .lifecycle_deliveries(WebhookEvent {
-            event_type: EventType::LinkUpdated,
-            body: webhook_event_payload(
-                EventType::LinkUpdated,
-                &canonical_code,
-                &rec.url,
-                alias.as_deref(),
-                rec.expiry,
-                rec.created,
-                None,
-            ),
-        })
-        .await;
+    let ev = WebhookEvent {
+        event_type: EventType::LinkUpdated,
+        body: webhook_event_payload(
+            EventType::LinkUpdated,
+            &canonical_code,
+            &rec.url,
+            alias.as_deref(),
+            rec.expiry,
+            rec.created,
+            None,
+        ),
+    };
+    let rows = st.webhooks.lifecycle_deliveries(&ev).await;
     if st.store.put_link_tx(id, &rec, &rows).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     st.cache.invalidate(id).await;
+    st.webhooks.emit_if_in_memory(ev);
     StatusCode::OK.into_response()
 }
 

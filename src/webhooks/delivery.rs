@@ -35,10 +35,13 @@ const BACKOFF_BASE_MS: u64 = 200;
 ///
 /// `outbox` is `Some` only on the Postgres backend (wired via `with_outbox`),
 /// where lifecycle events (created/updated/deleted) are routed through the
-/// durable outbox by `emit_lifecycle`. On LMDB it is `None` and every event
-/// rides the in-memory channel. `emit` (the in-memory path) is still used for
-/// `link.clicked` (hot path) and `link.expired` (also emitted on the redirect
-/// hot path, so it must stay off any synchronous DB write) on every backend.
+/// durable outbox: the api.rs sites call `lifecycle_deliveries` to build the
+/// rows and enqueue them inside the same transaction as the link mutation (a
+/// `_tx` store method). On LMDB `outbox` is `None`, `lifecycle_deliveries`
+/// returns empty, and `emit_if_in_memory` puts the event on the in-memory
+/// channel after the mutation succeeds. `emit` (the in-memory path) is still
+/// used for `link.clicked` (hot path) and `link.expired` (also emitted on the
+/// redirect hot path, so it must stay off any synchronous DB write).
 pub struct WebhookDispatcher {
     tx: Sender<WebhookEvent>,
     pub clicked_subscribed: Arc<AtomicBool>,
@@ -49,8 +52,9 @@ pub struct WebhookDispatcher {
 impl WebhookDispatcher {
     /// Builds a dispatcher over an existing channel sender and the pair of
     /// atomics the worker keeps refreshed (see `spawn_webhook_worker`). The
-    /// durable outbox is off by default (`emit_lifecycle` falls back to the
-    /// in-memory channel); call `with_outbox` on the Postgres backend.
+    /// durable outbox is off by default (`lifecycle_deliveries` returns empty
+    /// and `emit_if_in_memory` uses the channel); call `with_outbox` on the
+    /// Postgres backend.
     pub fn new(
         tx: Sender<WebhookEvent>,
         clicked_subscribed: Arc<AtomicBool>,
@@ -83,6 +87,17 @@ impl WebhookDispatcher {
         }
     }
 
+    /// Emits a lifecycle event on the in-memory channel ONLY when there is no
+    /// durable outbox (the LMDB single-node backend). On Postgres the delivery
+    /// rows were already enqueued inside the mutation transaction, so this is a
+    /// no-op. Callers invoke it only AFTER the mutation succeeds, so a failed
+    /// mutation (for example an alias already in use) emits nothing.
+    pub fn emit_if_in_memory(&self, ev: WebhookEvent) {
+        if self.outbox.is_none() {
+            self.emit(ev);
+        }
+    }
+
     /// Builds the durable delivery rows for a lifecycle event
     /// (created/updated/deleted) WITHOUT enqueuing them. On the Postgres
     /// backend (`outbox` set) it reads the current active subscriptions
@@ -99,9 +114,8 @@ impl WebhookDispatcher {
     /// the admin layer and never fails the admin request. This must NOT be
     /// called from the redirect hot path; `link.clicked`/`link.expired` use
     /// `emit` instead.
-    pub async fn lifecycle_deliveries(&self, ev: WebhookEvent) -> Vec<OutboxRow> {
+    pub async fn lifecycle_deliveries(&self, ev: &WebhookEvent) -> Vec<OutboxRow> {
         let Some(store) = &self.outbox else {
-            self.emit(ev);
             return Vec::new();
         };
         let subs = match store.list_webhooks().await {
@@ -127,34 +141,6 @@ impl WebhookDispatcher {
                 next_attempt_at: now,
             })
             .collect()
-    }
-
-    /// Routes a lifecycle event and enqueues it in its OWN transaction (the
-    /// non-atomic path retained for callers that are not tied to a link
-    /// mutation). The four api.rs lifecycle sites now use `lifecycle_deliveries`
-    /// plus a `_tx` store method instead, so the enqueue is atomic with the
-    /// mutation. On LMDB this is a plain in-memory `emit` (empty rows).
-    ///
-    /// Best-effort at the admin layer: a store error is logged and swallowed.
-    /// Must NOT be called from the redirect hot path.
-    pub async fn emit_lifecycle(&self, ev: WebhookEvent) {
-        let has_outbox = self.outbox.is_some();
-        let rows = self.lifecycle_deliveries(ev).await;
-        if !has_outbox || rows.is_empty() {
-            return;
-        }
-        if let Err(e) = self
-            .outbox
-            .as_ref()
-            .expect("outbox is Some when has_outbox")
-            .enqueue_deliveries(&rows)
-            .await
-        {
-            eprintln!(
-                "{}",
-                serde_json::json!({"webhook_outbox_enqueue_error": e.to_string()})
-            );
-        }
     }
 }
 
@@ -1327,7 +1313,7 @@ mod tests {
         .with_outbox(store);
 
         let rows = dispatcher
-            .lifecycle_deliveries(WebhookEvent {
+            .lifecycle_deliveries(&WebhookEvent {
                 event_type: EventType::LinkCreated,
                 body: r#"{"id":"evt_abc","type":"link.created"}"#.to_string(),
             })
@@ -1343,23 +1329,27 @@ mod tests {
     /// Without an outbox (LMDB), `lifecycle_deliveries` returns no rows and
     /// falls back to the in-memory `emit` (single-node behavior unchanged).
     #[tokio::test]
-    async fn lifecycle_deliveries_lmdb_emits_in_memory_and_returns_empty() {
+    async fn lmdb_lifecycle_deliveries_is_pure_and_emit_if_in_memory_emits() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         let dispatcher = WebhookDispatcher::new(
             tx,
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
         );
+        let ev = WebhookEvent {
+            event_type: EventType::LinkCreated,
+            body: "{}".to_string(),
+        };
 
-        let rows = dispatcher
-            .lifecycle_deliveries(WebhookEvent {
-                event_type: EventType::LinkCreated,
-                body: "{}".to_string(),
-            })
-            .await;
-
+        let rows = dispatcher.lifecycle_deliveries(&ev).await;
         assert!(rows.is_empty());
-        let ev = rx.try_recv().expect("LMDB path emits in-memory");
-        assert_eq!(ev.event_type, EventType::LinkCreated);
+        assert!(
+            rx.try_recv().is_err(),
+            "lifecycle_deliveries must not emit; the emit is deferred to after the mutation"
+        );
+
+        dispatcher.emit_if_in_memory(ev);
+        let got = rx.try_recv().expect("emit_if_in_memory emits on LMDB");
+        assert_eq!(got.event_type, EventType::LinkCreated);
     }
 }
