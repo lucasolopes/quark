@@ -11,7 +11,27 @@ const link: Link = {
   url: "https://example.com/a-pretty-long-page",
   expiry: null,
   created: 1700000000,
+  variants: [],
 };
+
+describe("LinkTable — A/B variants badge", () => {
+  it("shows a badge with the variant count when the link has variants", () => {
+    const linkWithVariants: Link = {
+      ...link,
+      variants: [
+        { url: "https://variant-a.com", weight: 1 },
+        { url: "https://variant-b.com", weight: 1 },
+      ],
+    };
+    render(withProviders(<LinkTable links={[linkWithVariants]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.getByText("A/B: 2")).toBeInTheDocument();
+  });
+
+  it("shows no badge when the link has no variants", () => {
+    render(withProviders(<LinkTable links={[link]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.queryByText(/^A\/B:/)).not.toBeInTheDocument();
+  });
+});
 
 describe("LinkTable — QR code", () => {
   it("opens the QR code dialog with the short URL and the download button", async () => {

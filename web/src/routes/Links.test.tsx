@@ -18,7 +18,7 @@ describe("Links", () => {
 
   it("renders the loaded links", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-      links: [{ id: 1, code: "6lB362J", url: "https://example.com/a", alias: "promo", expiry: null, created: 1700000000 }],
+      links: [{ id: 1, code: "6lB362J", url: "https://example.com/a", alias: "promo", expiry: null, created: 1700000000, variants: [] }],
       next_after: null,
     }), { status: 200 }));
     render(withProviders(<Links />));
@@ -29,8 +29,8 @@ describe("Links", () => {
   it("searches on the server when the backend supports it (?q= in the querystring)", async () => {
     const base = {
       links: [
-        { id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1 },
-        { id: 2, code: "BBB1111", url: "https://dog.com", expiry: null, created: 2 },
+        { id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1, variants: [] },
+        { id: 2, code: "BBB1111", url: "https://dog.com", expiry: null, created: 2, variants: [] },
       ],
       next_after: null,
     };
@@ -51,8 +51,8 @@ describe("Links", () => {
   it("falls back to client-side filtering when the search returns 501", async () => {
     const base = {
       links: [
-        { id: 1, code: "AAA0000", url: "https://github.com/x", expiry: null, created: 1 },
-        { id: 2, code: "BBB1111", url: "https://example.com", expiry: null, created: 2 },
+        { id: 1, code: "AAA0000", url: "https://github.com/x", expiry: null, created: 1, variants: [] },
+        { id: 2, code: "BBB1111", url: "https://example.com", expiry: null, created: 2, variants: [] },
       ],
       next_after: null,
     };
@@ -67,7 +67,7 @@ describe("Links", () => {
   });
 
   it("search empty state shows the message with the term", async () => {
-    const base = { links: [{ id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1 }], next_after: null };
+    const base = { links: [{ id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1, variants: [] }], next_after: null };
     mockFetchByUrl((url) =>
       url.includes("q=") ? jsonResponse({ links: [], next_after: null }) : jsonResponse(base),
     );
@@ -78,7 +78,7 @@ describe("Links", () => {
   });
 
   it("search error (non-501, 500) shows the error state, not the 'no results' one", async () => {
-    const base = { links: [{ id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1 }], next_after: null };
+    const base = { links: [{ id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1, variants: [] }], next_after: null };
     mockFetchByUrl((url) => (url.includes("q=") ? new Response("{}", { status: 500 }) : jsonResponse(base)));
     render(withProviders(<Links />));
     await screen.findByText("AAA0000");

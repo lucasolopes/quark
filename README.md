@@ -263,6 +263,7 @@ binary stays API-only. Dev: `cd web && npm install && npm run dev` (Vite on
 - Full system design: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Deeper walkthrough of every component, data model and the Feistel round internals: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Horizontal scaling (replicas + Postgres) and `QUARK_NODE_ID`: [`docs/SCALING.md`](docs/SCALING.md)
+- A/B testing (weighted variants + per-variant stats): [`docs/AB-TESTING.md`](docs/AB-TESTING.md)
 
 ## Contributing
 

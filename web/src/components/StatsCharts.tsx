@@ -128,6 +128,36 @@ function PerCountryChart({ perCountry }: { perCountry: Record<string, number> })
   );
 }
 
+/**
+ * Clicks per A/B variant (`per_variant`), keyed by the variant's index in
+ * `Link.variants` (as a string) — the stats response carries only the index,
+ * not the variant URL, so it's labeled positionally ("Variant 0", "Variant 1", …).
+ */
+function PerVariantChart({ perVariant }: { perVariant: Record<string, number> }) {
+  const t = useT();
+  const data = Object.entries(perVariant)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([index, count]) => ({ index, count, label: t("charts.variantLabel", { n: index }) }));
+
+  return (
+    <ChartCard
+      title={t("charts.perVariantTitle")}
+      empty={data.length === 0}
+      emptyLabel={t("charts.perVariantEmpty")}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
+          <XAxis dataKey="label" tick={{ fontSize: 12 }} stroke="var(--color-muted-foreground)" />
+          <YAxis allowDecimals={false} tick={{ fontSize: 12 }} stroke="var(--color-muted-foreground)" width={32} />
+          <Tooltip formatter={(value) => [`${value}`, t("charts.clicks")]} />
+          <Bar dataKey="count" name={t("charts.clicks")} fill="var(--color-chart-3)" radius={[4, 4, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </ChartCard>
+  );
+}
+
 /** Device distribution (`per_device`), as a donut chart. */
 function PerDeviceChart({ perDevice }: { perDevice: Record<string, number> }) {
   const t = useT();
@@ -168,13 +198,19 @@ interface StatsChartsProps {
   aggregates: Aggregates;
 }
 
-/** The three charts on the stats screen: clicks per day, per country and per device. */
+/**
+ * The charts on the stats screen: clicks per day, per country, per device
+ * and (when the link has variants with recorded clicks) per A/B variant.
+ */
 export function StatsCharts({ aggregates }: StatsChartsProps) {
+  const perVariant = aggregates.per_variant ?? {};
+  const hasVariantData = Object.keys(perVariant).length > 0;
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       <PerDayChart perDay={aggregates.per_day} />
       <PerCountryChart perCountry={aggregates.per_country} />
       <PerDeviceChart perDevice={aggregates.per_device} />
+      {hasVariantData && <PerVariantChart perVariant={perVariant} />}
     </div>
   );
 }

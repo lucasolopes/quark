@@ -263,6 +263,7 @@ do quark continua API-only. Dev: `cd web && npm install && npm run dev` (Vite na
 - Design de sistema completo: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Passo a passo mais profundo de cada componente, modelo de dados e os internos do round Feistel: [`docs/ARCHITECTURE.PT_BR.md`](docs/ARCHITECTURE.PT_BR.md)
 - Escala horizontal (réplicas + Postgres) e o `QUARK_NODE_ID`: [`docs/SCALING.PT_BR.md`](docs/SCALING.PT_BR.md)
+- Teste A/B (variantes com peso + estatísticas por variante): [`docs/AB-TESTING.PT_BR.md`](docs/AB-TESTING.PT_BR.md)
 
 ## Contribuindo
 

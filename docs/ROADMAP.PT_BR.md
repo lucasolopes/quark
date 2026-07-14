@@ -44,6 +44,8 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 - **Licença + contribuições**: núcleo **AGPL-3.0-only**; `CLA.md` (license-grant) +
   `CONTRIBUTING.md` + bot do CLA (GitHub Action). Multi-tenancy/cloud fica proprietária, à parte.
 - **`docker-compose.yml`**: stack full (quark + Postgres + Valkey + ClickHouse) pra dev/self-host.
+- **Teste A/B (#17)**: um link pode carregar variantes com peso; o redirect divide o tráfego por
+  um sorteio ponderado sem estado, com estatísticas de cliques por variante. Doc: `docs/AB-TESTING.PT_BR.md`.
 
 ## Próximo
 
