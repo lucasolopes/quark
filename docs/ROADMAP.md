@@ -45,6 +45,9 @@ bottleneck being geography/RTT, not the server).
 - **License + contributions**: **AGPL-3.0-only** core; `CLA.md` (license grant) +
   `CONTRIBUTING.md` + a CLA bot (GitHub Action). Multi-tenancy/cloud stays proprietary, separate.
 - **`docker-compose.yml`**: full stack (quark + Postgres + Valkey + ClickHouse) for dev/self-host.
+- **Importer (#4)**: `POST /admin/import` bulk-creates links from a CSV or JSON export (Bitly, Kutt,
+  YOURLS, generic), partial-success per-row report, plus a web panel "Import" tab. Doc:
+  [`docs/IMPORT.md`](IMPORT.md).
 
 ## Next
 

@@ -10,7 +10,7 @@
 
 > Short codes are **computed, not stored**: a keyed bijection. One tiny static binary (~1 MB), no Redis, no database, no external services.
 
-**Quick links:** [Deploy](docs/DEPLOY.md) · [Architecture](docs/ARCHITECTURE.md) · [Edge/CDN](docs/EDGE.md) · [Roadmap](docs/ROADMAP.md)
+**Quick links:** [Deploy](docs/DEPLOY.md) · [Architecture](docs/ARCHITECTURE.md) · [Edge/CDN](docs/EDGE.md) · [Import](docs/IMPORT.md) · [Roadmap](docs/ROADMAP.md)
 
 A URL shortener whose short code is a **calibrated, reduced-round ARX permutation** of the internal integer id. The code is not looked up in an index. It is **computed**, in both directions, from a tiny bijective function. That one design choice removes an entire class of problems (collisions) and an entire index (string → id) at once.
 
@@ -235,6 +235,7 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 - Per-request access logging is **opt-in via `QUARK_ACCESS_LOG`** (off by default). When set, every request emits a **structured JSON log line** to stdout (`{"method","path","status","latency_ms"}`), captured as-is by Coolify/Docker, ready to `grep` or ship to a log collector. Off by default so the hot redirect path pays no synchronous `println!`/stdout-lock cost at high throughput.
 - Redirects carry a **TTL-aware `Cache-Control`** header, so a CDN/browser can cache the 302 (and never past a link's expiry). See [`docs/EDGE.md`](docs/EDGE.md) for putting Cloudflare in front.
 - The domain blocklist is managed via `GET/POST/DELETE /admin/blocklist` (JSON body `{"domain": "..."}` for POST/DELETE), protected by `QUARK_ADMIN_TOKEN` (header `x-admin-token`; unset → 404, wrong token → 401).
+- **Import**: `POST /admin/import` bulk-creates links from a CSV or JSON export (Bitly, Kutt, YOURLS, or generic), same admin token, partial-success reporting per row. See [`docs/IMPORT.md`](docs/IMPORT.md).
 
 ### Local dev stack
 
@@ -259,6 +260,7 @@ binary stays API-only. Dev: `cd web && npm install && npm run dev` (Vite on
 
 - Deploy on a VPS with Coolify (ships a `Dockerfile`): [`docs/DEPLOY.md`](docs/DEPLOY.md)
 - Edge/CDN caching guide: [`docs/EDGE.md`](docs/EDGE.md)
+- Migrating from Bitly/Kutt/YOURLS: [`docs/IMPORT.md`](docs/IMPORT.md)
 - What's next: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Full system design: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Deeper walkthrough of every component, data model and the Feistel round internals: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
