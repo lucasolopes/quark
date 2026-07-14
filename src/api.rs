@@ -1637,7 +1637,11 @@ async fn admin_wellknown_get(
     }
     match st.store.get_wellknown(&name).await {
         Ok(Some(body)) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        // Admin read of an unset document: 200 with an empty body (the panel
+        // treats empty as "not configured"). Avoids a spurious 404 in the
+        // browser console on every App Links page load. The public serve path
+        // still returns 404 when unset, which is what iOS/Android expect.
+        Ok(None) => (StatusCode::OK, "").into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }

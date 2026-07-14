@@ -1336,6 +1336,25 @@ async fn wellknown_unset_get_404() {
 }
 
 #[tokio::test]
+async fn wellknown_admin_get_unset_returns_200_empty() {
+    let app = app_admin("secret").await;
+    let resp = app
+        .oneshot(
+            Request::get("/admin/wellknown/assetlinks.json")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
 async fn wellknown_put_non_json_400() {
     let app = app_admin("secret").await;
     let resp = app

@@ -23,6 +23,7 @@ export function LinkStats() {
           variant="ghost"
           size="icon-sm"
           aria-label={t("stats.backAria")}
+          nativeButton={false}
           render={<Link to="/links" />}
         >
           <ArrowLeft className="size-4" />
@@ -50,7 +51,7 @@ export function LinkStats() {
                 <RotateCw className="size-4" />
                 {t("common.retry")}
               </Button>
-              <Button variant="outline" render={<Link to="/links" />}>
+              <Button variant="outline" nativeButton={false} render={<Link to="/links" />}>
                 {t("stats.backToLinks")}
               </Button>
             </div>

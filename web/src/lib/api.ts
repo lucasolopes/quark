@@ -136,7 +136,8 @@ export const api = {
     const res = await req(`/admin/wellknown/${encodeURIComponent(name)}`);
     if (res.status === 404) return null;
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
-    return res.text();
+    const body = await res.text();
+    return body === "" ? null : body;
   },
   async putWellknown(name: WellknownName, body: string): Promise<void> {
     const res = await req(`/admin/wellknown/${encodeURIComponent(name)}`, { method: "PUT", body });
