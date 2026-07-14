@@ -1,7 +1,7 @@
 use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
-use crate::store::{Record, Store, StoreError};
+use crate::store::{normalize_tags, Record, Store, StoreError};
 use crate::{codec, now, permute};
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
@@ -36,6 +36,7 @@ pub struct CreateReq {
     url: String,
     alias: Option<String>,
     ttl: Option<u64>,
+    tags: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -124,6 +125,7 @@ async fn create(
         url: req.url.clone(),
         expiry,
         created: now(),
+        tags: normalize_tags(req.tags.clone().unwrap_or_default()),
     };
 
     if let Some(alias) = req.alias {
@@ -393,6 +395,7 @@ struct ListParams {
     after: Option<u64>,
     limit: Option<usize>,
     q: Option<String>,
+    tag: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -404,6 +407,7 @@ struct LinkRow {
     url: String,
     expiry: Option<u64>,
     created: u64,
+    tags: Vec<String>,
 }
 
 async fn admin_links_list(
@@ -419,13 +423,14 @@ async fn admin_links_list(
         .unwrap_or(DEFAULT_PAGE_LIMIT)
         .clamp(1, MAX_PAGE_LIMIT);
     let q = p.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let tag = p.tag.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let links = match q {
-        Some(term) => match st.store.search_links(term, p.after, limit).await {
+        Some(term) => match st.store.search_links(term, p.after, limit, tag).await {
             Ok(l) => l,
             Err(StoreError::Unsupported) => return StatusCode::NOT_IMPLEMENTED.into_response(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
-        None => match st.store.list_links(p.after, limit).await {
+        None => match st.store.list_links(p.after, limit, tag).await {
             Ok(l) => l,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
@@ -448,9 +453,22 @@ async fn admin_links_list(
             url: rec.url,
             expiry: rec.expiry,
             created: rec.created,
+            tags: rec.tags,
         })
         .collect();
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
+}
+
+/// `GET /admin/tags`: the distinct set of tags across all links, for the
+/// panel's filter control.
+async fn admin_tags_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    match st.store.list_tags().await {
+        Ok(tags) => Json(serde_json::json!({ "tags": tags })).into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
 }
 
 /// Resolves the code into (id, optional_alias). If the code is numeric, there's no
@@ -547,6 +565,21 @@ async fn admin_link_patch(
             return (StatusCode::BAD_REQUEST, "invalid ttl").into_response();
         }
     }
+    if let Some(t) = patch.get("tags") {
+        match t {
+            serde_json::Value::Array(items) => {
+                let mut raw = Vec::with_capacity(items.len());
+                for item in items {
+                    match item.as_str() {
+                        Some(s) => raw.push(s.to_string()),
+                        None => return (StatusCode::BAD_REQUEST, "invalid tags").into_response(),
+                    }
+                }
+                rec.tags = normalize_tags(raw);
+            }
+            _ => return (StatusCode::BAD_REQUEST, "invalid tags").into_response(),
+        }
+    }
     if st.store.put_link(id, &rec).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
@@ -631,6 +664,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             "/admin/links/:code",
             axum::routing::delete(admin_link_delete).patch(admin_link_patch),
         )
+        .route("/admin/tags", get(admin_tags_list))
         .with_state(state);
 
     let app = if origins.is_empty() {
