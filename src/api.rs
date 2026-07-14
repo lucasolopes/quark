@@ -120,13 +120,13 @@ async fn create(
         return (StatusCode::FORBIDDEN, "blocked destination").into_response();
     }
     if let Some(app) = req.app_ios.as_deref() {
-        if !app_destination_ok(&st, &headers, app).await {
-            return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
+        if let Err(status) = app_destination_ok(&st, &headers, app).await {
+            return (status, "invalid app destination").into_response();
         }
     }
     if let Some(app) = req.app_android.as_deref() {
-        if !app_destination_ok(&st, &headers, app).await {
-            return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
+        if let Err(status) = app_destination_ok(&st, &headers, app).await {
+            return (status, "invalid app destination").into_response();
         }
     }
 
@@ -254,20 +254,28 @@ fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
     matches!(self_host, Some(sh) if sh == host)
 }
 
-/// Validates an app destination URL with the same rules as the main link URL:
-/// http/https scheme, a resolvable host, not an internal/self target, not
-/// blocklisted. Returns `true` when the URL passes every check.
-async fn app_destination_ok(st: &AppState, headers: &HeaderMap, url: &str) -> bool {
+/// Validates an app destination URL with the same rules — and the same status
+/// codes — as the main link URL: 400 for a malformed URL (bad scheme / no host),
+/// 403 for a policy denial (internal/self target or a blocklisted host). Mirrors
+/// the create/patch main-`url` arms exactly, in the same order.
+async fn app_destination_ok(
+    st: &AppState,
+    headers: &HeaderMap,
+    url: &str,
+) -> Result<(), StatusCode> {
     if !is_valid_url(url) {
-        return false;
+        return Err(StatusCode::BAD_REQUEST);
     }
     let Some(host) = extract_host(url) else {
-        return false;
+        return Err(StatusCode::BAD_REQUEST);
     };
     if st.block_private && is_blocked_target(&host, headers, st) {
-        return false;
+        return Err(StatusCode::FORBIDDEN);
     }
-    !st.blocklist.is_blocked(&host, now()).await
+    if st.blocklist.is_blocked(&host, now()).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(())
 }
 
 /// Resolves a URL code into an id: first tries a numeric code (base62 in the
@@ -628,8 +636,8 @@ async fn admin_link_patch(
         if v.is_null() {
             rec.app_ios = None;
         } else if let Some(s) = v.as_str() {
-            if !app_destination_ok(&st, &headers, s).await {
-                return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
+            if let Err(status) = app_destination_ok(&st, &headers, s).await {
+                return (status, "invalid app destination").into_response();
             }
             rec.app_ios = Some(s.to_string());
         } else {
@@ -640,8 +648,8 @@ async fn admin_link_patch(
         if v.is_null() {
             rec.app_android = None;
         } else if let Some(s) = v.as_str() {
-            if !app_destination_ok(&st, &headers, s).await {
-                return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
+            if let Err(status) = app_destination_ok(&st, &headers, s).await {
+                return (status, "invalid app destination").into_response();
             }
             rec.app_android = Some(s.to_string());
         } else {

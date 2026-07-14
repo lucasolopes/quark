@@ -940,7 +940,7 @@ async fn no_app_fields_redirects_to_url_regardless_of_ua() {
 }
 
 #[tokio::test]
-async fn create_internal_app_ios_400() {
+async fn create_internal_app_ios_403() {
     let app = app().await;
     let resp = app
         .oneshot(
@@ -953,11 +953,30 @@ async fn create_internal_app_ios_400() {
         )
         .await
         .unwrap();
+    // An internal/self target is a policy denial, matching the main-url path: 403.
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn create_malformed_app_ios_400() {
+    let app = app().await;
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://example.com","app_ios":"ftp://example.com"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // A malformed URL (wrong scheme) is a bad request, not a policy denial: 400.
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
-async fn patch_internal_app_android_400() {
+async fn patch_internal_app_android_403() {
     let app = app_admin("secret").await;
     let code = create_and_get_code(&app, "https://ok.com").await;
     let r = app
@@ -970,7 +989,8 @@ async fn patch_internal_app_android_400() {
         )
         .await
         .unwrap();
-    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    // An internal/self target is a policy denial, matching the main-url path: 403.
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
