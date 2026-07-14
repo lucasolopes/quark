@@ -5,6 +5,8 @@
 //! secret with the `whsec_` prefix stripped, and the signature is
 //! `"v1," + base64(HMAC_SHA256(key, signed_string))`.
 
+pub mod delivery;
+
 use base64::{engine::general_purpose::STANDARD as base64_engine, Engine as _};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
