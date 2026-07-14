@@ -36,35 +36,48 @@ pub enum RuleField {
     Device,
 }
 
+/// Finds the index of the first rule (in order) that matches the visitor's
+/// `country`/`ua`, or `None` if no rule matches (including the empty-rules
+/// case). Pure (no I/O); returns an index rather than a reference so callers
+/// can decide independently whether to clone the match or move the link's
+/// default `url` — this is what lets the redirect hot path stay
+/// clone-free when a link has no rules.
+pub fn matched_rule_index(
+    rules: &[Rule],
+    country: Option<&str>,
+    ua: Option<&str>,
+) -> Option<usize> {
+    if rules.is_empty() {
+        return None;
+    }
+    let country_upper = country.map(|c| c.to_ascii_uppercase());
+    let device = crate::analytics::device_from_ua(ua);
+    rules.iter().position(|rule| match rule.field {
+        RuleField::Country => match &country_upper {
+            Some(c) => rule.values.iter().any(|v| v.eq_ignore_ascii_case(c)),
+            None => false,
+        },
+        RuleField::Device => rule.values.iter().any(|v| v.eq_ignore_ascii_case(device)),
+    })
+}
+
 /// Resolves the redirect destination for a click: with no rules (the common
 /// case, every pre-existing link), returns `&rec.url` with just a
 /// `Vec::is_empty()` check — no extra cost. With rules, evaluates them in
 /// order and returns the first match's `to`; falls back to `&rec.url` if
 /// none match. Pure (no I/O): reuses the `country`/`user_agent` already read
-/// for the click's `ClickEvent`.
+/// for the click's `ClickEvent`. Kept for tests/callers that want a borrowed
+/// destination; the redirect handler uses `matched_rule_index` directly so it
+/// can move `rec.url` instead of cloning it.
 pub fn resolve_destination<'a>(
     rec: &'a Record,
     country: Option<&str>,
     ua: Option<&str>,
 ) -> &'a str {
-    if rec.rules.is_empty() {
-        return &rec.url;
+    match matched_rule_index(&rec.rules, country, ua) {
+        Some(i) => &rec.rules[i].to,
+        None => &rec.url,
     }
-    let country_upper = country.map(|c| c.to_ascii_uppercase());
-    let device = crate::analytics::device_from_ua(ua);
-    for rule in &rec.rules {
-        let matched = match rule.field {
-            RuleField::Country => match &country_upper {
-                Some(c) => rule.values.iter().any(|v| v.eq_ignore_ascii_case(c)),
-                None => false,
-            },
-            RuleField::Device => rule.values.iter().any(|v| v.eq_ignore_ascii_case(device)),
-        };
-        if matched {
-            return &rule.to;
-        }
-    }
-    &rec.url
 }
 
 #[derive(Debug)]

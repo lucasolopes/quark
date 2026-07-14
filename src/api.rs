@@ -1,7 +1,7 @@
 use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
-use crate::store::{resolve_destination, Record, Rule, RuleField, Store, StoreError};
+use crate::store::{matched_rule_index, Record, Rule, RuleField, Store, StoreError};
 use crate::{codec, now, permute};
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
@@ -317,8 +317,14 @@ async fn redirect(
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
 
-            let dest =
-                resolve_destination(&rec, country.as_deref(), user_agent.as_deref()).to_string();
+            // Zero-clone hot path: only the rule-match branch allocates. When
+            // `rec.rules` is empty (every pre-existing link, the common
+            // case), `rec.url` is moved straight into the LOCATION header.
+            let dest: String =
+                match matched_rule_index(&rec.rules, country.as_deref(), user_agent.as_deref()) {
+                    Some(i) => rec.rules[i].to.clone(),
+                    None => rec.url,
+                };
 
             let ev = ClickEvent {
                 id,

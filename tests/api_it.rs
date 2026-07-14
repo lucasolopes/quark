@@ -1009,3 +1009,43 @@ async fn admin_patch_rules_then_redirect_applies_them() {
     assert_eq!(r.status(), StatusCode::FOUND);
     assert_eq!(r.headers()["location"], "https://br.example");
 }
+
+#[tokio::test]
+async fn admin_patch_with_too_many_rules_400() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://ok.com").await;
+    let rules: Vec<String> = (0..21)
+        .map(|i| format!(r#"{{"field":"country","values":["BR"],"to":"https://r{i}.example"}}"#))
+        .collect();
+    let body = format!(r#"{{"rules":[{}]}}"#, rules.join(","));
+    let r = app
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn admin_patch_with_invalid_device_value_400() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://ok.com").await;
+    let r = app
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"rules":[{"field":"device","values":["Tablet"],"to":"https://t.example"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+}
