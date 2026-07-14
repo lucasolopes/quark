@@ -25,6 +25,7 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 - **Núcleo (v0.1):** criar + redirecionar + alias customizado + expiração (TTL). O short-code
   é uma permutação Feistel/ARX calibrada (`ROUNDS=4`); códigos são **calculados, não
   armazenados** (store chaveado por `u64`).
+- **Expiração por máximo de visitas (#11):** um link expira por TTL ou por um número máximo de visitas, o que vier primeiro.
 - **Arquitetura plugável**: traits `Store` / `CacheTier` / `AnalyticsSink`:
   - **L2 Valkey** (`QUARK_VALKEY_URL`): cache compartilhado, circuit-breaker + timeout, fail-open.
   - **Postgres** (`QUARK_DATABASE_URL`): store relacional multi-nó (sequência de id atômica).

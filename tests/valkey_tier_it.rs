@@ -16,6 +16,7 @@ async fn set_get_round_trip() {
         expiry: None,
         created: 1,
         tags: Vec::new(),
+        max_visits: None,
     };
     tier.set(id, &rec, 60).await.unwrap();
     let got = tier.get(id).await.unwrap().unwrap();

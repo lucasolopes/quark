@@ -19,6 +19,7 @@ async fn seed_links(s: &PostgresStore, links: &[(&str, Option<&str>)]) -> Vec<u6
             expiry: None,
             created: 0,
             tags: Vec::new(),
+            max_visits: None,
         };
         match alias {
             Some(a) => {

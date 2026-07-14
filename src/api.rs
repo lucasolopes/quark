@@ -42,6 +42,13 @@ pub struct CreateReq {
     alias: Option<String>,
     ttl: Option<u64>,
     tags: Option<Vec<String>>,
+    max_visits: Option<u32>,
+}
+
+/// Normalizes the `max_visits` request field into the persisted representation:
+/// `0` or absent means unlimited (`None`); any `n > 0` is `Some(n)`.
+fn normalize_max_visits(raw: Option<u32>) -> Option<u32> {
+    raw.filter(|&n| n > 0)
 }
 
 #[derive(Serialize)]
@@ -225,6 +232,7 @@ pub async fn create_link_core(
     alias: Option<&str>,
     ttl: Option<u64>,
     tags: Vec<String>,
+    max_visits: Option<u32>,
     headers: &HeaderMap,
 ) -> Result<String, CreateError> {
     if !is_valid_url(url) {
@@ -252,6 +260,7 @@ pub async fn create_link_core(
         expiry,
         created: now(),
         tags,
+        max_visits,
     };
 
     if let Some(alias) = alias {
@@ -366,6 +375,7 @@ async fn create(
         req.alias.as_deref(),
         req.ttl,
         normalize_tags(req.tags.clone().unwrap_or_default()),
+        normalize_max_visits(req.max_visits),
         &headers,
     )
     .await
@@ -424,6 +434,7 @@ async fn admin_import(
             row.alias.as_deref(),
             row.ttl,
             Vec::new(),
+            None,
             &headers,
         )
         .await
@@ -518,6 +529,20 @@ async fn redirect(
                             ),
                         });
                     }
+                    return (
+                        StatusCode::GONE,
+                        [(header::CACHE_CONTROL, "no-store".to_string())],
+                        "expired link",
+                    )
+                        .into_response();
+                }
+            }
+            if let Some(max) = rec.max_visits {
+                let n = match st.store.bump_visits(id).await {
+                    Ok(n) => n,
+                    Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                };
+                if n > max as u64 {
                     return (
                         StatusCode::GONE,
                         [(header::CACHE_CONTROL, "no-store".to_string())],
@@ -751,6 +776,9 @@ struct LinkRow {
     expiry: Option<u64>,
     created: u64,
     tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_visits: Option<u32>,
+    visits: u64,
 }
 
 async fn admin_links_list(
@@ -792,9 +820,13 @@ async fn admin_links_list(
     } else {
         None
     };
-    let rows: Vec<LinkRow> = links
-        .into_iter()
-        .map(|(id, rec)| LinkRow {
+    let mut rows: Vec<LinkRow> = Vec::with_capacity(links.len());
+    for (id, rec) in links {
+        let visits = match st.store.visits(id).await {
+            Ok(v) => v,
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
+        rows.push(LinkRow {
             id,
             code: codec::to_base62(permute::encode(id, st.key)),
             alias: alias_map.get(&id).cloned(),
@@ -802,8 +834,10 @@ async fn admin_links_list(
             expiry: rec.expiry,
             created: rec.created,
             tags: rec.tags,
-        })
-        .collect();
+            max_visits: rec.max_visits,
+            visits,
+        });
+    }
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
 }
 
@@ -939,6 +973,15 @@ async fn admin_link_patch(
                 rec.tags = normalize_tags(raw);
             }
             _ => return (StatusCode::BAD_REQUEST, "invalid tags").into_response(),
+        }
+    }
+    if let Some(mv) = patch.get("max_visits") {
+        if mv.is_null() {
+            rec.max_visits = None;
+        } else if let Some(n) = mv.as_u64().and_then(|n| u32::try_from(n).ok()) {
+            rec.max_visits = normalize_max_visits(Some(n));
+        } else {
+            return (StatusCode::BAD_REQUEST, "invalid max_visits").into_response();
         }
     }
     if st.store.put_link(id, &rec).await.is_err() {
@@ -1452,8 +1495,8 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::{
-        access_log_line, cache_control_for, parse_cors_origins, send_test_event_guarded, EventType,
-        SubscriptionKind, WebhookSubscription,
+        access_log_line, cache_control_for, normalize_max_visits, parse_cors_origins,
+        send_test_event_guarded, EventType, SubscriptionKind, WebhookSubscription,
     };
     use axum::body::Bytes;
     use axum::extract::State;
@@ -1462,6 +1505,18 @@ mod tests {
     use axum::Router as TestRouter;
     use std::sync::Mutex;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn normalize_max_visits_zero_or_absent_is_unlimited() {
+        assert_eq!(normalize_max_visits(None), None);
+        assert_eq!(normalize_max_visits(Some(0)), None);
+    }
+
+    #[test]
+    fn normalize_max_visits_positive_is_some() {
+        assert_eq!(normalize_max_visits(Some(1)), Some(1));
+        assert_eq!(normalize_max_visits(Some(42)), Some(42));
+    }
 
     #[test]
     fn parse_cors_origins_splits_and_trims() {

@@ -13,6 +13,7 @@ async fn put_get_link() {
         expiry: None,
         created: 100,
         tags: Vec::new(),
+        max_visits: None,
     };
     store.put_link(7, &rec).await.unwrap();
     let got = store.get_link(7).await.unwrap().unwrap();
@@ -41,12 +42,14 @@ async fn put_alias_and_link_is_atomic() {
         expiry: None,
         created: 100,
         tags: Vec::new(),
+        max_visits: None,
     };
     let rec2 = Record {
         url: "https://other.com".into(),
         expiry: None,
         created: 200,
         tags: Vec::new(),
+        max_visits: None,
     };
 
     assert!(store.put_alias_and_link("promo", 5, &rec).await.unwrap());

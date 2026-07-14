@@ -25,6 +25,7 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
     let tags: serde_json::Value = r.try_get("tags").map_err(StoreError::backend)?;
     let tags: Vec<String> = serde_json::from_value(tags)?;
+    let max_visits: Option<i64> = r.try_get("max_visits").map_err(StoreError::backend)?;
     Ok((
         id as u64,
         Record {
@@ -32,6 +33,7 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
             expiry: expiry.map(|v| v as u64),
             created: created as u64,
             tags,
+            max_visits: max_visits.map(|v| v as u32),
         },
     ))
 }
@@ -125,6 +127,9 @@ impl PostgresStore {
                 "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'generic'",
                 "CREATE TABLE IF NOT EXISTS api_tokens (id BIGINT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, scopes JSONB NOT NULL, rate_limit_per_min BIGINT, created BIGINT NOT NULL)",
                 "CREATE INDEX IF NOT EXISTS api_tokens_token_hash_idx ON api_tokens (token_hash)",
+                // Idempotent migrations for pre-existing `links` tables (max-visits feature).
+                "ALTER TABLE links ADD COLUMN IF NOT EXISTS max_visits BIGINT",
+                "ALTER TABLE links ADD COLUMN IF NOT EXISTS visits BIGINT NOT NULL DEFAULT 0",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -173,11 +178,12 @@ impl Store for PostgresStore {
     }
 
     async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError> {
-        let row = sqlx::query("SELECT url, expiry, created, tags FROM links WHERE id = $1")
-            .bind(id as i64)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(StoreError::backend)?;
+        let row =
+            sqlx::query("SELECT url, expiry, created, tags, max_visits FROM links WHERE id = $1")
+                .bind(id as i64)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(StoreError::backend)?;
         match row {
             Some(r) => {
                 let url: String = r.try_get("url").map_err(StoreError::backend)?;
@@ -185,11 +191,14 @@ impl Store for PostgresStore {
                 let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
                 let tags: serde_json::Value = r.try_get("tags").map_err(StoreError::backend)?;
                 let tags: Vec<String> = serde_json::from_value(tags)?;
+                let max_visits: Option<i64> =
+                    r.try_get("max_visits").map_err(StoreError::backend)?;
                 Ok(Some(Record {
                     url,
                     expiry: expiry.map(|v| v as u64),
                     created: created as u64,
                     tags,
+                    max_visits: max_visits.map(|v| v as u32),
                 }))
             }
             None => Ok(None),
@@ -199,14 +208,15 @@ impl Store for PostgresStore {
     async fn put_link(&self, id: u64, rec: &Record) -> Result<(), StoreError> {
         let tags = serde_json::to_value(&rec.tags)?;
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created, tags) VALUES ($1,$2,$3,$4,$5) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5",
+            "INSERT INTO links (id, url, expiry, created, tags, max_visits) VALUES ($1,$2,$3,$4,$5,$6) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6",
         )
         .bind(id as i64)
         .bind(&rec.url)
         .bind(rec.expiry.map(|v| v as i64))
         .bind(rec.created as i64)
         .bind(&tags)
+        .bind(rec.max_visits.map(|v| v as i64))
         .execute(&self.pool)
         .await
         .map_err(StoreError::backend)?;
@@ -248,14 +258,15 @@ impl Store for PostgresStore {
         }
         let tags = serde_json::to_value(&rec.tags)?;
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created, tags) VALUES ($1,$2,$3,$4,$5) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5",
+            "INSERT INTO links (id, url, expiry, created, tags, max_visits) VALUES ($1,$2,$3,$4,$5,$6) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6",
         )
         .bind(id as i64)
         .bind(&rec.url)
         .bind(rec.expiry.map(|v| v as i64))
         .bind(rec.created as i64)
         .bind(&tags)
+        .bind(rec.max_visits.map(|v| v as i64))
         .execute(&mut *tx)
         .await
         .map_err(StoreError::backend)?;
@@ -304,7 +315,7 @@ impl Store for PostgresStore {
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = sqlx::query(
-            "SELECT id, url, expiry, created, tags FROM links \
+            "SELECT id, url, expiry, created, tags, max_visits FROM links \
              WHERE ($1::bigint IS NULL OR id > $1) \
                AND ($2::jsonb IS NULL OR tags @> $2) \
              ORDER BY id LIMIT $3",
@@ -328,7 +339,7 @@ impl Store for PostgresStore {
         let pattern = format!("%{}%", like_escape(q));
         let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = sqlx::query(
-            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags \
+            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits \
              FROM links l LEFT JOIN aliases a ON a.id = l.id \
              WHERE ($1::bigint IS NULL OR l.id > $1) \
                AND (l.url ILIKE $2 OR a.alias ILIKE $2) \
@@ -514,6 +525,32 @@ impl Store for PostgresStore {
             .map_err(StoreError::backend)?;
         let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
         Ok(id as u64)
+    }
+
+    async fn bump_visits(&self, id: u64) -> Result<u64, StoreError> {
+        let row =
+            sqlx::query("UPDATE links SET visits = visits + 1 WHERE id = $1 RETURNING visits")
+                .bind(id as i64)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(StoreError::backend)?;
+        let visits: i64 = row.try_get("visits").map_err(StoreError::backend)?;
+        Ok(visits as u64)
+    }
+
+    async fn visits(&self, id: u64) -> Result<u64, StoreError> {
+        let row = sqlx::query("SELECT visits FROM links WHERE id = $1")
+            .bind(id as i64)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => {
+                let visits: i64 = r.try_get("visits").map_err(StoreError::backend)?;
+                Ok(visits as u64)
+            }
+            None => Ok(0),
+        }
     }
 }
 

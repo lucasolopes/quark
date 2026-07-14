@@ -12,6 +12,7 @@ const link: Link = {
   expiry: null,
   created: 1700000000,
   tags: [],
+  visits: 0,
 };
 
 describe("LinkTable — QR code", () => {
@@ -61,5 +62,19 @@ describe("LinkTable — tags", () => {
   it("shows a dash when a link has no tags", () => {
     render(withProviders(<LinkTable links={[link]} onEdit={() => {}} onDelete={() => {}} />));
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+  });
+});
+
+describe("LinkTable — visits", () => {
+  it("shows visits/max when max_visits is set", () => {
+    const limited: Link = { ...link, visits: 12, max_visits: 100 };
+    render(withProviders(<LinkTable links={[limited]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.getByText("12 / 100")).toBeInTheDocument();
+  });
+
+  it("shows only the visit count when there is no max_visits", () => {
+    const unlimited: Link = { ...link, visits: 7 };
+    render(withProviders(<LinkTable links={[unlimited]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.getByText("7")).toBeInTheDocument();
   });
 });

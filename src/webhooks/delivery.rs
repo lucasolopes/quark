@@ -486,6 +486,12 @@ mod tests {
         async fn next_api_token_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }
+        async fn bump_visits(&self, _id: u64) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
+        async fn visits(&self, _id: u64) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
     }
 
     fn sub(

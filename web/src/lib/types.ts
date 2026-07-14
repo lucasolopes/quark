@@ -6,9 +6,11 @@ export interface Link {
   expiry: number | null;
   created: number;
   tags: string[];
+  max_visits?: number;
+  visits: number;
 }
 export interface ListLinksResponse { links: Link[]; next_after: number | null; }
-export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; }
+export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; max_visits?: number; }
 export interface CreateLinkResponse { code: string; url: string; }
 export interface TagsResponse { tags: string[]; }
 export interface ClickEvent {
@@ -29,7 +31,7 @@ export interface Aggregates {
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
 export interface BlocklistResponse { domains: string[]; }
-export interface PatchLinkRequest { url?: string; ttl?: number | null; }
+export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; }
 
 /** The 5 link lifecycle events a webhook subscription can be notified about. */
 export const WEBHOOK_EVENTS = [
@@ -62,7 +64,6 @@ export interface PatchWebhookRequest { url?: string; events?: WebhookEvent[]; ac
 export interface TestWebhookResponse { delivered: boolean; status: number; }
 export interface ImportFailure { index: number; url: string; reason: string; }
 export interface ImportSummary { imported: number; failed: ImportFailure[]; }
-export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; }
 export type Scope = "links_read" | "links_write" | "blocklist" | "webhooks" | "analytics" | "full";
 export const ALL_SCOPES: Scope[] = ["links_read", "links_write", "blocklist", "webhooks", "analytics", "full"];
 

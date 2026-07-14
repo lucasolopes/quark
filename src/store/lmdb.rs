@@ -18,7 +18,7 @@ const LOCAL_BITS: u32 = 40 - NODE_BITS;
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1;
 
 /// Number of named LMDB sub-databases opened in the environment.
-const MAX_DBS: u32 = 8;
+const MAX_DBS: u32 = 9;
 /// Virtual address space (mmap) reserved for the LMDB environment.
 const MAP_SIZE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 
@@ -59,6 +59,7 @@ pub struct LmdbStore {
     blocked: Database<Str, Str>,
     webhooks: Database<BeU64, Bytes>,
     api_tokens: Database<BeU64, Bytes>,
+    visits: Database<BeU64, BeU64>,
     node_id: Option<u8>,
 }
 
@@ -87,6 +88,7 @@ impl LmdbStore {
         let blocked = env.create_database(&mut wtxn, Some("blocked"))?;
         let webhooks = env.create_database(&mut wtxn, Some("webhooks"))?;
         let api_tokens = env.create_database(&mut wtxn, Some("api_tokens"))?;
+        let visits = env.create_database(&mut wtxn, Some("visits"))?;
         wtxn.commit()?;
         Ok(LmdbStore {
             env,
@@ -98,6 +100,7 @@ impl LmdbStore {
             blocked,
             webhooks,
             api_tokens,
+            visits,
             node_id,
         })
     }
@@ -286,6 +289,15 @@ impl Store for LmdbStore {
         Ok(next)
     }
 
+    async fn bump_visits(&self, id: u64) -> Result<u64, StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        let cur = self.visits.get(&wtxn, &id)?.unwrap_or(0);
+        let next = cur + 1;
+        self.visits.put(&mut wtxn, &id, &next)?;
+        wtxn.commit()?;
+        Ok(next)
+    }
+
     async fn list_tags(&self) -> Result<Vec<String>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut set = std::collections::BTreeSet::new();
@@ -346,6 +358,11 @@ impl Store for LmdbStore {
         self.meta.put(&mut wtxn, "next_api_token_id", &next)?;
         wtxn.commit()?;
         Ok(next)
+    }
+
+    async fn visits(&self, id: u64) -> Result<u64, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        Ok(self.visits.get(&rtxn, &id)?.unwrap_or(0))
     }
 }
 
@@ -555,6 +572,7 @@ mod tests {
             expiry: None,
             created: 0,
             tags: Vec::new(),
+            max_visits: None,
         };
         for id in 1..=5u64 {
             s.put_link(id, &rec(&format!("https://e{id}.com")))
@@ -618,6 +636,7 @@ mod tests {
             expiry: None,
             created: 0,
             tags: tags.iter().map(|t| t.to_string()).collect(),
+            max_visits: None,
         };
         s.put_link(1, &rec("https://a.com", &["rust", "web"]))
             .await

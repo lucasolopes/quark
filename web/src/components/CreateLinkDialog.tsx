@@ -29,6 +29,7 @@ interface FormErrors {
   url?: string;
   alias?: string;
   ttl?: string;
+  maxVisits?: string;
   form?: string;
 }
 
@@ -55,6 +56,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
   const [alias, setAlias] = useState("");
   const [ttl, setTtl] = useState("");
   const [tagsInput, setTagsInput] = useState("");
+  const [maxVisits, setMaxVisits] = useState("");
   const [errors, setErrors] = useState<FormErrors>({});
   const [utmOpen, setUtmOpen] = useState(false);
   const [utm, setUtm] = useState<UtmParams>(EMPTY_UTM);
@@ -68,6 +70,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
     setAlias("");
     setTtl("");
     setTagsInput("");
+    setMaxVisits("");
     setErrors({});
     setUtmOpen(false);
     setUtm(EMPTY_UTM);
@@ -129,6 +132,13 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
         next.ttl = t("dialogs.create.ttlInvalid");
       }
     }
+    const trimmedMaxVisits = maxVisits.trim();
+    if (trimmedMaxVisits) {
+      const n = Number(trimmedMaxVisits);
+      if (!Number.isInteger(n) || n <= 0) {
+        next.maxVisits = t("dialogs.create.maxVisitsInvalid");
+      }
+    }
     return next;
   }
 
@@ -149,6 +159,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
         ...(alias.trim() ? { alias: alias.trim() } : {}),
         ...(ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
         ...(tags.length > 0 ? { tags } : {}),
+        ...(maxVisits.trim() ? { max_visits: Number(maxVisits.trim()) } : {}),
       });
       toast.success(t("dialogs.create.successToast"));
       reset();
@@ -408,6 +419,27 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
                     </div>
                   )}
                 </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="create-link-max-visits" className="text-sm font-medium">
+                {t("dialogs.create.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.create.maxVisitsOptional")}</span>
+              </label>
+              <Input
+                id="create-link-max-visits"
+                type="number"
+                min={1}
+                step={1}
+                placeholder={t("dialogs.create.maxVisitsPlaceholder")}
+                value={maxVisits}
+                onChange={(e) => setMaxVisits(e.target.value)}
+                aria-invalid={errors.maxVisits != null}
+              />
+              {errors.maxVisits && (
+                <p className="text-sm text-destructive" role="alert">
+                  {errors.maxVisits}
+                </p>
               )}
             </div>
 
