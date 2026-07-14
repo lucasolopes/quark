@@ -1,4 +1,5 @@
 use crate::analytics::{Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
+use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::store::{Record, Store, StoreError};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{PgPool, Row};
@@ -29,6 +30,42 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
             created: created as u64,
         },
     ))
+}
+
+/// Maps a `Provider` to the string stored in the `pixels.provider` column.
+fn provider_to_str(p: Provider) -> &'static str {
+    match p {
+        Provider::Ga4 => "ga4",
+        Provider::MetaCapi => "meta_capi",
+    }
+}
+
+/// Inverse of `provider_to_str`. Errors on an unrecognized value (defensive
+/// against manual DB edits or a future provider not yet handled here).
+fn provider_from_str(s: &str) -> Result<Provider, StoreError> {
+    match s {
+        "ga4" => Ok(Provider::Ga4),
+        "meta_capi" => Ok(Provider::MetaCapi),
+        other => Err(StoreError::Backend(format!(
+            "unknown pixel provider: {other}"
+        ))),
+    }
+}
+
+/// Maps a `pixels` row into a `PixelConfig`.
+fn row_to_pixel(r: &PgRow) -> Result<PixelConfig, StoreError> {
+    let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+    let provider: String = r.try_get("provider").map_err(StoreError::backend)?;
+    let credentials: serde_json::Value = r.try_get("credentials").map_err(StoreError::backend)?;
+    let active: bool = r.try_get("active").map_err(StoreError::backend)?;
+    let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    Ok(PixelConfig {
+        id: id as u64,
+        provider: provider_from_str(&provider)?,
+        credentials: serde_json::from_value::<PixelCredentials>(credentials)?,
+        active,
+        created: created as u64,
+    })
 }
 
 pub struct PostgresStore {
@@ -68,6 +105,8 @@ impl PostgresStore {
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS blocked_domains (domain TEXT PRIMARY KEY)",
+                "CREATE SEQUENCE IF NOT EXISTS quark_pixel_id_seq",
+                "CREATE TABLE IF NOT EXISTS pixels (id BIGINT PRIMARY KEY, provider TEXT NOT NULL, credentials JSONB NOT NULL, active BOOLEAN NOT NULL, created BIGINT NOT NULL)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -90,8 +129,9 @@ impl PostgresStore {
     /// Used in tests: resets all state.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, stats, events",
+            "TRUNCATE links, aliases, stats, events, pixels",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
+            "ALTER SEQUENCE quark_pixel_id_seq RESTART WITH 1",
         ] {
             sqlx::query(q)
                 .execute(&self.pool)
@@ -300,6 +340,65 @@ impl Store for PostgresStore {
             .await
             .map_err(StoreError::backend)?;
         Ok(())
+    }
+
+    async fn next_pixel_id(&self) -> Result<u64, StoreError> {
+        let row = sqlx::query("SELECT nextval('quark_pixel_id_seq') AS id")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
+        Ok(id as u64)
+    }
+
+    async fn get_pixel(&self, id: u64) -> Result<Option<PixelConfig>, StoreError> {
+        let row = sqlx::query(
+            "SELECT id, provider, credentials, active, created FROM pixels WHERE id = $1",
+        )
+        .bind(id as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => Ok(Some(row_to_pixel(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError> {
+        let credentials = serde_json::to_value(&config.credentials)?;
+        sqlx::query(
+            "INSERT INTO pixels (id, provider, credentials, active, created) VALUES ($1,$2,$3,$4,$5) \
+             ON CONFLICT (id) DO UPDATE SET provider=$2, credentials=$3, active=$4, created=$5",
+        )
+        .bind(config.id as i64)
+        .bind(provider_to_str(config.provider))
+        .bind(&credentials)
+        .bind(config.active)
+        .bind(config.created as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn delete_pixel(&self, id: u64) -> Result<bool, StoreError> {
+        let res = sqlx::query("DELETE FROM pixels WHERE id = $1")
+            .bind(id as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn list_pixels(&self) -> Result<Vec<PixelConfig>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT id, provider, credentials, active, created FROM pixels ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        rows.iter().map(row_to_pixel).collect()
     }
 }
 

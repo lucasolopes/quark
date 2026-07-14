@@ -1,4 +1,5 @@
 use crate::analytics::{Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
+use crate::pixel::PixelConfig;
 use crate::store::{Record, Store, StoreError};
 use heed::byteorder::BigEndian;
 use heed::types::{Bytes, Str, U64};
@@ -16,7 +17,7 @@ const LOCAL_BITS: u32 = 40 - NODE_BITS;
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1;
 
 /// Number of named LMDB sub-databases opened in the environment.
-const MAX_DBS: u32 = 6;
+const MAX_DBS: u32 = 7;
 /// Virtual address space (mmap) reserved for the LMDB environment.
 const MAP_SIZE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 
@@ -55,6 +56,7 @@ pub struct LmdbStore {
     stats: Database<BeU64, Bytes>,
     events: Database<BeU64, Bytes>,
     blocked: Database<Str, Str>,
+    pixels: Database<BeU64, Bytes>,
     node_id: Option<u8>,
 }
 
@@ -81,6 +83,7 @@ impl LmdbStore {
         let stats = env.create_database(&mut wtxn, Some("stats"))?;
         let events = env.create_database(&mut wtxn, Some("events"))?;
         let blocked = env.create_database(&mut wtxn, Some("blocked"))?;
+        let pixels = env.create_database(&mut wtxn, Some("pixels"))?;
         wtxn.commit()?;
         Ok(LmdbStore {
             env,
@@ -90,6 +93,7 @@ impl LmdbStore {
             stats,
             events,
             blocked,
+            pixels,
             node_id,
         })
     }
@@ -224,6 +228,48 @@ impl Store for LmdbStore {
         wtxn.commit()?;
         Ok(())
     }
+
+    async fn next_pixel_id(&self) -> Result<u64, StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        let cur = self.meta.get(&wtxn, "next_pixel_id")?.unwrap_or(0);
+        let next = cur + 1;
+        self.meta.put(&mut wtxn, "next_pixel_id", &next)?;
+        wtxn.commit()?;
+        Ok(next)
+    }
+
+    async fn get_pixel(&self, id: u64) -> Result<Option<PixelConfig>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        match self.pixels.get(&rtxn, &id)? {
+            Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec(config)?;
+        let mut wtxn = self.env.write_txn()?;
+        self.pixels.put(&mut wtxn, &config.id, &bytes)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn delete_pixel(&self, id: u64) -> Result<bool, StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        let existed = self.pixels.delete(&mut wtxn, &id)?;
+        wtxn.commit()?;
+        Ok(existed)
+    }
+
+    async fn list_pixels(&self) -> Result<Vec<PixelConfig>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        for item in self.pixels.iter(&rtxn)? {
+            let (_, bytes) = item?;
+            out.push(serde_json::from_slice(bytes)?);
+        }
+        Ok(out)
+    }
 }
 
 #[async_trait::async_trait]
@@ -285,6 +331,7 @@ impl AnalyticsSink for LmdbStore {
 #[cfg(test)]
 mod tests {
     use super::{compose_id, parse_node_id, LmdbStore, LOCAL_BITS, LOCAL_MAX};
+    use crate::pixel::{PixelConfig, PixelCredentials, Provider};
     use crate::store::{Record, Store, StoreError};
 
     #[test]
@@ -454,5 +501,45 @@ mod tests {
         assert!(s.get_link(2).await.unwrap().is_none());
         s.delete_alias("promo").await.unwrap();
         assert_eq!(s.get_alias("promo").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn pixel_round_trip_list_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+
+        assert_eq!(s.next_pixel_id().await.unwrap(), 1);
+        assert_eq!(s.next_pixel_id().await.unwrap(), 2);
+
+        let config = PixelConfig {
+            id: 1,
+            provider: Provider::Ga4,
+            credentials: PixelCredentials {
+                measurement_id: Some("G-1".into()),
+                api_secret: Some("s".into()),
+                pixel_id: None,
+                access_token: None,
+            },
+            active: true,
+            created: 42,
+        };
+        s.put_pixel(&config).await.unwrap();
+
+        let got = s.get_pixel(1).await.unwrap().unwrap();
+        assert_eq!(got.provider, Provider::Ga4);
+        assert_eq!(got.credentials.measurement_id.as_deref(), Some("G-1"));
+        assert!(got.active);
+        assert_eq!(got.created, 42);
+
+        assert!(s.get_pixel(999).await.unwrap().is_none());
+
+        let list = s.list_pixels().await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, 1);
+
+        assert!(s.delete_pixel(1).await.unwrap());
+        assert!(!s.delete_pixel(1).await.unwrap());
+        assert!(s.get_pixel(1).await.unwrap().is_none());
+        assert!(s.list_pixels().await.unwrap().is_empty());
     }
 }

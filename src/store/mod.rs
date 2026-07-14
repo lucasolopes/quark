@@ -2,6 +2,7 @@ pub mod lmdb;
 pub mod postgres;
 
 use crate::analytics::AnalyticsSink;
+use crate::pixel::PixelConfig;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -88,6 +89,11 @@ pub trait Store: Send + Sync + 'static {
     async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError>;
     async fn delete_link(&self, id: u64) -> Result<(), StoreError>;
     async fn delete_alias(&self, alias: &str) -> Result<(), StoreError>;
+    async fn next_pixel_id(&self) -> Result<u64, StoreError>;
+    async fn get_pixel(&self, id: u64) -> Result<Option<PixelConfig>, StoreError>;
+    async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError>;
+    async fn delete_pixel(&self, id: u64) -> Result<bool, StoreError>;
+    async fn list_pixels(&self) -> Result<Vec<PixelConfig>, StoreError>;
 }
 
 /// Opens only the Store on LMDB (used by tests that don't need the AnalyticsSink).
