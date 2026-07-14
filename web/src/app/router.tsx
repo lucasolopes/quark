@@ -6,6 +6,7 @@ import { Links } from "@/routes/Links";
 import { Login } from "@/routes/Login";
 import { Webhooks } from "@/routes/Webhooks";
 import { Tokens } from "@/routes/Tokens";
+import { Pixels } from "@/routes/Pixels";
 import { RequireAuth } from "./RequireAuth";
 import { Shell } from "./Shell";
 
@@ -26,6 +27,7 @@ export const router = createBrowserRouter([
       { path: "webhooks", element: <Webhooks /> },
       { path: "import", element: <Import /> },
       { path: "tokens", element: <Tokens /> },
+      { path: "pixels", element: <Pixels /> },
     ],
   },
   { path: "*", element: <Navigate to="/links" replace /> },

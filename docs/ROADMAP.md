@@ -65,6 +65,8 @@ bottleneck being geography/RTT, not the server).
   destination preview and named templates saved locally (`localStorage`).
 - **#9 API tokens with scopes + quota**: named tokens (`links_read`, `links_write`, `blocklist`, `webhooks`, `analytics`, `full`) with an optional per-token rate limit, managed under `/admin/tokens` and the panel's **API tokens** page; the env `QUARK_ADMIN_TOKEN` keeps behaving as `full`, unchanged. Doc: `docs/API-TOKENS.md`.
 - **Redirect rules (#12)**: per-link geo/device rules (first match wins, `url` stays the default), panel editor in the create/edit dialogs. Doc: `docs/REDIRECT-RULES.md`.
+- **Conversion forwarding (#14)**: instance-level GA4/Meta CAPI pixels, forwarded async from the
+  analytics worker (never the redirect hot path), fail-open. Panel: `/pixels`. Doc: `docs/CONVERSION-FORWARDING.md`.
 
 ## Next
 

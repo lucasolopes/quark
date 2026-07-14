@@ -3,6 +3,7 @@ pub mod postgres;
 
 use crate::analytics::AnalyticsSink;
 use crate::auth::ApiToken;
+use crate::pixel::PixelConfig;
 use crate::webhooks::WebhookSubscription;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -218,6 +219,11 @@ pub trait Store: Send + Sync + 'static {
     async fn bump_visits(&self, id: u64) -> Result<u64, StoreError>;
     /// Reads the current visit count for `id` (0 if never bumped), for display.
     async fn visits(&self, id: u64) -> Result<u64, StoreError>;
+    async fn next_pixel_id(&self) -> Result<u64, StoreError>;
+    async fn get_pixel(&self, id: u64) -> Result<Option<PixelConfig>, StoreError>;
+    async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError>;
+    async fn delete_pixel(&self, id: u64) -> Result<bool, StoreError>;
+    async fn list_pixels(&self) -> Result<Vec<PixelConfig>, StoreError>;
 }
 
 /// Opens only the Store on LMDB (used by tests that don't need the AnalyticsSink).

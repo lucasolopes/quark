@@ -313,6 +313,8 @@ impl AnalyticsSink for ClickHouseSink {
                 user_agent: None,
                 city: non_empty(r.city),
                 bot: r.bot != 0,
+                ip: None,
+                fbc: None,
             })
             .collect();
 

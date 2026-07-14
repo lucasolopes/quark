@@ -17,6 +17,8 @@ fn ev(id: u64, ts: u64, c: &str, ua: &str) -> ClickEvent {
         user_agent: Some(ua.into()),
         city: None,
         bot: false,
+        ip: None,
+        fbc: None,
     }
 }
 fn ev_full(id: u64, ts: u64, ua: &str, referer: Option<&str>, city: Option<&str>) -> ClickEvent {
@@ -28,6 +30,8 @@ fn ev_full(id: u64, ts: u64, ua: &str, referer: Option<&str>, city: Option<&str>
         user_agent: Some(ua.into()),
         city: city.map(String::from),
         bot: false,
+        ip: None,
+        fbc: None,
     }
 }
 

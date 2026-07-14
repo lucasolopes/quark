@@ -1,12 +1,13 @@
 import { QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import type { CreateLinkRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest } from "./types";
+import type { CreateLinkRequest, CreatePixelRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest } from "./types";
 
 const LINKS_QUERY_KEY = ["links"];
 const BLOCKLIST_QUERY_KEY = ["blocklist"];
 const WEBHOOKS_QUERY_KEY = ["webhooks"];
 const TAGS_QUERY_KEY = ["tags"];
 const TOKENS_QUERY_KEY = ["tokens"];
+const PIXELS_QUERY_KEY = ["pixels"];
 
 /**
  * The application's single TanStack Query client. `retry: false` because a
@@ -215,5 +216,31 @@ export function useDeleteToken() {
   return useMutation({
     mutationFn: (id: number) => api.deleteToken(id),
     onSuccess: () => { void client.invalidateQueries({ queryKey: TOKENS_QUERY_KEY }); },
+  });
+}
+
+/** List of configured conversion-forwarding pixels, for the Pixels screen. */
+export function usePixels() {
+  return useQuery({
+    queryKey: PIXELS_QUERY_KEY,
+    queryFn: () => api.listPixels(),
+  });
+}
+
+/** Creates a pixel config; on success invalidates `usePixels`. */
+export function useCreatePixel() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreatePixelRequest) => api.createPixel(body),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: PIXELS_QUERY_KEY }); },
+  });
+}
+
+/** Deletes a pixel config; on success invalidates `usePixels`. */
+export function useDeletePixel() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.deletePixel(id),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: PIXELS_QUERY_KEY }); },
   });
 }

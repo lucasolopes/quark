@@ -11,6 +11,7 @@
 > Os short codes são **calculados, não armazenados** — uma bijeção chaveada. Um binário estático minúsculo (~1 MB), sem Redis, sem banco de dados, sem serviços externos.
 
 **Links rápidos:** [Deploy](docs/DEPLOY.PT_BR.md) · [Arquitetura](docs/ARCHITECTURE.PT_BR.md) · [Edge/CDN](docs/EDGE.PT_BR.md) · [Importação](docs/IMPORT.PT_BR.md) · [Roadmap](docs/ROADMAP.PT_BR.md)
+**Links rápidos:** [Deploy](docs/DEPLOY.PT_BR.md) · [Arquitetura](docs/ARCHITECTURE.PT_BR.md) · [Edge/CDN](docs/EDGE.PT_BR.md) · [Encaminhamento de conversão](docs/CONVERSION-FORWARDING.PT_BR.md) · [Roadmap](docs/ROADMAP.PT_BR.md)
 
 Um encurtador de URL cujo short code é uma **permutação ARX de rounds reduzidos e calibrada** do id inteiro interno. O código não é procurado em um índice — ele é **calculado**, nas duas direções, a partir de uma função bijetora minúscula. Essa única decisão de design remove uma classe inteira de problemas (colisões) e um índice inteiro (string → id) de uma vez.
 
@@ -274,6 +275,7 @@ inclui um builder de UTM opcional com templates salvos localmente (`localStorage
 - Analytics de cliques e postura de privacidade (o que é capturado, o que nunca é armazenado): [`docs/ANALYTICS.PT_BR.md`](docs/ANALYTICS.PT_BR.md)
 - Migrando do Bitly/Kutt/YOURLS: [`docs/IMPORT.PT_BR.md`](docs/IMPORT.PT_BR.md)
 - Regras de redirecionamento por geo/dispositivo: [`docs/REDIRECT-RULES.PT_BR.md`](docs/REDIRECT-RULES.PT_BR.md)
+- Encaminhamento de conversão server-side (GA4/Meta CAPI, sem pixel no cliente): [`docs/CONVERSION-FORWARDING.PT_BR.md`](docs/CONVERSION-FORWARDING.PT_BR.md)
 - O que vem a seguir: [`docs/ROADMAP.PT_BR.md`](docs/ROADMAP.PT_BR.md)
 - Design de sistema completo: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Passo a passo mais profundo de cada componente, modelo de dados e os internos do round Feistel: [`docs/ARCHITECTURE.PT_BR.md`](docs/ARCHITECTURE.PT_BR.md)

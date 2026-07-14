@@ -81,7 +81,19 @@ async fn main() {
         None => Cache::new(store.clone(), CACHE_CAPACITY),
     };
     let (analytics_tx, analytics_rx) = tokio::sync::mpsc::channel(ANALYTICS_CHANNEL_CAPACITY);
-    let _worker = spawn_worker(analytics_rx, sink.clone());
+    let pixel_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .expect("build pixel forwarding client");
+    let _worker = spawn_worker(
+        analytics_rx,
+        sink.clone(),
+        store.clone(),
+        pixel_client,
+        key,
+        quark::pixel::PixelBases::default(),
+    );
     let admin_token = std::env::var("QUARK_ADMIN_TOKEN").ok();
     if admin_token.is_none() {
         eprintln!("WARNING: QUARK_ADMIN_TOKEN not set — /stats endpoint disabled.");

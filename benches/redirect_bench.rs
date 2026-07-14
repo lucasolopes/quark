@@ -49,7 +49,14 @@ fn bench(c: &mut Criterion) {
             .unwrap();
         let cache = Cache::new(store.clone(), 100_000);
         let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(10_000);
-        let worker = spawn_worker(rx, sink.clone());
+        let worker = spawn_worker(
+            rx,
+            sink.clone(),
+            store.clone(),
+            reqwest::Client::new(),
+            key,
+            quark::pixel::PixelBases::default(),
+        );
         let state = Arc::new(AppState {
             cache,
             store: store.clone(),
@@ -109,6 +116,8 @@ fn bench(c: &mut Criterion) {
                     user_agent: Some("Mozilla/5.0 (X11; Linux x86_64)".to_string()),
                     city: None,
                     bot: false,
+                    ip: None,
+                    fbc: None,
                 };
                 let _ = tx.try_send(black_box(ev));
             }

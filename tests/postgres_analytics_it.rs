@@ -17,6 +17,8 @@ fn ev(id: u64, ts: u64) -> ClickEvent {
         user_agent: Some("iPhone".into()),
         city: None,
         bot: false,
+        ip: None,
+        fbc: None,
     }
 }
 

@@ -6,6 +6,7 @@ import type {
   PatchWebhookRequest, TestWebhookResponse,
   ImportSummary, TagsResponse,
   ListTokensResponse, CreateTokenRequest, CreateTokenResponse,
+  ListPixelsResponse, CreatePixelRequest, Pixel,
 } from "./types";
 
 /**
@@ -118,6 +119,16 @@ export const api = {
   },
   async deleteToken(id: number): Promise<void> {
     const res = await req(`/admin/tokens/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  async listPixels(): Promise<ListPixelsResponse> {
+    return jsonOrThrow(await req("/admin/pixels"));
+  },
+  async createPixel(body: CreatePixelRequest): Promise<Pixel> {
+    return jsonOrThrow(await req("/admin/pixels", { method: "POST", body: JSON.stringify(body) }));
+  },
+  async deletePixel(id: number): Promise<void> {
+    const res = await req(`/admin/pixels/${encodeURIComponent(String(id))}`, { method: "DELETE" });
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
 };

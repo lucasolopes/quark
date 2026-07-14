@@ -492,6 +492,24 @@ mod tests {
         async fn visits(&self, _id: u64) -> Result<u64, StoreError> {
             unimplemented!()
         }
+        async fn next_pixel_id(&self) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
+        async fn get_pixel(
+            &self,
+            _id: u64,
+        ) -> Result<Option<crate::pixel::PixelConfig>, StoreError> {
+            unimplemented!()
+        }
+        async fn put_pixel(&self, _config: &crate::pixel::PixelConfig) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn delete_pixel(&self, _id: u64) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
+        async fn list_pixels(&self) -> Result<Vec<crate::pixel::PixelConfig>, StoreError> {
+            unimplemented!()
+        }
     }
 
     fn sub(

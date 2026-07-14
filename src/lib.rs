@@ -6,6 +6,7 @@ pub mod cache;
 pub mod codec;
 pub mod import;
 pub mod permute;
+pub mod pixel;
 pub mod store;
 pub mod webhooks;
 

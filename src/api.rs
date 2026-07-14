@@ -2,6 +2,7 @@ use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{device_from_ua, AnalyticsSink, ClickEvent};
 use crate::auth::{generate_token, hash_token, ApiToken, Scope};
 use crate::cache::Cache;
+use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::store::{
     matched_rule_index, normalize_tags, Record, Rule, RuleField, Store, StoreError,
 };
@@ -9,7 +10,7 @@ use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{self, EventType, SubscriptionKind, WebhookEvent, WebhookSubscription};
 use crate::{codec, now, permute};
 use axum::body::Bytes;
-use axum::extract::{ConnectInfo, Path, Query, Request, State};
+use axum::extract::{ConnectInfo, Path, Query, RawQuery, Request, State};
 use axum::http::Method;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
@@ -568,9 +569,22 @@ async fn resolve_code(st: &AppState, code: &str) -> Result<Option<u64>, StoreErr
     }
 }
 
+/// Extracts and percent-decodes the `fbclid` query parameter Meta ads append
+/// to a click URL, if present. Used only to build the Meta `fbc` cookie value
+/// for server-side conversion forwarding; never persisted.
+fn fbclid_from_query(raw: Option<&str>) -> Option<String> {
+    let raw = raw?;
+    url::form_urlencoded::parse(raw.as_bytes())
+        .find(|(k, _)| k == "fbclid")
+        .map(|(_, v)| v.into_owned())
+        .filter(|v| !v.is_empty())
+}
+
 async fn redirect(
     State(st): State<Arc<AppState>>,
     Path(code): Path<String>,
+    conn: Option<ConnectInfo<SocketAddr>>,
+    RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
     let id = match resolve_code(&st, &code).await {
@@ -659,6 +673,12 @@ async fn redirect(
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string()),
                 bot: false,
+                ip: match client_ip(&headers, &st.real_ip_header, conn.as_ref()) {
+                    s if s == "unknown" => None,
+                    s => Some(s),
+                },
+                fbc: fbclid_from_query(raw_query.as_deref())
+                    .map(|fbclid| format!("fb.1.{}.{}", now.saturating_mul(1000), fbclid)),
             };
             // Gate check first (cheap: one atomic load) so the payload build
             // — which reads `ev`'s fields — happens before `ev` is moved
@@ -1154,6 +1174,84 @@ async fn admin_webhooks_list(State(st): State<Arc<AppState>>, headers: HeaderMap
     }
 }
 
+/// Maximum number of pixel configs allowed on this instance (instance-level
+/// config for this pass, roadmap #14 — not per-link, so this stays small).
+const PIXELS_CAP: usize = 20;
+/// Placeholder shown instead of a secret credential in `GET /admin/pixels`.
+/// The raw value is never sent back once stored.
+const MASKED_SECRET: &str = "\u{2022}\u{2022}\u{2022}\u{2022}";
+
+#[derive(Deserialize)]
+struct PixelCreateReq {
+    provider: Provider,
+    credentials: PixelCredentials,
+    active: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct MaskedCredentials {
+    measurement_id: Option<String>,
+    api_secret: Option<String>,
+    pixel_id: Option<String>,
+    access_token: Option<String>,
+}
+
+/// Masks the secret fields (`api_secret`/`access_token`); `measurement_id`
+/// and `pixel_id` are provider-facing identifiers, not secrets, so they pass
+/// through unmasked.
+fn mask_credentials(c: &PixelCredentials) -> MaskedCredentials {
+    MaskedCredentials {
+        measurement_id: c.measurement_id.clone(),
+        api_secret: c.api_secret.as_ref().map(|_| MASKED_SECRET.to_string()),
+        pixel_id: c.pixel_id.clone(),
+        access_token: c.access_token.as_ref().map(|_| MASKED_SECRET.to_string()),
+    }
+}
+
+#[derive(Serialize)]
+struct PixelRow {
+    id: u64,
+    provider: Provider,
+    credentials: MaskedCredentials,
+    active: bool,
+    created: u64,
+}
+
+fn to_pixel_row(config: &PixelConfig) -> PixelRow {
+    PixelRow {
+        id: config.id,
+        provider: config.provider,
+        credentials: mask_credentials(&config.credentials),
+        active: config.active,
+        created: config.created,
+    }
+}
+
+/// Minimal credential validation per provider: GA4 needs measurement_id +
+/// api_secret; Meta needs pixel_id + access_token. Both non-empty (trimmed).
+fn has_required_pixel_credentials(provider: Provider, c: &PixelCredentials) -> bool {
+    fn non_empty(s: &Option<String>) -> bool {
+        s.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false)
+    }
+    match provider {
+        Provider::Ga4 => non_empty(&c.measurement_id) && non_empty(&c.api_secret),
+        Provider::MetaCapi => non_empty(&c.pixel_id) && non_empty(&c.access_token),
+    }
+}
+
+async fn admin_pixels_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Analytics).await {
+        return status.into_response();
+    }
+    match st.store.list_pixels().await {
+        Ok(pixels) => {
+            let rows: Vec<PixelRow> = pixels.iter().map(to_pixel_row).collect();
+            Json(serde_json::json!({ "pixels": rows })).into_response()
+        }
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
 /// Maximum number of API tokens that may exist at once.
 const MAX_API_TOKENS: usize = 100;
 
@@ -1377,6 +1475,64 @@ async fn admin_tokens_delete(
     }
 }
 
+async fn admin_pixels_create(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Analytics).await {
+        return status.into_response();
+    }
+    let req: PixelCreateReq = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
+    };
+    if !has_required_pixel_credentials(req.provider, &req.credentials) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "missing required credentials for provider",
+        )
+            .into_response();
+    }
+    let existing = match st.store.list_pixels().await {
+        Ok(p) => p,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if existing.len() >= PIXELS_CAP {
+        return (StatusCode::BAD_REQUEST, "pixel config limit reached (20)").into_response();
+    }
+    let id = match st.store.next_pixel_id().await {
+        Ok(id) => id,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let config = PixelConfig {
+        id,
+        provider: req.provider,
+        credentials: req.credentials,
+        active: req.active.unwrap_or(true),
+        created: now(),
+    };
+    if st.store.put_pixel(&config).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    (StatusCode::CREATED, Json(to_pixel_row(&config))).into_response()
+}
+
+async fn admin_pixels_delete(
+    State(st): State<Arc<AppState>>,
+    Path(id): Path<u64>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Analytics).await {
+        return status.into_response();
+    }
+    match st.store.delete_pixel(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
 /// Sends a synthetic `link.created` event straight to a single subscription,
 /// bypassing the queue: unlike `emit`, the caller (an admin, testing their
 /// endpoint) wants to see the outcome, so this delivers once, synchronously,
@@ -1569,6 +1725,14 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             "/admin/tokens/:id",
             axum::routing::delete(admin_tokens_delete),
         )
+        .route(
+            "/admin/pixels",
+            get(admin_pixels_list).post(admin_pixels_create),
+        )
+        .route(
+            "/admin/pixels/:id",
+            axum::routing::delete(admin_pixels_delete),
+        )
         .with_state(state);
 
     let app = if origins.is_empty() {
@@ -1593,8 +1757,9 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::{
-        access_log_line, cache_control_for, normalize_max_visits, parse_cors_origins,
-        send_test_event_guarded, EventType, SubscriptionKind, WebhookSubscription,
+        access_log_line, cache_control_for, fbclid_from_query, normalize_max_visits,
+        parse_cors_origins, send_test_event_guarded, EventType, SubscriptionKind,
+        WebhookSubscription,
     };
     use axum::body::Bytes;
     use axum::extract::State;
@@ -1614,6 +1779,34 @@ mod tests {
     fn normalize_max_visits_positive_is_some() {
         assert_eq!(normalize_max_visits(Some(1)), Some(1));
         assert_eq!(normalize_max_visits(Some(42)), Some(42));
+    }
+
+    #[test]
+    fn fbclid_from_query_present() {
+        assert_eq!(
+            fbclid_from_query(Some("a=1&fbclid=abc123&b=2")),
+            Some("abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn fbclid_from_query_absent() {
+        assert_eq!(fbclid_from_query(Some("a=1&b=2")), None);
+        assert_eq!(fbclid_from_query(None), None);
+    }
+
+    #[test]
+    fn fbclid_from_query_urlencoded_value_is_decoded() {
+        assert_eq!(
+            fbclid_from_query(Some("fbclid=IwAR%2Bx%20y")),
+            Some("IwAR+x y".to_string())
+        );
+    }
+
+    #[test]
+    fn fbclid_from_query_empty_is_none() {
+        assert_eq!(fbclid_from_query(Some("")), None);
+        assert_eq!(fbclid_from_query(Some("fbclid=")), None);
     }
 
     #[test]

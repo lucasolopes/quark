@@ -1,7 +1,9 @@
-use crate::store::StoreError;
+use crate::pixel::{self, PixelBases, PixelConfig};
+use crate::store::{Store, StoreError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
 pub mod clickhouse;
@@ -19,6 +21,13 @@ pub struct ClickEvent {
     /// builder (re)computes it via `is_bot` for every event in `recent`.
     #[serde(default)]
     pub bot: bool,
+    /// Captured only to forward server-side conversions (Meta CAPI user_data).
+    /// `serde(skip)` keeps them in memory for the worker but out of the
+    /// persisted recent-events buffer, so the raw IP never lands on disk.
+    #[serde(skip)]
+    pub ip: Option<String>,
+    #[serde(skip)]
+    pub fbc: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -248,15 +257,42 @@ pub trait AnalyticsSink: Send + Sync + 'static {
 /// Batch size that triggers an immediate flush (in addition to the 5s timer).
 pub const BATCH: usize = 500;
 
+/// How long a pixel-snapshot refresh (`store.list_pixels()`) is allowed to
+/// run before it's abandoned in favor of the previous snapshot (fail-open:
+/// a wedged store must never stall the worker).
+const PIXEL_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Background worker: accumulates `ClickEvent`s from the channel and flushes
 /// to the sink when the buffer reaches `BATCH`, every 5s, or when the channel
-/// closes (drains and exits).
+/// closes (drains and exits). Each flush also forwards the batch to every
+/// active pixel config (server-side conversion forwarding, roadmap #14):
+/// async only, off the redirect hot path, and fail-open (a provider error is
+/// only logged, never propagated to the caller or the sink write).
+///
+/// The pixel config list is read from `store` only once up front and then on
+/// every 5s tick — never on the flush path itself (mirrors the webhook
+/// worker's subscription-snapshot pattern, #1). This means a wedged store
+/// (e.g. an exhausted Postgres pool) can never stall `flush`/forward and
+/// back up the bounded analytics channel: the worker keeps forwarding to the
+/// last-known-good snapshot, and a refresh that fails or times out just
+/// keeps that snapshot (fail-open) instead of blocking.
+///
+/// `client` is the shared `reqwest::Client` used for provider calls (built
+/// with no redirects and a timeout by the caller); `key` derives the real
+/// short code used as `link_code` in the forwarded payload; `bases` are the
+/// provider hosts (fixed in production, injectable in tests).
 pub fn spawn_worker(
     mut rx: Receiver<ClickEvent>,
     sink: Arc<dyn AnalyticsSink>,
+    store: Arc<dyn Store>,
+    client: reqwest::Client,
+    key: u64,
+    bases: PixelBases,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut buf: Vec<ClickEvent> = Vec::with_capacity(BATCH);
+        let mut pixels: Vec<PixelConfig> = Vec::new();
+        refresh_pixel_snapshot(&store, &mut pixels).await;
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -266,24 +302,52 @@ pub fn spawn_worker(
                         Some(ev) => {
                             buf.push(ev);
                             if buf.len() >= BATCH {
-                                flush(&sink, &mut buf).await;
+                                flush(&sink, &mut buf, &pixels, &client, key, &bases).await;
                             }
                         }
                         None => {
-                            flush(&sink, &mut buf).await;
+                            flush(&sink, &mut buf, &pixels, &client, key, &bases).await;
                             break;
                         }
                     }
                 }
                 _ = ticker.tick() => {
-                    flush(&sink, &mut buf).await;
+                    refresh_pixel_snapshot(&store, &mut pixels).await;
+                    flush(&sink, &mut buf, &pixels, &client, key, &bases).await;
                 }
             }
         }
     })
 }
 
-async fn flush(sink: &Arc<dyn AnalyticsSink>, buf: &mut Vec<ClickEvent>) {
+/// Refreshes the cached pixel-config snapshot from `store`, bounded by
+/// `PIXEL_SNAPSHOT_TIMEOUT`. Fail-open: on a store error or a timeout, the
+/// previous snapshot (`pixels`) is left untouched and the failure is only
+/// logged — a wedged or erroring store never stalls the worker and never
+/// empties out a snapshot that was previously known-good.
+async fn refresh_pixel_snapshot(store: &Arc<dyn Store>, pixels: &mut Vec<PixelConfig>) {
+    match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, store.list_pixels()).await {
+        Ok(Ok(configs)) => *pixels = configs,
+        Ok(Err(e)) => {
+            eprintln!("{}", serde_json::json!({"pixel_list_error": e.to_string()}));
+        }
+        Err(_) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"pixel_list_error": "timed out refreshing pixel snapshot"})
+            );
+        }
+    }
+}
+
+async fn flush(
+    sink: &Arc<dyn AnalyticsSink>,
+    buf: &mut Vec<ClickEvent>,
+    pixels: &[PixelConfig],
+    client: &reqwest::Client,
+    key: u64,
+    bases: &PixelBases,
+) {
     if buf.is_empty() {
         return;
     }
@@ -293,7 +357,34 @@ async fn flush(sink: &Arc<dyn AnalyticsSink>, buf: &mut Vec<ClickEvent>) {
             serde_json::json!({"analytics_flush_error": e.to_string()})
         );
     }
+    forward_to_pixels(pixels, client, key, bases, buf).await;
     buf.clear();
+}
+
+/// Forwards the flushed batch to every active pixel config in the cached
+/// `pixels` snapshot (no store access on this path — see `spawn_worker`).
+/// Fail-open: a per-provider forward failure is only logged, never
+/// propagated (never affects the sink write above nor the redirect hot path,
+/// which has already returned by the time this runs).
+async fn forward_to_pixels(
+    pixels: &[PixelConfig],
+    client: &reqwest::Client,
+    key: u64,
+    bases: &PixelBases,
+    events: &[ClickEvent],
+) {
+    for config in pixels.iter().filter(|c| c.active) {
+        let base = bases.base_for(config.provider);
+        if let Err(e) = pixel::forward(client, base, config, events, key).await {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "pixel_forward_error": e.to_string(),
+                    "pixel_id": config.id,
+                })
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -309,6 +400,8 @@ mod tests {
             user_agent: Some(ua.into()),
             city: None,
             bot: false,
+            ip: None,
+            fbc: None,
         }
     }
 
@@ -365,9 +458,16 @@ mod tests {
     #[tokio::test]
     async fn worker_drains_and_writes_on_channel_close() {
         let dir = tempfile::tempdir().unwrap();
-        let (_store, sink) = crate::store::open_backends(dir.path()).await.unwrap();
+        let (store, sink) = crate::store::open_backends(dir.path()).await.unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(1000);
-        let handle = spawn_worker(rx, sink.clone());
+        let handle = spawn_worker(
+            rx,
+            sink.clone(),
+            store,
+            reqwest::Client::new(),
+            0x1234,
+            PixelBases::default(),
+        );
 
         for i in 0..250u64 {
             tx.send(ClickEvent {
@@ -378,6 +478,8 @@ mod tests {
                 user_agent: Some("iPhone".into()),
                 city: None,
                 bot: false,
+                ip: None,
+                fbc: None,
             })
             .await
             .unwrap();
@@ -391,6 +493,36 @@ mod tests {
     }
 
     #[test]
+    fn old_clickevent_json_without_ip_fbc_deserializes_with_none() {
+        let blob = r#"{"id":1,"ts":2,"referer":null,"country":"BR","user_agent":"UA"}"#;
+        let ev: ClickEvent = serde_json::from_str(blob).unwrap();
+        assert_eq!(ev.id, 1);
+        assert_eq!(ev.country.as_deref(), Some("BR"));
+        assert_eq!(ev.ip, None);
+        assert_eq!(ev.fbc, None);
+    }
+
+    #[test]
+    fn serialized_clickevent_never_contains_ip_or_fbc() {
+        let ev = ClickEvent {
+            id: 7,
+            ts: 100,
+            referer: None,
+            country: Some("BR".into()),
+            user_agent: Some("UA".into()),
+            city: None,
+            bot: false,
+            ip: Some("203.0.113.9".into()),
+            fbc: Some("fb.1.100000.abc123".into()),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(!json.contains("203.0.113.9"));
+        assert!(!json.contains("fb.1.100000.abc123"));
+        assert!(!json.contains("\"ip\""));
+        assert!(!json.contains("\"fbc\""));
+    }
+
+    #[test]
     fn first_ts_handles_epoch_zero() {
         let mut a = Aggregates::default();
         a.apply(&ClickEvent {
@@ -401,6 +533,8 @@ mod tests {
             user_agent: None,
             city: None,
             bot: false,
+            ip: None,
+            fbc: None,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -410,6 +544,8 @@ mod tests {
             user_agent: None,
             city: None,
             bot: false,
+            ip: None,
+            fbc: None,
         });
         assert_eq!(a.first_ts, 0);
         assert_eq!(a.last_ts, 5_000_000_000);
@@ -508,6 +644,8 @@ mod tests {
             ),
             city: Some("Sao Paulo".into()),
             bot: false,
+            ip: None,
+            fbc: None,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -519,6 +657,8 @@ mod tests {
             ),
             city: None,
             bot: false,
+            ip: None,
+            fbc: None,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -531,6 +671,8 @@ mod tests {
             ),
             city: Some("".into()),
             bot: false,
+            ip: None,
+            fbc: None,
         });
 
         assert_eq!(a.per_os.get("iOS"), Some(&1));

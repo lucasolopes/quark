@@ -11,6 +11,7 @@
 > Short codes are **computed, not stored**: a keyed bijection. One tiny static binary (~1 MB), no Redis, no database, no external services.
 
 **Quick links:** [Deploy](docs/DEPLOY.md) · [Architecture](docs/ARCHITECTURE.md) · [Edge/CDN](docs/EDGE.md) · [Import](docs/IMPORT.md) · [Roadmap](docs/ROADMAP.md)
+**Quick links:** [Deploy](docs/DEPLOY.md) · [Architecture](docs/ARCHITECTURE.md) · [Edge/CDN](docs/EDGE.md) · [Conversion forwarding](docs/CONVERSION-FORWARDING.md) · [Roadmap](docs/ROADMAP.md)
 
 A URL shortener whose short code is a **calibrated, reduced-round ARX permutation** of the internal integer id. The code is not looked up in an index. It is **computed**, in both directions, from a tiny bijective function. That one design choice removes an entire class of problems (collisions) and an entire index (string → id) at once.
 
@@ -274,6 +275,7 @@ includes an optional UTM builder with locally saved templates (`localStorage`).
 - Click analytics and privacy posture (what's captured, what's never stored): [`docs/ANALYTICS.md`](docs/ANALYTICS.md)
 - Migrating from Bitly/Kutt/YOURLS: [`docs/IMPORT.md`](docs/IMPORT.md)
 - Geo/device redirect rules: [`docs/REDIRECT-RULES.md`](docs/REDIRECT-RULES.md)
+- Server-side conversion forwarding (GA4/Meta CAPI, no client-side pixel): [`docs/CONVERSION-FORWARDING.md`](docs/CONVERSION-FORWARDING.md)
 - What's next: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Full system design: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Deeper walkthrough of every component, data model and the Feistel round internals: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
