@@ -51,7 +51,7 @@ the item above, the edge still does **not** cache the 302.
 The only reliable path on Cloudflare is a **Worker**: an edge script that
 either (a) performs the redirect itself, reading the code→URL pair from
 **Workers KV**, or (b) caches the origin's 302 via the **Cache API**. That's
-a genuine phase-2 change — it requires getting link data to wherever the
+a phase-2 change — it requires getting link data to wherever the
 Worker can reach it (dual-write to KV, or the Worker querying the origin and
 caching the result).
 

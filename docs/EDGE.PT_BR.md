@@ -48,8 +48,8 @@ acima, a borda continua **não** cacheando o 302.
 
 O único caminho confiável na Cloudflare é um **Worker**: um script na borda que
 ou (a) faz o próprio redirect lendo o par código→URL de um **Workers KV**, ou
-(b) cacheia o 302 da origem via **Cache API**. Isso é uma mudança de fase 2 de
-verdade — exige levar os dados dos links pra onde o Worker alcança (dual-write
+(b) cacheia o 302 da origem via **Cache API**. Isso é uma mudança de fase 2 —
+exige levar os dados dos links pra onde o Worker alcança (dual-write
 pro KV, ou o Worker consultando a origem e cacheando).
 
 **Vale a pena?** Só se você tiver tráfego relevante **longe** da região da VPS.
