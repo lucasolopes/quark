@@ -97,14 +97,14 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 
 ## Backlog
 
+Para um conjunto mais amplo de features candidatas, pontuadas contra short.io, Rebrandly,
+Bitly e Dub, veja [`docs/research/2026-07-14-next-features.md`](research/2026-07-14-next-features.md).
+
 - **Domínios customizados**: `meudominio.com/abc`.
 - **Follow-ups de deep linking**: deferred deep linking (mandar um usuário sem o app pra loja e abrir
   na tela certa após instalar) e roteamento de in-app-browser (tirar cliques de um webview do
   Instagram/TikTok). Os dois precisam de um SDK móvel que o quark não entrega. O redirect ciente do
   aparelho em si está feito (veja Feito).
-- **Outbox de webhook na mesma transação**: dobrar a inserção no outbox dentro da transação da
-  mutação do link para a janela estreita de crash pós-commit não perder um evento de ciclo de vida
-  (veja `docs/SCALING.PT_BR.md`).
 
 ## Restrições de design (conscientes)
 

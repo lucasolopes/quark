@@ -94,13 +94,14 @@ bottleneck being geography/RTT, not the server).
 
 ## Backlog
 
+For a wider set of candidate features, scored against short.io, Rebrandly, Bitly, and Dub,
+see [`docs/research/2026-07-14-next-features.md`](research/2026-07-14-next-features.md).
+
 - **Custom domains**: `mydomain.com/abc`.
 - **Deep linking follow-ups**: deferred deep linking (send a user without the app to the store, then
   open it on the right screen after install) and in-app-browser routing (steering clicks out of an
   Instagram/TikTok webview). Both need a mobile SDK quark does not ship. The device-aware redirect
   itself is done (see Done).
-- **Same-transaction webhook outbox**: fold the outbox insert into the link mutation's transaction
-  so the narrow post-commit crash window cannot lose a lifecycle event (see `docs/SCALING.md`).
 
 ## Design constraints (deliberate)
 

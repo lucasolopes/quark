@@ -74,3 +74,27 @@ AI-isms (seamless, robust, leverage, comprehensive, delve, ensure, cutting-edge,
 - The scale audit `docs/research/2026-07-14-scale-audit.md` is a point-in-time
   Portuguese record and was left intact; the closed gaps it lists are now
   documented as done in `SCALING.md` and `ROADMAP.md`, which cross-link to it.
+
+## 2026-07-14 follow-up pass
+
+Later changes after the pass above, documented against source at each step:
+
+- **Operator domain blocklist retired.** The optional destination-domain
+  blocklist was removed end to end (routes, store methods, token scope, the
+  Valkey invalidation channel, the panel page, and its docs). The SSRF guard it
+  sat next to (`is_internal_host` plus the self-host check) stays: every
+  destination still refuses internal and loopback targets. `README`,
+  `ARCHITECTURE`, `API`, `API-TOKENS`, `CONFIGURATION`, `SCALING`, `AB-TESTING`,
+  and `IMPORT` (both languages) dropped their blocklist mentions; the LMDB count
+  in `ARCHITECTURE` moved from eleven databases to ten (`max_dbs = 10`).
+- **Same-transaction webhook outbox shipped.** The Backlog item is done: on
+  Postgres the outbox insert now rides the link mutation's own transaction, so a
+  post-commit crash cannot drop a lifecycle event. `SCALING.md` describes the
+  same-transaction enqueue; the Backlog entry was removed to match.
+- **Stats donut charts fixed.** The device, OS, and browser breakdowns rendered
+  zero sectors under recharts 3 (its polar charts read the ResponsiveContainer's
+  first empty measurement). They now draw at a fixed pixel size with a legend
+  beside the ring. Code change only, verified in the browser; no doc surface.
+- **Research records added.** `docs/research/2026-07-14-login-system.md`,
+  `-perf-infra.md`, and `-next-features.md` (candidate features scored against
+  short.io, Rebrandly, Bitly, and Dub). `ROADMAP` Backlog links the last one.
