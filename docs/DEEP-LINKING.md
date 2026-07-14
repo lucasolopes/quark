@@ -8,9 +8,10 @@ and Android both do this by fetching a small JSON file from the domain and
 checking it against the app installed on the device. quark hosts those two
 files so your links can become iOS Universal Links and Android App Links.
 
-This page covers hosting the files, which is the piece quark ships today.
-Opening the app on a per-request basis (device-aware redirect) is a separate
-follow-up, see the note at the end.
+This page covers two things: hosting the files, which is what the OS needs
+before it will tie your domain to an app, and the device-aware redirect that
+decides where a click goes once it reaches quark. The redirect section is at the
+end.
 
 ## The two files
 
@@ -94,13 +95,50 @@ After Save, the file is live at its well-known path immediately. You can confirm
 with a request, for example `curl https://your-domain/.well-known/assetlinks.json`,
 and check the body and the `application/json` content type.
 
-## Not yet: device-aware redirect
+## Device-aware redirect
 
-Device-aware redirect, actually opening the app when a link is tapped (detecting
-iOS or Android and sending the device to an app URI or the store, with a web
-fallback), is a deferred follow-up and is not yet implemented. Hosting the
-association files is the prerequisite that work builds on. It needs product
-decisions (which platforms, per-link app scheme, fallback behavior) and overlaps
-the redirect-rules work, so it is left for a later, interactive round. Today
-quark hosts the files, which is what lets the OS associate your domain with the
+A link can carry two optional destinations on top of its normal URL, one for iOS
+and one for Android. When a click comes from that platform and the app is not
+installed, so the tap is not caught by the OS and reaches quark, quark sends the
+click to the platform destination instead of the normal URL. If the app is
+installed, the OS opens it through the association file and quark never sees the
+request.
+
+quark picks the destination from the click's platform:
+
+| Click platform | Redirects to |
+| --- | --- |
+| iOS, and the link sets an iOS destination | the iOS destination |
+| Android, and the link sets an Android destination | the Android destination |
+| desktop, other, or the platform has no destination set | the normal link URL (fallback) |
+
+The fallback never fails. A click from desktop, or from a platform whose
+destination is not set, goes to the link's normal URL, the same as a link that
+uses no app destinations at all.
+
+Only links that set an app destination pay for this. quark checks whether the
+link has an iOS or Android destination before it looks at the User-Agent. A link
+with neither takes the plain redirect with no extra work, so the common hot path
+is unchanged. Platform detection is a substring check on the User-Agent (iPhone,
+iPad, or iPod for iOS, Android for Android), not a parsing library.
+
+The app destinations are validated the same way as the main URL. Each one has to
+be http or https and pass the SSRF guard that blocks internal and private hosts,
+so an app destination cannot point quark at an internal address the main URL
+could not reach either.
+
+### Limits
+
+This version does the redirect only. Two things it does not do:
+
+- **Deferred deep linking.** Sending a user who does not have the app to the
+  store, then opening the app on the right screen after they install it, is not
+  handled. Closing that loop needs an SDK embedded in the mobile app to read the
+  pending link on first launch, and quark does not ship a mobile SDK.
+- **In-app-browser routing.** Clicks opened inside an app's own webview
+  (Instagram, TikTok, and the like) are not detected or steered out of the
+  webview. They fall through to the normal behavior.
+
+Both build on the association files from the hosting sections above, which are
+the prerequisite for any of this. Without them the OS will not hand a link to the
 app in the first place.

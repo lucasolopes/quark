@@ -9,9 +9,10 @@ conferem contra o app instalado no aparelho. O quark hospeda esses dois
 arquivos pra que seus links possam virar Universal Links no iOS e App Links no
 Android.
 
-Esta página cobre a hospedagem dos arquivos, que é a parte que o quark entrega
-hoje. Abrir o app a cada request (redirect ciente do aparelho) é um follow-up à
-parte, veja a nota no fim.
+Esta página cobre duas coisas: a hospedagem dos arquivos, que é o que o SO
+precisa antes de ligar seu domínio a um app, e o redirect ciente do aparelho,
+que decide pra onde um clique vai depois que chega no quark. A seção do redirect
+está no fim.
 
 ## Os dois arquivos
 
@@ -95,14 +96,50 @@ confirmar com uma request, por exemplo
 `curl https://seu-dominio/.well-known/assetlinks.json`, e checar o corpo e o
 content type `application/json`.
 
-## Ainda não: redirect ciente do aparelho
+## Redirect ciente do aparelho
 
-O redirect ciente do aparelho, abrir de fato o app quando um link é tocado
-(detectar iOS ou Android e mandar o aparelho pra uma URI de app ou pra loja, com
-fallback web), é um follow-up adiado e ainda não está implementado. Hospedar os
-arquivos de associação é o pré-requisito em que esse trabalho se apoia. Ele
-precisa de decisões de produto (quais plataformas, esquema de app por link,
-comportamento do fallback) e se sobrepõe ao trabalho de regras de redirect,
-então fica pra uma rodada posterior, interativa. Hoje o quark hospeda os
-arquivos, que é o que permite ao SO associar seu domínio ao app pra começo de
-conversa.
+Um link pode carregar dois destinos opcionais além da sua URL normal, um pra iOS
+e um pra Android. Quando um clique vem daquela plataforma e o app não está
+instalado, ou seja, o toque não é capturado pelo SO e chega no quark, o quark
+manda o clique pro destino da plataforma em vez da URL normal. Se o app está
+instalado, o SO abre ele pelo arquivo de associação e o quark nunca vê a request.
+
+O quark escolhe o destino pela plataforma do clique:
+
+| Plataforma do clique | Redireciona pra |
+| --- | --- |
+| iOS, e o link define um destino iOS | o destino iOS |
+| Android, e o link define um destino Android | o destino Android |
+| desktop, outra, ou plataforma sem destino definido | a URL normal do link (fallback) |
+
+O fallback nunca falha. Um clique de desktop, ou de uma plataforma cujo destino
+não está definido, vai pra URL normal do link, igual a um link que não usa
+destino de app nenhum.
+
+Só links que definem um destino de app pagam por isso. O quark checa se o link
+tem um destino iOS ou Android antes de olhar o User-Agent. Um link sem nenhum dos
+dois segue o redirect simples sem trabalho extra, então o caminho quente comum
+fica inalterado. A detecção de plataforma é um teste de substring no User-Agent
+(iPhone, iPad ou iPod pra iOS, Android pra Android), não uma biblioteca de
+parsing.
+
+Os destinos de app são validados do mesmo jeito que a URL principal. Cada um tem
+que ser http ou https e passar pelo guard de SSRF que bloqueia hosts internos e
+privados, então um destino de app não pode apontar o quark pra um endereço
+interno que a URL principal também não alcançaria.
+
+### Limites
+
+Esta versão faz só o redirect. Duas coisas que ela não faz:
+
+- **Deep linking diferido.** Mandar um usuário que não tem o app pra loja e
+  depois abrir o app na tela certa depois que ele instala não é tratado. Fechar
+  esse ciclo precisa de um SDK embarcado no app mobile pra ler o link pendente no
+  primeiro launch, e o quark não entrega um SDK mobile.
+- **Roteamento de navegador in-app.** Cliques abertos dentro do webview do
+  próprio app (Instagram, TikTok e afins) não são detectados nem tirados do
+  webview. Eles caem no comportamento normal.
+
+Os dois se apoiam nos arquivos de associação das seções de hospedagem acima, que
+são o pré-requisito de tudo isso. Sem eles o SO não entrega um link pro app pra
+começo de conversa.
