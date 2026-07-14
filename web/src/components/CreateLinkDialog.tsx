@@ -15,6 +15,7 @@ import { ApiError } from "@/lib/api";
 import { isHttpUrl, isNumericCode } from "@/lib/codeguard";
 import { isUnauthorized } from "@/lib/mutation-error";
 import { useCreateLink } from "@/lib/queries";
+import { parseTagsInput } from "@/lib/tags";
 
 interface FormErrors {
   url?: string;
@@ -38,6 +39,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
   const [url, setUrl] = useState("");
   const [alias, setAlias] = useState("");
   const [ttl, setTtl] = useState("");
+  const [tagsInput, setTagsInput] = useState("");
   const [errors, setErrors] = useState<FormErrors>({});
   const createLink = useCreateLink();
 
@@ -45,6 +47,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
     setUrl("");
     setAlias("");
     setTtl("");
+    setTagsInput("");
     setErrors({});
   }
 
@@ -83,10 +86,12 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
     }
     setErrors({});
     try {
+      const tags = parseTagsInput(tagsInput);
       await createLink.mutateAsync({
         url: url.trim(),
         ...(alias.trim() ? { alias: alias.trim() } : {}),
         ...(ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
+        ...(tags.length > 0 ? { tags } : {}),
       });
       toast.success(t("dialogs.create.successToast"));
       reset();
@@ -173,6 +178,19 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
                   {errors.ttl}
                 </p>
               )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="create-link-tags" className="text-sm font-medium">
+                {t("dialogs.create.tagsLabel")} <span className="text-muted-foreground">({t("dialogs.create.tagsHint")})</span>
+              </label>
+              <Input
+                id="create-link-tags"
+                type="text"
+                placeholder={t("dialogs.create.tagsPlaceholder")}
+                value={tagsInput}
+                onChange={(e) => setTagsInput(e.target.value)}
+              />
             </div>
 
             {errors.form && (

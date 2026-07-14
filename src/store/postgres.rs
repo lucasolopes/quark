@@ -15,19 +15,22 @@ fn like_escape(q: &str) -> String {
         .replace('_', "\\_")
 }
 
-/// Maps a `links` row (id, url, expiry, created) into `(id, Record)`.
+/// Maps a `links` row (id, url, expiry, created, tags) into `(id, Record)`.
 /// Shared by `list_links` and `search_links`, which select the same columns.
 fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
     let url: String = r.try_get("url").map_err(StoreError::backend)?;
     let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    let tags: serde_json::Value = r.try_get("tags").map_err(StoreError::backend)?;
+    let tags: Vec<String> = serde_json::from_value(tags)?;
     Ok((
         id as u64,
         Record {
             url,
             expiry: expiry.map(|v| v as u64),
             created: created as u64,
+            tags,
         },
     ))
 }
@@ -85,7 +88,8 @@ impl PostgresStore {
             for ddl in [
                 "CREATE SEQUENCE IF NOT EXISTS quark_id_seq",
                 "CREATE SEQUENCE IF NOT EXISTS quark_webhook_id_seq",
-                "CREATE TABLE IF NOT EXISTS links (id BIGINT PRIMARY KEY, url TEXT NOT NULL, expiry BIGINT, created BIGINT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS links (id BIGINT PRIMARY KEY, url TEXT NOT NULL, expiry BIGINT, created BIGINT NOT NULL, tags JSONB NOT NULL DEFAULT '[]')",
+                "ALTER TABLE links ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'",
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
@@ -144,7 +148,7 @@ impl Store for PostgresStore {
     }
 
     async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError> {
-        let row = sqlx::query("SELECT url, expiry, created FROM links WHERE id = $1")
+        let row = sqlx::query("SELECT url, expiry, created, tags FROM links WHERE id = $1")
             .bind(id as i64)
             .fetch_optional(&self.pool)
             .await
@@ -154,10 +158,13 @@ impl Store for PostgresStore {
                 let url: String = r.try_get("url").map_err(StoreError::backend)?;
                 let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
                 let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+                let tags: serde_json::Value = r.try_get("tags").map_err(StoreError::backend)?;
+                let tags: Vec<String> = serde_json::from_value(tags)?;
                 Ok(Some(Record {
                     url,
                     expiry: expiry.map(|v| v as u64),
                     created: created as u64,
+                    tags,
                 }))
             }
             None => Ok(None),
@@ -165,14 +172,16 @@ impl Store for PostgresStore {
     }
 
     async fn put_link(&self, id: u64, rec: &Record) -> Result<(), StoreError> {
+        let tags = serde_json::to_value(&rec.tags)?;
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created) VALUES ($1,$2,$3,$4) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4",
+            "INSERT INTO links (id, url, expiry, created, tags) VALUES ($1,$2,$3,$4,$5) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5",
         )
         .bind(id as i64)
         .bind(&rec.url)
         .bind(rec.expiry.map(|v| v as i64))
         .bind(rec.created as i64)
+        .bind(&tags)
         .execute(&self.pool)
         .await
         .map_err(StoreError::backend)?;
@@ -212,14 +221,16 @@ impl Store for PostgresStore {
         if res.rows_affected() == 0 {
             return Ok(false);
         }
+        let tags = serde_json::to_value(&rec.tags)?;
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created) VALUES ($1,$2,$3,$4) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4",
+            "INSERT INTO links (id, url, expiry, created, tags) VALUES ($1,$2,$3,$4,$5) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5",
         )
         .bind(id as i64)
         .bind(&rec.url)
         .bind(rec.expiry.map(|v| v as i64))
         .bind(rec.created as i64)
+        .bind(&tags)
         .execute(&mut *tx)
         .await
         .map_err(StoreError::backend)?;
@@ -264,12 +275,17 @@ impl Store for PostgresStore {
         &self,
         after: Option<u64>,
         limit: usize,
+        tag: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
+        let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = sqlx::query(
-            "SELECT id, url, expiry, created FROM links \
-             WHERE ($1::bigint IS NULL OR id > $1) ORDER BY id LIMIT $2",
+            "SELECT id, url, expiry, created, tags FROM links \
+             WHERE ($1::bigint IS NULL OR id > $1) \
+               AND ($2::jsonb IS NULL OR tags @> $2) \
+             ORDER BY id LIMIT $3",
         )
         .bind(after.map(|a| a as i64))
+        .bind(&tag_json)
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await
@@ -282,17 +298,21 @@ impl Store for PostgresStore {
         q: &str,
         after: Option<u64>,
         limit: usize,
+        tag: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let pattern = format!("%{}%", like_escape(q));
+        let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = sqlx::query(
-            "SELECT DISTINCT l.id, l.url, l.expiry, l.created \
+            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags \
              FROM links l LEFT JOIN aliases a ON a.id = l.id \
              WHERE ($1::bigint IS NULL OR l.id > $1) \
                AND (l.url ILIKE $2 OR a.alias ILIKE $2) \
-             ORDER BY l.id LIMIT $3",
+               AND ($3::jsonb IS NULL OR l.tags @> $3) \
+             ORDER BY l.id LIMIT $4",
         )
         .bind(after.map(|a| a as i64))
         .bind(&pattern)
+        .bind(&tag_json)
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await
@@ -391,6 +411,18 @@ impl Store for PostgresStore {
             .map_err(StoreError::backend)?;
         let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
         Ok(id as u64)
+    }
+
+    async fn list_tags(&self) -> Result<Vec<String>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT jsonb_array_elements_text(tags) AS tag FROM links ORDER BY tag",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        rows.iter()
+            .map(|r| r.try_get::<String, _>("tag").map_err(StoreError::backend))
+            .collect()
     }
 }
 

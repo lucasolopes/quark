@@ -5,6 +5,7 @@ import type { CreateLinkRequest, CreateWebhookRequest, PatchLinkRequest, PatchWe
 const LINKS_QUERY_KEY = ["links"];
 const BLOCKLIST_QUERY_KEY = ["blocklist"];
 const WEBHOOKS_QUERY_KEY = ["webhooks"];
+const TAGS_QUERY_KEY = ["tags"];
 
 /**
  * The application's single TanStack Query client. `retry: false` because a
@@ -37,43 +38,62 @@ const LINKS_PAGE_SIZE = 50;
  * 501 either, which is a final response, not a transient error). A custom
  * `retry` here would leak into the call without `q` too, since it's the same
  * hook.
+ *
+ * `tag` filters the list server-side (`GET /admin/links?tag=`); it's part of
+ * the query key alongside `q` so switching the tag filter refetches instead
+ * of reusing a stale cache entry.
  */
-export function useLinks(q?: string, options: { enabled?: boolean } = {}) {
+export function useLinks(q?: string, tag?: string, options: { enabled?: boolean } = {}) {
   const term = q?.trim() ?? "";
+  const tagTerm = tag?.trim() ?? "";
   return useInfiniteQuery({
-    queryKey: [...LINKS_QUERY_KEY, term],
+    queryKey: [...LINKS_QUERY_KEY, term, tagTerm],
     queryFn: ({ pageParam }) =>
-      api.listLinks({ after: pageParam ?? undefined, limit: LINKS_PAGE_SIZE, q: term || undefined }),
+      api.listLinks({
+        after: pageParam ?? undefined,
+        limit: LINKS_PAGE_SIZE,
+        q: term || undefined,
+        tag: tagTerm || undefined,
+      }),
     initialPageParam: null as number | null,
     getNextPageParam: (lastPage) => (lastPage.links.length < LINKS_PAGE_SIZE ? undefined : lastPage.next_after),
     enabled: options.enabled,
   });
 }
 
-/** Creates a link; on success invalidates `useLinks` to reflect the new record in the list. */
+/** Creates a link; on success invalidates `useLinks` and `useTags` (a new tag may now exist). */
 export function useCreateLink() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (body: CreateLinkRequest) => api.createLink(body),
-    onSuccess: () => { void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY }); },
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY });
+      void client.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+    },
   });
 }
 
-/** Updates url and/or ttl of an existing link; on success invalidates `useLinks`. */
+/** Updates url/ttl/tags of an existing link; on success invalidates `useLinks` and `useTags`. */
 export function usePatchLink() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: ({ code, body }: { code: string; body: PatchLinkRequest }) => api.patchLink(code, body),
-    onSuccess: () => { void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY }); },
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY });
+      void client.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+    },
   });
 }
 
-/** Deletes a link; on success invalidates `useLinks`. */
+/** Deletes a link; on success invalidates `useLinks` and `useTags` (its tags may no longer be in use). */
 export function useDeleteLink() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (code: string) => api.deleteLink(code),
-    onSuccess: () => { void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY }); },
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY });
+      void client.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+    },
   });
 }
 
@@ -83,6 +103,14 @@ export function useStats(code: string) {
     queryKey: ["stats", code],
     queryFn: () => api.getStats(code),
     enabled: Boolean(code),
+  });
+}
+
+/** Distinct set of tags in use across all links, for the Links screen's tag filter. */
+export function useTags() {
+  return useQuery({
+    queryKey: TAGS_QUERY_KEY,
+    queryFn: () => api.listTags(),
   });
 }
 

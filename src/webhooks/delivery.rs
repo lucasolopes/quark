@@ -428,6 +428,7 @@ mod tests {
             &self,
             _after: Option<u64>,
             _limit: usize,
+            _tag: Option<&str>,
         ) -> Result<Vec<(u64, Record)>, StoreError> {
             unimplemented!()
         }
@@ -436,7 +437,11 @@ mod tests {
             _q: &str,
             _after: Option<u64>,
             _limit: usize,
+            _tag: Option<&str>,
         ) -> Result<Vec<(u64, Record)>, StoreError> {
+            unimplemented!()
+        }
+        async fn list_tags(&self) -> Result<Vec<String>, StoreError> {
             unimplemented!()
         }
         async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError> {

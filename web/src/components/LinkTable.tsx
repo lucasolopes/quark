@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { LinkQrDialog } from "@/components/LinkQrDialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -29,6 +30,9 @@ const PUBLIC_BASE = (
 function shortUrl(code: string): string {
   return `${PUBLIC_BASE}/${code}`;
 }
+
+/** Max tag badges shown per row before collapsing the rest into a "+k" badge. */
+const MAX_VISIBLE_TAGS = 3;
 
 interface LinkTableProps {
   links: Link[];
@@ -80,6 +84,26 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
       accessorKey: "alias",
       header: t("linkTable.columnAlias"),
       cell: ({ row }) => row.original.alias || <span className="text-muted-foreground">—</span>,
+    },
+    {
+      id: "tags",
+      header: t("linkTable.columnTags"),
+      cell: ({ row }) => {
+        const tags = row.original.tags ?? [];
+        if (tags.length === 0) return <span className="text-muted-foreground">—</span>;
+        const visible = tags.slice(0, MAX_VISIBLE_TAGS);
+        const hiddenCount = tags.length - visible.length;
+        return (
+          <div className="flex flex-wrap gap-1">
+            {visible.map((tag) => (
+              <Badge key={tag} variant="secondary">
+                {tag}
+              </Badge>
+            ))}
+            {hiddenCount > 0 && <Badge variant="outline">{t("linkTable.moreTags", { count: hiddenCount })}</Badge>}
+          </div>
+        );
+      },
     },
     {
       accessorKey: "created",

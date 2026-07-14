@@ -5,10 +5,12 @@ export interface Link {
   url: string;
   expiry: number | null;
   created: number;
+  tags: string[];
 }
 export interface ListLinksResponse { links: Link[]; next_after: number | null; }
-export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; }
+export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; }
 export interface CreateLinkResponse { code: string; url: string; }
+export interface TagsResponse { tags: string[]; }
 export interface ClickEvent {
   id: number; ts: number;
   referer?: string | null; country?: string | null; user_agent?: string | null; city?: string | null;
@@ -60,3 +62,4 @@ export interface PatchWebhookRequest { url?: string; events?: WebhookEvent[]; ac
 export interface TestWebhookResponse { delivered: boolean; status: number; }
 export interface ImportFailure { index: number; url: string; reason: string; }
 export interface ImportSummary { imported: number; failed: ImportFailure[]; }
+export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; }

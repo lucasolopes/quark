@@ -1,7 +1,7 @@
 use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{device_from_ua, AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
-use crate::store::{Record, Store, StoreError};
+use crate::store::{normalize_tags, Record, Store, StoreError};
 use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{self, EventType, SubscriptionKind, WebhookEvent, WebhookSubscription};
 use crate::{codec, now, permute};
@@ -40,6 +40,7 @@ pub struct CreateReq {
     url: String,
     alias: Option<String>,
     ttl: Option<u64>,
+    tags: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -222,6 +223,7 @@ pub async fn create_link_core(
     url: &str,
     alias: Option<&str>,
     ttl: Option<u64>,
+    tags: Vec<String>,
     headers: &HeaderMap,
 ) -> Result<String, CreateError> {
     if !is_valid_url(url) {
@@ -248,6 +250,7 @@ pub async fn create_link_core(
         url: url.to_string(),
         expiry,
         created: now(),
+        tags,
     };
 
     if let Some(alias) = alias {
@@ -356,7 +359,16 @@ async fn create(
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
     }
-    match create_link_core(&st, &req.url, req.alias.as_deref(), req.ttl, &headers).await {
+    match create_link_core(
+        &st,
+        &req.url,
+        req.alias.as_deref(),
+        req.ttl,
+        normalize_tags(req.tags.clone().unwrap_or_default()),
+        &headers,
+    )
+    .await
+    {
         Ok(code) => Json(CreateResp { code, url: req.url }).into_response(),
         Err(err) => create_error_response(err),
     }
@@ -405,7 +417,16 @@ async fn admin_import(
     let mut imported = 0usize;
     let mut failed = Vec::new();
     for (index, row) in rows.into_iter().enumerate() {
-        match create_link_core(&st, &row.url, row.alias.as_deref(), row.ttl, &headers).await {
+        match create_link_core(
+            &st,
+            &row.url,
+            row.alias.as_deref(),
+            row.ttl,
+            Vec::new(),
+            &headers,
+        )
+        .await
+        {
             Ok(_) => imported += 1,
             Err(err) => failed.push(ImportFailure {
                 index,
@@ -678,6 +699,7 @@ struct ListParams {
     after: Option<u64>,
     limit: Option<usize>,
     q: Option<String>,
+    tag: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -689,6 +711,7 @@ struct LinkRow {
     url: String,
     expiry: Option<u64>,
     created: u64,
+    tags: Vec<String>,
 }
 
 async fn admin_links_list(
@@ -704,13 +727,19 @@ async fn admin_links_list(
         .unwrap_or(DEFAULT_PAGE_LIMIT)
         .clamp(1, MAX_PAGE_LIMIT);
     let q = p.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let tag = p
+        .tag
+        .as_deref()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+    let tag = tag.as_deref();
     let links = match q {
-        Some(term) => match st.store.search_links(term, p.after, limit).await {
+        Some(term) => match st.store.search_links(term, p.after, limit, tag).await {
             Ok(l) => l,
             Err(StoreError::Unsupported) => return StatusCode::NOT_IMPLEMENTED.into_response(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
-        None => match st.store.list_links(p.after, limit).await {
+        None => match st.store.list_links(p.after, limit, tag).await {
             Ok(l) => l,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
@@ -733,9 +762,22 @@ async fn admin_links_list(
             url: rec.url,
             expiry: rec.expiry,
             created: rec.created,
+            tags: rec.tags,
         })
         .collect();
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
+}
+
+/// `GET /admin/tags`: the distinct set of tags across all links, for the
+/// panel's filter control.
+async fn admin_tags_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    match st.store.list_tags().await {
+        Ok(tags) => Json(serde_json::json!({ "tags": tags })).into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
 }
 
 /// Resolves the code into (id, optional_alias). If the code is numeric, there's no
@@ -843,6 +885,21 @@ async fn admin_link_patch(
             }
         } else {
             return (StatusCode::BAD_REQUEST, "invalid ttl").into_response();
+        }
+    }
+    if let Some(t) = patch.get("tags") {
+        match t {
+            serde_json::Value::Array(items) => {
+                let mut raw = Vec::with_capacity(items.len());
+                for item in items {
+                    match item.as_str() {
+                        Some(s) => raw.push(s.to_string()),
+                        None => return (StatusCode::BAD_REQUEST, "invalid tags").into_response(),
+                    }
+                }
+                rec.tags = normalize_tags(raw);
+            }
+            _ => return (StatusCode::BAD_REQUEST, "invalid tags").into_response(),
         }
     }
     if st.store.put_link(id, &rec).await.is_err() {
@@ -1211,6 +1268,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             axum::routing::patch(admin_webhooks_patch).delete(admin_webhooks_delete),
         )
         .route("/admin/webhooks/:id/test", post(admin_webhooks_test))
+        .route("/admin/tags", get(admin_tags_list))
         .with_state(state);
 
     let app = if origins.is_empty() {

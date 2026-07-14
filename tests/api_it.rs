@@ -554,6 +554,136 @@ async fn admin_links_paginated_list() {
 }
 
 #[tokio::test]
+async fn create_with_tags_then_filter_by_tag() {
+    let app = app_admin("secret").await;
+    for (u, tags) in [
+        ("https://a.com", r#"["Rust", "Web"]"#),
+        ("https://b.com", r#"["web"]"#),
+        ("https://c.com", "[]"),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/")
+                    .header("content-type", "application/json")
+                    .header("x-admin-token", "secret")
+                    .body(Body::from(format!(r#"{{"url":"{u}","tags":{tags}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/links?tag=rust")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let links = v["links"].as_array().unwrap();
+    assert_eq!(links.len(), 1, "only the link tagged 'rust' matches");
+    assert_eq!(links[0]["url"], "https://a.com");
+    assert_eq!(links[0]["tags"], serde_json::json!(["rust", "web"]));
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/links?tag=RUST")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let links = v["links"].as_array().unwrap();
+    assert_eq!(
+        links.len(),
+        1,
+        "uppercase filter must match the lowercase stored tag"
+    );
+    assert_eq!(links[0]["url"], "https://a.com");
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/links?tag=web")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        v["links"].as_array().unwrap().len(),
+        2,
+        "a and b both have 'web'"
+    );
+}
+
+#[tokio::test]
+async fn admin_tags_returns_distinct_set() {
+    let app = app_admin("secret").await;
+    for (u, tags) in [
+        ("https://a.com", r#"["rust", "web"]"#),
+        ("https://b.com", r#"["web", "cli"]"#),
+    ] {
+        app.clone()
+            .oneshot(
+                Request::post("/")
+                    .header("content-type", "application/json")
+                    .header("x-admin-token", "secret")
+                    .body(Body::from(format!(r#"{{"url":"{u}","tags":{tags}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    let resp = app
+        .oneshot(
+            Request::get("/admin/tags")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let mut tags: Vec<String> = v["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t.as_str().unwrap().to_string())
+        .collect();
+    tags.sort();
+    assert_eq!(
+        tags,
+        vec!["cli".to_string(), "rust".to_string(), "web".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn admin_links_search_on_lmdb_returns_501() {
     let app = app_admin("secret").await;
     let resp = app
@@ -659,6 +789,39 @@ async fn admin_patch_link_updates_destination() {
         .unwrap();
     assert_eq!(r.status(), StatusCode::FOUND);
     assert_eq!(r.headers()["location"], "https://new.com");
+}
+
+#[tokio::test]
+async fn admin_patch_link_replaces_tags() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://tagged.com").await;
+    let r = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"tags":["Rust", "rust", " web "]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let r = app
+        .oneshot(
+            Request::get("/admin/links?limit=10")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let links = v["links"].as_array().unwrap();
+    assert_eq!(links[0]["tags"], serde_json::json!(["rust", "web"]));
 }
 
 #[tokio::test]

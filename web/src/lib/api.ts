@@ -5,6 +5,7 @@ import type {
   ListWebhooksResponse, CreateWebhookRequest, CreateWebhookResponse,
   PatchWebhookRequest, TestWebhookResponse,
   Stats, BlocklistResponse, PatchLinkRequest, ImportSummary,
+  Stats, BlocklistResponse, PatchLinkRequest, TagsResponse,
 } from "./types";
 
 /**
@@ -45,11 +46,12 @@ export const api = {
   async createLink(body: CreateLinkRequest): Promise<CreateLinkResponse> {
     return jsonOrThrow(await req("/", { method: "POST", body: JSON.stringify(body) }));
   },
-  async listLinks(params: { after?: number; limit?: number; q?: string } = {}): Promise<ListLinksResponse> {
+  async listLinks(params: { after?: number; limit?: number; q?: string; tag?: string } = {}): Promise<ListLinksResponse> {
     const sp = new URLSearchParams();
     if (params.after != null) sp.set("after", String(params.after));
     if (params.limit != null) sp.set("limit", String(params.limit));
     if (params.q && params.q.trim() !== "") sp.set("q", params.q.trim());
+    if (params.tag && params.tag.trim() !== "") sp.set("tag", params.tag.trim());
     const qs = sp.toString();
     return jsonOrThrow(await req(`/admin/links${qs ? `?${qs}` : ""}`));
   },
@@ -68,6 +70,9 @@ export const api = {
   },
   async listBlocked(): Promise<BlocklistResponse> {
     return jsonOrThrow(await req("/admin/blocklist"));
+  },
+  async listTags(): Promise<TagsResponse> {
+    return jsonOrThrow(await req("/admin/tags"));
   },
   async addBlocked(domain: string): Promise<void> {
     const res = await req("/admin/blocklist", { method: "POST", body: JSON.stringify({ domain }) });

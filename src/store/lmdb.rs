@@ -181,6 +181,7 @@ impl Store for LmdbStore {
         &self,
         after: Option<u64>,
         limit: usize,
+        tag: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let start = match after {
@@ -189,9 +190,18 @@ impl Store for LmdbStore {
         };
         let range = (start, Bound::Unbounded);
         let mut out = Vec::new();
-        for item in self.links.range(&rtxn, &range)?.take(limit) {
+        for item in self.links.range(&rtxn, &range)? {
             let (id, bytes) = item?;
-            out.push((id, serde_json::from_slice(bytes)?));
+            let rec: Record = serde_json::from_slice(bytes)?;
+            if let Some(t) = tag {
+                if !rec.tags.iter().any(|x| x == t) {
+                    continue;
+                }
+            }
+            out.push((id, rec));
+            if out.len() >= limit {
+                break;
+            }
         }
         Ok(out)
     }
@@ -201,6 +211,7 @@ impl Store for LmdbStore {
         _q: &str,
         _after: Option<u64>,
         _limit: usize,
+        _tag: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         Err(StoreError::Unsupported)
     }
@@ -269,6 +280,19 @@ impl Store for LmdbStore {
         self.meta.put(&mut wtxn, "next_webhook_id", &next)?;
         wtxn.commit()?;
         Ok(next)
+    }
+
+    async fn list_tags(&self) -> Result<Vec<String>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut set = std::collections::BTreeSet::new();
+        for item in self.links.iter(&rtxn)? {
+            let (_, bytes) = item?;
+            let rec: Record = serde_json::from_slice(bytes)?;
+            for t in rec.tags {
+                set.insert(t);
+            }
+        }
+        Ok(set.into_iter().collect())
     }
 }
 
@@ -464,7 +488,7 @@ mod tests {
     async fn search_links_is_unsupported_on_lmdb() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        let r = store.search_links("anything", None, 10).await;
+        let r = store.search_links("anything", None, 10, None).await;
         assert!(matches!(r, Err(StoreError::Unsupported)));
     }
 
@@ -476,6 +500,7 @@ mod tests {
             url: u.into(),
             expiry: None,
             created: 0,
+            tags: Vec::new(),
         };
         for id in 1..=5u64 {
             s.put_link(id, &rec(&format!("https://e{id}.com")))
@@ -486,12 +511,12 @@ mod tests {
             .await
             .unwrap();
 
-        let p1 = s.list_links(None, 3).await.unwrap();
+        let p1 = s.list_links(None, 3, None).await.unwrap();
         assert_eq!(
             p1.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![1, 2, 3]
         );
-        let p2 = s.list_links(Some(3), 3).await.unwrap();
+        let p2 = s.list_links(Some(3), 3, None).await.unwrap();
         assert_eq!(
             p2.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![4, 5, 10]
@@ -528,5 +553,37 @@ mod tests {
         assert_eq!(store.list_webhooks().await.unwrap().len(), 1);
         assert!(store.delete_webhook(id).await.unwrap());
         assert!(store.get_webhook(id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn tags_round_trip_and_filter_and_distinct() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let rec = |u: &str, tags: &[&str]| Record {
+            url: u.into(),
+            expiry: None,
+            created: 0,
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+        };
+        s.put_link(1, &rec("https://a.com", &["rust", "web"]))
+            .await
+            .unwrap();
+        s.put_link(2, &rec("https://b.com", &["web"]))
+            .await
+            .unwrap();
+        s.put_link(3, &rec("https://c.com", &[])).await.unwrap();
+
+        let got = s.get_link(1).await.unwrap().unwrap();
+        assert_eq!(got.tags, vec!["rust".to_string(), "web".to_string()]);
+
+        let filtered = s.list_links(None, 50, Some("rust")).await.unwrap();
+        assert_eq!(
+            filtered.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![1]
+        );
+
+        let mut tags = s.list_tags().await.unwrap();
+        tags.sort();
+        assert_eq!(tags, vec!["rust".to_string(), "web".to_string()]);
     }
 }

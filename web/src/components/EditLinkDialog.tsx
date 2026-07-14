@@ -15,6 +15,7 @@ import { ApiError } from "@/lib/api";
 import { isHttpUrl } from "@/lib/codeguard";
 import { isUnauthorized } from "@/lib/mutation-error";
 import { usePatchLink } from "@/lib/queries";
+import { formatTagsInput, parseTagsInput } from "@/lib/tags";
 import type { Link } from "@/lib/types";
 
 interface FormErrors {
@@ -39,6 +40,7 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
   const [url, setUrl] = useState(link.url);
   const [ttl, setTtl] = useState("");
   const [removeExpiry, setRemoveExpiry] = useState(false);
+  const [tagsInput, setTagsInput] = useState(formatTagsInput(link.tags ?? []));
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
 
@@ -83,6 +85,7 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
         body: {
           url: url.trim(),
           ...(removeExpiry ? { ttl: null } : ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
+          tags: parseTagsInput(tagsInput),
         },
       });
       toast.success(t("dialogs.edit.successToast"));
@@ -160,6 +163,19 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
                 />
                 {t("dialogs.edit.removeExpiryLabel")}
               </label>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="edit-link-tags" className="text-sm font-medium">
+                {t("dialogs.edit.tagsLabel")} <span className="text-muted-foreground">({t("dialogs.edit.tagsHint")})</span>
+              </label>
+              <Input
+                id="edit-link-tags"
+                type="text"
+                placeholder={t("dialogs.edit.tagsPlaceholder")}
+                value={tagsInput}
+                onChange={(e) => setTagsInput(e.target.value)}
+              />
             </div>
 
             {errors.form && (
