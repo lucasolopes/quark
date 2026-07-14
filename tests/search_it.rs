@@ -4,13 +4,12 @@ use serial_test::serial;
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
     let s = PostgresStore::open(&url).await.unwrap();
-    // limpa estado entre rodadas
     s.reset_for_tests().await.unwrap();
     Some(s)
 }
 
-/// Semeia links via `put_link`/`put_alias_and_link`. Retorna os ids alocados
-/// na mesma ordem de `links`. `alias` (quando `Some`) fica associado ao id.
+/// Seeds links via `put_link`/`put_alias_and_link`. Returns the allocated ids
+/// in the same order as `links`. `alias` (when `Some`) is associated with the id.
 async fn seed_links(s: &PostgresStore, links: &[(&str, Option<&str>)]) -> Vec<u64> {
     let mut ids = Vec::new();
     for (url, alias) in links {
@@ -33,13 +32,11 @@ async fn seed_links(s: &PostgresStore, links: &[(&str, Option<&str>)]) -> Vec<u6
     ids
 }
 
-// Semeia 3 links: github.com/rust-lang, example.com, docs.rs com alias "rust".
-// Busca "rust" casa por url (rust-lang) E por alias (o link com alias "rust").
 #[tokio::test]
 #[serial(pg)]
 async fn search_matches_url_and_alias() {
     let Some(store) = fresh().await else {
-        eprintln!("skip: sem QUARK_TEST_DATABASE_URL");
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let ids = seed_links(
@@ -47,7 +44,7 @@ async fn search_matches_url_and_alias() {
         &[
             ("https://github.com/rust-lang", None),
             ("https://example.com", None),
-            ("https://docs.rs", Some("rust")), // alias "rust", url NÃO contém rust
+            ("https://docs.rs", Some("rust")), // alias "rust", url does NOT contain rust
         ],
     )
     .await;
@@ -55,16 +52,18 @@ async fn search_matches_url_and_alias() {
     let urls: Vec<&str> = hits.iter().map(|(_, r)| r.url.as_str()).collect();
     assert!(
         urls.iter().any(|u| u.contains("github.com/rust-lang")),
-        "casa url"
+        "matches url"
     );
     assert!(
         hits.iter().any(|(id, _)| *id == ids[2]),
-        "casa alias 'rust'"
+        "matches alias 'rust'"
     );
-    assert!(!urls.contains(&"https://example.com"), "não casa example");
+    assert!(
+        !urls.contains(&"https://example.com"),
+        "does not match example"
+    );
 }
 
-// Curinga literal: "%" no termo NÃO vira wildcard SQL.
 #[tokio::test]
 #[serial(pg)]
 async fn search_escapes_wildcards() {
@@ -83,15 +82,14 @@ async fn search_escapes_wildcards() {
     let urls: Vec<&str> = hits.iter().map(|(_, r)| r.url.as_str()).collect();
     assert!(
         urls.iter().any(|u| u.contains("50%off")),
-        "casa o literal 50%off"
+        "matches the literal 50%off"
     );
     assert!(
         !urls.iter().any(|u| u.contains("504")),
-        "NÃO casa 504 (% não é wildcard)"
+        "does NOT match 504 (% is not a wildcard)"
     );
 }
 
-// Case-insensitive: termo em caixa alta casa url/alias em minúsculas (ILIKE).
 #[tokio::test]
 #[serial(pg)]
 async fn search_is_case_insensitive() {
@@ -106,20 +104,18 @@ async fn search_is_case_insensitive() {
         ],
     )
     .await;
-    // "RUST" (caixa alta) casa a url minúscula rust-lang E o alias minúsculo "rust".
     let hits = store.search_links("RUST", None, 50).await.unwrap();
     assert!(
         hits.iter()
             .any(|(_, r)| r.url.contains("github.com/rust-lang")),
-        "casa url em caixa diferente"
+        "matches url in different case"
     );
     assert!(
         hits.iter().any(|(id, _)| *id == ids[1]),
-        "casa alias em caixa diferente"
+        "matches alias in different case"
     );
 }
 
-// Keyset: after corta os ids <= after.
 #[tokio::test]
 #[serial(pg)]
 async fn search_keyset_pagination() {
@@ -141,7 +137,7 @@ async fn search_keyset_pagination() {
     let page2 = store.search_links("alfa", Some(after), 2).await.unwrap();
     assert!(
         page2.iter().all(|(id, _)| *id > after),
-        "página 2 só tem id > after"
+        "page 2 only has id > after"
     );
     assert!(page2.iter().any(|(id, _)| *id == ids[2]));
 }

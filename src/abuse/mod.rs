@@ -4,22 +4,20 @@ pub mod ratelimit;
 use std::collections::HashSet;
 use std::net::IpAddr;
 
-/// Host da URL em minúsculas, sem porta. `None` se não parsear ou não tiver host.
+/// Lowercased URL host, without port. `None` if it doesn't parse or has no host.
 pub fn extract_host(url: &str) -> Option<String> {
     let u = url::Url::parse(url).ok()?;
     u.host_str().map(|h| h.to_ascii_lowercase())
 }
 
-/// `true` para destinos de rede interna que um encurtador público não deve encurtar:
-/// `localhost`/`*.localhost`, ou IP literal loopback/privado/link-local/unspecified.
-/// NÃO resolve DNS — só decide sobre IP literal e nomes óbvios.
+/// `true` for internal network destinations that a public shortener should not shorten:
+/// `localhost`/`*.localhost`, or a literal loopback/private/link-local/unspecified IP.
+/// Does NOT resolve DNS — it only decides on literal IPs and obvious names.
 pub fn is_internal_host(host: &str) -> bool {
     let h = host.to_ascii_lowercase();
     if h == "localhost" || h.ends_with(".localhost") {
         return true;
     }
-    // IPv6 literal em URL vem entre colchetes; url crate já os remove no host_str,
-    // mas normalizamos por segurança.
     let h_ip = h.trim_start_matches('[').trim_end_matches(']');
     match h_ip.parse::<IpAddr>() {
         Ok(IpAddr::V4(v4)) => {
@@ -30,7 +28,6 @@ pub fn is_internal_host(host: &str) -> bool {
                 || v4.is_broadcast()
         }
         Ok(IpAddr::V6(v6)) => {
-            // IPv4-mapeado (::ffff:a.b.c.d): reavalia como IPv4 (loopback/privado disfarçado)
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return v4.is_private()
                     || v4.is_loopback()
@@ -39,16 +36,16 @@ pub fn is_internal_host(host: &str) -> bool {
                     || v4.is_broadcast();
             }
             let seg = v6.segments();
-            let ula = (seg[0] & 0xfe00) == 0xfc00; // fc00::/7
-            let link_local = (seg[0] & 0xffc0) == 0xfe80; // fe80::/10
+            let ula = (seg[0] & 0xfe00) == 0xfc00;
+            let link_local = (seg[0] & 0xffc0) == 0xfe80;
             v6.is_loopback() || v6.is_unspecified() || ula || link_local
         }
-        Err(_) => false, // nome não-IP e não-localhost: não é "interno" por si só
+        Err(_) => false,
     }
 }
 
-/// `true` se `host` ou qualquer domínio-pai está no conjunto (case-insensitive).
-/// Ex.: set={evil.com} bloqueia evil.com, x.evil.com, a.b.evil.com.
+/// `true` if `host` or any parent domain is in the set (case-insensitive).
+/// E.g.: set={evil.com} blocks evil.com, x.evil.com, a.b.evil.com.
 pub fn host_in_blocklist(host: &str, set: &HashSet<String>) -> bool {
     let h = host.to_ascii_lowercase();
     let mut rest = h.as_str();
@@ -69,7 +66,7 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn extract_host_normaliza_e_tira_porta() {
+    fn extract_host_normalizes_and_strips_port() {
         assert_eq!(
             extract_host("https://Example.COM/a/b?x=1"),
             Some("example.com".into())
@@ -80,15 +77,11 @@ mod tests {
             Some("127.0.0.1".into())
         );
         assert_eq!(extract_host("not a url"), None);
-        // "http:///semhost" NÃO cai aqui: pela WHATWG URL spec (special authority
-        // ignore slashes), a `url` crate 2.5.8 trata a barra extra como parte do
-        // marcador de authority e lê "semhost" como host (path fica "/"). Um caso
-        // real de URL válida sem host é um scheme sem authority, ex. `file:///`.
         assert_eq!(extract_host("file:///semhost"), None);
     }
 
     #[test]
-    fn is_internal_host_pega_loopback_privado_localhost() {
+    fn is_internal_host_catches_loopback_private_localhost() {
         for h in [
             "localhost",
             "foo.localhost",
@@ -100,19 +93,19 @@ mod tests {
             "0.0.0.0",
             "::1",
         ] {
-            assert!(is_internal_host(h), "deveria bloquear {h}");
+            assert!(is_internal_host(h), "should block {h}");
         }
     }
 
     #[test]
-    fn is_internal_host_libera_publicos() {
-        for h in ["example.com", "8.8.8.8", "1.1.1.1", "meusite.com.br"] {
-            assert!(!is_internal_host(h), "não deveria bloquear {h}");
+    fn is_internal_host_allows_public_hosts() {
+        for h in ["example.com", "8.8.8.8", "1.1.1.1", "mysite.com.br"] {
+            assert!(!is_internal_host(h), "should not block {h}");
         }
     }
 
     #[test]
-    fn is_internal_host_pega_ipv6_interno_e_mapeado() {
+    fn is_internal_host_catches_internal_and_mapped_ipv6() {
         for h in [
             "::1",
             "::",
@@ -121,24 +114,24 @@ mod tests {
             "[::ffff:127.0.0.1]",
             "[::ffff:10.0.0.1]",
         ] {
-            assert!(is_internal_host(h), "deveria bloquear {h}");
+            assert!(is_internal_host(h), "should block {h}");
         }
     }
 
     #[test]
-    fn is_internal_host_libera_ipv6_publico() {
+    fn is_internal_host_allows_public_ipv6() {
         assert!(!is_internal_host("[2606:4700::1111]"));
-        assert!(!is_internal_host("[::ffff:8.8.8.8]")); // publico mapeado
+        assert!(!is_internal_host("[::ffff:8.8.8.8]"));
     }
 
     #[test]
-    fn host_in_blocklist_casa_dominio_e_subdominio() {
+    fn host_in_blocklist_matches_domain_and_subdomain() {
         let mut set = HashSet::new();
         set.insert("evil.com".to_string());
         assert!(host_in_blocklist("evil.com", &set));
         assert!(host_in_blocklist("x.evil.com", &set));
         assert!(host_in_blocklist("a.b.evil.com", &set));
-        assert!(host_in_blocklist("EVIL.COM", &set)); // case-insensitive
+        assert!(host_in_blocklist("EVIL.COM", &set));
         assert!(!host_in_blocklist("eviltwin.com", &set));
         assert!(!host_in_blocklist("evil.com.br", &set));
     }

@@ -1,17 +1,34 @@
 use crate::analytics::{Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::store::{Record, Store, StoreError};
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{PgPool, Row};
 
-/// Chave do pg_advisory_lock que serializa a criação idempotente do schema entre instâncias.
+/// Key of the pg_advisory_lock that serializes idempotent schema creation across instances.
 const QUARK_SCHEMA_LOCK_ID: i64 = 727271;
 
-/// Escapa os curingas do `LIKE`/`ILIKE` (escape char padrão = `\`) para que o
-/// termo do usuário seja tratado literalmente. Ordem importa: escapa a `\` antes.
+/// Escapes `LIKE`/`ILIKE` wildcards (default escape char = `\`) so that the
+/// user's term is treated literally. Order matters: escape `\` first.
 fn like_escape(q: &str) -> String {
     q.replace('\\', "\\\\")
         .replace('%', "\\%")
         .replace('_', "\\_")
+}
+
+/// Maps a `links` row (id, url, expiry, created) into `(id, Record)`.
+/// Shared by `list_links` and `search_links`, which select the same columns.
+fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
+    let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+    let url: String = r.try_get("url").map_err(StoreError::backend)?;
+    let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
+    let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    Ok((
+        id as u64,
+        Record {
+            url,
+            expiry: expiry.map(|v| v as u64),
+            created: created as u64,
+        },
+    ))
 }
 
 pub struct PostgresStore {
@@ -30,11 +47,11 @@ impl PostgresStore {
         Ok(s)
     }
 
-    /// Cria o schema de forma idempotente. `CREATE TABLE/SEQUENCE IF NOT EXISTS`
-    /// ainda pode colidir sob concorrência (várias conexões checam "não existe"
-    /// e tentam criar ao mesmo tempo, batendo em unique constraints do catálogo
-    /// do Postgres) — por isso serializamos com um advisory lock de sessão numa
-    /// única conexão antes de rodar o DDL.
+    /// Creates the schema idempotently. `CREATE TABLE/SEQUENCE IF NOT EXISTS`
+    /// can still collide under concurrency (several connections check "doesn't exist"
+    /// and try to create at the same time, hitting the Postgres catalog's unique
+    /// constraints) — so we serialize with a session advisory lock on a
+    /// single connection before running the DDL.
     async fn init_schema(&self) -> Result<(), StoreError> {
         let mut conn = self.pool.acquire().await.map_err(StoreError::backend)?;
         sqlx::query("SELECT pg_advisory_lock($1)")
@@ -70,7 +87,7 @@ impl PostgresStore {
         result
     }
 
-    /// Uso em testes: zera todo o estado.
+    /// Used in tests: resets all state.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
             "TRUNCATE links, aliases, stats, events",
@@ -163,7 +180,6 @@ impl Store for PostgresStore {
         .await
         .map_err(StoreError::backend)?;
         if res.rows_affected() == 0 {
-            // alias já existe -> rollback (drop) e false
             return Ok(false);
         }
         sqlx::query(
@@ -228,22 +244,7 @@ impl Store for PostgresStore {
         .fetch_all(&self.pool)
         .await
         .map_err(StoreError::backend)?;
-        let mut out = Vec::new();
-        for r in rows {
-            let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
-            let url: String = r.try_get("url").map_err(StoreError::backend)?;
-            let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
-            let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
-            out.push((
-                id as u64,
-                Record {
-                    url,
-                    expiry: expiry.map(|v| v as u64),
-                    created: created as u64,
-                },
-            ));
-        }
-        Ok(out)
+        rows.iter().map(row_to_link).collect()
     }
 
     async fn search_links(
@@ -266,22 +267,7 @@ impl Store for PostgresStore {
         .fetch_all(&self.pool)
         .await
         .map_err(StoreError::backend)?;
-        let mut out = Vec::new();
-        for r in rows {
-            let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
-            let url: String = r.try_get("url").map_err(StoreError::backend)?;
-            let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
-            let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
-            out.push((
-                id as u64,
-                Record {
-                    url,
-                    expiry: expiry.map(|v| v as u64),
-                    created: created as u64,
-                },
-            ));
-        }
-        Ok(out)
+        rows.iter().map(row_to_link).collect()
     }
 
     async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError> {
@@ -330,17 +316,11 @@ impl AnalyticsSink for PostgresStore {
         }
         let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
         for (id, evs) in by_id {
-            // Serializa read-modify-write concorrente sobre o mesmo id entre instâncias
-            // (multi-node): sem isso, dois workers podem ler o mesmo snapshot de agg/recent,
-            // recomputar e o segundo commit sobrescreve o primeiro (lost update). O lock
-            // é escopado à transação (libera em commit/rollback) e funciona mesmo quando
-            // as linhas de stats/events ainda não existem (diferente de SELECT ... FOR UPDATE).
             sqlx::query("SELECT pg_advisory_xact_lock($1)")
                 .bind(id as i64)
                 .execute(&mut *tx)
                 .await
                 .map_err(StoreError::backend)?;
-            // agregados
             let row = sqlx::query("SELECT agg FROM stats WHERE id=$1")
                 .bind(id as i64)
                 .fetch_optional(&mut *tx)
@@ -365,7 +345,6 @@ impl AnalyticsSink for PostgresStore {
             .execute(&mut *tx)
             .await
             .map_err(StoreError::backend)?;
-            // eventos crus (ring)
             let row = sqlx::query("SELECT recent FROM events WHERE id=$1")
                 .bind(id as i64)
                 .fetch_optional(&mut *tx)

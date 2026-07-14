@@ -49,10 +49,10 @@ pub struct Stats {
     pub recent: Vec<ClickEvent>,
 }
 
-/// Quantidade máxima de eventos crus retidos por id (retenção circular).
+/// Maximum number of raw events retained per id (circular retention).
 pub const EVENTS_MAX: usize = 1000;
 
-/// Heurística leve de device a partir do User-Agent (sem dep externa).
+/// Lightweight device heuristic from the User-Agent (no external dep).
 pub fn device_from_ua(ua: Option<&str>) -> &'static str {
     match ua {
         Some(s) => {
@@ -73,24 +73,23 @@ pub fn device_from_ua(ua: Option<&str>) -> &'static str {
     }
 }
 
-/// YYYY-MM-DD (UTC) a partir de epoch secs, via cálculo de dias (sem chrono).
+/// YYYY-MM-DD (UTC) from epoch secs, via day arithmetic (no chrono).
 pub fn day_bucket(ts: u64) -> String {
-    let days = (ts / 86_400) as i64; // dias desde 1970-01-01
+    let days = (ts / 86_400) as i64;
     let (y, m, d) = civil_from_days(days);
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-// Algoritmo de Howard Hinnant (days -> Y/M/D proléptico gregoriano).
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
     let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
@@ -100,11 +99,12 @@ pub trait AnalyticsSink: Send + Sync + 'static {
     async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError>;
 }
 
-/// Tamanho de lote que dispara flush imediato (além do timer de 5s).
+/// Batch size that triggers an immediate flush (in addition to the 5s timer).
 pub const BATCH: usize = 500;
 
-/// Worker de fundo: acumula `ClickEvent`s do canal e faz flush no sink quando
-/// o buffer atinge `BATCH`, a cada 5s, ou quando o canal fecha (drena e sai).
+/// Background worker: accumulates `ClickEvent`s from the channel and flushes
+/// to the sink when the buffer reaches `BATCH`, every 5s, or when the channel
+/// closes (drains and exits).
 pub fn spawn_worker(
     mut rx: Receiver<ClickEvent>,
     sink: Arc<dyn AnalyticsSink>,
@@ -124,7 +124,6 @@ pub fn spawn_worker(
                             }
                         }
                         None => {
-                            // canal fechado: drena o resto e encerra
                             flush(&sink, &mut buf).await;
                             break;
                         }
@@ -166,9 +165,8 @@ mod tests {
     }
 
     #[test]
-    fn agrega_total_dia_pais_device() {
+    fn aggregates_total_day_country_device() {
         let mut a = Aggregates::default();
-        // 2026-07-12 e 2026-07-13 (epoch secs aproximados; day_bucket deriva a data)
         a.apply(&ev(1, 1_752_300_000, "BR", "Mozilla/5.0 (iPhone)"));
         a.apply(&ev(1, 1_752_300_050, "BR", "Mozilla/5.0 (Windows NT 10.0)"));
         a.apply(&ev(1, 1_752_400_000, "US", "curl/8.0"));
@@ -184,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn device_heuristica() {
+    fn device_heuristic() {
         assert_eq!(
             device_from_ua(Some("Mozilla/5.0 (iPhone; CPU iPhone OS)")),
             "Mobile"
@@ -206,14 +204,14 @@ mod tests {
     }
 
     #[test]
-    fn day_bucket_datas_conhecidas() {
+    fn day_bucket_known_dates() {
         assert_eq!(day_bucket(0), "1970-01-01");
-        assert_eq!(day_bucket(1_735_689_600), "2025-01-01"); // epoch de 2025-01-01 00:00 UTC
+        assert_eq!(day_bucket(1_735_689_600), "2025-01-01");
         assert_eq!(day_bucket(1_735_689_600 + 86_400), "2025-01-02");
     }
 
     #[tokio::test]
-    async fn worker_drena_e_grava_ao_fechar_canal() {
+    async fn worker_drains_and_writes_on_channel_close() {
         let dir = tempfile::tempdir().unwrap();
         let (_store, sink) = crate::store::open_backends(dir.path()).await.unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(1000);
@@ -230,7 +228,7 @@ mod tests {
             .await
             .unwrap();
         }
-        drop(tx); // fecha o canal → worker drena, faz flush e encerra
+        drop(tx);
         handle.await.unwrap();
 
         let s = sink.stats(5).await.unwrap().unwrap();
@@ -239,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn first_ts_lida_com_epoch_zero() {
+    fn first_ts_handles_epoch_zero() {
         let mut a = Aggregates::default();
         a.apply(&ClickEvent {
             id: 1,
@@ -255,7 +253,7 @@ mod tests {
             country: None,
             user_agent: None,
         });
-        assert_eq!(a.first_ts, 0); // epoch 0 é o menor/primeiro — não pode ser sobrescrito
+        assert_eq!(a.first_ts, 0);
         assert_eq!(a.last_ts, 5_000_000_000);
     }
 }

@@ -10,10 +10,10 @@ pub const BREAKER_THRESHOLD: u32 = 5;
 pub const BREAKER_COOLDOWN_SECS: u64 = 30;
 pub const L1_TTL_SECS: u64 = 60;
 pub const L2_TTL_SECS: u64 = 3600;
-/// Timeout por operação de L2: um Valkey que aceita a conexão mas para de
-/// responder (sobrecarga/black-hole/pausa) nunca pode travar o redirect —
-/// isso quebraria o invariante sagrado. Um timeout conta como falha pro
-/// breaker, igual a um `Err` de tier.
+/// Timeout per L2 operation: a Valkey that accepts the connection but stops
+/// responding (overload/black-hole/pause) must never block the redirect —
+/// that would break the sacred invariant. A timeout counts as a failure for
+/// the breaker, same as a tier `Err`.
 pub const L2_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
 
 #[derive(Debug)]
@@ -25,9 +25,9 @@ impl std::fmt::Display for TierError {
 }
 impl std::error::Error for TierError {}
 
-/// Camada L2 (rede) plugável. Implementada por `ValkeyTier` (Valkey/Redis) e
-/// pelos tiers fake dos testes. Erros de tier nunca propagam pro chamador: o
-/// `Cache::get` os registra no `Breaker` e cai pro store.
+/// Pluggable L2 (network) layer. Implemented by `ValkeyTier` (Valkey/Redis) and
+/// by the fake tiers in the tests. Tier errors never propagate to the caller:
+/// `Cache::get` records them in the `Breaker` and falls back to the store.
 #[async_trait::async_trait]
 pub trait CacheTier: Send + Sync + 'static {
     async fn get(&self, id: u64) -> Result<Option<Record>, TierError>;
@@ -35,19 +35,19 @@ pub trait CacheTier: Send + Sync + 'static {
     async fn invalidate(&self, id: u64) -> Result<(), TierError>;
 }
 
-/// TTL efetivo do L2 pra um registro: capado pelo TTL default e pelo tempo
-/// restante até o expiry do link (não faz sentido cachear além da validade).
+/// Effective L2 TTL for a record: capped by the default TTL and by the time
+/// remaining until the link's expiry (no point caching past validity).
 pub fn l2_ttl(rec: &Record, now: u64, l2_ttl_secs: u64) -> u64 {
     match rec.expiry {
         Some(e) if e > now => (e - now).min(l2_ttl_secs),
-        Some(_) => 0, // já expirado (não deveria chegar aqui, mas total)
+        Some(_) => 0,
         None => l2_ttl_secs,
     }
 }
 
-/// Circuit breaker simples via atomics (sem locks): abre após
-/// `BREAKER_THRESHOLD` falhas consecutivas, volta a permitir (half-open)
-/// depois de `BREAKER_COOLDOWN_SECS`. Uma falha no half-open reabre.
+/// Simple circuit breaker via atomics (no locks): opens after
+/// `BREAKER_THRESHOLD` consecutive failures, allows traffic again (half-open)
+/// after `BREAKER_COOLDOWN_SECS`. A failure while half-open reopens it.
 struct Breaker {
     failures: AtomicU32,
     opened_at: AtomicU64,
@@ -59,13 +59,12 @@ impl Breaker {
             opened_at: AtomicU64::new(0),
         }
     }
-    /// Deve consultar o L2 agora?
+    /// Should the L2 be queried now?
     fn allow(&self, now: u64) -> bool {
         let opened = self.opened_at.load(Ordering::Relaxed);
         if opened == 0 {
-            return true; // fechado
+            return true;
         }
-        // aberto: só permite (half-open) após o cooldown
         now.saturating_sub(opened) >= BREAKER_COOLDOWN_SECS
     }
     fn record_success(&self) {
@@ -75,10 +74,6 @@ impl Breaker {
     fn record_failure(&self, now: u64) {
         let f = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
         if f >= BREAKER_THRESHOLD {
-            // Re-arma o cooldown a cada falha no/acima do threshold: uma
-            // probe de half-open que falha reabre o breaker por mais
-            // BREAKER_COOLDOWN_SECS, em vez de deixar `allow()` liberar
-            // pra sempre depois do primeiro cooldown.
             self.opened_at.store(now, Ordering::Relaxed);
         }
     }
@@ -128,12 +123,10 @@ impl Cache {
     }
 
     pub async fn get(&self, id: u64) -> Result<Option<Record>, StoreError> {
-        // L1
         if let Some(rec) = self.hot.get(&id) {
             return Ok(Some(rec));
         }
         let n = now();
-        // L2 (best-effort, protegido por breaker; erro nunca propaga)
         let mut l2_failed_this_request = false;
         if let Some(l2) = &self.l2 {
             if self.breaker.allow(n) {
@@ -146,25 +139,22 @@ impl Cache {
                     Ok(Ok(None)) => {
                         self.breaker.record_success();
                     }
-                    Ok(Err(_)) | Err(_ /* Elapsed */) => {
+                    Ok(Err(_)) | Err(_) => {
                         self.breaker.record_failure(n);
                         l2_failed_this_request = true;
                     }
                 }
             }
         }
-        // store
         match self.store.get_link(id).await? {
             Some(rec) => {
-                // Não tenta o L2.set se ele já falhou nesta mesma requisição
-                // (evita martelar um L2 que acabamos de ver caído).
                 if let Some(l2) = &self.l2 {
                     if !l2_failed_this_request && self.breaker.allow(n) {
                         let ttl = l2_ttl(&rec, n, self.l2_ttl_secs);
                         if ttl > 0 {
                             match tokio::time::timeout(L2_OP_TIMEOUT, l2.set(id, &rec, ttl)).await {
                                 Ok(Ok(())) => self.breaker.record_success(),
-                                Ok(Err(_)) | Err(_ /* Elapsed */) => self.breaker.record_failure(n),
+                                Ok(Err(_)) | Err(_) => self.breaker.record_failure(n),
                             }
                         }
                     }
@@ -176,9 +166,9 @@ impl Cache {
         }
     }
 
-    /// Remove um id do cache: L1 sempre; L2 best-effort (breaker + timeout), como
-    /// as demais ops de tier. Usado quando um link é editado ou apagado, pra o
-    /// redirect parar de servir o valor velho.
+    /// Removes an id from the cache: L1 always; L2 best-effort (breaker + timeout), like
+    /// the other tier ops. Used when a link is edited or deleted, so the
+    /// redirect stops serving the old value.
     pub async fn invalidate(&self, id: u64) {
         self.hot.invalidate(&id);
         if let Some(l2) = &self.l2 {
@@ -208,7 +198,6 @@ mod tests {
         }
     }
 
-    // Tier fake que sempre falha (simula Valkey caído).
     struct FailingTier {
         calls: AtomicU32,
     }
@@ -226,8 +215,6 @@ mod tests {
         }
     }
 
-    // Tier fake que pendura (simula Valkey aceitando a conexão mas nunca
-    // respondendo — overload/black-hole/pausa).
     struct HangingTier;
     #[async_trait::async_trait]
     impl CacheTier for HangingTier {
@@ -246,32 +233,29 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn l2_pendurado_cai_no_store_via_timeout() {
+    async fn hanging_l2_falls_back_to_store_via_timeout() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
         store.put_link(9, &rec("hung")).await.unwrap();
         let c = Cache::with_l2(store, 1000, Arc::new(HangingTier), 60, 3600);
-        // com o relógio pausado, o timeout de 100ms dispara (auto-advance) e
-        // cai no store em vez de travar o redirect:
         let got = c.get(9).await.unwrap().unwrap();
         assert_eq!(got.url, "hung");
     }
 
     #[tokio::test]
-    async fn invalidate_remove_do_l1() {
+    async fn invalidate_removes_from_l1() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
         store.put_link(1, &rec("u1")).await.unwrap();
         let c = Cache::new(store.clone(), 1000);
-        assert_eq!(c.get(1).await.unwrap().unwrap().url, "u1"); // popula L1
-                                                                // apaga no store e invalida o cache: próximo get NÃO pode servir do L1
+        assert_eq!(c.get(1).await.unwrap().unwrap().url, "u1");
         store.delete_link(1).await.unwrap();
         c.invalidate(1).await;
         assert!(c.get(1).await.unwrap().is_none());
     }
 
     #[tokio::test]
-    async fn sem_l2_comporta_como_hoje() {
+    async fn without_l2_behaves_as_today() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
         store.put_link(3, &rec("u")).await.unwrap();
@@ -281,7 +265,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn l2_caido_cai_no_store_e_abre_breaker() {
+    async fn l2_down_falls_back_to_store_and_opens_breaker() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
         store.put_link(7, &rec("v")).await.unwrap();
@@ -289,31 +273,26 @@ mod tests {
             calls: AtomicU32::new(0),
         });
         let c = Cache::with_l2(store, 1000, tier.clone(), 60, 3600);
-        // primeira leitura popula L1 a partir do store (e já testa o caminho
-        // normal); repetimos no mesmo id só pra exercer o hit de L1.
         for _ in 0..7 {
             let _ = c.get(7).await.unwrap();
         }
-        // Chama com ids DISTINTOS pra sempre furar o L1 e exercer o L2:
         for id in 100..110u64 {
-            let _ = c.get(id).await.unwrap(); // store miss -> None; L2 consultado até abrir
+            let _ = c.get(id).await.unwrap();
         }
-        // o breaker deve ter parado de chamar o L2 (calls não cresce indefinidamente)
         let calls = tier.calls.load(Ordering::SeqCst);
         assert!(
             calls >= BREAKER_THRESHOLD,
-            "deveria ter tentado o L2 ao menos o threshold"
+            "should have tried the L2 at least the threshold amount"
         );
         assert!(
             calls <= BREAKER_THRESHOLD + 2,
-            "após abrir, para de chamar o L2 (calls={calls})"
+            "after opening, stops calling the L2 (calls={calls})"
         );
     }
 
     #[test]
-    fn l2_ttl_limitado_pelo_expiry() {
+    fn l2_ttl_capped_by_expiry() {
         let now = 1000u64;
-        // sem expiry -> usa o default
         assert_eq!(
             l2_ttl(
                 &Record {
@@ -326,7 +305,6 @@ mod tests {
             ),
             3600
         );
-        // expiry perto -> ttl reduzido
         assert_eq!(
             l2_ttl(
                 &Record {
@@ -339,7 +317,6 @@ mod tests {
             ),
             100
         );
-        // expiry longe -> cap no default
         assert_eq!(
             l2_ttl(
                 &Record {
@@ -352,7 +329,6 @@ mod tests {
             ),
             3600
         );
-        // já expirado -> 0
         assert_eq!(
             l2_ttl(
                 &Record {
@@ -368,26 +344,20 @@ mod tests {
     }
 
     #[test]
-    fn breaker_reabre_apos_probe_half_open_falhar() {
+    fn breaker_reopens_after_half_open_probe_fails() {
         let b = Breaker::new();
         let t0 = 1_000_000u64;
-        // fecha inicialmente
         assert!(b.allow(t0));
-        // THRESHOLD falhas -> abre
         for _ in 0..BREAKER_THRESHOLD {
             b.record_failure(t0);
         }
-        assert!(!b.allow(t0)); // aberto: dentro do cooldown
-                               // ainda dentro do cooldown
+        assert!(!b.allow(t0));
         assert!(!b.allow(t0 + BREAKER_COOLDOWN_SECS - 1));
-        // passou o cooldown -> half-open permite UMA tentativa
         let t1 = t0 + BREAKER_COOLDOWN_SECS;
         assert!(b.allow(t1));
-        // a probe falha -> re-arma o cooldown a partir de t1
         b.record_failure(t1);
-        assert!(!b.allow(t1)); // reaberto, não deixa martelar
+        assert!(!b.allow(t1));
         assert!(!b.allow(t1 + BREAKER_COOLDOWN_SECS - 1));
-        // sucesso fecha e zera
         b.record_success();
         assert!(b.allow(t1 + 1));
     }

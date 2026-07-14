@@ -5,6 +5,13 @@ use quark::cache::Cache;
 use quark::store::open_backends;
 use std::sync::Arc;
 
+/// L1 cache capacity (max number of entries held in memory).
+const CACHE_CAPACITY: u64 = 100_000;
+/// Analytics channel capacity (buffered `ClickEvent`s before backpressure).
+const ANALYTICS_CHANNEL_CAPACITY: usize = 10_000;
+/// Default blocklist snapshot TTL, in seconds, when `QUARK_BLOCKLIST_TTL` is unset.
+const DEFAULT_BLOCKLIST_TTL_SECS: u64 = 60;
+
 #[tokio::main]
 async fn main() {
     let path = std::env::var("QUARK_DATA").unwrap_or_else(|_| "./data".into());
@@ -12,12 +19,12 @@ async fn main() {
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or_else(|| {
-            eprintln!("AVISO: QUARK_KEY não definido — usando chave de dev. NÃO use em produção.");
+            eprintln!("WARNING: QUARK_KEY not set — using dev key. DO NOT use in production.");
             0x9E3779B97F4A7C15
         });
     let (store, sink) = open_backends(std::path::Path::new(&path))
         .await
-        .expect("abrir backends");
+        .expect("open backends");
     eprintln!(
         "backend: {}",
         if std::env::var("QUARK_DATABASE_URL").is_ok() {
@@ -33,51 +40,52 @@ async fn main() {
         } else if std::env::var("QUARK_DATABASE_URL").is_ok() {
             "postgres"
         } else {
-            "lmdb(embutido)"
+            "lmdb(embedded)"
         }
     );
     match std::env::var("QUARK_NODE_ID") {
         Ok(n) if !n.is_empty() && std::env::var("QUARK_DATABASE_URL").is_ok() => {
             eprintln!(
-                "AVISO: QUARK_NODE_ID={n} ignorado no backend Postgres (node-id é só do LMDB)"
+                "WARNING: QUARK_NODE_ID={n} ignored on the Postgres backend (node-id is LMDB-only)"
             );
         }
         Ok(n) if !n.is_empty() => {
-            eprintln!("node-id LMDB: {n} (espaço de id particionado em 8+32 bits)")
+            eprintln!("LMDB node-id: {n} (id space partitioned into 8+32 bits)")
         }
         _ => {}
     }
     let cache = match std::env::var("QUARK_VALKEY_URL").ok() {
-        Some(url) => match ValkeyTier::open(&url).await {
-            Ok(tier) => {
-                let shown = url.rsplit('@').next().unwrap_or(&url);
-                eprintln!("L2 Valkey habilitado: {shown}");
-                Cache::with_l2(
-                    store.clone(),
-                    100_000,
-                    Arc::new(tier),
-                    quark::cache::L1_TTL_SECS,
-                    quark::cache::L2_TTL_SECS,
-                )
+        Some(url) => {
+            match ValkeyTier::open(&url).await {
+                Ok(tier) => {
+                    let shown = url.rsplit('@').next().unwrap_or(&url);
+                    eprintln!("L2 Valkey enabled: {shown}");
+                    Cache::with_l2(
+                        store.clone(),
+                        CACHE_CAPACITY,
+                        Arc::new(tier),
+                        quark::cache::L1_TTL_SECS,
+                        quark::cache::L2_TTL_SECS,
+                    )
+                }
+                Err(e) => {
+                    eprintln!("WARNING: failed to connect to Valkey ({e}); continuing with L1+store only.");
+                    Cache::new(store.clone(), CACHE_CAPACITY)
+                }
             }
-            Err(e) => {
-                eprintln!("AVISO: falha ao conectar no Valkey ({e}); seguindo só com L1+store.");
-                Cache::new(store.clone(), 100_000)
-            }
-        },
-        None => Cache::new(store.clone(), 100_000),
+        }
+        None => Cache::new(store.clone(), CACHE_CAPACITY),
     };
-    let (analytics_tx, analytics_rx) = tokio::sync::mpsc::channel(10_000);
+    let (analytics_tx, analytics_rx) = tokio::sync::mpsc::channel(ANALYTICS_CHANNEL_CAPACITY);
     let _worker = spawn_worker(analytics_rx, sink.clone());
     let admin_token = std::env::var("QUARK_ADMIN_TOKEN").ok();
     if admin_token.is_none() {
-        eprintln!("AVISO: QUARK_ADMIN_TOKEN não definido — endpoint /stats desligado.");
+        eprintln!("WARNING: QUARK_ADMIN_TOKEN not set — /stats endpoint disabled.");
     }
     if std::env::var("QUARK_ACCESS_LOG").is_err() {
-        eprintln!("access log por request desligado (defina QUARK_ACCESS_LOG=1 para ligar)");
+        eprintln!("per-request access log disabled (set QUARK_ACCESS_LOG=1 to enable)");
     }
 
-    // --- proteção contra abuso ---
     let control_conn: Option<redis::aio::MultiplexedConnection> =
         match std::env::var("QUARK_VALKEY_URL").ok() {
             Some(url) => match redis::Client::open(url) {
@@ -96,21 +104,21 @@ async fn main() {
         (n, None) => quark::abuse::ratelimit::RateLimiter::memory(n),
     };
     if per_min == 0 {
-        eprintln!("rate-limit desligado (defina QUARK_RATELIMIT_PER_MIN=n para ligar)");
+        eprintln!("rate-limit disabled (set QUARK_RATELIMIT_PER_MIN=n to enable)");
     } else {
         eprintln!(
-            "rate-limit: {per_min}/min por IP ({})",
+            "rate-limit: {per_min}/min per IP ({})",
             if control_conn.is_some() {
                 "global via Valkey"
             } else {
-                "por réplica (memória)"
+                "per replica (memory)"
             }
         );
     }
     let blocklist_ttl: u64 = std::env::var("QUARK_BLOCKLIST_TTL")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(60);
+        .unwrap_or(DEFAULT_BLOCKLIST_TTL_SECS);
     let blocklist =
         quark::abuse::blocklist::Blocklist::new(store.clone(), control_conn.clone(), blocklist_ttl);
     let block_private = std::env::var("QUARK_BLOCK_PRIVATE")
@@ -137,7 +145,7 @@ async fn main() {
 
     let addr = std::env::var("QUARK_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
-    eprintln!("quark ouvindo em {addr}");
+    eprintln!("quark listening on {addr}");
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),

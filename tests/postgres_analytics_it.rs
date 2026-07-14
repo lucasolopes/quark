@@ -20,9 +20,9 @@ fn ev(id: u64, ts: u64) -> ClickEvent {
 
 #[tokio::test]
 #[serial(pg)]
-async fn record_e_stats_pg() {
+async fn record_and_stats_pg() {
     let Some(s) = fresh().await else {
-        eprintln!("skip: sem QUARK_TEST_DATABASE_URL");
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     s.record_batch(&[ev(1, 1_752_300_000), ev(1, 1_752_300_050)])
@@ -37,9 +37,9 @@ async fn record_e_stats_pg() {
 
 #[tokio::test]
 #[serial(pg)]
-async fn retencao_pg() {
+async fn retention_pg() {
     let Some(s) = fresh().await else {
-        eprintln!("skip: sem QUARK_TEST_DATABASE_URL");
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     for b in 0..12u64 {
@@ -55,15 +55,13 @@ async fn retencao_pg() {
 
 #[tokio::test]
 #[serial(pg)]
-async fn record_batch_concorrente_sem_perda() {
+async fn record_batch_concurrent_no_lost_updates() {
     let url = match std::env::var("QUARK_TEST_DATABASE_URL") {
         Ok(u) => u,
         Err(_) => return,
     };
-    // reset via one store
     let s0 = PostgresStore::open(&url).await.unwrap();
     s0.reset_for_tests().await.unwrap();
-    // 2 stores (pools independentes) martelando o MESMO id concorrentemente
     let s1 = std::sync::Arc::new(PostgresStore::open(&url).await.unwrap());
     let s2 = std::sync::Arc::new(PostgresStore::open(&url).await.unwrap());
     let n = 50u64;
@@ -86,5 +84,5 @@ async fn record_batch_concorrente_sem_perda() {
     t1.await.unwrap();
     t2.await.unwrap();
     let st = s0.stats(42).await.unwrap().unwrap();
-    assert_eq!(st.aggregates.total, 2 * n); // sem o lock, seria < 2n (lost updates)
+    assert_eq!(st.aggregates.total, 2 * n);
 }

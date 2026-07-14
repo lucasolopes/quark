@@ -25,15 +25,12 @@ use quark::permute::{self, MAX_ID};
 
 type HmacSha256 = Hmac<Sha256>;
 
-// ---------------------------------------------------------------------
-// feistel_hmac: honest reproduction of the "real cipher" (Feistly-style)
-// approach. Same balanced-Feistel structure and round count as quark's
-// permute module, but the round function is HMAC-SHA256(key, round_byte
-// || R_bytes) truncated to 20 bits, instead of quark's ARX mix.
-// ---------------------------------------------------------------------
-
-const FH_WIDTH_BITS: u32 = permute::WIDTH_BITS; // 40, same domain as quark
-const FH_ROUNDS: usize = permute::ROUNDS; // 4, same round count as quark
+/// feistel_hmac: honest reproduction of the "real cipher" (Feistly-style)
+/// approach. Same balanced-Feistel structure and round count as quark's
+/// permute module, but the round function is HMAC-SHA256(key, round_byte
+/// || R_bytes) truncated to 20 bits, instead of quark's ARX mix.
+const FH_WIDTH_BITS: u32 = permute::WIDTH_BITS;
+const FH_ROUNDS: usize = permute::ROUNDS;
 
 fn fh_round_fn(key: &[u8], round: usize, half_bits: u32, r: u32) -> u32 {
     let mask: u32 = if half_bits >= 32 {
@@ -45,7 +42,6 @@ fn fh_round_fn(key: &[u8], round: usize, half_bits: u32, r: u32) -> u32 {
     mac.update(&[round as u8]);
     mac.update(&r.to_be_bytes());
     let tag = mac.finalize().into_bytes();
-    // Truncate the 32-byte tag down to 20 bits (first 4 bytes -> mask).
     let word = u32::from_be_bytes([tag[0], tag[1], tag[2], tag[3]]);
     word & mask
 }

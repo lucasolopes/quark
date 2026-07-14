@@ -20,20 +20,19 @@ async fn put_get_link() {
 }
 
 #[tokio::test]
-async fn next_id_incrementa_e_persiste() {
+async fn next_id_increments_and_persists() {
     let dir = tmp();
     {
         let store = open_store(dir.path()).await.unwrap();
         assert_eq!(store.next_id().await.unwrap(), 1);
         assert_eq!(store.next_id().await.unwrap(), 2);
     }
-    // reabrir: contador persiste
     let store = open_store(dir.path()).await.unwrap();
     assert_eq!(store.next_id().await.unwrap(), 3);
 }
 
 #[tokio::test]
-async fn put_alias_and_link_atomico() {
+async fn put_alias_and_link_is_atomic() {
     let dir = tmp();
     let store = open_store(dir.path()).await.unwrap();
     let rec = Record {
@@ -42,7 +41,7 @@ async fn put_alias_and_link_atomico() {
         created: 100,
     };
     let rec2 = Record {
-        url: "https://outro.com".into(),
+        url: "https://other.com".into(),
         expiry: None,
         created: 200,
     };

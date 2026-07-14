@@ -8,8 +8,8 @@ pub mod store;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Epoch em segundos (UTC). Saturating em 0 se o relógio estiver antes de 1970.
-/// Ponto único usado pelo caminho de request (`api`) e pelo cache (TTL de L2).
+/// Epoch in seconds (UTC). Saturates to 0 if the clock is before 1970.
+/// Single point used by the request path (`api`) and by the cache (L2 TTL).
 pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

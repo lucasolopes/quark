@@ -1,11 +1,11 @@
-//! Microbench in-process do caminho de redirect (sem rede/VM no meio).
-//! Mede (1) o redirect completo via router e (2) o custo marginal da captura
-//! de analytics adicionada ao 302. Objetivo: responder "quanto a analytics
-//! custa no redirect" em nanossegundos, sem o ruído do oha-através-do-Docker.
+//! In-process microbench of the redirect path (no network/VM in between).
+//! Measures (1) the full redirect via the router and (2) the marginal cost of the
+//! analytics capture added to the 302. Goal: answer "how much does analytics
+//! cost on the redirect" in nanoseconds, without the noise of oha-through-Docker.
 //!
-//! Nota: criterion roda single-thread por iteração, então este número é o
-//! custo NÃO-contendido (piso). Contenção do canal mpsc sob N threads reais
-//! não aparece aqui — mas o oha também não conseguiu medi-la acima do ruído.
+//! Note: criterion runs single-threaded per iteration, so this number is the
+//! UNcontended cost (floor). Contention on the mpsc channel under N real threads
+//! doesn't show up here — but oha couldn't measure it above the noise either.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use quark::abuse::blocklist::Blocklist;
@@ -37,7 +37,7 @@ fn bench(c: &mut Criterion) {
             .put_link(
                 1,
                 &Record {
-                    url: "https://example.com/destino".into(),
+                    url: "https://example.com/destination".into(),
                     expiry: None,
                     created: 0,
                 },
@@ -67,9 +67,7 @@ fn bench(c: &mut Criterion) {
     let app = router(state);
     let path = format!("/{code}");
 
-    // (1) redirect completo (router + extractors + resolve + cache-hit +
-    // Cache-Control + captura de analytics + resposta 302). Caminho realista.
-    c.bench_function("redirect_full_com_analytics", |b| {
+    c.bench_function("redirect_full_with_analytics", |b| {
         b.to_async(&rt).iter(|| {
             let app = app.clone();
             let path = path.clone();
@@ -88,9 +86,6 @@ fn bench(c: &mut Criterion) {
         })
     });
 
-    // (2) custo marginal SÓ da captura de analytics: montar o ClickEvent
-    // (1 alocação de String no user_agent, como um browser real) + try_send.
-    // É exatamente o que o 302 ganhou desde a v1 no lado da analytics.
     c.bench_function("analytics_capture", |b| {
         b.to_async(&rt).iter(|| {
             let tx = tx.clone();

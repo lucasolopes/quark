@@ -20,9 +20,9 @@ fn ev(id: u64, ts: u64, c: &str, ua: &str) -> ClickEvent {
 
 #[tokio::test]
 #[serial(ch)]
-async fn record_e_stats_ch() {
+async fn record_and_stats_ch() {
     let Some(s) = fresh().await else {
-        eprintln!("skip: sem QUARK_TEST_CLICKHOUSE_URL");
+        eprintln!("skip: QUARK_TEST_CLICKHOUSE_URL not set");
         return;
     };
     s.record_batch(&[
@@ -45,7 +45,7 @@ async fn record_e_stats_ch() {
 
 #[tokio::test]
 #[serial(ch)]
-async fn recent_limita_n_ch() {
+async fn recent_limits_to_n_ch() {
     let Some(s) = fresh().await else {
         return;
     };
@@ -55,5 +55,5 @@ async fn recent_limita_n_ch() {
     s.record_batch(&evs).await.unwrap();
     let st = s.stats(7).await.unwrap().unwrap();
     assert_eq!(st.aggregates.total, 1200);
-    assert_eq!(st.recent.len(), 1000); // últimos N
+    assert_eq!(st.recent.len(), 1000);
 }

@@ -4,7 +4,6 @@ use std::sync::Arc;
 #[tokio::test]
 async fn round_trip_via_trait_object() {
     let dir = tempfile::tempdir().unwrap();
-    // Exercita explicitamente o dispatch dinâmico: nada aqui conhece o LmdbStore.
     let store: Arc<dyn Store> = open_store(dir.path()).await.unwrap();
 
     let id = store.next_id().await.unwrap();
@@ -18,7 +17,6 @@ async fn round_trip_via_trait_object() {
     let got = store.get_link(id).await.unwrap().unwrap();
     assert_eq!(got.url, "https://example.com/dyn");
 
-    // alias transacional também via trait object
     assert!(store
         .put_alias_and_link("promo-dyn", 999, &rec)
         .await

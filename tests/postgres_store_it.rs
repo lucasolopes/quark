@@ -4,7 +4,6 @@ use serial_test::serial;
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
     let s = PostgresStore::open(&url).await.unwrap();
-    // limpa estado entre rodadas
     s.reset_for_tests().await.unwrap();
     Some(s)
 }
@@ -13,7 +12,7 @@ async fn fresh() -> Option<PostgresStore> {
 #[serial(pg)]
 async fn put_get_link_pg() {
     let Some(s) = fresh().await else {
-        eprintln!("skip: sem QUARK_TEST_DATABASE_URL");
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let rec = Record {
@@ -31,7 +30,7 @@ async fn put_get_link_pg() {
 
 #[tokio::test]
 #[serial(pg)]
-async fn next_id_incrementa_pg() {
+async fn next_id_increments_pg() {
     let Some(s) = fresh().await else {
         return;
     };
@@ -42,7 +41,7 @@ async fn next_id_incrementa_pg() {
 
 #[tokio::test]
 #[serial(pg)]
-async fn alias_atomico_sem_orfao_pg() {
+async fn alias_is_atomic_no_orphan_pg() {
     let Some(s) = fresh().await else {
         return;
     };
@@ -52,7 +51,7 @@ async fn alias_atomico_sem_orfao_pg() {
         created: 0,
     };
     assert!(s.put_alias_and_link("promo", 5, &rec).await.unwrap());
-    assert!(!s.put_alias_and_link("promo", 9, &rec).await.unwrap()); // colisão
+    assert!(!s.put_alias_and_link("promo", 9, &rec).await.unwrap());
     assert_eq!(s.get_alias("promo").await.unwrap(), Some(5));
-    assert!(s.get_link(9).await.unwrap().is_none()); // sem órfão
+    assert!(s.get_link(9).await.unwrap().is_none());
 }

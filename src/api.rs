@@ -35,7 +35,7 @@ pub struct AppState {
 pub struct CreateReq {
     url: String,
     alias: Option<String>,
-    ttl: Option<u64>, // segundos a partir de agora
+    ttl: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -49,10 +49,14 @@ fn is_valid_url(u: &str) -> bool {
 }
 
 const DEFAULT_MAX_AGE: u64 = 86400;
+/// Default page size for admin listing/search endpoints when `limit` is not provided.
+const DEFAULT_PAGE_LIMIT: usize = 50;
+/// Maximum page size accepted for admin listing/search endpoints (clamp ceiling).
+const MAX_PAGE_LIMIT: usize = 500;
 
-/// Calcula o valor do header Cache-Control para uma resposta de redirect,
-/// respeitando o TTL do link: nunca cacheia além da expiração. Função pura,
-/// alvo de TDD.
+/// Computes the Cache-Control header value for a redirect response,
+/// respecting the link's TTL: never caches past expiry. Pure function,
+/// a TDD target.
 fn cache_control_for(expiry: Option<u64>, now: u64) -> String {
     match expiry {
         None => format!("public, max-age={}", DEFAULT_MAX_AGE),
@@ -64,8 +68,8 @@ fn cache_control_for(expiry: Option<u64>, now: u64) -> String {
     }
 }
 
-/// Exige o admin token para criar — mas só quando um token está configurado.
-/// Sem QUARK_ADMIN_TOKEN, criar continua público (shortener aberto).
+/// Requires the admin token to create — but only when a token is configured.
+/// Without QUARK_ADMIN_TOKEN, create remains public (open shortener).
 fn require_admin_for_create(st: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
     match st.admin_token.as_deref() {
         None => Ok(()),
@@ -92,32 +96,27 @@ async fn create(
     if let Err(status) = require_admin_for_create(&st, &headers) {
         return status.into_response();
     }
-    // 1) rate-limit (checagem barata primeiro)
     let ip = client_ip(&headers, &st.real_ip_header, conn.as_ref());
     if !st.ratelimiter.check(&ip, now()).await {
-        return (StatusCode::TOO_MANY_REQUESTS, "muitas requisições").into_response();
+        return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
     }
-    // 2) validação de URL (http/https) — já existente
     if !is_valid_url(&req.url) {
-        return (StatusCode::BAD_REQUEST, "url inválida").into_response();
+        return (StatusCode::BAD_REQUEST, "invalid url").into_response();
     }
-    // 3) host do destino (URL sem host é inválida)
     let Some(host) = extract_host(&req.url) else {
-        return (StatusCode::BAD_REQUEST, "url sem host").into_response();
+        return (StatusCode::BAD_REQUEST, "url without host").into_response();
     };
-    // 4) guarda embutida (rede interna / loop pro próprio host)
     if st.block_private && is_blocked_target(&host, &headers, &st) {
-        return (StatusCode::FORBIDDEN, "destino não permitido").into_response();
+        return (StatusCode::FORBIDDEN, "destination not allowed").into_response();
     }
-    // 5) blocklist do banco (domínio + subdomínio)
     if st.blocklist.is_blocked(&host, now()).await {
-        return (StatusCode::FORBIDDEN, "destino bloqueado").into_response();
+        return (StatusCode::FORBIDDEN, "blocked destination").into_response();
     }
 
     let expiry = match req.ttl {
         Some(t) => match now().checked_add(t) {
             Some(e) => Some(e),
-            None => return (StatusCode::BAD_REQUEST, "ttl inválido").into_response(),
+            None => return (StatusCode::BAD_REQUEST, "invalid ttl").into_response(),
         },
         None => None,
     };
@@ -127,25 +126,24 @@ async fn create(
         created: now(),
     };
 
-    // aliases: caminho separado; único ponto de checagem de colisão.
     if let Some(alias) = req.alias {
         if codec::from_base62(&alias).is_some() {
             return (
                 StatusCode::BAD_REQUEST,
-                "alias colide com o espaço de código numérico",
+                "alias collides with the numeric code space",
             )
                 .into_response();
         }
         let id = match st.store.next_id().await {
             Ok(id) => id,
             Err(StoreError::IdSpaceExhausted) => {
-                return (StatusCode::INSUFFICIENT_STORAGE, "espaço de id esgotado").into_response()
+                return (StatusCode::INSUFFICIENT_STORAGE, "id space exhausted").into_response()
             }
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
         match st.store.put_alias_and_link(&alias, id, &rec).await {
             Ok(true) => {}
-            Ok(false) => return (StatusCode::CONFLICT, "alias em uso").into_response(),
+            Ok(false) => return (StatusCode::CONFLICT, "alias in use").into_response(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
         return Json(CreateResp {
@@ -155,16 +153,15 @@ async fn create(
         .into_response();
     }
 
-    // caminho sem alias: id atômico → encode → grava. Sem checagem de colisão.
     let id = match st.store.next_id().await {
         Ok(id) => id,
         Err(StoreError::IdSpaceExhausted) => {
-            return (StatusCode::INSUFFICIENT_STORAGE, "espaço de id esgotado").into_response()
+            return (StatusCode::INSUFFICIENT_STORAGE, "id space exhausted").into_response()
         }
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     if id > permute::MAX_ID {
-        return (StatusCode::INSUFFICIENT_STORAGE, "espaço de id esgotado").into_response();
+        return (StatusCode::INSUFFICIENT_STORAGE, "id space exhausted").into_response();
     }
     if st.store.put_link(id, &rec).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -173,8 +170,8 @@ async fn create(
     Json(CreateResp { code, url: req.url }).into_response()
 }
 
-/// IP do cliente: header configurável (default CF-Connecting-IP) tem prioridade;
-/// senão o IP do socket; senão "unknown" (bucket único, conservador).
+/// Client IP: configurable header (default CF-Connecting-IP) takes priority;
+/// otherwise the socket IP; otherwise "unknown" (single, conservative bucket).
 fn client_ip(
     headers: &HeaderMap,
     header_name: &str,
@@ -192,12 +189,11 @@ fn client_ip(
     "unknown".to_string()
 }
 
-/// Guarda embutida: destino de rede interna, ou loop pro próprio host do quark.
+/// Built-in guard: internal network destination, or a loop back to quark's own host.
 fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
     if is_internal_host(host) {
         return true;
     }
-    // anti-loop: host próprio via QUARK_PUBLIC_HOST ou o header Host da requisição
     let self_host = st.public_host.clone().or_else(|| {
         headers
             .get(header::HOST)
@@ -207,10 +203,10 @@ fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
     matches!(self_host, Some(sh) if sh == host)
 }
 
-/// Resolve um code de URL em id: primeiro tenta código numérico (base62 no
-/// domínio); se não for, trata como alias no store. `Ok(Some(id))` resolvido,
-/// `Ok(None)` inexistente, `Err` falha de backend. Cada handler mapeia esses
-/// casos pra sua própria resposta HTTP (o redirect anexa Cache-Control no 404).
+/// Resolves a URL code into an id: first tries a numeric code (base62 in the
+/// domain); if not, treats it as an alias in the store. `Ok(Some(id))` resolved,
+/// `Ok(None)` doesn't exist, `Err` backend failure. Each handler maps these
+/// cases to its own HTTP response (the redirect attaches Cache-Control on 404).
 async fn resolve_code(st: &AppState, code: &str) -> Result<Option<u64>, StoreError> {
     match codec::from_base62(code) {
         Some(c) if c <= permute::MAX_ID => Ok(Some(permute::decode(c, st.key))),
@@ -242,14 +238,13 @@ async fn redirect(
                     return (
                         StatusCode::GONE,
                         [(header::CACHE_CONTROL, "no-store".to_string())],
-                        "link expirado",
+                        "expired link",
                     )
                         .into_response();
                 }
             }
             let cache_control = cache_control_for(rec.expiry, now);
 
-            // Captura fire-and-forget: nunca bloqueia nem falha o redirect.
             let ev = ClickEvent {
                 id,
                 ts: now,
@@ -291,7 +286,6 @@ async fn stats(
     Path(code): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    // endpoint desligado se não há token configurado
     let Some(expected) = st.admin_token.as_deref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -307,7 +301,6 @@ async fn stats(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    // link precisa existir; alvo de alias inexistente também é 404 (mesma lógica do redirect)
     match st.store.get_link(id).await {
         Ok(Some(_)) => {}
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -329,10 +322,10 @@ struct BlocklistReq {
     domain: String,
 }
 
-/// Autoriza uma requisição admin: `Ok(())` se o token bate; `Err(status)` senão.
-/// Sem token configurado → 404 (endpoint desligado); token errado → 401.
-/// Retorna `StatusCode` (não `Response`) pra ficar `Copy`/pequeno — evita o lint
-/// `result_large_err` do clippy, que dispararia com `Response` no `Err`.
+/// Authorizes an admin request: `Ok(())` if the token matches; `Err(status)` otherwise.
+/// No token configured -> 404 (endpoint disabled); wrong token -> 401.
+/// Returns `StatusCode` (not `Response`) to stay `Copy`/small — avoids clippy's
+/// `result_large_err` lint, which would trigger with `Response` in the `Err`.
 fn admin_guard(st: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
     let Some(expected) = st.admin_token.as_deref() else {
         return Err(StatusCode::NOT_FOUND);
@@ -367,7 +360,7 @@ async fn blocklist_add(
     }
     let req: BlocklistReq = match serde_json::from_slice(&body) {
         Ok(r) => r,
-        Err(_) => return (StatusCode::BAD_REQUEST, "json inválido").into_response(),
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
     };
     if st.store.add_blocked_domain(&req.domain).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -386,7 +379,7 @@ async fn blocklist_delete(
     }
     let req: BlocklistReq = match serde_json::from_slice(&body) {
         Ok(r) => r,
-        Err(_) => return (StatusCode::BAD_REQUEST, "json inválido").into_response(),
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
     };
     if st.store.remove_blocked_domain(&req.domain).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -421,13 +414,14 @@ async fn admin_links_list(
     if let Err(status) = admin_guard(&st, &headers) {
         return status.into_response();
     }
-    let limit = p.limit.unwrap_or(50).clamp(1, 500);
+    let limit = p
+        .limit
+        .unwrap_or(DEFAULT_PAGE_LIMIT)
+        .clamp(1, MAX_PAGE_LIMIT);
     let q = p.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let links = match q {
         Some(term) => match st.store.search_links(term, p.after, limit).await {
             Ok(l) => l,
-            // Backend sem busca server-side (LMDB): sinaliza ao painel cair
-            // pro filtro client-side.
             Err(StoreError::Unsupported) => return StatusCode::NOT_IMPLEMENTED.into_response(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
@@ -436,13 +430,10 @@ async fn admin_links_list(
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
     };
-    // mapa id -> alias (um único list_aliases por request)
     let alias_map: std::collections::HashMap<u64, String> = match st.store.list_aliases().await {
         Ok(pairs) => pairs.into_iter().map(|(a, id)| (id, a)).collect(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    // Só há próxima página se veio uma página cheia; página parcial = fim
-    // (evita um fetch vazio extra no cliente).
     let next_after = if links.len() == limit {
         links.last().map(|(id, _)| *id)
     } else {
@@ -462,8 +453,8 @@ async fn admin_links_list(
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
 }
 
-/// Resolve o code em (id, alias_opcional). Se o code é numérico, não há alias
-/// a remover; se é uma string de alias, devolve o alias pra apagar junto.
+/// Resolves the code into (id, optional_alias). If the code is numeric, there's no
+/// alias to remove; if it's an alias string, returns the alias to delete alongside it.
 async fn resolve_for_admin(
     st: &AppState,
     code: &str,
@@ -490,7 +481,6 @@ async fn admin_link_delete(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    // 404 se o link em si não existe
     match st.store.get_link(id).await {
         Ok(Some(_)) => {}
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -525,25 +515,23 @@ async fn admin_link_patch(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    // corpo: chaves ausentes = mantém; "url" atualiza; "ttl": número recomputa
-    // expiry (now+ttl), null remove a expiração.
     let patch: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, "json inválido").into_response(),
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
     };
     if let Some(u) = patch.get("url") {
         let s = match u.as_str() {
             Some(s) if is_valid_url(s) => s,
-            _ => return (StatusCode::BAD_REQUEST, "url inválida").into_response(),
+            _ => return (StatusCode::BAD_REQUEST, "invalid url").into_response(),
         };
         let Some(host) = extract_host(s) else {
-            return (StatusCode::BAD_REQUEST, "url sem host").into_response();
+            return (StatusCode::BAD_REQUEST, "url without host").into_response();
         };
         if st.block_private && is_blocked_target(&host, &headers, &st) {
-            return (StatusCode::FORBIDDEN, "destino não permitido").into_response();
+            return (StatusCode::FORBIDDEN, "destination not allowed").into_response();
         }
         if st.blocklist.is_blocked(&host, now()).await {
-            return (StatusCode::FORBIDDEN, "destino bloqueado").into_response();
+            return (StatusCode::FORBIDDEN, "blocked destination").into_response();
         }
         rec.url = s.to_string();
     }
@@ -553,10 +541,10 @@ async fn admin_link_patch(
         } else if let Some(secs) = ttl.as_u64() {
             match now().checked_add(secs) {
                 Some(e) => rec.expiry = Some(e),
-                None => return (StatusCode::BAD_REQUEST, "ttl inválido").into_response(),
+                None => return (StatusCode::BAD_REQUEST, "invalid ttl").into_response(),
             }
         } else {
-            return (StatusCode::BAD_REQUEST, "ttl inválido").into_response();
+            return (StatusCode::BAD_REQUEST, "invalid ttl").into_response();
         }
     }
     if st.store.put_link(id, &rec).await.is_err() {
@@ -581,7 +569,7 @@ async fn health() -> &'static str {
     "ok"
 }
 
-/// Formata uma linha de log de acesso em JSON. Função pura: sem I/O, fácil de testar.
+/// Formats an access log line as JSON. Pure function: no I/O, easy to test.
 fn access_log_line(method: &str, path: &str, status: u16, latency_ms: f64) -> String {
     let latency_ms = (latency_ms * 1000.0).round() / 1000.0;
     serde_json::json!({
@@ -593,8 +581,8 @@ fn access_log_line(method: &str, path: &str, status: u16, latency_ms: f64) -> St
     .to_string()
 }
 
-/// Middleware que loga uma linha JSON por request no stdout (Coolify captura stdout).
-/// Puramente observacional: não altera a resposta.
+/// Middleware that logs one JSON line per request to stdout (Coolify captures stdout).
+/// Purely observational: doesn't alter the response.
 async fn log_requests(req: Request, next: Next) -> Response {
     let start = Instant::now();
     let method = req.method().to_string();
@@ -609,7 +597,7 @@ async fn log_requests(req: Request, next: Next) -> Response {
     response
 }
 
-/// Origens de CORS a partir da env `QUARK_CORS_ORIGINS` (lista por vírgula).
+/// CORS origins from the `QUARK_CORS_ORIGINS` env var (comma-separated list).
 pub fn parse_cors_origins(raw: Option<String>) -> Vec<String> {
     match raw {
         None => Vec::new(),
@@ -645,8 +633,6 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         )
         .with_state(state);
 
-    // CORS é opt-in via QUARK_CORS_ORIGINS: sem origens configuradas, nenhum
-    // header de CORS é adicionado (comportamento atual preservado).
     let app = if origins.is_empty() {
         app
     } else {
@@ -659,9 +645,6 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         app.layer(cors)
     };
 
-    // Log de acesso por request é opt-in: em alta vazão, o println! síncrono
-    // por request serializa tudo na lock do stdout (I/O do Docker json-file).
-    // Fica desligado por padrão; ativa com QUARK_ACCESS_LOG=1.
     if std::env::var("QUARK_ACCESS_LOG").is_ok() {
         app.layer(axum::middleware::from_fn(log_requests))
     } else {
@@ -674,7 +657,7 @@ mod tests {
     use super::{access_log_line, cache_control_for, parse_cors_origins};
 
     #[test]
-    fn parse_cors_origins_split_e_trim() {
+    fn parse_cors_origins_splits_and_trims() {
         assert_eq!(parse_cors_origins(None), Vec::<String>::new());
         assert_eq!(parse_cors_origins(Some("".into())), Vec::<String>::new());
         assert_eq!(
@@ -684,12 +667,12 @@ mod tests {
     }
 
     #[test]
-    fn cache_control_sem_expiry_usa_default() {
+    fn cache_control_without_expiry_uses_default() {
         assert_eq!(cache_control_for(None, 1_000), "public, max-age=86400");
     }
 
     #[test]
-    fn cache_control_com_expiry_futuro_usa_diferenca() {
+    fn cache_control_with_future_expiry_uses_difference() {
         let now = 1_000;
         assert_eq!(
             cache_control_for(Some(now + 100), now),
@@ -698,7 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_control_com_expiry_futuro_distante_capa_em_default() {
+    fn cache_control_with_distant_future_expiry_caps_at_default() {
         let now = 1_000;
         assert_eq!(
             cache_control_for(Some(now + 999_999), now),
@@ -707,7 +690,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_control_com_expiry_passado_no_store() {
+    fn cache_control_with_past_expiry_is_no_store() {
         let now = 1_000;
         assert_eq!(cache_control_for(Some(now - 1), now), "no-store");
     }
@@ -716,7 +699,7 @@ mod tests {
     fn access_log_line_is_valid_json_with_expected_fields() {
         let line = access_log_line("GET", "/abc", 302, 0.4139);
         let v: serde_json::Value =
-            serde_json::from_str(&line).expect("access_log_line deve produzir JSON válido");
+            serde_json::from_str(&line).expect("access_log_line should produce valid JSON");
         assert_eq!(v["method"], "GET");
         assert_eq!(v["path"], "/abc");
         assert_eq!(v["status"], 302);
@@ -728,7 +711,7 @@ mod tests {
         let path = "/a\"b\\c";
         let line = access_log_line("GET", path, 200, 1.0);
         let v: serde_json::Value = serde_json::from_str(&line)
-            .expect("access_log_line deve escapar corretamente e continuar sendo JSON válido");
+            .expect("access_log_line should escape correctly and remain valid JSON");
         assert_eq!(v["path"], path);
     }
 }

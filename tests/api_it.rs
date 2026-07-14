@@ -4,7 +4,7 @@ use quark::api::{router, AppState};
 use quark::cache::Cache;
 use quark::store::open_backends;
 use std::sync::Arc;
-use tower::ServiceExt; // oneshot
+use tower::ServiceExt;
 
 async fn app() -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
@@ -29,7 +29,7 @@ async fn app() -> axum::Router {
 }
 
 #[tokio::test]
-async fn cria_e_redireciona() {
+async fn creates_and_redirects() {
     let app = app().await;
     let resp = app
         .clone()
@@ -56,12 +56,12 @@ async fn cria_e_redireciona() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FOUND); // 302
+    assert_eq!(resp.status(), StatusCode::FOUND);
     assert_eq!(resp.headers()["location"], "https://example.com");
 }
 
 #[tokio::test]
-async fn codigo_inexistente_404() {
+async fn nonexistent_code_404() {
     let app = app().await;
     let resp = app
         .oneshot(Request::get("/0000000").body(Body::empty()).unwrap())
@@ -71,7 +71,7 @@ async fn codigo_inexistente_404() {
 }
 
 #[tokio::test]
-async fn alias_em_uso_409() {
+async fn alias_in_use_409() {
     let app = app().await;
     let resp = app
         .clone()
@@ -98,7 +98,7 @@ async fn alias_em_uso_409() {
 }
 
 #[tokio::test]
-async fn link_expirado_410() {
+async fn expired_link_410() {
     let app = app().await;
     let resp = app
         .clone()
@@ -129,7 +129,7 @@ async fn link_expirado_410() {
 }
 
 #[tokio::test]
-async fn alias_redireciona() {
+async fn alias_redirects() {
     let app = app().await;
     let resp = app
         .clone()
@@ -149,12 +149,12 @@ async fn alias_redireciona() {
         .oneshot(Request::get("/promo").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FOUND); // 302
+    assert_eq!(resp.status(), StatusCode::FOUND);
     assert_eq!(resp.headers()["location"], "https://alias.example.com");
 }
 
 #[tokio::test]
-async fn alias_numerico_rejeitado() {
+async fn numeric_alias_rejected() {
     let app = app().await;
     let resp = app
         .oneshot(
@@ -169,7 +169,7 @@ async fn alias_numerico_rejeitado() {
 }
 
 #[tokio::test]
-async fn bloqueia_destino_interno_403() {
+async fn blocks_internal_destination_403() {
     let app = app().await;
     let resp = app
         .oneshot(
@@ -184,8 +184,7 @@ async fn bloqueia_destino_interno_403() {
 }
 
 #[tokio::test]
-async fn bloqueia_dominio_na_blocklist_403() {
-    // helper dedicado que semeia a blocklist antes de montar o app
+async fn blocks_domain_on_blocklist_403() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     store.add_blocked_domain("evil.com").await.unwrap();
@@ -218,7 +217,7 @@ async fn bloqueia_dominio_na_blocklist_403() {
 }
 
 #[tokio::test]
-async fn rate_limit_429_apos_estourar() {
+async fn rate_limit_429_after_exceeding() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     let cache = Cache::new(store.clone(), 1000);
@@ -256,7 +255,7 @@ async fn rate_limit_429_apos_estourar() {
 }
 
 #[tokio::test]
-async fn redirect_sem_ttl_tem_cache_control_default() {
+async fn redirect_without_ttl_has_default_cache_control() {
     let app = app().await;
     let resp = app
         .clone()
@@ -288,7 +287,7 @@ async fn redirect_sem_ttl_tem_cache_control_default() {
 }
 
 #[tokio::test]
-async fn redirect_com_ttl_tem_cache_control_limitado_pelo_ttl() {
+async fn redirect_with_ttl_has_cache_control_capped_by_ttl() {
     let app = app().await;
     let resp = app
         .clone()
@@ -322,17 +321,17 @@ async fn redirect_com_ttl_tem_cache_control_limitado_pelo_ttl() {
         .to_string();
     let max_age: i64 = cc
         .strip_prefix("public, max-age=")
-        .expect("deve ser public, max-age=<n>")
+        .expect("should be public, max-age=<n>")
         .parse()
-        .expect("max-age deve ser numérico");
+        .expect("max-age should be numeric");
     assert!(
         max_age > 0 && max_age <= 100,
-        "max-age fora do esperado: {max_age}"
+        "max-age outside expected range: {max_age}"
     );
 }
 
 #[tokio::test]
-async fn codigo_inexistente_404_tem_cache_control_no_store() {
+async fn nonexistent_code_404_has_no_store_cache_control() {
     let app = app().await;
     let resp = app
         .oneshot(Request::get("/0000000").body(Body::empty()).unwrap())
@@ -365,27 +364,25 @@ async fn app_admin(token: &str) -> axum::Router {
 }
 
 #[tokio::test]
-async fn admin_blocklist_add_list_e_bloqueia() {
-    let app = app_admin("segredo").await;
-    // add
+async fn admin_blocklist_add_list_and_blocks() {
+    let app = app_admin("secret").await;
     let resp = app
         .clone()
         .oneshot(
             Request::post("/admin/blocklist")
                 .header("content-type", "application/json")
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::from(r#"{"domain":"evil.com"}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    // list contém
     let resp = app
         .clone()
         .oneshot(
             Request::get("/admin/blocklist")
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -400,8 +397,7 @@ async fn admin_blocklist_add_list_e_bloqueia() {
 }
 
 #[tokio::test]
-async fn admin_blocklist_sem_token_404() {
-    // app() tem admin_token: None
+async fn admin_blocklist_without_token_404() {
     let app = app().await;
     let resp = app
         .oneshot(
@@ -415,12 +411,12 @@ async fn admin_blocklist_sem_token_404() {
 }
 
 #[tokio::test]
-async fn admin_blocklist_token_errado_401() {
-    let app = app_admin("segredo").await;
+async fn admin_blocklist_token_wrong_401() {
+    let app = app_admin("secret").await;
     let resp = app
         .oneshot(
             Request::get("/admin/blocklist")
-                .header("x-admin-token", "errado")
+                .header("x-admin-token", "wrong")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -447,14 +443,13 @@ async fn ttl_overflow_400() {
 }
 
 #[tokio::test]
-async fn admin_blocklist_sem_token_corpo_malformado_404() {
-    // endpoint opaco: sem QUARK_ADMIN_TOKEN, ate POST com corpo ruim da 404 (nao 400/415)
-    let app = app().await; // admin_token: None
+async fn admin_blocklist_without_token_malformed_body_404() {
+    let app = app().await;
     let resp = app
         .oneshot(
             Request::post("/admin/blocklist")
                 .header("content-type", "application/json")
-                .body(Body::from("nao eh json"))
+                .body(Body::from("not json"))
                 .unwrap(),
         )
         .await
@@ -464,36 +459,33 @@ async fn admin_blocklist_sem_token_corpo_malformado_404() {
 
 #[tokio::test]
 async fn admin_blocklist_delete_remove() {
-    let app = app_admin("segredo").await;
-    // add
+    let app = app_admin("secret").await;
     app.clone()
         .oneshot(
             Request::post("/admin/blocklist")
                 .header("content-type", "application/json")
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::from(r#"{"domain":"del.com"}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
-    // delete
     let resp = app
         .clone()
         .oneshot(
             Request::delete("/admin/blocklist")
                 .header("content-type", "application/json")
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::from(r#"{"domain":"del.com"}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    // list vazia
     let resp = app
         .oneshot(
             Request::get("/admin/blocklist")
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -507,26 +499,24 @@ async fn admin_blocklist_delete_remove() {
 }
 
 #[tokio::test]
-async fn admin_links_lista_paginada() {
-    let app = app_admin("segredo").await;
-    // cria 2 links
+async fn admin_links_paginated_list() {
+    let app = app_admin("secret").await;
     for u in ["https://a.com", "https://b.com"] {
         app.clone()
             .oneshot(
                 Request::post("/")
                     .header("content-type", "application/json")
-                    .header("x-admin-token", "segredo")
+                    .header("x-admin-token", "secret")
                     .body(Body::from(format!(r#"{{"url":"{u}"}}"#)))
                     .unwrap(),
             )
             .await
             .unwrap();
     }
-    // lista
     let resp = app
         .oneshot(
             Request::get("/admin/links?limit=10")
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -541,20 +531,19 @@ async fn admin_links_lista_paginada() {
     assert_eq!(links.len(), 2);
     assert!(links[0]["code"].as_str().unwrap().len() == 7);
     assert_eq!(links[0]["url"], "https://a.com");
-    // página parcial (2 < limit 10) => sem próxima página
     assert!(
         v["next_after"].is_null(),
-        "next_after deve ser null numa página parcial"
+        "next_after should be null on a partial page"
     );
 }
 
 #[tokio::test]
 async fn admin_links_search_on_lmdb_returns_501() {
-    let app = app_admin("segredo").await;
+    let app = app_admin("secret").await;
     let resp = app
         .oneshot(
             Request::get("/admin/links?q=abc")
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -564,8 +553,8 @@ async fn admin_links_search_on_lmdb_returns_501() {
 }
 
 #[tokio::test]
-async fn admin_links_sem_token_404() {
-    let app = app().await; // admin_token: None
+async fn admin_links_without_token_404() {
+    let app = app().await;
     let resp = app
         .oneshot(Request::get("/admin/links").body(Body::empty()).unwrap())
         .await
@@ -573,13 +562,13 @@ async fn admin_links_sem_token_404() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
-async fn cria_e_pega_code(app: &axum::Router, url: &str) -> String {
+async fn create_and_get_code(app: &axum::Router, url: &str) -> String {
     let resp = app
         .clone()
         .oneshot(
             Request::post("/")
                 .header("content-type", "application/json")
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::from(format!(r#"{{"url":"{url}"}}"#)))
                 .unwrap(),
         )
@@ -593,10 +582,9 @@ async fn cria_e_pega_code(app: &axum::Router, url: &str) -> String {
 }
 
 #[tokio::test]
-async fn admin_delete_link_vira_404_no_redirect() {
-    let app = app_admin("segredo").await;
-    let code = cria_e_pega_code(&app, "https://del.com").await;
-    // antes: redireciona
+async fn admin_delete_link_becomes_404_on_redirect() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://del.com").await;
     let r = app
         .clone()
         .oneshot(
@@ -607,19 +595,17 @@ async fn admin_delete_link_vira_404_no_redirect() {
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::FOUND);
-    // delete
     let r = app
         .clone()
         .oneshot(
             Request::delete(format!("/admin/links/{code}"))
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
-    // depois: 404
     let r = app
         .oneshot(
             Request::get(format!("/{code}"))
@@ -632,16 +618,16 @@ async fn admin_delete_link_vira_404_no_redirect() {
 }
 
 #[tokio::test]
-async fn admin_patch_link_atualiza_destino() {
-    let app = app_admin("segredo").await;
-    let code = cria_e_pega_code(&app, "https://velho.com").await;
+async fn admin_patch_link_updates_destination() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://old.com").await;
     let r = app
         .clone()
         .oneshot(
             Request::patch(format!("/admin/links/{code}"))
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"url":"https://novo.com"}"#))
+                .body(Body::from(r#"{"url":"https://new.com"}"#))
                 .unwrap(),
         )
         .await
@@ -656,16 +642,16 @@ async fn admin_patch_link_atualiza_destino() {
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::FOUND);
-    assert_eq!(r.headers()["location"], "https://novo.com");
+    assert_eq!(r.headers()["location"], "https://new.com");
 }
 
 #[tokio::test]
-async fn admin_delete_inexistente_404() {
-    let app = app_admin("segredo").await;
+async fn admin_delete_nonexistent_404() {
+    let app = app_admin("secret").await;
     let r = app
         .oneshot(
             Request::delete("/admin/links/0000000")
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -675,13 +661,13 @@ async fn admin_delete_inexistente_404() {
 }
 
 #[tokio::test]
-async fn admin_patch_destino_interno_403() {
-    let app = app_admin("segredo").await;
-    let code = cria_e_pega_code(&app, "https://ok.com").await;
+async fn admin_patch_internal_destination_403() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://ok.com").await;
     let r = app
         .oneshot(
             Request::patch(format!("/admin/links/{code}"))
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"url":"http://127.0.0.1:9000"}"#))
                 .unwrap(),
@@ -692,13 +678,13 @@ async fn admin_patch_destino_interno_403() {
 }
 
 #[tokio::test]
-async fn admin_patch_url_invalida_400() {
-    let app = app_admin("segredo").await;
-    let code = cria_e_pega_code(&app, "https://ok.com").await;
+async fn admin_patch_invalid_url_400() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://ok.com").await;
     let r = app
         .oneshot(
             Request::patch(format!("/admin/links/{code}"))
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"url":"ftp://nope"}"#))
                 .unwrap(),
@@ -709,8 +695,8 @@ async fn admin_patch_url_invalida_400() {
 }
 
 #[tokio::test]
-async fn create_sem_token_quando_configurado_401() {
-    let app = app_admin("segredo").await;
+async fn create_without_token_when_configured_401() {
+    let app = app_admin("secret").await;
     let resp = app
         .oneshot(
             Request::post("/")
@@ -724,13 +710,13 @@ async fn create_sem_token_quando_configurado_401() {
 }
 
 #[tokio::test]
-async fn create_com_token_quando_configurado_ok() {
-    let app = app_admin("segredo").await;
+async fn create_with_token_when_configured_ok() {
+    let app = app_admin("secret").await;
     let resp = app
         .oneshot(
             Request::post("/")
                 .header("content-type", "application/json")
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::from(r#"{"url":"https://example.com"}"#))
                 .unwrap(),
         )
@@ -740,8 +726,7 @@ async fn create_com_token_quando_configurado_ok() {
 }
 
 #[tokio::test]
-async fn cors_header_presente_quando_configurado() {
-    // monta o router com uma origem permitida explícita (sem env)
+async fn cors_header_present_when_configured() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     let cache = Cache::new(store.clone(), 1000);
@@ -760,11 +745,11 @@ async fn cors_header_presente_quando_configurado() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".into(),
     });
-    let app = quark::api::router_with_cors(state, vec!["https://painel.example".into()]);
+    let app = quark::api::router_with_cors(state, vec!["https://panel.example".into()]);
     let resp = app
         .oneshot(
             Request::get("/health")
-                .header("origin", "https://painel.example")
+                .header("origin", "https://panel.example")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -772,6 +757,6 @@ async fn cors_header_presente_quando_configurado() {
         .unwrap();
     assert_eq!(
         resp.headers().get("access-control-allow-origin").unwrap(),
-        "https://painel.example"
+        "https://panel.example"
     );
 }

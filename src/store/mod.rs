@@ -19,7 +19,7 @@ pub enum StoreError {
     Serde(serde_json::Error),
     Backend(String),
     IdSpaceExhausted,
-    /// Operação não suportada por este backend (ex.: busca server-side no LMDB).
+    /// Operation not supported by this backend (e.g. server-side search on LMDB).
     Unsupported,
 }
 impl std::fmt::Display for StoreError {
@@ -28,16 +28,16 @@ impl std::fmt::Display for StoreError {
             StoreError::Db(e) => write!(f, "db: {e}"),
             StoreError::Serde(e) => write!(f, "serde: {e}"),
             StoreError::Backend(s) => write!(f, "backend: {s}"),
-            StoreError::IdSpaceExhausted => write!(f, "espaço de id esgotado"),
-            StoreError::Unsupported => write!(f, "operação não suportada por este backend"),
+            StoreError::IdSpaceExhausted => write!(f, "id space exhausted"),
+            StoreError::Unsupported => write!(f, "operation not supported by this backend"),
         }
     }
 }
 impl std::error::Error for StoreError {}
 impl StoreError {
-    /// Constrói um `Backend` a partir de qualquer erro exibível (sqlx,
-    /// clickhouse, etc). Enxuga o `.map_err(|e| Backend(e.to_string()))`
-    /// repetido nos backends de rede: `.map_err(StoreError::backend)`.
+    /// Builds a `Backend` from any displayable error (sqlx,
+    /// clickhouse, etc). Shortens the repeated `.map_err(|e| Backend(e.to_string()))`
+    /// in the network backends: `.map_err(StoreError::backend)`.
     pub fn backend<E: std::fmt::Display>(e: E) -> StoreError {
         StoreError::Backend(e.to_string())
     }
@@ -53,9 +53,9 @@ impl From<serde_json::Error> for StoreError {
     }
 }
 
-/// Interface de persistência. O caminho quente é sempre servido do cache L1;
-/// os métodos async acomodam backends de rede (Postgres/Valkey) sem gambiarra
-/// de bloqueio.
+/// Persistence interface. The hot path is always served from the L1 cache;
+/// the async methods accommodate network backends (Postgres/Valkey) without a
+/// blocking workaround.
 #[async_trait::async_trait]
 pub trait Store: Send + Sync + 'static {
     async fn next_id(&self) -> Result<u64, StoreError>;
@@ -76,8 +76,8 @@ pub trait Store: Send + Sync + 'static {
         after: Option<u64>,
         limit: usize,
     ) -> Result<Vec<(u64, Record)>, StoreError>;
-    /// Busca server-side paginada (keyset por id). Casa `url`/`alias`,
-    /// case-insensitive, termo literal. Backends sem busca retornam
+    /// Paginated server-side search (keyset by id). Matches `url`/`alias`,
+    /// case-insensitive, literal term. Backends without search return
     /// `Err(StoreError::Unsupported)`.
     async fn search_links(
         &self,
@@ -90,22 +90,22 @@ pub trait Store: Send + Sync + 'static {
     async fn delete_alias(&self, alias: &str) -> Result<(), StoreError>;
 }
 
-/// Abre só o Store em LMDB (usado por testes que não precisam do AnalyticsSink).
+/// Opens only the Store on LMDB (used by tests that don't need the AnalyticsSink).
 pub async fn open_store(path: &Path) -> Result<Arc<dyn Store>, StoreError> {
     Ok(Arc::new(lmdb::LmdbStore::open(path)?))
 }
 
-/// Par de backends (Store + AnalyticsSink) que compartilham o mesmo backend físico.
+/// Pair of backends (Store + AnalyticsSink) sharing the same physical backend.
 pub type Backends = (Arc<dyn Store>, Arc<dyn AnalyticsSink>);
 
-/// Seam de seleção de backend por `QUARK_DATABASE_URL`: definido → Postgres;
-/// ausente → LMDB local em `data_path`. Async pra acomodar setup de conexão
-/// (Postgres) sem gambiarra de bloqueio.
+/// Backend-selection seam via `QUARK_DATABASE_URL`: set -> Postgres;
+/// absent -> local LMDB at `data_path`. Async to accommodate connection setup
+/// (Postgres) without a blocking workaround.
 ///
-/// O Store e o AnalyticsSink são escolhidos de forma independente: o Store
-/// (+ seu sink embutido) segue a regra acima; o Sink é sobrescrito por
-/// `QUARK_CLICKHOUSE_URL` quando definido (ClickHouse é analytics-only,
-/// nunca Store).
+/// The Store and the AnalyticsSink are chosen independently: the Store
+/// (+ its embedded sink) follows the rule above; the Sink is overridden by
+/// `QUARK_CLICKHOUSE_URL` when set (ClickHouse is analytics-only,
+/// never a Store).
 pub async fn open_backends(data_path: &Path) -> Result<Backends, StoreError> {
     let (store, embedded_sink): (Arc<dyn Store>, Arc<dyn AnalyticsSink>) =
         match std::env::var("QUARK_DATABASE_URL") {

@@ -2,9 +2,9 @@ use crate::cache::{CacheTier, TierError};
 use crate::store::Record;
 use redis::AsyncCommands;
 
-/// Tier L2 (rede) sobre Valkey/Redis via `redis::aio::MultiplexedConnection`.
-/// Todo erro (rede, protocolo, (de)serialização) vira `TierError` — nunca
-/// panica; quem decide o fallback pro store é o `Cache::get` (breaker).
+/// L2 (network) tier over Valkey/Redis via `redis::aio::MultiplexedConnection`.
+/// Every error (network, protocol, (de)serialization) becomes a `TierError` — it
+/// never panics; `Cache::get` (breaker) decides the fallback to the store.
 pub struct ValkeyTier {
     conn: redis::aio::MultiplexedConnection,
 }

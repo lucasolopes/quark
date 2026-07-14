@@ -27,13 +27,13 @@ struct Kv {
 struct RecentRow {
     ts: u64,
     country: String,
-    #[allow(dead_code)] // selecionado para casar a ordem de colunas; não usado na reconstrução
+    #[allow(dead_code)]
     device: String,
     referer: String,
 }
 
-/// String vazia vira `None`, senão `Some(s)`. Enxuga o padrão de campo-vazio.
-/// Toma posse: move no caminho de reconstrução (sem alocação extra).
+/// Empty string becomes `None`, otherwise `Some(s)`. Shortens the empty-field pattern.
+/// Takes ownership: moves along the reconstruction path (no extra allocation).
 fn non_empty(s: String) -> Option<String> {
     if s.is_empty() {
         None
@@ -42,17 +42,17 @@ fn non_empty(s: String) -> Option<String> {
     }
 }
 
-/// Extrai (endpoint scheme://host[:port], user, password, database) de uma URL.
+/// Extracts (endpoint scheme://host[:port], user, password, database) from a URL.
 #[allow(clippy::type_complexity)]
 fn parse_ch_url(
     raw: &str,
 ) -> Result<(String, Option<String>, Option<String>, Option<String>), StoreError> {
     let u = url::Url::parse(raw)
-        .map_err(|e| StoreError::Backend(format!("URL ClickHouse inválida: {e}")))?;
+        .map_err(|e| StoreError::Backend(format!("invalid ClickHouse URL: {e}")))?;
     let scheme = u.scheme();
     let host = u
         .host_str()
-        .ok_or_else(|| StoreError::Backend("URL ClickHouse sem host".into()))?;
+        .ok_or_else(|| StoreError::Backend("ClickHouse URL missing host".into()))?;
     let endpoint = match u.port() {
         Some(p) => format!("{scheme}://{host}:{p}"),
         None => format!("{scheme}://{host}"),
@@ -95,7 +95,7 @@ impl ClickHouseSink {
             .map_err(StoreError::backend)
     }
 
-    /// Uso em testes: zera todo o estado.
+    /// Used in tests: resets all state.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         self.client
             .query("TRUNCATE TABLE IF EXISTS clicks")
@@ -191,7 +191,7 @@ impl AnalyticsSink for ClickHouseSink {
             .fetch_all()
             .await
             .map_err(StoreError::backend)?;
-        recent_rows.reverse(); // cronológico
+        recent_rows.reverse();
         let recent = recent_rows
             .into_iter()
             .map(|r| ClickEvent {
@@ -199,7 +199,7 @@ impl AnalyticsSink for ClickHouseSink {
                 ts: r.ts,
                 referer: non_empty(r.referer),
                 country: non_empty(r.country),
-                user_agent: None, // ClickHouse guarda device, não o UA cru (fidelidade documentada)
+                user_agent: None,
             })
             .collect();
 
@@ -215,7 +215,7 @@ mod tests {
     use super::parse_ch_url;
 
     #[test]
-    fn parse_ch_url_sem_credenciais() {
+    fn parse_ch_url_without_credentials() {
         let (endpoint, user, pass, db) = parse_ch_url("http://127.0.0.1:8123").unwrap();
         assert_eq!(endpoint, "http://127.0.0.1:8123");
         assert_eq!(user, None);
@@ -224,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_ch_url_com_credenciais_e_database() {
+    fn parse_ch_url_with_credentials_and_database() {
         let (endpoint, user, pass, db) =
             parse_ch_url("http://user:pass@host:8123/analytics").unwrap();
         assert_eq!(endpoint, "http://host:8123");
@@ -234,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_ch_url_sem_porta() {
+    fn parse_ch_url_without_port() {
         let (endpoint, user, pass, db) = parse_ch_url("https://host").unwrap();
         assert_eq!(endpoint, "https://host");
         assert_eq!(user, None);

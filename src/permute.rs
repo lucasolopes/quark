@@ -1,21 +1,22 @@
-//! Bijeção sobre [0, 2^WIDTH_BITS) via rede de Feistel balanceada
-//! com função de round ARX. É format-preserving: encode/decode nunca
-//! saem do range, nunca colidem.
+//! Bijection over [0, 2^WIDTH_BITS) via a balanced Feistel network
+//! with an ARX round function. It is format-preserving: encode/decode never
+//! leave the range, never collide.
 
 pub const WIDTH_BITS: u32 = 40;
-pub const ROUNDS: usize = 4; // calibrado (ver bin/calibrate): menor nº de rounds com avalanche = 0,5000 exata e cobertura 40/40 (difusão fechada); r3 encosta em 0,4866
+/// Calibrated (see bin/calibrate): the smallest number of rounds with exact 0.5000
+/// avalanche and full 40/40 coverage (diffusion closed); 3 rounds only reaches 0.4866.
+pub const ROUNDS: usize = 4;
 pub const MAX_ID: u64 = (1u64 << WIDTH_BITS) - 1;
 
-/// Deriva a subchave do round a partir da chave mestra e do índice.
+/// Derives the round subkey from the master key and the round index.
 #[inline]
 fn subkey(key: u64, round: usize) -> u32 {
-    // mistura simples chave+round; espalha os bits altos da chave.
     let x = key.rotate_left((round as u32) * 7 + 1)
         ^ (0x9E3779B97F4A7C15u64.wrapping_mul(round as u64 + 1));
     (x ^ (x >> 32)) as u32
 }
 
-/// Função de round ARX: mistura um meio (half_bits) com a subchave.
+/// ARX round function: mixes one half (half_bits) with the subkey.
 #[inline]
 fn round_fn(r: u32, key: u64, round: usize, half_bits: u32) -> u32 {
     let mask = (1u32 << half_bits) - 1;
@@ -27,10 +28,10 @@ fn round_fn(r: u32, key: u64, round: usize, half_bits: u32) -> u32 {
     x & mask
 }
 
-/// Feistel genérico sobre `width` bits (width par), parameterizado pelo nº de
-/// rounds. Generaliza o Feistel usado por encode; também usado pelo teste de
-/// bijetividade em largura pequena e pelo harness de calibração (bin/calibrate),
-/// que mede a permutação real (sem cópia divergente).
+/// Generic Feistel over `width` bits (width even), parameterized by the number of
+/// rounds. Generalizes the Feistel used by encode; also used by the small-width
+/// bijectivity test and by the calibration harness (bin/calibrate),
+/// which measures the real permutation (no divergent copy).
 #[inline]
 pub fn feistel_n(input: u64, key: u64, rounds: usize, width: u32) -> u64 {
     let half = width / 2;
@@ -54,7 +55,6 @@ pub fn feistel_n_inv(input: u64, key: u64, rounds: usize, width: u32) -> u64 {
     let mut l = ((input >> half) & mask) as u32;
     let mut r = (input & mask) as u32;
     for round in (0..rounds).rev() {
-        // inverte um round: antes tínhamos (l,r) = (r_prev, l_prev ^ f(r_prev))
         let r_prev = l;
         let f = round_fn(r_prev, key, round, half);
         let l_prev = r ^ f;
@@ -64,15 +64,15 @@ pub fn feistel_n_inv(input: u64, key: u64, rounds: usize, width: u32) -> u64 {
     ((l as u64) << half) | (r as u64)
 }
 
-/// Codifica um id em [0, MAX_ID] via Feistel. Entrada fora do domínio é reduzida (mascarada);
-/// a função é total e nunca dá panic.
+/// Encodes an id in [0, MAX_ID] via Feistel. Input outside the domain is reduced (masked);
+/// the function is total and never panics.
 pub fn encode(id: u64, key: u64) -> u64 {
     let id = id & MAX_ID;
     feistel_n(id, key, ROUNDS, WIDTH_BITS)
 }
 
-/// Decodifica um code em [0, MAX_ID] via Feistel inversa. Entrada fora do domínio é reduzida (mascarada);
-/// a função é total e nunca dá panic.
+/// Decodes a code in [0, MAX_ID] via inverse Feistel. Input outside the domain is reduced (masked);
+/// the function is total and never panics.
 pub fn decode(code: u64, key: u64) -> u64 {
     let code = code & MAX_ID;
     feistel_n_inv(code, key, ROUNDS, WIDTH_BITS)
@@ -83,35 +83,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trip_amostrado() {
+    fn round_trip_sampled() {
         let key = 0x9E3779B97F4A7C15;
         for id in [0u64, 1, 2, 42, 1000, MAX_ID / 2, MAX_ID - 1, MAX_ID] {
             let code = encode(id, key);
-            assert!(code <= MAX_ID, "code fora do range: {code}");
-            assert_eq!(decode(code, key), id, "round-trip falhou para id={id}");
+            assert!(code <= MAX_ID, "code out of range: {code}");
+            assert_eq!(decode(code, key), id, "round-trip failed for id={id}");
         }
     }
 
     #[test]
-    fn bijetividade_em_largura_pequena() {
-        // Varre um domínio pequeno inteiro e prova que encode é permutação.
-        // Usa 20 bits mascarando; a estrutura Feistel é a mesma.
+    fn bijectivity_on_small_width() {
         let key = 0xDEADBEEFCAFEBABE;
         let n = 1u64 << 20;
-        let mut visto = vec![false; n as usize];
+        let mut seen = vec![false; n as usize];
         for id in 0..n {
             let c = feistel_n(id, key, ROUNDS, 20);
             assert!(c < n);
-            assert!(!visto[c as usize], "colisão em id={id} -> {c}");
-            visto[c as usize] = true;
+            assert!(!seen[c as usize], "collision at id={id} -> {c}");
+            seen[c as usize] = true;
         }
     }
 
     #[test]
-    fn feistel_n_bate_com_encode_decode_guarda_anti_drift() {
-        // Pin de comportamento: encode/decode devem ser exatamente feistel_n/feistel_n_inv
-        // com ROUNDS/WIDTH_BITS do módulo. Se um futuro refactor desviar a função de round
-        // usada pelo calibrate, este teste (ou o round-trip) quebra primeiro.
+    fn feistel_n_matches_encode_decode_anti_drift_guard() {
         let key = 0x1122334455667788;
         for id in [0u64, 1, 7, 12345, MAX_ID / 3, MAX_ID] {
             assert_eq!(encode(id, key), feistel_n(id, key, ROUNDS, WIDTH_BITS));
@@ -127,14 +122,13 @@ mod tests {
     }
 
     #[test]
-    fn nao_enumeravel_ids_vizinhos() {
-        // ids sequenciais não produzem códigos sequenciais.
+    fn sequential_ids_are_not_enumerable() {
         let key = 0x0123456789ABCDEF;
         let a = encode(100, key);
         let b = encode(101, key);
         assert!(
             a.abs_diff(b) > 1,
-            "códigos vizinhos são sequenciais: {a} {b}"
+            "neighboring codes are sequential: {a} {b}"
         );
     }
 }

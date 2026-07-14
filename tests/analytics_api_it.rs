@@ -35,7 +35,6 @@ async fn app_with(
 }
 
 async fn create(app: &axum::Router, url: &str, token: Option<&str>) -> String {
-    // Quando o app tem admin_token configurado, o POST / exige o token; envie-o.
     let mut req = Request::post("/").header("content-type", "application/json");
     if let Some(t) = token {
         req = req.header("x-admin-token", t);
@@ -56,9 +55,7 @@ async fn create(app: &axum::Router, url: &str, token: Option<&str>) -> String {
 }
 
 #[tokio::test]
-async fn redirect_nao_bloqueia_com_fila_cheia() {
-    // canal capacidade 1, SEM worker consumindo: enche na 1ª e descarta o resto,
-    // mas o redirect precisa continuar respondendo 302.
+async fn redirect_does_not_block_when_queue_is_full() {
     let (app, _rx) = app_with(None, 1).await;
     let code = create(&app, "https://example.com", None).await;
     for _ in 0..5 {
@@ -71,15 +68,14 @@ async fn redirect_nao_bloqueia_com_fila_cheia() {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::FOUND); // 302 sempre, mesmo com fila cheia
+        assert_eq!(resp.status(), StatusCode::FOUND);
     }
 }
 
 #[tokio::test]
-async fn stats_exige_token() {
-    let (app, _rx) = app_with(Some("segredo"), 100).await;
-    let code = create(&app, "https://example.com", Some("segredo")).await;
-    // sem token → 401
+async fn stats_requires_token() {
+    let (app, _rx) = app_with(Some("secret"), 100).await;
+    let code = create(&app, "https://example.com", Some("secret")).await;
     let resp = app
         .clone()
         .oneshot(
@@ -90,24 +86,22 @@ async fn stats_exige_token() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    // com token errado → 401
     let resp = app
         .clone()
         .oneshot(
             Request::get(format!("/{code}/stats"))
-                .header("x-admin-token", "errado")
+                .header("x-admin-token", "wrong")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    // com token certo → 200, shape consistente (aggregates é objeto, não null)
     let resp = app
         .clone()
         .oneshot(
             Request::get(format!("/{code}/stats"))
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -123,14 +117,13 @@ async fn stats_exige_token() {
 }
 
 #[tokio::test]
-async fn stats_404_codigo_inexistente() {
-    let (app, _rx) = app_with(Some("segredo"), 100).await;
-    // "0000000" decodifica p/ id 0, in-range, nunca criado neste store fresco.
+async fn stats_404_nonexistent_code() {
+    let (app, _rx) = app_with(Some("secret"), 100).await;
     let resp = app
         .clone()
         .oneshot(
             Request::get("/0000000/stats")
-                .header("x-admin-token", "segredo")
+                .header("x-admin-token", "secret")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -140,14 +133,14 @@ async fn stats_404_codigo_inexistente() {
 }
 
 #[tokio::test]
-async fn stats_desligado_sem_token_configurado() {
-    let (app, _rx) = app_with(None, 100).await; // admin_token None
+async fn stats_disabled_without_configured_token() {
+    let (app, _rx) = app_with(None, 100).await;
     let code = create(&app, "https://example.com", None).await;
     let resp = app
         .clone()
         .oneshot(
             Request::get(format!("/{code}/stats"))
-                .header("x-admin-token", "qualquer")
+                .header("x-admin-token", "anything")
                 .body(Body::empty())
                 .unwrap(),
         )
