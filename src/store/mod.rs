@@ -2,6 +2,7 @@ pub mod lmdb;
 pub mod postgres;
 
 use crate::analytics::AnalyticsSink;
+use crate::webhooks::WebhookSubscription;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -88,6 +89,11 @@ pub trait Store: Send + Sync + 'static {
     async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError>;
     async fn delete_link(&self, id: u64) -> Result<(), StoreError>;
     async fn delete_alias(&self, alias: &str) -> Result<(), StoreError>;
+    async fn list_webhooks(&self) -> Result<Vec<WebhookSubscription>, StoreError>;
+    async fn get_webhook(&self, id: u64) -> Result<Option<WebhookSubscription>, StoreError>;
+    async fn put_webhook(&self, sub: &WebhookSubscription) -> Result<(), StoreError>;
+    async fn delete_webhook(&self, id: u64) -> Result<bool, StoreError>;
+    async fn next_webhook_id(&self) -> Result<u64, StoreError>;
 }
 
 /// Opens only the Store on LMDB (used by tests that don't need the AnalyticsSink).

@@ -1,5 +1,6 @@
 use crate::analytics::{Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::store::{Record, Store, StoreError};
+use crate::webhooks::WebhookSubscription;
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{PgPool, Row};
 
@@ -29,6 +30,24 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
             created: created as u64,
         },
     ))
+}
+
+/// Maps a `webhooks` row into a `WebhookSubscription`.
+fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
+    let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+    let url: String = r.try_get("url").map_err(StoreError::backend)?;
+    let events: serde_json::Value = r.try_get("events").map_err(StoreError::backend)?;
+    let secret: String = r.try_get("secret").map_err(StoreError::backend)?;
+    let active: bool = r.try_get("active").map_err(StoreError::backend)?;
+    let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    Ok(WebhookSubscription {
+        id: id as u64,
+        url,
+        events: serde_json::from_value(events)?,
+        secret,
+        active,
+        created: created as u64,
+    })
 }
 
 pub struct PostgresStore {
@@ -63,11 +82,13 @@ impl PostgresStore {
         let result = async {
             for ddl in [
                 "CREATE SEQUENCE IF NOT EXISTS quark_id_seq",
+                "CREATE SEQUENCE IF NOT EXISTS quark_webhook_id_seq",
                 "CREATE TABLE IF NOT EXISTS links (id BIGINT PRIMARY KEY, url TEXT NOT NULL, expiry BIGINT, created BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS blocked_domains (domain TEXT PRIMARY KEY)",
+                "CREATE TABLE IF NOT EXISTS webhooks (id BIGINT PRIMARY KEY, url TEXT NOT NULL, events JSONB NOT NULL, secret TEXT NOT NULL, active BOOLEAN NOT NULL, created BIGINT NOT NULL)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -90,8 +111,9 @@ impl PostgresStore {
     /// Used in tests: resets all state.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, stats, events",
+            "TRUNCATE links, aliases, stats, events, webhooks",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
+            "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
         ] {
             sqlx::query(q)
                 .execute(&self.pool)
@@ -300,6 +322,66 @@ impl Store for PostgresStore {
             .await
             .map_err(StoreError::backend)?;
         Ok(())
+    }
+
+    async fn list_webhooks(&self) -> Result<Vec<WebhookSubscription>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT id, url, events, secret, active, created FROM webhooks ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        rows.iter().map(row_to_webhook).collect()
+    }
+
+    async fn get_webhook(&self, id: u64) -> Result<Option<WebhookSubscription>, StoreError> {
+        let row = sqlx::query(
+            "SELECT id, url, events, secret, active, created FROM webhooks WHERE id = $1",
+        )
+        .bind(id as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => Ok(Some(row_to_webhook(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn put_webhook(&self, sub: &WebhookSubscription) -> Result<(), StoreError> {
+        let events = serde_json::to_value(&sub.events)?;
+        sqlx::query(
+            "INSERT INTO webhooks (id, url, events, secret, active, created) VALUES ($1,$2,$3,$4,$5,$6) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6",
+        )
+        .bind(sub.id as i64)
+        .bind(&sub.url)
+        .bind(&events)
+        .bind(&sub.secret)
+        .bind(sub.active)
+        .bind(sub.created as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn delete_webhook(&self, id: u64) -> Result<bool, StoreError> {
+        let res = sqlx::query("DELETE FROM webhooks WHERE id = $1")
+            .bind(id as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn next_webhook_id(&self) -> Result<u64, StoreError> {
+        let row = sqlx::query("SELECT nextval('quark_webhook_id_seq') AS id")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
+        Ok(id as u64)
     }
 }
 

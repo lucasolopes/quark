@@ -1,5 +1,6 @@
 use crate::analytics::{Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::store::{Record, Store, StoreError};
+use crate::webhooks::WebhookSubscription;
 use heed::byteorder::BigEndian;
 use heed::types::{Bytes, Str, U64};
 use heed::{Database, Env, EnvOpenOptions};
@@ -16,7 +17,7 @@ const LOCAL_BITS: u32 = 40 - NODE_BITS;
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1;
 
 /// Number of named LMDB sub-databases opened in the environment.
-const MAX_DBS: u32 = 6;
+const MAX_DBS: u32 = 7;
 /// Virtual address space (mmap) reserved for the LMDB environment.
 const MAP_SIZE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 
@@ -55,6 +56,7 @@ pub struct LmdbStore {
     stats: Database<BeU64, Bytes>,
     events: Database<BeU64, Bytes>,
     blocked: Database<Str, Str>,
+    webhooks: Database<BeU64, Bytes>,
     node_id: Option<u8>,
 }
 
@@ -81,6 +83,7 @@ impl LmdbStore {
         let stats = env.create_database(&mut wtxn, Some("stats"))?;
         let events = env.create_database(&mut wtxn, Some("events"))?;
         let blocked = env.create_database(&mut wtxn, Some("blocked"))?;
+        let webhooks = env.create_database(&mut wtxn, Some("webhooks"))?;
         wtxn.commit()?;
         Ok(LmdbStore {
             env,
@@ -90,6 +93,7 @@ impl LmdbStore {
             stats,
             events,
             blocked,
+            webhooks,
             node_id,
         })
     }
@@ -224,6 +228,48 @@ impl Store for LmdbStore {
         wtxn.commit()?;
         Ok(())
     }
+
+    async fn list_webhooks(&self) -> Result<Vec<WebhookSubscription>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        for item in self.webhooks.iter(&rtxn)? {
+            let (_, bytes) = item?;
+            out.push(serde_json::from_slice(bytes)?);
+        }
+        Ok(out)
+    }
+
+    async fn get_webhook(&self, id: u64) -> Result<Option<WebhookSubscription>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        match self.webhooks.get(&rtxn, &id)? {
+            Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn put_webhook(&self, sub: &WebhookSubscription) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec(sub)?;
+        let mut wtxn = self.env.write_txn()?;
+        self.webhooks.put(&mut wtxn, &sub.id, &bytes)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn delete_webhook(&self, id: u64) -> Result<bool, StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        let existed = self.webhooks.delete(&mut wtxn, &id)?;
+        wtxn.commit()?;
+        Ok(existed)
+    }
+
+    async fn next_webhook_id(&self) -> Result<u64, StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        let cur = self.meta.get(&wtxn, "next_webhook_id")?.unwrap_or(0);
+        let next = cur + 1;
+        self.meta.put(&mut wtxn, "next_webhook_id", &next)?;
+        wtxn.commit()?;
+        Ok(next)
+    }
 }
 
 #[async_trait::async_trait]
@@ -286,6 +332,7 @@ impl AnalyticsSink for LmdbStore {
 mod tests {
     use super::{compose_id, parse_node_id, LmdbStore, LOCAL_BITS, LOCAL_MAX};
     use crate::store::{Record, Store, StoreError};
+    use crate::webhooks::{EventType, WebhookSubscription};
 
     #[test]
     fn parse_node_id_absent_or_empty_becomes_none() {
@@ -454,5 +501,28 @@ mod tests {
         assert!(s.get_link(2).await.unwrap().is_none());
         s.delete_alias("promo").await.unwrap();
         assert_eq!(s.get_alias("promo").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn webhook_crud_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let id = store.next_webhook_id().await.unwrap();
+        let sub = WebhookSubscription {
+            id,
+            url: "https://e.com".into(),
+            events: vec![EventType::LinkCreated],
+            secret: "whsec_a".into(),
+            active: true,
+            created: 1,
+        };
+        store.put_webhook(&sub).await.unwrap();
+        assert_eq!(
+            store.get_webhook(id).await.unwrap().unwrap().url,
+            "https://e.com"
+        );
+        assert_eq!(store.list_webhooks().await.unwrap().len(), 1);
+        assert!(store.delete_webhook(id).await.unwrap());
+        assert!(store.get_webhook(id).await.unwrap().is_none());
     }
 }
