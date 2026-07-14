@@ -1662,8 +1662,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64",
  "clickhouse",
  "criterion",
+ "getrandom 0.4.3",
  "harsh",
  "heed",
  "hmac 0.13.0",

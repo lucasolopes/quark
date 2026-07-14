@@ -26,6 +26,10 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
 clickhouse = "0.13"
 url = "2"
 tower-http = { version = "0.6", features = ["cors"] }
+hmac = "0.13.0"
+sha2 = "0.11.0"
+base64 = "0.22.1"
+getrandom = "0.4.3"
 
 [dev-dependencies]
 serial_test = "3"
@@ -35,8 +39,6 @@ tower = "0.5"
 criterion = { version = "0.5", features = ["async_tokio"] }
 sqids = "0.4.2"
 harsh = "0.2.2"
-hmac = "0.13.0"
-sha2 = "0.11.0"
 
 [[bench]]
 name = "permute_bench"
