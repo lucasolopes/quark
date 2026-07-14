@@ -154,7 +154,9 @@ fn generate_event_id() -> String {
 /// deduplicate the conversion.
 fn generate_click_id() -> String {
     let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes).expect("system RNG must be available");
+    if getrandom::fill(&mut bytes).is_err() {
+        return String::new();
+    }
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     format!("clk_{hex}")
 }
