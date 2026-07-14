@@ -1,5 +1,5 @@
 use crate::abuse::{extract_host, is_internal_host};
-use crate::analytics::{AnalyticsSink, ClickEvent};
+use crate::analytics::{device_from_ua, AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
 use crate::store::{Record, Store, StoreError};
 use crate::webhooks::delivery::WebhookDispatcher;
@@ -77,6 +77,14 @@ fn generate_event_id() -> String {
 /// `docs/specs/2026-07-13-webhooks-design.md`: `{id, type, timestamp, data}`,
 /// where `data` carries `code`, `url`, an optional `alias`, an optional
 /// `expiry`, and `created`. Optional fields are omitted (not `null`) when absent.
+///
+/// `click` is `Some` only for `link.clicked`: per the design doc, that
+/// event's `data` additionally carries the click context already captured
+/// for analytics (`country`, `device`, `referrer`, `ts`), reusing the
+/// existing `ClickEvent` shape. `country`/`referrer` are omitted when
+/// absent (same omit-empty convention as `alias`/`expiry`); `device` is
+/// always present, derived from `user_agent` via `device_from_ua` (falls
+/// back to `"Other"`).
 fn webhook_event_payload(
     event_type: EventType,
     code: &str,
@@ -84,6 +92,7 @@ fn webhook_event_payload(
     alias: Option<&str>,
     expiry: Option<u64>,
     created: u64,
+    click: Option<&ClickEvent>,
 ) -> String {
     let mut data = serde_json::Map::new();
     data.insert(
@@ -104,6 +113,19 @@ fn webhook_event_payload(
         data.insert("expiry".to_string(), serde_json::Value::from(e));
     }
     data.insert("created".to_string(), serde_json::Value::from(created));
+    if let Some(ev) = click {
+        if let Some(c) = &ev.country {
+            data.insert("country".to_string(), serde_json::Value::String(c.clone()));
+        }
+        data.insert(
+            "device".to_string(),
+            serde_json::Value::String(device_from_ua(ev.user_agent.as_deref()).to_string()),
+        );
+        if let Some(r) = &ev.referer {
+            data.insert("referrer".to_string(), serde_json::Value::String(r.clone()));
+        }
+        data.insert("ts".to_string(), serde_json::Value::from(ev.ts));
+    }
     serde_json::json!({
         "id": generate_event_id(),
         "type": event_type.as_str(),
@@ -237,6 +259,7 @@ async fn create(
                 Some(&alias),
                 rec.expiry,
                 rec.created,
+                None,
             ),
         });
         return Json(CreateResp {
@@ -269,6 +292,7 @@ async fn create(
             None,
             rec.expiry,
             rec.created,
+            None,
         ),
     });
     Json(CreateResp { code, url: req.url }).into_response()
@@ -349,6 +373,7 @@ async fn redirect(
                                 None,
                                 rec.expiry,
                                 rec.created,
+                                None,
                             ),
                         });
                     }
@@ -378,8 +403,10 @@ async fn redirect(
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string()),
             };
-            let _ = st.analytics_tx.try_send(ev);
-
+            // Gate check first (cheap: one atomic load) so the payload build
+            // — which reads `ev`'s fields — happens before `ev` is moved
+            // into `try_send` below. No subscriber -> no extra work beyond
+            // the load, same as before this fix.
             if st.webhooks.clicked_subscribed.load(Ordering::Relaxed) {
                 st.webhooks.emit(WebhookEvent {
                     event_type: EventType::LinkClicked,
@@ -390,9 +417,12 @@ async fn redirect(
                         None,
                         rec.expiry,
                         rec.created,
+                        Some(&ev),
                     ),
                 });
             }
+
+            let _ = st.analytics_tx.try_send(ev);
 
             (
                 StatusCode::FOUND,
@@ -634,6 +664,7 @@ async fn admin_link_delete(
             alias.as_deref(),
             rec.expiry,
             rec.created,
+            None,
         ),
     });
     StatusCode::OK.into_response()
@@ -704,6 +735,7 @@ async fn admin_link_patch(
             alias.as_deref(),
             rec.expiry,
             rec.created,
+            None,
         ),
     });
     StatusCode::OK.into_response()
@@ -868,6 +900,7 @@ async fn admin_webhooks_test(
         None,
         None,
         now(),
+        None,
     );
     let msg_id = generate_event_id();
     let ts = now() as i64;
