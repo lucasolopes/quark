@@ -40,6 +40,19 @@ O que isso significa pros números que você vê:
 
 O filtro de bots afeta só a analytics. Ele não bloqueia nada: uma requisição sinalizada ainda recebe o redirect normalmente.
 
+## Como o sink do Postgres guarda os cliques
+
+O sink de analytics do Postgres mantém dois tipos de estado, os dois pensados para continuar rápidos quando um link vira febre:
+
+- **Contadores atômicos** (`click_counters`): uma linha por link, dimensão e balde (`total`, `bots` e cada chave de `per_day` / `per_country` / `per_device` / `per_os` / `per_browser` / `per_referer` / `per_city` / `per_variant`). Um flush calcula o delta do lote e aplica cada contador com `count = count + n` via `INSERT ... ON CONFLICT DO UPDATE`. O incremento é atômico, então dois servidores dando flush no mesmo link quente ao mesmo tempo somam as duas contagens sem perder atualização e sem lock para esperar.
+- **Eventos append-only** (`click_events`): cada clique entra como uma linha própria, nunca um read-modify-write de um blob compartilhado. As leituras remontam o agregado na hora a partir dos contadores, e a lista de eventos recentes vem das `EVENTS_MAX` (1000) linhas mais novas por link; as mais antigas são cortadas depois de cada flush.
+
+Isso substitui um design anterior que lia o blob agregado inteiro, aplicava o lote em memória e regravava o blob sob um advisory lock por link. Aquilo serializava todo flush de um link quente e regravava o blob inteiro toda vez. A abordagem de contadores tira o lock e a regravação, então um link quente deixa de ser o gargalo do sink.
+
+Uma ressalva: o incremento do contador não é idempotente. Ele resolve a perda de atualização sob concorrência, mas reprocessar o mesmo lote contaria em dobro. A ingestão do quark hoje é at-most-once (um clique é enfileirado uma vez, nunca reprocessado), então está tudo bem. Se um dia entrar entrega at-least-once, os incrementos precisariam deduplicar pelo `ClickEvent.event_id` (uma tabela `processed_events`); isso é um follow-up à parte, fora desta mudança.
+
+Para volume muito alto, o ClickHouse continua sendo o sink recomendado: é colunar, feito para esse tipo de consulta, e o caminho do Postgres é para deploys menores que preferem não rodar um segundo banco.
+
 ## Postura de privacidade
 
 **A analytics de clique nunca armazena um endereço IP.** Nem no backend LMDB, nem no ClickHouse, nem no `ClickEvent` ou nos agregados que ele alimenta. País e cidade vêm de um header que o proxy de borda já calculou (`cf-ipcountry`, `cf-ipcity`); o quark só lê esse header e segue. Não existe base GeoIP, não existe lookup de IP pra localização, não existe dependência que precisasse de uma.

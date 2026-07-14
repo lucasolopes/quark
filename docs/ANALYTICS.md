@@ -40,6 +40,19 @@ What this means for the numbers you see:
 
 Bot filtering only affects analytics. It does not block anything: a flagged request still gets its redirect like any other.
 
+## How the Postgres sink stores clicks
+
+The Postgres analytics sink keeps two kinds of state, both built to stay fast when a single link goes viral:
+
+- **Atomic counters** (`click_counters`): one row per link, dimension and bucket (`total`, `bots`, and each `per_day` / `per_country` / `per_device` / `per_os` / `per_browser` / `per_referer` / `per_city` / `per_variant` key). A flush computes the batch delta and applies each counter with `count = count + n` via `INSERT ... ON CONFLICT DO UPDATE`. The increment is atomic, so two servers flushing the same hot link at the same time both land their counts with no lost update and no lock to wait on.
+- **Append-only events** (`click_events`): every click is inserted as its own row, never a read-modify-write of a shared blob. Reads rebuild the aggregate on the fly from the counters, and the recent-events list comes from the newest `EVENTS_MAX` (1000) rows per link; older rows are trimmed after each flush.
+
+This replaces an earlier design that read the whole aggregate blob, applied the batch in memory, and wrote the blob back under a per-link advisory lock. That serialized every flush for a hot link and rewrote the entire blob each time. The counter approach removes both the lock and the rewrite, so a hot link no longer bottlenecks the sink.
+
+One caveat: the counter increment is not idempotent. It fixes lost updates under concurrency, but replaying the same batch would double-count. quark's ingestion is at-most-once today (a click is queued once, never replayed), so this is fine. If at-least-once delivery is ever added, increments would need to dedup on `ClickEvent.event_id` (a `processed_events` table); that's a separate follow-up, not part of this change.
+
+For very high volume, ClickHouse is still the recommended sink: it is columnar, built for this query shape, and the Postgres path is meant for smaller deploys that would rather not run a second datastore.
+
 ## Privacy posture
 
 **Click analytics never stores an IP address.** Not in the LMDB backend, not in ClickHouse, not in the `ClickEvent` or in the aggregates it feeds. Country and city come from a header the edge proxy already computed (`cf-ipcountry`, `cf-ipcity`); quark reads that header and moves on. There's no GeoIP database, no IP-to-location lookup, no dependency that would need one.

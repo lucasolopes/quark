@@ -24,6 +24,22 @@ fn ev(id: u64, ts: u64) -> ClickEvent {
     }
 }
 
+fn ev_ua(id: u64, ts: u64, country: &str, ua: &str) -> ClickEvent {
+    ClickEvent {
+        id,
+        event_id: String::new(),
+        ts,
+        referer: None,
+        country: Some(country.into()),
+        user_agent: Some(ua.into()),
+        city: None,
+        bot: false,
+        ip: None,
+        fbc: None,
+        variant: None,
+    }
+}
+
 #[tokio::test]
 #[serial(pg)]
 async fn record_and_stats_pg() {
@@ -57,6 +73,98 @@ async fn retention_pg() {
     let st = s.stats(7).await.unwrap().unwrap();
     assert_eq!(st.aggregates.total, 1200);
     assert_eq!(st.recent.len(), 1000);
+}
+
+#[tokio::test]
+#[serial(pg)]
+async fn per_dimension_aggregation_across_batches_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    s.record_batch(&[
+        ev_ua(3, 1_752_300_000, "BR", "Mozilla/5.0 (iPhone)"),
+        ev_ua(3, 1_752_300_050, "US", "Mozilla/5.0 (Windows NT 10.0)"),
+    ])
+    .await
+    .unwrap();
+    s.record_batch(&[ev_ua(3, 1_752_300_100, "BR", "Mozilla/5.0 (iPhone)")])
+        .await
+        .unwrap();
+    let st = s.stats(3).await.unwrap().unwrap();
+    assert_eq!(st.aggregates.total, 3);
+    assert_eq!(st.aggregates.per_country.get("BR"), Some(&2));
+    assert_eq!(st.aggregates.per_country.get("US"), Some(&1));
+    assert_eq!(st.aggregates.per_device.get("Mobile"), Some(&2));
+    assert_eq!(st.aggregates.per_device.get("Desktop"), Some(&1));
+    assert_eq!(st.aggregates.first_ts, 1_752_300_000);
+    assert_eq!(st.aggregates.last_ts, 1_752_300_100);
+    assert_eq!(st.aggregates.per_day.values().sum::<u64>(), 3);
+}
+
+#[tokio::test]
+#[serial(pg)]
+async fn bots_counted_in_total_excluded_from_breakdowns_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    s.record_batch(&[
+        ev_ua(9, 1_752_300_000, "BR", "Mozilla/5.0 (iPhone)"),
+        ev_ua(9, 1_752_300_050, "US", "Mozilla/5.0 (Windows NT 10.0)"),
+        ev_ua(9, 1_752_300_100, "JP", "Googlebot/2.1"),
+    ])
+    .await
+    .unwrap();
+    let st = s.stats(9).await.unwrap().unwrap();
+    assert_eq!(st.aggregates.total, 3);
+    assert_eq!(st.aggregates.bots, 1);
+    assert!(
+        !st.aggregates.per_country.contains_key("JP"),
+        "bot's country must not appear in per_country"
+    );
+    assert_eq!(st.aggregates.per_country.get("BR"), Some(&1));
+    assert_eq!(st.aggregates.per_country.get("US"), Some(&1));
+    assert_eq!(st.aggregates.per_device.values().sum::<u64>(), 2);
+}
+
+#[tokio::test]
+#[serial(pg)]
+async fn retention_keeps_newest_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    for b in 0..12u64 {
+        let evs: Vec<ClickEvent> = (0..100)
+            .map(|i| ev(11, 1_752_300_000 + b * 100 + i))
+            .collect();
+        s.record_batch(&evs).await.unwrap();
+    }
+    let st = s.stats(11).await.unwrap().unwrap();
+    assert_eq!(st.recent.len(), 1000);
+    let newest_ts = 1_752_300_000 + 11 * 100 + 99;
+    let oldest_kept_ts = newest_ts - 999;
+    assert_eq!(
+        st.recent.last().unwrap().ts,
+        newest_ts,
+        "newest event must be retained"
+    );
+    assert_eq!(
+        st.recent.first().unwrap().ts,
+        oldest_kept_ts,
+        "recent must hold the newest EVENTS_MAX, oldest dropped"
+    );
+}
+
+#[tokio::test]
+#[serial(pg)]
+async fn stats_none_when_empty_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    assert!(s.stats(12345).await.unwrap().is_none());
 }
 
 #[tokio::test]

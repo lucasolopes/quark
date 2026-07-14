@@ -187,6 +187,15 @@ impl PostgresStore {
                 // existed (#17).
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS variants JSONB NOT NULL DEFAULT '[]'",
                 "CREATE TABLE IF NOT EXISTS wellknown_documents (name TEXT PRIMARY KEY, body TEXT NOT NULL)",
+                // Atomic analytics (scale-audit #4): counters incremented with
+                // `ON CONFLICT DO UPDATE SET count = count + EXCLUDED.count`
+                // instead of the old whole-blob read-modify-write under an
+                // advisory lock. `stats`/`events` above are kept for
+                // idempotency but no longer read or written.
+                "CREATE TABLE IF NOT EXISTS click_counters (id BIGINT NOT NULL, dimension TEXT NOT NULL, bucket TEXT NOT NULL, count BIGINT NOT NULL, PRIMARY KEY (id, dimension, bucket))",
+                "CREATE TABLE IF NOT EXISTS stats_meta (id BIGINT PRIMARY KEY, first_ts BIGINT NOT NULL, last_ts BIGINT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS click_events (seq BIGSERIAL PRIMARY KEY, id BIGINT NOT NULL, ts BIGINT NOT NULL, referer TEXT, country TEXT, user_agent TEXT, city TEXT, variant INT, event_id TEXT NOT NULL DEFAULT '')",
+                "CREATE INDEX IF NOT EXISTS click_events_id_seq_idx ON click_events (id, seq DESC)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -209,7 +218,7 @@ impl PostgresStore {
     /// Used in tests: resets all state.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, stats, events, webhooks, api_tokens, pixels, wellknown_documents",
+            "TRUNCATE links, aliases, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
@@ -706,6 +715,37 @@ impl Store for PostgresStore {
     }
 }
 
+/// Flattens a batch DELTA (a fresh `Aggregates` that applied only this batch's
+/// events) into `(dimension, bucket, count)` rows for `click_counters`. `total`
+/// and `bots` use the empty bucket; every per_* map contributes one row per key.
+/// Zero counts are skipped so an all-bot batch never writes empty per_* rows.
+fn counter_rows(agg: &Aggregates) -> Vec<(&'static str, String, i64)> {
+    let mut rows: Vec<(&'static str, String, i64)> = Vec::new();
+    if agg.total > 0 {
+        rows.push(("total", String::new(), agg.total as i64));
+    }
+    if agg.bots > 0 {
+        rows.push(("bots", String::new(), agg.bots as i64));
+    }
+    for (dim, map) in [
+        ("day", &agg.per_day),
+        ("country", &agg.per_country),
+        ("device", &agg.per_device),
+        ("os", &agg.per_os),
+        ("browser", &agg.per_browser),
+        ("referer", &agg.per_referer),
+        ("city", &agg.per_city),
+        ("variant", &agg.per_variant),
+    ] {
+        for (bucket, count) in map {
+            if *count > 0 {
+                rows.push((dim, bucket.clone(), *count as i64));
+            }
+        }
+    }
+    rows
+}
+
 #[async_trait::async_trait]
 impl AnalyticsSink for PostgresStore {
     async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), StoreError> {
@@ -719,60 +759,56 @@ impl AnalyticsSink for PostgresStore {
         }
         let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
         for (id, evs) in by_id {
-            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            let mut delta = Aggregates::default();
+            for e in &evs {
+                delta.apply(e);
+            }
+            for (dimension, bucket, count) in counter_rows(&delta) {
+                sqlx::query(
+                    "INSERT INTO click_counters (id, dimension, bucket, count) VALUES ($1,$2,$3,$4) \
+                     ON CONFLICT (id, dimension, bucket) DO UPDATE SET count = click_counters.count + EXCLUDED.count",
+                )
                 .bind(id as i64)
+                .bind(dimension)
+                .bind(&bucket)
+                .bind(count)
                 .execute(&mut *tx)
                 .await
                 .map_err(StoreError::backend)?;
-            let row = sqlx::query("SELECT agg FROM stats WHERE id=$1")
-                .bind(id as i64)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(StoreError::backend)?;
-            let mut agg: Aggregates = match row {
-                Some(r) => {
-                    let v: serde_json::Value = r.try_get("agg").map_err(StoreError::backend)?;
-                    serde_json::from_value(v)?
-                }
-                None => Aggregates::default(),
-            };
-            for e in &evs {
-                agg.apply(e);
             }
-            let aggv = serde_json::to_value(&agg)?;
             sqlx::query(
-                "INSERT INTO stats (id, agg) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET agg=$2",
+                "INSERT INTO stats_meta (id, first_ts, last_ts) VALUES ($1,$2,$3) \
+                 ON CONFLICT (id) DO UPDATE SET first_ts = LEAST(stats_meta.first_ts, EXCLUDED.first_ts), last_ts = GREATEST(stats_meta.last_ts, EXCLUDED.last_ts)",
             )
             .bind(id as i64)
-            .bind(&aggv)
+            .bind(delta.first_ts as i64)
+            .bind(delta.last_ts as i64)
             .execute(&mut *tx)
             .await
             .map_err(StoreError::backend)?;
-            let row = sqlx::query("SELECT recent FROM events WHERE id=$1")
+            for e in &evs {
+                sqlx::query(
+                    "INSERT INTO click_events (id, ts, referer, country, user_agent, city, variant, event_id) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+                )
                 .bind(id as i64)
-                .fetch_optional(&mut *tx)
+                .bind(e.ts as i64)
+                .bind(&e.referer)
+                .bind(&e.country)
+                .bind(&e.user_agent)
+                .bind(&e.city)
+                .bind(e.variant.map(|v| v as i32))
+                .bind(&e.event_id)
+                .execute(&mut *tx)
                 .await
                 .map_err(StoreError::backend)?;
-            let mut recent: Vec<ClickEvent> = match row {
-                Some(r) => {
-                    let v: serde_json::Value = r.try_get("recent").map_err(StoreError::backend)?;
-                    serde_json::from_value(v)?
-                }
-                None => Vec::new(),
-            };
-            for e in &evs {
-                recent.push((*e).clone());
             }
-            if recent.len() > EVENTS_MAX {
-                let d = recent.len() - EVENTS_MAX;
-                recent.drain(0..d);
-            }
-            let recv = serde_json::to_value(&recent)?;
             sqlx::query(
-                "INSERT INTO events (id, recent) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET recent=$2",
+                "DELETE FROM click_events WHERE id=$1 AND seq < \
+                 (SELECT MIN(seq) FROM (SELECT seq FROM click_events WHERE id=$1 ORDER BY seq DESC LIMIT $2) t)",
             )
             .bind(id as i64)
-            .bind(&recv)
+            .bind(EVENTS_MAX as i64)
             .execute(&mut *tx)
             .await
             .map_err(StoreError::backend)?;
@@ -782,32 +818,94 @@ impl AnalyticsSink for PostgresStore {
     }
 
     async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError> {
-        let row = sqlx::query("SELECT agg FROM stats WHERE id=$1")
+        let counter_rows =
+            sqlx::query("SELECT dimension, bucket, count FROM click_counters WHERE id=$1")
+                .bind(id as i64)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(StoreError::backend)?;
+        let mut agg = Aggregates::default();
+        for r in &counter_rows {
+            let dimension: String = r.try_get("dimension").map_err(StoreError::backend)?;
+            let bucket: String = r.try_get("bucket").map_err(StoreError::backend)?;
+            let count: i64 = r.try_get("count").map_err(StoreError::backend)?;
+            let count = count as u64;
+            match dimension.as_str() {
+                "total" => agg.total = count,
+                "bots" => agg.bots = count,
+                "day" => {
+                    agg.per_day.insert(bucket, count);
+                }
+                "country" => {
+                    agg.per_country.insert(bucket, count);
+                }
+                "device" => {
+                    agg.per_device.insert(bucket, count);
+                }
+                "os" => {
+                    agg.per_os.insert(bucket, count);
+                }
+                "browser" => {
+                    agg.per_browser.insert(bucket, count);
+                }
+                "referer" => {
+                    agg.per_referer.insert(bucket, count);
+                }
+                "city" => {
+                    agg.per_city.insert(bucket, count);
+                }
+                "variant" => {
+                    agg.per_variant.insert(bucket, count);
+                }
+                _ => {}
+            }
+        }
+        let meta = sqlx::query("SELECT first_ts, last_ts FROM stats_meta WHERE id=$1")
             .bind(id as i64)
             .fetch_optional(&self.pool)
             .await
             .map_err(StoreError::backend)?;
-        let agg: Aggregates = match row {
-            Some(r) => {
-                let v: serde_json::Value = r.try_get("agg").map_err(StoreError::backend)?;
-                serde_json::from_value(v)?
-            }
-            None => return Ok(None),
-        };
-        let row = sqlx::query("SELECT recent FROM events WHERE id=$1")
-            .bind(id as i64)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(StoreError::backend)?;
-        let mut recent: Vec<ClickEvent> = match row {
-            Some(r) => {
-                let v: serde_json::Value = r.try_get("recent").map_err(StoreError::backend)?;
-                serde_json::from_value(v)?
-            }
-            None => Vec::new(),
-        };
-        for e in &mut recent {
-            e.bot = is_bot(e.user_agent.as_deref());
+        if let Some(m) = &meta {
+            let first_ts: i64 = m.try_get("first_ts").map_err(StoreError::backend)?;
+            let last_ts: i64 = m.try_get("last_ts").map_err(StoreError::backend)?;
+            agg.first_ts = first_ts as u64;
+            agg.last_ts = last_ts as u64;
+        }
+        let event_rows = sqlx::query(
+            "SELECT ts, referer, country, user_agent, city, variant, event_id FROM click_events \
+             WHERE id=$1 ORDER BY seq DESC LIMIT $2",
+        )
+        .bind(id as i64)
+        .bind(EVENTS_MAX as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        if counter_rows.is_empty() && event_rows.is_empty() {
+            return Ok(None);
+        }
+        let mut recent: Vec<ClickEvent> = Vec::with_capacity(event_rows.len());
+        for r in event_rows.iter().rev() {
+            let ts: i64 = r.try_get("ts").map_err(StoreError::backend)?;
+            let referer: Option<String> = r.try_get("referer").map_err(StoreError::backend)?;
+            let country: Option<String> = r.try_get("country").map_err(StoreError::backend)?;
+            let user_agent: Option<String> =
+                r.try_get("user_agent").map_err(StoreError::backend)?;
+            let city: Option<String> = r.try_get("city").map_err(StoreError::backend)?;
+            let variant: Option<i32> = r.try_get("variant").map_err(StoreError::backend)?;
+            let event_id: String = r.try_get("event_id").map_err(StoreError::backend)?;
+            recent.push(ClickEvent {
+                id,
+                event_id,
+                ts: ts as u64,
+                referer,
+                country,
+                bot: is_bot(user_agent.as_deref()),
+                user_agent,
+                city,
+                ip: None,
+                fbc: None,
+                variant: variant.map(|v| v as u32),
+            });
         }
         Ok(Some(Stats {
             aggregates: agg,
