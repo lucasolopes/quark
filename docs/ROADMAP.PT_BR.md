@@ -14,6 +14,10 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 
 ## Feito
 
+- **Webhooks (#1):** eventos HTTP de saída assinados em `link.created/updated/deleted/expired/clicked`,
+  assinatura HMAC Standard Webhooks, entrega best-effort (fila → worker → retry com backoff/jitter,
+  guardada contra SSRF), assinaturas gerenciadas no painel ou via `/admin/webhooks`. É a base
+  pro #6 (Slack/Discord/Telegram) e o #10 (n8n/Zapier). Doc: `docs/WEBHOOKS.PT_BR.md`.
 - **Núcleo (v0.1):** criar + redirecionar + alias customizado + expiração (TTL). O short-code
   é uma permutação Feistel/ARX calibrada (`ROUNDS=4`); códigos são **calculados, não
   armazenados** (store chaveado por `u64`).
