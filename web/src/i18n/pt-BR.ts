@@ -26,6 +26,7 @@ export const ptBR: Messages = {
   shell: {
     navLinks: "Links",
     navBlocklist: "Blocklist",
+    navImport: "Importar",
     themeToLight: "Usar tema claro",
     themeToDark: "Usar tema escuro",
     logout: "Sair",
@@ -118,6 +119,25 @@ export const ptBR: Messages = {
     refererHeader: "Referência",
     direct: "direto",
     empty: "Nenhum clique recente.",
+  },
+  import: {
+    heading: "Importar links",
+    subtitle: "Crie links em massa a partir de uma exportação do Bitly, Kutt ou YOURLS (CSV ou JSON), ou qualquer lista com uma coluna de URL.",
+    fileLabel: "Arquivo (.csv ou .json)",
+    fileAriaLabel: "Escolher um arquivo CSV ou JSON para importar",
+    pasteLabel: "Ou cole CSV ou JSON",
+    textareaPlaceholder: "url,alias,ttl\nhttps://exemplo.com/pagina,,3600",
+    submit: "Importar",
+    submitting: "Importando…",
+    noInputError: "Escolha um arquivo ou cole os dados primeiro.",
+    genericError: "Não foi possível importar. Tente de novo.",
+    successToast: "Importação concluída: {imported} importados, {failed} falharam.",
+    summary: "Importados: {imported} · Falharam: {failed}",
+    tableIndexHeader: "Linha",
+    tableUrlHeader: "URL",
+    tableReasonHeader: "Motivo",
+    emptyTitle: "Nenhuma importação feita ainda.",
+    emptySubtitle: "Escolha um arquivo ou cole os dados abaixo e clique em Importar.",
   },
   dialogs: {
     create: {

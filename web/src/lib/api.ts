@@ -1,7 +1,7 @@
 import { getToken } from "./auth";
 import type {
   ListLinksResponse, CreateLinkRequest, CreateLinkResponse,
-  Stats, BlocklistResponse, PatchLinkRequest,
+  Stats, BlocklistResponse, PatchLinkRequest, ImportSummary,
 } from "./types";
 
 /**
@@ -27,7 +27,7 @@ async function req(path: string, opts: RequestInit = {}): Promise<Response> {
   const headers = new Headers(opts.headers);
   const token = getToken();
   if (token) headers.set("x-admin-token", token);
-  if (opts.body) headers.set("content-type", "application/json");
+  if (opts.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   const res = await fetch(BASE + path, { ...opts, headers });
   if (res.status === 401) { onUnauthorized(); throw new ApiError(401, "unauthorized"); }
   return res;
@@ -73,5 +73,16 @@ export const api = {
   async removeBlocked(domain: string): Promise<void> {
     const res = await req("/admin/blocklist", { method: "DELETE", body: JSON.stringify({ domain }) });
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  /**
+   * Bulk-imports links from a raw CSV or JSON body. `contentType` picks the
+   * parser server-side (`text/csv` or `application/json`) and is sent as-is,
+   * overriding the default `application/json` the shared `req` helper would
+   * otherwise set for any request with a body.
+   */
+  async importLinks(body: string, contentType: string): Promise<ImportSummary> {
+    return jsonOrThrow(
+      await req("/admin/import", { method: "POST", body, headers: { "content-type": contentType } }),
+    );
   },
 };

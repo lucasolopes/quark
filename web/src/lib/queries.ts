@@ -110,3 +110,12 @@ export function useRemoveBlocked() {
     onSuccess: () => { void client.invalidateQueries({ queryKey: BLOCKLIST_QUERY_KEY }); },
   });
 }
+
+/** Bulk-imports links from a raw CSV/JSON body; on success invalidates `useLinks`. */
+export function useImport() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ body, contentType }: { body: string; contentType: string }) => api.importLinks(body, contentType),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY }); },
+  });
+}

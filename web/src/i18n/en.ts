@@ -24,6 +24,7 @@ export const en = {
   shell: {
     navLinks: "Links",
     navBlocklist: "Blocklist",
+    navImport: "Import",
     themeToLight: "Switch to light theme",
     themeToDark: "Switch to dark theme",
     logout: "Log out",
@@ -116,6 +117,25 @@ export const en = {
     refererHeader: "Referrer",
     direct: "direct",
     empty: "No recent clicks.",
+  },
+  import: {
+    heading: "Import links",
+    subtitle: "Bulk-create links from a Bitly, Kutt or YOURLS export (CSV or JSON), or any list with a url column.",
+    fileLabel: "File (.csv or .json)",
+    fileAriaLabel: "Choose a CSV or JSON file to import",
+    pasteLabel: "Or paste CSV or JSON",
+    textareaPlaceholder: "url,alias,ttl\nhttps://example.com/page,,3600",
+    submit: "Import",
+    submitting: "Importing…",
+    noInputError: "Choose a file or paste some data first.",
+    genericError: "Could not import. Try again.",
+    successToast: "Import finished: {imported} imported, {failed} failed.",
+    summary: "Imported: {imported} · Failed: {failed}",
+    tableIndexHeader: "Row",
+    tableUrlHeader: "URL",
+    tableReasonHeader: "Reason",
+    emptyTitle: "No import run yet.",
+    emptySubtitle: "Choose a file or paste data below, then click Import.",
   },
   dialogs: {
     create: {

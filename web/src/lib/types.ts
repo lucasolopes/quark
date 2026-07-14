@@ -22,3 +22,5 @@ export interface Aggregates {
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
 export interface BlocklistResponse { domains: string[]; }
 export interface PatchLinkRequest { url?: string; ttl?: number | null; }
+export interface ImportFailure { index: number; url: string; reason: string; }
+export interface ImportSummary { imported: number; failed: ImportFailure[]; }
