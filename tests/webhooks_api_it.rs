@@ -170,6 +170,7 @@ async fn webhooks_crud_and_secret_masking() {
         "whsec_\u{2022}\u{2022}\u{2022}\u{2022}"
     );
     assert!(row.get("secret").is_none());
+    assert_eq!(row["kind"], "generic");
 
     let resp = app
         .clone()
@@ -299,6 +300,54 @@ async fn link_clicked_emits_payload_with_click_context() {
     assert_eq!(payload["data"]["referrer"], "https://ref.example/page");
     assert_eq!(payload["data"]["device"], "Mobile");
     assert!(payload["data"]["ts"].is_u64());
+}
+
+/// Creating a Slack-kind subscription must not mint an HMAC secret: Slack
+/// authenticates via the incoming URL itself, so `secret` is absent from the
+/// response entirely (rather than a fake/empty `whsec_...` value), and the
+/// list's `secret_masked` is empty too.
+#[tokio::test]
+async fn creating_a_slack_webhook_returns_no_secret() {
+    let app = app_admin("secret").await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/webhooks")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(
+                    r#"{"url":"https://hooks.slack.example/incoming","events":["link.created"],"kind":"slack"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(created.get("secret").is_none());
+    let id = created["id"].as_u64().unwrap();
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/webhooks")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let row = &list["webhooks"][0];
+    assert_eq!(row["id"], id);
+    assert_eq!(row["kind"], "slack");
+    assert_eq!(row["secret_masked"], "");
 }
 
 /// Hot-path coverage for the no-subscriber case: `app_admin_with_dispatcher`

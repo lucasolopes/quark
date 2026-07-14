@@ -515,6 +515,7 @@ mod tests {
             secret: "whsec_a".into(),
             active: true,
             created: 1,
+            kind: crate::webhooks::SubscriptionKind::Generic,
         };
         store.put_webhook(&sub).await.unwrap();
         assert_eq!(

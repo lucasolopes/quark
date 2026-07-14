@@ -3,7 +3,7 @@ use crate::analytics::{device_from_ua, AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
 use crate::store::{Record, Store, StoreError};
 use crate::webhooks::delivery::WebhookDispatcher;
-use crate::webhooks::{self, EventType, WebhookEvent, WebhookSubscription};
+use crate::webhooks::{self, EventType, SubscriptionKind, WebhookEvent, WebhookSubscription};
 use crate::{codec, now, permute};
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
@@ -152,9 +152,15 @@ fn validate_webhook_url(url: &str) -> Result<(), (StatusCode, &'static str)> {
 }
 
 /// Masks a webhook secret for display: the raw value is only ever returned
-/// once, at creation time.
-fn mask_secret(_secret: &str) -> String {
-    "whsec_••••".to_string()
+/// once, at creation time. Channel kinds (Slack/Discord/Telegram) carry no
+/// signing secret at all, so an empty `secret` masks to an empty string
+/// rather than a fake-looking `whsec_••••`.
+fn mask_secret(secret: &str) -> String {
+    if secret.is_empty() {
+        String::new()
+    } else {
+        "whsec_••••".to_string()
+    }
 }
 
 /// Computes the Cache-Control header value for a redirect response,
@@ -746,6 +752,8 @@ struct WebhookCreateReq {
     url: String,
     events: Vec<EventType>,
     active: Option<bool>,
+    #[serde(default)]
+    kind: SubscriptionKind,
 }
 
 #[derive(Deserialize)]
@@ -753,6 +761,7 @@ struct WebhookPatchReq {
     url: Option<String>,
     events: Option<Vec<EventType>>,
     active: Option<bool>,
+    kind: Option<SubscriptionKind>,
 }
 
 #[derive(Serialize)]
@@ -763,6 +772,7 @@ struct WebhookRow {
     active: bool,
     created: u64,
     secret_masked: String,
+    kind: SubscriptionKind,
 }
 
 async fn admin_webhooks_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
@@ -780,6 +790,7 @@ async fn admin_webhooks_list(State(st): State<Arc<AppState>>, headers: HeaderMap
                     active: s.active,
                     created: s.created,
                     secret_masked: mask_secret(&s.secret),
+                    kind: s.kind,
                 })
                 .collect();
             Json(serde_json::json!({ "webhooks": rows })).into_response()
@@ -810,7 +821,13 @@ async fn admin_webhooks_create(
         Ok(id) => id,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    let secret = webhooks::generate_secret();
+    // Only Generic subscriptions sign deliveries, so only they need an HMAC
+    // secret. Channel kinds (Slack/Discord/Telegram) authenticate via the
+    // incoming URL itself and get no secret at all.
+    let secret = match req.kind {
+        SubscriptionKind::Generic => webhooks::generate_secret(),
+        _ => String::new(),
+    };
     let sub = WebhookSubscription {
         id,
         url: req.url,
@@ -818,15 +835,16 @@ async fn admin_webhooks_create(
         secret: secret.clone(),
         active: req.active.unwrap_or(true),
         created: now(),
+        kind: req.kind,
     };
     if st.store.put_webhook(&sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({ "id": id, "secret": secret })),
-    )
-        .into_response()
+    let mut resp = serde_json::json!({ "id": id });
+    if sub.kind == SubscriptionKind::Generic {
+        resp["secret"] = serde_json::Value::String(secret);
+    }
+    (StatusCode::CREATED, Json(resp)).into_response()
 }
 
 async fn admin_webhooks_patch(
@@ -854,6 +872,9 @@ async fn admin_webhooks_patch(
     }
     if let Some(active) = req.active {
         sub.active = active;
+    }
+    if let Some(kind) = req.kind {
+        sub.kind = kind;
     }
     if st.store.put_webhook(&sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

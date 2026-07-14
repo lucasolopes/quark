@@ -43,6 +43,51 @@ impl EventType {
     }
 }
 
+/// Kind of channel a webhook subscription delivers to. `Generic` is a raw,
+/// Standard-Webhooks-signed HTTP callback (the #1 behavior); the other
+/// variants are native chat integrations whose incoming URL doubles as the
+/// authentication secret, so they are delivered unsigned (see
+/// `channel_payload` and `delivery::deliver_one`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SubscriptionKind {
+    #[default]
+    #[serde(rename = "generic")]
+    Generic,
+    #[serde(rename = "slack")]
+    Slack,
+    #[serde(rename = "discord")]
+    Discord,
+    #[serde(rename = "telegram")]
+    Telegram,
+}
+
+impl SubscriptionKind {
+    /// The wire string for this kind (matches the serde rename); also used
+    /// as the on-disk representation for backends that store `kind` as a
+    /// plain text column (see `store::postgres::row_to_webhook`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SubscriptionKind::Generic => "generic",
+            SubscriptionKind::Slack => "slack",
+            SubscriptionKind::Discord => "discord",
+            SubscriptionKind::Telegram => "telegram",
+        }
+    }
+
+    /// Parses the wire/column string back into a kind. Unrecognized values
+    /// fall back to `Generic` rather than erroring, matching the
+    /// `#[serde(default)]` behavior on `WebhookSubscription::kind` for
+    /// pre-#6 rows that never had this column/field.
+    pub fn from_str_or_generic(s: &str) -> Self {
+        match s {
+            "slack" => SubscriptionKind::Slack,
+            "discord" => SubscriptionKind::Discord,
+            "telegram" => SubscriptionKind::Telegram,
+            _ => SubscriptionKind::Generic,
+        }
+    }
+}
+
 /// A registered outbound webhook subscription.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookSubscription {
@@ -52,6 +97,10 @@ pub struct WebhookSubscription {
     pub secret: String,
     pub active: bool,
     pub created: u64,
+    /// Channel kind; defaults to `Generic` so pre-#6 persisted blobs (which
+    /// never had this field) deserialize unchanged.
+    #[serde(default)]
+    pub kind: SubscriptionKind,
 }
 
 /// A concrete event ready to be delivered: the event kind plus the exact
@@ -121,6 +170,45 @@ pub fn matches(sub: &WebhookSubscription, ev: &EventType) -> bool {
     sub.active && sub.events.contains(ev)
 }
 
+/// Renders a plain-text (no emoji) chat message for `event_type`, parsing
+/// the fields a channel needs (`data.code`/`data.url`, optionally
+/// `data.country`) out of the same JSON `body` the generic path signs and
+/// sends verbatim. If `body` doesn't parse as JSON, falls back to the bare
+/// event type string, since there's nothing else reliable to show.
+pub fn format_message(event_type: EventType, body: &str) -> String {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) else {
+        return event_type.as_str().to_string();
+    };
+    let code = parsed["data"]["code"].as_str().unwrap_or("");
+    let url = parsed["data"]["url"].as_str().unwrap_or("");
+    match event_type {
+        EventType::LinkCreated => format!("New short link: {code} -> {url}"),
+        EventType::LinkUpdated => format!("Short link updated: {code} -> {url}"),
+        EventType::LinkDeleted => format!("Short link deleted: {code}"),
+        EventType::LinkExpired => format!("Short link expired: {code}"),
+        EventType::LinkClicked => {
+            let mut msg = format!("Click on {code} -> {url}");
+            if let Some(country) = parsed["data"]["country"].as_str() {
+                msg.push_str(&format!(" ({country})"));
+            }
+            msg
+        }
+    }
+}
+
+/// Builds the JSON body a chat channel expects for `message`, per `kind`.
+/// Returns `None` for `Generic`, which has no channel payload: it signs and
+/// sends the original event body verbatim instead (see `delivery::deliver_one`).
+pub fn channel_payload(kind: SubscriptionKind, message: &str) -> Option<String> {
+    match kind {
+        SubscriptionKind::Generic => None,
+        SubscriptionKind::Slack | SubscriptionKind::Telegram => {
+            Some(serde_json::json!({ "text": message }).to_string())
+        }
+        SubscriptionKind::Discord => Some(serde_json::json!({ "content": message }).to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +260,7 @@ mod tests {
             secret: "whsec_x".into(),
             active: true,
             created: 0,
+            kind: SubscriptionKind::Generic,
         };
         assert!(matches(&sub, &EventType::LinkCreated));
         assert!(!matches(&sub, &EventType::LinkClicked));
@@ -180,5 +269,129 @@ mod tests {
             ..sub.clone()
         };
         assert!(!matches(&off, &EventType::LinkCreated));
+    }
+
+    #[test]
+    fn subscription_kind_wire_strings_are_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&SubscriptionKind::Generic).unwrap(),
+            "\"generic\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SubscriptionKind::Slack).unwrap(),
+            "\"slack\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SubscriptionKind::Discord).unwrap(),
+            "\"discord\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SubscriptionKind::Telegram).unwrap(),
+            "\"telegram\""
+        );
+    }
+
+    /// Regression: a pre-#6 persisted `WebhookSubscription` blob has no
+    /// `kind` field at all. `#[serde(default)]` must fill it with `Generic`
+    /// rather than failing to deserialize.
+    #[test]
+    fn subscription_without_kind_field_deserializes_as_generic() {
+        let blob = r#"{
+            "id": 1,
+            "url": "https://x",
+            "events": ["link.created"],
+            "secret": "whsec_x",
+            "active": true,
+            "created": 0
+        }"#;
+        let sub: WebhookSubscription = serde_json::from_str(blob).unwrap();
+        assert_eq!(sub.kind, SubscriptionKind::Generic);
+    }
+
+    #[test]
+    fn format_message_created() {
+        let body = r#"{"type":"link.created","data":{"code":"abc123","url":"https://e.com"}}"#;
+        assert_eq!(
+            format_message(EventType::LinkCreated, body),
+            "New short link: abc123 -> https://e.com"
+        );
+    }
+
+    #[test]
+    fn format_message_updated() {
+        let body = r#"{"type":"link.updated","data":{"code":"abc123","url":"https://e.com"}}"#;
+        assert_eq!(
+            format_message(EventType::LinkUpdated, body),
+            "Short link updated: abc123 -> https://e.com"
+        );
+    }
+
+    #[test]
+    fn format_message_deleted() {
+        let body = r#"{"type":"link.deleted","data":{"code":"abc123"}}"#;
+        assert_eq!(
+            format_message(EventType::LinkDeleted, body),
+            "Short link deleted: abc123"
+        );
+    }
+
+    #[test]
+    fn format_message_expired() {
+        let body = r#"{"type":"link.expired","data":{"code":"abc123"}}"#;
+        assert_eq!(
+            format_message(EventType::LinkExpired, body),
+            "Short link expired: abc123"
+        );
+    }
+
+    #[test]
+    fn format_message_clicked_without_country() {
+        let body = r#"{"type":"link.clicked","data":{"code":"abc123","url":"https://e.com"}}"#;
+        assert_eq!(
+            format_message(EventType::LinkClicked, body),
+            "Click on abc123 -> https://e.com"
+        );
+    }
+
+    #[test]
+    fn format_message_clicked_with_country() {
+        let body = r#"{"type":"link.clicked","data":{"code":"abc123","url":"https://e.com","country":"BR"}}"#;
+        assert_eq!(
+            format_message(EventType::LinkClicked, body),
+            "Click on abc123 -> https://e.com (BR)"
+        );
+    }
+
+    #[test]
+    fn format_message_falls_back_to_event_type_on_parse_failure() {
+        assert_eq!(
+            format_message(EventType::LinkCreated, "not json"),
+            "link.created"
+        );
+    }
+
+    #[test]
+    fn channel_payload_slack_and_telegram_use_text_field() {
+        assert_eq!(
+            channel_payload(SubscriptionKind::Slack, "hello"),
+            Some(r#"{"text":"hello"}"#.to_string())
+        );
+        assert_eq!(
+            channel_payload(SubscriptionKind::Telegram, "hello"),
+            Some(r#"{"text":"hello"}"#.to_string())
+        );
+    }
+
+    #[test]
+    fn channel_payload_discord_uses_content_field() {
+        assert_eq!(
+            channel_payload(SubscriptionKind::Discord, "hello"),
+            Some(r#"{"content":"hello"}"#.to_string())
+        );
+    }
+
+    #[test]
+    fn channel_payload_generic_is_none() {
+        assert_eq!(channel_payload(SubscriptionKind::Generic, "hello"), None);
     }
 }
