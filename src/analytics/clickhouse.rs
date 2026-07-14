@@ -1,4 +1,7 @@
-use crate::analytics::{device_from_ua, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
+use crate::analytics::{
+    browser_from_ua, device_from_ua, os_from_ua, referer_host, Aggregates, AnalyticsSink,
+    ClickEvent, Stats, EVENTS_MAX,
+};
 use crate::store::StoreError;
 use clickhouse::Row;
 use serde::{Deserialize, Serialize};
@@ -10,6 +13,10 @@ struct ClickRow<'a> {
     country: &'a str,
     device: &'a str,
     referer: &'a str,
+    os: &'a str,
+    browser: &'a str,
+    city: &'a str,
+    referer_host: String,
 }
 
 #[derive(Row, Deserialize)]
@@ -30,6 +37,7 @@ struct RecentRow {
     #[allow(dead_code)]
     device: String,
     referer: String,
+    city: String,
 }
 
 /// Empty string becomes `None`, otherwise `Some(s)`. Shortens the empty-field pattern.
@@ -88,7 +96,21 @@ impl ClickHouseSink {
     async fn init_schema(&self) -> Result<(), StoreError> {
         self.client
             .query(
-                "CREATE TABLE IF NOT EXISTS clicks (id UInt64, ts UInt64, country String, device String, referer String) ENGINE = MergeTree ORDER BY (id, ts)"
+                "CREATE TABLE IF NOT EXISTS clicks (id UInt64, ts UInt64, country String, device String, referer String, os String, browser String, city String, referer_host String) ENGINE = MergeTree ORDER BY (id, ts)"
+            )
+            .execute()
+            .await
+            .map_err(StoreError::backend)?;
+        // Migration for tables created before os/browser/city/referer_host
+        // existed. `IF NOT EXISTS` makes this a no-op on fresh tables (already
+        // created with these columns above) and on tables migrated before.
+        self.client
+            .query(
+                "ALTER TABLE clicks \
+                 ADD COLUMN IF NOT EXISTS os String, \
+                 ADD COLUMN IF NOT EXISTS browser String, \
+                 ADD COLUMN IF NOT EXISTS city String, \
+                 ADD COLUMN IF NOT EXISTS referer_host String",
             )
             .execute()
             .await
@@ -114,12 +136,19 @@ impl AnalyticsSink for ClickHouseSink {
         let mut insert = self.client.insert("clicks").map_err(StoreError::backend)?;
         for e in events {
             let device = device_from_ua(e.user_agent.as_deref());
+            let os = os_from_ua(e.user_agent.as_deref());
+            let browser = browser_from_ua(e.user_agent.as_deref());
+            let host = referer_host(e.referer.as_deref());
             let row = ClickRow {
                 id: e.id,
                 ts: e.ts,
                 country: e.country.as_deref().unwrap_or(""),
                 device,
                 referer: e.referer.as_deref().unwrap_or(""),
+                os,
+                browser,
+                city: e.city.as_deref().unwrap_or(""),
+                referer_host: host,
             };
             insert.write(&row).await.map_err(StoreError::backend)?;
         }
@@ -183,9 +212,68 @@ impl AnalyticsSink for ClickHouseSink {
             agg.per_device.insert(kv.k, kv.c);
         }
 
+        // `os`/`browser` fall back to "Other" for rows written before the
+        // migration (empty string), matching the `os_from_ua`/`browser_from_ua`
+        // default for an absent user agent.
+        let per_os: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT if(os = '', 'Other', os) AS k, count() AS c FROM clicks WHERE id = ? GROUP BY k",
+            )
+            .bind(id)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_os {
+            agg.per_os.insert(kv.k, kv.c);
+        }
+
+        let per_browser: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT if(browser = '', 'Other', browser) AS k, count() AS c FROM clicks WHERE id = ? GROUP BY k",
+            )
+            .bind(id)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_browser {
+            agg.per_browser.insert(kv.k, kv.c);
+        }
+
+        // Referer is grouped by the `referer_host` column (computed at write
+        // time via `referer_host()`, consistent with the LMDB/Postgres path
+        // that derives it in Rust). Empty falls back to "direct" for rows
+        // written before the migration.
+        let per_referer: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT if(referer_host = '', 'direct', referer_host) AS k, count() AS c FROM clicks WHERE id = ? GROUP BY k",
+            )
+            .bind(id)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_referer {
+            agg.per_referer.insert(kv.k, kv.c);
+        }
+
+        let per_city: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT city AS k, count() AS c FROM clicks WHERE id = ? AND city != '' GROUP BY k",
+            )
+            .bind(id)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_city {
+            agg.per_city.insert(kv.k, kv.c);
+        }
+
         let mut recent_rows: Vec<RecentRow> = self
             .client
-            .query("SELECT ts, country, device, referer FROM clicks WHERE id = ? ORDER BY ts DESC LIMIT ?")
+            .query("SELECT ts, country, device, referer, city FROM clicks WHERE id = ? ORDER BY ts DESC LIMIT ?")
             .bind(id)
             .bind(EVENTS_MAX as u64)
             .fetch_all()
@@ -200,7 +288,7 @@ impl AnalyticsSink for ClickHouseSink {
                 referer: non_empty(r.referer),
                 country: non_empty(r.country),
                 user_agent: None,
-                city: None,
+                city: non_empty(r.city),
             })
             .collect();
 
