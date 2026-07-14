@@ -23,6 +23,23 @@ A partir desse evento, o quark calcula:
 - **Por dispositivo** (Mobile / Desktop / Other), **por SO** (Windows / macOS / iOS / Android / Linux / Other) e **por navegador** (Chrome / Safari / Firefox / Edge / Other), todos por parsing heurístico da string de user agent. Sem base de dados de UA externa, sem dependência nova: mesmo estilo do parser `device_from_ua` já existente.
 - **Por referência**, agrupado pelo hostname (`news.ycombinator.com`, `direct` quando não há referrer, `other` quando o referrer não é uma URL válida). Agrupar pelo host, e não pela URL completa, evita que essa quebra cresça sem limite de buckets.
 
+## Filtro de bots
+
+O quark sinaliza cliques prováveis de bots e crawlers a partir da string `User-Agent` e mantém eles fora das quebras acima, mas ainda conta eles de forma honesta.
+
+`is_bot` é uma heurística sem dependência nova, no mesmo estilo dos parsers `device_from_ua` e `os_from_ua`: ela procura substrings comuns de crawler, monitor e biblioteca num User-Agent em minúsculas, coisas como `bot`, `crawler`, `spider`, `crawl`, `slurp`, `bingpreview`, `facebookexternalhit`, `embedly`, `curl`, `wget`, `python-requests`, `httpie`, `go-http-client`, `axios`, `headless`, `phantomjs`, `preview`, `monitor`, `uptime` e `pingdom`. Um User-Agent vazio ou ausente também é tratado como bot: nenhum navegador de verdade manda uma requisição sem esse header.
+
+Isso é uma heurística, não uma certeza. Ela pega crawlers bem comportados e bibliotecas HTTP comuns que se identificam, e vai deixar passar um bot que finge ser um navegador normal. Pense nos números abaixo como "bots potenciais", não uma garantia.
+
+O que isso significa pros números que você vê:
+
+- **`total`** nos agregados continua honesto: conta todo clique que chegou no redirect, bot ou não.
+- **`bots`** é um contador separado: quantos desses cliques foram sinalizados. A tela de estatísticas mostra ele do lado do total, como "Bots (excluídos)".
+- **Todas as outras quebras** (`per_day`, `per_country`, `per_device`, `per_os`, `per_browser`, `per_referer`, `per_city`) são calculadas só com cliques humanos. Um clique sinalizado incrementa `bots` e é ignorado em todo o resto, então os gráficos refletem visitantes de verdade, não scrapers martelando um link.
+- **Eventos recentes** ainda listam todo clique, bot ou não, cada um marcado com uma flag `bot`; a interface mostra um badge pequeno nas linhas sinalizadas pra você conseguir diferenciar sem perder o feed bruto.
+
+O filtro de bots afeta só a analytics. Ele não bloqueia nada: uma requisição sinalizada ainda recebe o redirect normalmente.
+
 ## Postura de privacidade
 
 **A analytics de clique nunca armazena um endereço IP.** Nem no backend LMDB, nem no ClickHouse, nem no `ClickEvent` ou nos agregados que ele alimenta. País e cidade vêm de um header que o proxy de borda já calculou (`cf-ipcountry`, `cf-ipcity`); o quark só lê esse header e segue. Não existe base GeoIP, não existe lookup de IP pra localização, não existe dependência que precisasse de uma.
@@ -48,5 +65,6 @@ Se você está atrás de outro proxy (nginx, Traefik, outro CDN), defina os head
 ## O que está fora do escopo (por ora)
 
 - Uma base GeoIP pra lookup de IP pra cidade sem depender de header de proxy. Isso adicionaria uma dependência pesada e um arquivo de dados pra manter atualizado; o caminho por header já cobre cidade pra quem roda atrás de uma borda que suporta isso.
-- Filtro de bots e crawlers. Hoje a analytics conta toda requisição que chega ao redirect, incluindo bots. Filtrar isso é um trabalho separado, pra depois.
+- Detecção de bot por IP ou ASN. O filtro atual é só heurística de User-Agent; ele não olha reputação de IP nem dado de rede.
+- Um toggle pra incluir bots nos gráficos de quebra. As quebras são só de tráfego humano por design; um toggle por visualização é um possível trabalho futuro, ainda não implementado.
 - Detalhe completo de referrer por URL. Os agregados agrupam pelo host; o referrer bruto ainda aparece por evento no anel de eventos recentes, se você precisar da URL exata.

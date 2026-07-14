@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useT } from "@/i18n";
 import { formatDateTime } from "@/lib/format";
@@ -38,7 +39,18 @@ export function RecentEventsTable({ events }: RecentEventsTableProps) {
       <TableBody>
         {sorted.map((event, i) => (
           <TableRow key={`${event.ts}-${i}`}>
-            <TableCell>{formatDateTime(event.ts)}</TableCell>
+            <TableCell>
+              <div className="flex items-center gap-2">
+                {formatDateTime(event.ts)}
+                {event.bot ? (
+                  <Badge variant="outline" className="text-[10px] font-normal">
+                    {t("events.botBadge")}
+                  </Badge>
+                ) : (
+                  <span className="sr-only">{t("events.human")}</span>
+                )}
+              </div>
+            </TableCell>
             <TableCell>{event.country || <span className="text-muted-foreground">—</span>}</TableCell>
             <TableCell>{event.city || <span className="text-muted-foreground">—</span>}</TableCell>
             <TableCell className="max-w-64 truncate" title={event.referer ?? undefined}>

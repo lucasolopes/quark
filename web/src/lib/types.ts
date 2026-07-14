@@ -12,9 +12,11 @@ export interface CreateLinkResponse { code: string; url: string; }
 export interface ClickEvent {
   id: number; ts: number;
   referer?: string | null; country?: string | null; user_agent?: string | null; city?: string | null;
+  bot?: boolean;
 }
 export interface Aggregates {
   total: number; first_ts: number; last_ts: number;
+  bots: number;
   per_day: Record<string, number>;
   per_country: Record<string, number>;
   per_device: Record<string, number>;

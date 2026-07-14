@@ -23,3 +23,23 @@ describe("RecentEventsTable — city column", () => {
     expect(row.textContent).toContain("—");
   });
 });
+
+describe("RecentEventsTable — bot badge", () => {
+  it("shows a bot badge on rows flagged as bot", () => {
+    const events: ClickEvent[] = [
+      { id: 1, ts: 1700000000, country: "US", referer: null, city: null, bot: true },
+    ];
+    render(withProviders(<RecentEventsTable events={events} />, { withRouter: false }));
+
+    expect(screen.getByText("Bot")).toBeInTheDocument();
+  });
+
+  it("does not show a bot badge on human rows", () => {
+    const events: ClickEvent[] = [
+      { id: 1, ts: 1700000000, country: "US", referer: null, city: null, bot: false },
+    ];
+    render(withProviders(<RecentEventsTable events={events} />, { withRouter: false }));
+
+    expect(screen.queryByText("Bot")).not.toBeInTheDocument();
+  });
+});
