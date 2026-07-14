@@ -68,6 +68,7 @@ impl PostgresStore {
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS blocked_domains (domain TEXT PRIMARY KEY)",
+                "CREATE TABLE IF NOT EXISTS wellknown_documents (name TEXT PRIMARY KEY, body TEXT NOT NULL)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -90,7 +91,7 @@ impl PostgresStore {
     /// Used in tests: resets all state.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, stats, events",
+            "TRUNCATE links, aliases, stats, events, wellknown_documents",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
         ] {
             sqlx::query(q)
@@ -296,6 +297,43 @@ impl Store for PostgresStore {
     async fn delete_alias(&self, alias: &str) -> Result<(), StoreError> {
         sqlx::query("DELETE FROM aliases WHERE alias = $1")
             .bind(alias)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn get_wellknown(&self, name: &str) -> Result<Option<String>, StoreError> {
+        let row = sqlx::query("SELECT body FROM wellknown_documents WHERE name = $1")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => {
+                let body: String = r.try_get("body").map_err(StoreError::backend)?;
+                Ok(Some(body))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn put_wellknown(&self, name: &str, body: &str) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO wellknown_documents (name, body) VALUES ($1,$2) \
+             ON CONFLICT (name) DO UPDATE SET body=EXCLUDED.body",
+        )
+        .bind(name)
+        .bind(body)
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn delete_wellknown(&self, name: &str) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM wellknown_documents WHERE name = $1")
+            .bind(name)
             .execute(&self.pool)
             .await
             .map_err(StoreError::backend)?;

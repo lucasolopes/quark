@@ -16,7 +16,7 @@ const LOCAL_BITS: u32 = 40 - NODE_BITS;
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1;
 
 /// Number of named LMDB sub-databases opened in the environment.
-const MAX_DBS: u32 = 6;
+const MAX_DBS: u32 = 7;
 /// Virtual address space (mmap) reserved for the LMDB environment.
 const MAP_SIZE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 
@@ -55,6 +55,7 @@ pub struct LmdbStore {
     stats: Database<BeU64, Bytes>,
     events: Database<BeU64, Bytes>,
     blocked: Database<Str, Str>,
+    wellknown: Database<Str, Str>,
     node_id: Option<u8>,
 }
 
@@ -81,6 +82,7 @@ impl LmdbStore {
         let stats = env.create_database(&mut wtxn, Some("stats"))?;
         let events = env.create_database(&mut wtxn, Some("events"))?;
         let blocked = env.create_database(&mut wtxn, Some("blocked"))?;
+        let wellknown = env.create_database(&mut wtxn, Some("wellknown"))?;
         wtxn.commit()?;
         Ok(LmdbStore {
             env,
@@ -90,6 +92,7 @@ impl LmdbStore {
             stats,
             events,
             blocked,
+            wellknown,
             node_id,
         })
     }
@@ -221,6 +224,25 @@ impl Store for LmdbStore {
     async fn delete_alias(&self, alias: &str) -> Result<(), StoreError> {
         let mut wtxn = self.env.write_txn()?;
         self.aliases.delete(&mut wtxn, alias)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn get_wellknown(&self, name: &str) -> Result<Option<String>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        Ok(self.wellknown.get(&rtxn, name)?.map(|s| s.to_string()))
+    }
+
+    async fn put_wellknown(&self, name: &str, body: &str) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        self.wellknown.put(&mut wtxn, name, body)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn delete_wellknown(&self, name: &str) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        self.wellknown.delete(&mut wtxn, name)?;
         wtxn.commit()?;
         Ok(())
     }
@@ -408,6 +430,22 @@ mod tests {
             s.list_blocked_domains().await.unwrap(),
             vec!["spam.net".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn wellknown_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        assert_eq!(s.get_wellknown("assetlinks.json").await.unwrap(), None);
+        let body = r#"{"relation":["delegate_permission/common.handle_all_urls"]}"#;
+        s.put_wellknown("assetlinks.json", body).await.unwrap();
+        assert_eq!(
+            s.get_wellknown("assetlinks.json").await.unwrap(),
+            Some(body.to_string())
+        );
+        s.delete_wellknown("assetlinks.json").await.unwrap();
+        assert_eq!(s.get_wellknown("assetlinks.json").await.unwrap(), None);
+        s.delete_wellknown("assetlinks.json").await.unwrap();
     }
 
     #[tokio::test]

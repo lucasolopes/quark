@@ -88,6 +88,13 @@ pub trait Store: Send + Sync + 'static {
     async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError>;
     async fn delete_link(&self, id: u64) -> Result<(), StoreError>;
     async fn delete_alias(&self, alias: &str) -> Result<(), StoreError>;
+    /// Reads a well-known app-association document by name. The raw JSON is
+    /// returned verbatim (no parsing here; validation lives at the HTTP layer).
+    async fn get_wellknown(&self, name: &str) -> Result<Option<String>, StoreError>;
+    /// Stores a well-known document, replacing any existing body for `name`.
+    async fn put_wellknown(&self, name: &str, body: &str) -> Result<(), StoreError>;
+    /// Deletes a well-known document; a missing document is not an error.
+    async fn delete_wellknown(&self, name: &str) -> Result<(), StoreError>;
 }
 
 /// Opens only the Store on LMDB (used by tests that don't need the AnalyticsSink).
