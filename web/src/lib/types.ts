@@ -18,6 +18,10 @@ export interface Aggregates {
   per_day: Record<string, number>;
   per_country: Record<string, number>;
   per_device: Record<string, number>;
+  per_os: Record<string, number>;
+  per_browser: Record<string, number>;
+  per_referer: Record<string, number>;
+  per_city: Record<string, number>;
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
 export interface BlocklistResponse { domains: string[]; }
