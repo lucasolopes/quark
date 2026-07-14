@@ -97,6 +97,16 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
         ),
     },
     {
+      accessorKey: "visits",
+      header: t("linkTable.columnVisits"),
+      cell: ({ row }) =>
+        row.original.max_visits ? (
+          <span>{`${row.original.visits} / ${row.original.max_visits}`}</span>
+        ) : (
+          <span className="text-muted-foreground">{row.original.visits}</span>
+        ),
+    },
+    {
       id: "actions",
       header: () => <span className="sr-only">{t("linkTable.actionsSr")}</span>,
       cell: ({ row }) => {

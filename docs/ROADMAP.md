@@ -18,6 +18,7 @@ bottleneck being geography/RTT, not the server).
 - **Core (v0.1):** create + redirect + custom alias + expiration (TTL). The short code
   is a calibrated Feistel/ARX permutation (`ROUNDS=4`); codes are **computed, not
   stored** (store keyed by `u64`).
+- **Max-visits expiration (#11):** a link expires by TTL or by a maximum number of visits, whichever comes first.
 - **Pluggable architecture**: `Store` / `CacheTier` / `AnalyticsSink` traits:
   - **L2 Valkey** (`QUARK_VALKEY_URL`): shared cache, circuit breaker + timeout, fail-open.
   - **Postgres** (`QUARK_DATABASE_URL`): multi-node relational store (atomic id sequence).

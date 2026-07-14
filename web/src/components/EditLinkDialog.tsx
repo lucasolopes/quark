@@ -20,6 +20,7 @@ import type { Link } from "@/lib/types";
 interface FormErrors {
   url?: string;
   ttl?: string;
+  maxVisits?: string;
   form?: string;
 }
 
@@ -39,12 +40,17 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
   const [url, setUrl] = useState(link.url);
   const [ttl, setTtl] = useState("");
   const [removeExpiry, setRemoveExpiry] = useState(false);
+  const [maxVisits, setMaxVisits] = useState(link.max_visits ? String(link.max_visits) : "");
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
 
   function formatExpiry(expiry: number | null): string {
     if (expiry == null) return t("dialogs.edit.neverExpires");
     return t("dialogs.edit.expiresOn", { date: new Date(expiry * 1000).toLocaleDateString("pt-BR") });
+  }
+
+  function formatCurrentMaxVisits(value?: number): string {
+    return value ? String(value) : t("dialogs.edit.unlimitedVisits");
   }
 
   function handleOpenChange(next: boolean) {
@@ -66,6 +72,13 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
         next.ttl = t("dialogs.edit.ttlInvalid");
       }
     }
+    const trimmedMaxVisits = maxVisits.trim();
+    if (trimmedMaxVisits) {
+      const n = Number(trimmedMaxVisits);
+      if (!Number.isInteger(n) || n <= 0) {
+        next.maxVisits = t("dialogs.edit.maxVisitsInvalid");
+      }
+    }
     return next;
   }
 
@@ -83,6 +96,7 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
         body: {
           url: url.trim(),
           ...(removeExpiry ? { ttl: null } : ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
+          ...(maxVisits.trim() ? { max_visits: Number(maxVisits.trim()) } : {}),
         },
       });
       toast.success(t("dialogs.edit.successToast"));
@@ -160,6 +174,27 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
                 />
                 {t("dialogs.edit.removeExpiryLabel")}
               </label>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="edit-link-max-visits" className="text-sm font-medium">
+                {t("dialogs.edit.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.edit.maxVisitsOptional")}</span>
+              </label>
+              <Input
+                id="edit-link-max-visits"
+                type="number"
+                min={1}
+                step={1}
+                placeholder={t("dialogs.edit.maxVisitsPlaceholder", { current: formatCurrentMaxVisits(link.max_visits) })}
+                value={maxVisits}
+                onChange={(e) => setMaxVisits(e.target.value)}
+                aria-invalid={errors.maxVisits != null}
+              />
+              {errors.maxVisits && (
+                <p className="text-sm text-destructive" role="alert">
+                  {errors.maxVisits}
+                </p>
+              )}
             </div>
 
             {errors.form && (

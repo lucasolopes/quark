@@ -5,9 +5,11 @@ export interface Link {
   url: string;
   expiry: number | null;
   created: number;
+  max_visits?: number;
+  visits: number;
 }
 export interface ListLinksResponse { links: Link[]; next_after: number | null; }
-export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; }
+export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; max_visits?: number; }
 export interface CreateLinkResponse { code: string; url: string; }
 export interface ClickEvent {
   id: number; ts: number;
@@ -21,4 +23,4 @@ export interface Aggregates {
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
 export interface BlocklistResponse { domains: string[]; }
-export interface PatchLinkRequest { url?: string; ttl?: number | null; }
+export interface PatchLinkRequest { url?: string; ttl?: number | null; max_visits?: number; }

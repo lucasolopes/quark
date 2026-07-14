@@ -11,6 +11,7 @@ const link: Link = {
   url: "https://example.com/a-pretty-long-page",
   expiry: null,
   created: 1700000000,
+  visits: 0,
 };
 
 describe("LinkTable — QR code", () => {
@@ -34,5 +35,19 @@ describe("LinkTable — QR code", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(screen.queryByRole("dialog", { name: /qr code for 6lB362J/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("LinkTable — visits", () => {
+  it("shows visits/max when max_visits is set", () => {
+    const limited: Link = { ...link, visits: 12, max_visits: 100 };
+    render(withProviders(<LinkTable links={[limited]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.getByText("12 / 100")).toBeInTheDocument();
+  });
+
+  it("shows only the visit count when there is no max_visits", () => {
+    const unlimited: Link = { ...link, visits: 7 };
+    render(withProviders(<LinkTable links={[unlimited]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.getByText("7")).toBeInTheDocument();
   });
 });

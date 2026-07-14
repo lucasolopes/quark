@@ -196,6 +196,10 @@ curl -X POST localhost:8080/ -H 'content-type: application/json' \
 curl -X POST localhost:8080/ -H 'content-type: application/json' \
   -d '{"url": "https://example.com", "alias": "promo", "ttl": 3600}'
 
+# create a link that expires after 100 visits instead of (or alongside) a TTL
+curl -X POST localhost:8080/ -H 'content-type: application/json' \
+  -d '{"url": "https://example.com", "max_visits": 100}'
+
 # follow it
 curl -i localhost:8080/01aB2Cd   # -> 302 Location: https://example.com/...
 
@@ -234,6 +238,7 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 
 - Per-request access logging is **opt-in via `QUARK_ACCESS_LOG`** (off by default). When set, every request emits a **structured JSON log line** to stdout (`{"method","path","status","latency_ms"}`), captured as-is by Coolify/Docker, ready to `grep` or ship to a log collector. Off by default so the hot redirect path pays no synchronous `println!`/stdout-lock cost at high throughput.
 - Redirects carry a **TTL-aware `Cache-Control`** header, so a CDN/browser can cache the 302 (and never past a link's expiry). See [`docs/EDGE.md`](docs/EDGE.md) for putting Cloudflare in front.
+- A link can also expire after a maximum number of visits (`max_visits`), in addition to or instead of a TTL date; the redirect returns `410 Gone` once the limit is reached.
 - The domain blocklist is managed via `GET/POST/DELETE /admin/blocklist` (JSON body `{"domain": "..."}` for POST/DELETE), protected by `QUARK_ADMIN_TOKEN` (header `x-admin-token`; unset → 404, wrong token → 401).
 
 ### Local dev stack

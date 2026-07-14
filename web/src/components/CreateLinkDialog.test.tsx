@@ -25,4 +25,18 @@ describe("CreateLinkDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: /create/i }));
     expect(fetchMock).toHaveBeenCalledOnce();
   });
+
+  it("sends max_visits as a number when set", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
+    );
+    render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
+    await userEvent.type(screen.getByLabelText(/max visits/i), "100");
+    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(String(init?.body));
+    expect(body.max_visits).toBe(100);
+  });
 });
