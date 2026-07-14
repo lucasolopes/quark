@@ -96,6 +96,8 @@ export const ptBR: Messages = {
     emptyTitle: "Sem cliques ainda.",
     emptySubtitle: "Quando alguém abrir este link, os cliques aparecem aqui.",
     totalClicks: "Total de cliques",
+    botsExcluded: "Bots (excluídos)",
+    chartsHumanOnlyHint: "Os gráficos abaixo mostram só tráfego humano. Cliques de bots e crawlers são contados à parte e excluídos dessas quebras.",
     firstClick: "Primeiro clique",
     lastClick: "Último clique",
     recentEvents: "Eventos recentes",
@@ -129,6 +131,8 @@ export const ptBR: Messages = {
     cityHeader: "Cidade",
     direct: "direto",
     empty: "Nenhum clique recente.",
+    botBadge: "Bot",
+    human: "Humano",
   },
   dialogs: {
     create: {

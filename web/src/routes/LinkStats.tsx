@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, MousePointerClick, RotateCw, Timer, TimerReset } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bot, MousePointerClick, RotateCw, Timer, TimerReset } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -72,12 +72,17 @@ export function LinkStats() {
 
       {query.isSuccess && query.data.aggregates.total > 0 && (
         <>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               icon={<MousePointerClick className="size-4" aria-hidden="true" />}
               label={t("stats.totalClicks")}
               value={query.data.aggregates.total.toLocaleString("pt-BR")}
               accent
+            />
+            <StatCard
+              icon={<Bot className="size-4" aria-hidden="true" />}
+              label={t("stats.botsExcluded")}
+              value={query.data.aggregates.bots.toLocaleString("pt-BR")}
             />
             <StatCard
               icon={<Timer className="size-4" aria-hidden="true" />}
@@ -90,6 +95,8 @@ export function LinkStats() {
               value={formatDateTime(query.data.aggregates.last_ts)}
             />
           </div>
+
+          <p className="text-sm text-muted-foreground">{t("stats.chartsHumanOnlyHint")}</p>
 
           <StatsCharts aggregates={query.data.aggregates} />
 

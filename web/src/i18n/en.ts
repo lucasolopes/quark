@@ -94,6 +94,8 @@ export const en = {
     emptyTitle: "No clicks yet.",
     emptySubtitle: "Once someone opens this link, clicks will show up here.",
     totalClicks: "Total clicks",
+    botsExcluded: "Bots (excluded)",
+    chartsHumanOnlyHint: "Charts below show human traffic only. Bot and crawler clicks are counted separately and excluded from these breakdowns.",
     firstClick: "First click",
     lastClick: "Last click",
     recentEvents: "Recent events",
@@ -127,6 +129,8 @@ export const en = {
     cityHeader: "City",
     direct: "direct",
     empty: "No recent clicks.",
+    botBadge: "Bot",
+    human: "Human",
   },
   dialogs: {
     create: {

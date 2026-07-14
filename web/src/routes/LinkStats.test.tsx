@@ -22,6 +22,7 @@ describe("LinkStats", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       aggregates: {
         total: 42, first_ts: 1700000000, last_ts: 1700100000,
+        bots: 7,
         per_day: { "2024-01-01": 42 },
         per_country: { BR: 40, US: 2 },
         per_device: { Mobile: 30, Desktop: 12 },
@@ -36,10 +37,31 @@ describe("LinkStats", () => {
     expect(await screen.findByText("42")).toBeInTheDocument();
   });
 
+  it("shows the bots-excluded count as a separate stat card", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      aggregates: {
+        total: 42, first_ts: 1700000000, last_ts: 1700100000,
+        bots: 7,
+        per_day: { "2024-01-01": 42 },
+        per_country: { BR: 40, US: 2 },
+        per_device: { Mobile: 30, Desktop: 12 },
+        per_os: { Windows: 20, iOS: 22 },
+        per_browser: { Chrome: 25, Safari: 17 },
+        per_referer: { "news.ycombinator.com": 30, direct: 12 },
+        per_city: {},
+      },
+      recent: [],
+    }), { status: 200 }));
+    render(wrap("6lB362J"));
+    expect(await screen.findByText("Bots (excluded)")).toBeInTheDocument();
+    expect(await screen.findByText("7")).toBeInTheDocument();
+  });
+
   it("empty state when total is 0", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       aggregates: {
         total: 0, first_ts: 0, last_ts: 0,
+        bots: 0,
         per_day: {}, per_country: {}, per_device: {},
         per_os: {}, per_browser: {}, per_referer: {}, per_city: {},
       },
@@ -53,6 +75,7 @@ describe("LinkStats", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       aggregates: {
         total: 42, first_ts: 1700000000, last_ts: 1700100000,
+        bots: 0,
         per_day: { "2024-01-01": 42 },
         per_country: { BR: 40, US: 2 },
         per_device: { Mobile: 30, Desktop: 12 },
@@ -74,6 +97,7 @@ describe("LinkStats", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       aggregates: {
         total: 5, first_ts: 1700000000, last_ts: 1700100000,
+        bots: 1,
         per_day: { "2024-01-01": 5 },
         per_country: { BR: 5 },
         per_device: { Mobile: 5 },
