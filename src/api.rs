@@ -1,7 +1,7 @@
 use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
-use crate::store::{Record, Store, StoreError};
+use crate::store::{resolve_destination, Record, Rule, RuleField, Store, StoreError};
 use crate::{codec, now, permute};
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
@@ -36,6 +36,64 @@ pub struct CreateReq {
     url: String,
     alias: Option<String>,
     ttl: Option<u64>,
+    rules: Option<Vec<Rule>>,
+}
+
+/// Maximum number of geo/device rules a single link may carry.
+const MAX_RULES: usize = 20;
+
+/// Validates and normalizes rules for `create`/`admin_link_patch`: caps the
+/// count, normalizes country codes to uppercase and device values to the
+/// canonical `Mobile`/`Desktop`/`Other` set, and runs each rule's `to`
+/// through the SAME SSRF/blocklist guards as the link's main `url` (a rule
+/// destination must not smuggle an internal/blocked host).
+async fn validate_rules(
+    rules: Vec<Rule>,
+    headers: &HeaderMap,
+    st: &AppState,
+) -> Result<Vec<Rule>, Response> {
+    if rules.len() > MAX_RULES {
+        return Err((StatusCode::BAD_REQUEST, "too many rules").into_response());
+    }
+    let mut out = Vec::with_capacity(rules.len());
+    for mut rule in rules {
+        match rule.field {
+            RuleField::Country => {
+                rule.values = rule.values.iter().map(|v| v.to_ascii_uppercase()).collect();
+            }
+            RuleField::Device => {
+                let mut normalized = Vec::with_capacity(rule.values.len());
+                for v in &rule.values {
+                    match ["Mobile", "Desktop", "Other"]
+                        .into_iter()
+                        .find(|c| c.eq_ignore_ascii_case(v))
+                    {
+                        Some(c) => normalized.push(c.to_string()),
+                        None => {
+                            return Err(
+                                (StatusCode::BAD_REQUEST, "invalid device value").into_response()
+                            )
+                        }
+                    }
+                }
+                rule.values = normalized;
+            }
+        }
+        if !is_valid_url(&rule.to) {
+            return Err((StatusCode::BAD_REQUEST, "invalid rule destination").into_response());
+        }
+        let Some(host) = extract_host(&rule.to) else {
+            return Err((StatusCode::BAD_REQUEST, "rule destination without host").into_response());
+        };
+        if st.block_private && is_blocked_target(&host, headers, st) {
+            return Err((StatusCode::FORBIDDEN, "rule destination not allowed").into_response());
+        }
+        if st.blocklist.is_blocked(&host, now()).await {
+            return Err((StatusCode::FORBIDDEN, "blocked rule destination").into_response());
+        }
+        out.push(rule);
+    }
+    Ok(out)
 }
 
 #[derive(Serialize)]
@@ -120,10 +178,15 @@ async fn create(
         },
         None => None,
     };
+    let rules = match validate_rules(req.rules.clone().unwrap_or_default(), &headers, &st).await {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
     let rec = Record {
         url: req.url.clone(),
         expiry,
         created: now(),
+        rules,
     };
 
     if let Some(alias) = req.alias {
@@ -245,6 +308,18 @@ async fn redirect(
             }
             let cache_control = cache_control_for(rec.expiry, now);
 
+            let country = headers
+                .get("cf-ipcountry")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let user_agent = headers
+                .get(header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
+            let dest =
+                resolve_destination(&rec, country.as_deref(), user_agent.as_deref()).to_string();
+
             let ev = ClickEvent {
                 id,
                 ts: now,
@@ -252,21 +327,15 @@ async fn redirect(
                     .get(header::REFERER)
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string()),
-                country: headers
-                    .get("cf-ipcountry")
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string()),
-                user_agent: headers
-                    .get(header::USER_AGENT)
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string()),
+                country,
+                user_agent,
             };
             let _ = st.analytics_tx.try_send(ev);
 
             (
                 StatusCode::FOUND,
                 [
-                    (header::LOCATION, rec.url),
+                    (header::LOCATION, dest),
                     (header::CACHE_CONTROL, cache_control),
                 ],
             )
@@ -404,6 +473,7 @@ struct LinkRow {
     url: String,
     expiry: Option<u64>,
     created: u64,
+    rules: Vec<Rule>,
 }
 
 async fn admin_links_list(
@@ -448,6 +518,7 @@ async fn admin_links_list(
             url: rec.url,
             expiry: rec.expiry,
             created: rec.created,
+            rules: rec.rules,
         })
         .collect();
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
@@ -545,6 +616,16 @@ async fn admin_link_patch(
             }
         } else {
             return (StatusCode::BAD_REQUEST, "invalid ttl").into_response();
+        }
+    }
+    if let Some(r) = patch.get("rules") {
+        let parsed: Vec<Rule> = match serde_json::from_value(r.clone()) {
+            Ok(v) => v,
+            Err(_) => return (StatusCode::BAD_REQUEST, "invalid rules").into_response(),
+        };
+        match validate_rules(parsed, &headers, &st).await {
+            Ok(v) => rec.rules = v,
+            Err(resp) => return resp,
         }
     }
     if st.store.put_link(id, &rec).await.is_err() {

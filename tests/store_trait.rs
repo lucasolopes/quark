@@ -11,6 +11,7 @@ async fn round_trip_via_trait_object() {
         url: "https://example.com/dyn".into(),
         expiry: None,
         created: 1,
+        rules: Vec::new(),
     };
     store.put_link(id, &rec).await.unwrap();
 

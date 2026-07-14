@@ -21,12 +21,15 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let url: String = r.try_get("url").map_err(StoreError::backend)?;
     let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    let rules: serde_json::Value = r.try_get("rules").map_err(StoreError::backend)?;
+    let rules: Vec<crate::store::Rule> = serde_json::from_value(rules)?;
     Ok((
         id as u64,
         Record {
             url,
             expiry: expiry.map(|v| v as u64),
             created: created as u64,
+            rules,
         },
     ))
 }
@@ -64,6 +67,7 @@ impl PostgresStore {
             for ddl in [
                 "CREATE SEQUENCE IF NOT EXISTS quark_id_seq",
                 "CREATE TABLE IF NOT EXISTS links (id BIGINT PRIMARY KEY, url TEXT NOT NULL, expiry BIGINT, created BIGINT NOT NULL)",
+                "ALTER TABLE links ADD COLUMN IF NOT EXISTS rules JSONB NOT NULL DEFAULT '[]'",
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
@@ -114,7 +118,7 @@ impl Store for PostgresStore {
     }
 
     async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError> {
-        let row = sqlx::query("SELECT url, expiry, created FROM links WHERE id = $1")
+        let row = sqlx::query("SELECT url, expiry, created, rules FROM links WHERE id = $1")
             .bind(id as i64)
             .fetch_optional(&self.pool)
             .await
@@ -124,10 +128,13 @@ impl Store for PostgresStore {
                 let url: String = r.try_get("url").map_err(StoreError::backend)?;
                 let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
                 let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+                let rules: serde_json::Value = r.try_get("rules").map_err(StoreError::backend)?;
+                let rules: Vec<crate::store::Rule> = serde_json::from_value(rules)?;
                 Ok(Some(Record {
                     url,
                     expiry: expiry.map(|v| v as u64),
                     created: created as u64,
+                    rules,
                 }))
             }
             None => Ok(None),
@@ -135,14 +142,16 @@ impl Store for PostgresStore {
     }
 
     async fn put_link(&self, id: u64, rec: &Record) -> Result<(), StoreError> {
+        let rules = serde_json::to_value(&rec.rules)?;
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created) VALUES ($1,$2,$3,$4) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4",
+            "INSERT INTO links (id, url, expiry, created, rules) VALUES ($1,$2,$3,$4,$5) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, rules=$5",
         )
         .bind(id as i64)
         .bind(&rec.url)
         .bind(rec.expiry.map(|v| v as i64))
         .bind(rec.created as i64)
+        .bind(&rules)
         .execute(&self.pool)
         .await
         .map_err(StoreError::backend)?;
@@ -182,14 +191,16 @@ impl Store for PostgresStore {
         if res.rows_affected() == 0 {
             return Ok(false);
         }
+        let rules = serde_json::to_value(&rec.rules)?;
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created) VALUES ($1,$2,$3,$4) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4",
+            "INSERT INTO links (id, url, expiry, created, rules) VALUES ($1,$2,$3,$4,$5) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, rules=$5",
         )
         .bind(id as i64)
         .bind(&rec.url)
         .bind(rec.expiry.map(|v| v as i64))
         .bind(rec.created as i64)
+        .bind(&rules)
         .execute(&mut *tx)
         .await
         .map_err(StoreError::backend)?;
@@ -236,7 +247,7 @@ impl Store for PostgresStore {
         limit: usize,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let rows = sqlx::query(
-            "SELECT id, url, expiry, created FROM links \
+            "SELECT id, url, expiry, created, rules FROM links \
              WHERE ($1::bigint IS NULL OR id > $1) ORDER BY id LIMIT $2",
         )
         .bind(after.map(|a| a as i64))
@@ -255,7 +266,7 @@ impl Store for PostgresStore {
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let pattern = format!("%{}%", like_escape(q));
         let rows = sqlx::query(
-            "SELECT DISTINCT l.id, l.url, l.expiry, l.created \
+            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.rules \
              FROM links l LEFT JOIN aliases a ON a.id = l.id \
              WHERE ($1::bigint IS NULL OR l.id > $1) \
                AND (l.url ILIKE $2 OR a.alias ILIKE $2) \

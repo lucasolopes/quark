@@ -760,3 +760,252 @@ async fn cors_header_present_when_configured() {
         "https://panel.example"
     );
 }
+
+#[tokio::test]
+async fn redirect_without_rules_goes_to_default_url() {
+    let app = app().await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"https://default.example"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    let resp = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .header("cf-ipcountry", "BR")
+                .header("user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS)")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    assert_eq!(resp.headers()["location"], "https://default.example");
+}
+
+#[tokio::test]
+async fn redirect_country_rule_matches_and_falls_back() {
+    let app = app().await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://default.example","rules":[{"field":"country","values":["BR"],"to":"https://br.example"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .header("cf-ipcountry", "BR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    assert_eq!(resp.headers()["location"], "https://br.example");
+
+    let resp = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .header("cf-ipcountry", "US")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    assert_eq!(resp.headers()["location"], "https://default.example");
+}
+
+#[tokio::test]
+async fn redirect_device_rule_matches_via_mobile_ua() {
+    let app = app().await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://default.example","rules":[{"field":"device","values":["Mobile"],"to":"https://m.example"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    let resp = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .header("user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS)")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    assert_eq!(resp.headers()["location"], "https://m.example");
+}
+
+#[tokio::test]
+async fn redirect_first_matching_rule_wins() {
+    let app = app().await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://default.example","rules":[
+                        {"field":"country","values":["BR"],"to":"https://first.example"},
+                        {"field":"country","values":["BR"],"to":"https://second.example"}
+                    ]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    let resp = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .header("cf-ipcountry", "BR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    assert_eq!(resp.headers()["location"], "https://first.example");
+}
+
+#[tokio::test]
+async fn create_with_rule_to_internal_host_400_ssrf() {
+    let app = app().await;
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://default.example","rules":[{"field":"country","values":["BR"],"to":"http://127.0.0.1"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Same guard as the main url: an internal host is FORBIDDEN, not a
+    // generic BAD_REQUEST (see blocks_internal_destination_403 above).
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn create_with_too_many_rules_400() {
+    let app = app().await;
+    let rules: Vec<String> = (0..21)
+        .map(|i| format!(r#"{{"field":"country","values":["BR"],"to":"https://r{i}.example"}}"#))
+        .collect();
+    let body = format!(
+        r#"{{"url":"https://default.example","rules":[{}]}}"#,
+        rules.join(",")
+    );
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn admin_patch_rule_to_internal_host_400_ssrf() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://ok.com").await;
+    let r = app
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"rules":[{"field":"country","values":["BR"],"to":"http://127.0.0.1"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Same guard as the main url: an internal host is FORBIDDEN, not a
+    // generic BAD_REQUEST.
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_patch_rules_then_redirect_applies_them() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://ok.com").await;
+    let r = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"rules":[{"field":"country","values":["br"],"to":"https://br.example"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    let r = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .header("cf-ipcountry", "BR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FOUND);
+    assert_eq!(r.headers()["location"], "https://br.example");
+}
