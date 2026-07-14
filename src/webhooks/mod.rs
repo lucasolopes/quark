@@ -119,6 +119,13 @@ pub enum SignError {
     /// The HMAC key material was rejected (should not happen for HMAC-SHA256,
     /// which accepts keys of any length).
     InvalidKeyLength,
+    /// The secret is missing the `whsec_` prefix, or decodes to an empty
+    /// key. Either way, signing with it would be a no-op an attacker can
+    /// reproduce (an empty HMAC key is a fixed, guessable key); this is a
+    /// defensive backstop, since the real fix is that a `Generic`
+    /// subscription's secret is never left empty (see `admin_webhooks_create`
+    /// / `admin_webhooks_patch`).
+    EmptyOrMalformedSecret,
 }
 
 impl fmt::Display for SignError {
@@ -126,6 +133,12 @@ impl fmt::Display for SignError {
         match self {
             SignError::InvalidSecretEncoding => write!(f, "secret is not valid base64"),
             SignError::InvalidKeyLength => write!(f, "invalid HMAC key length"),
+            SignError::EmptyOrMalformedSecret => {
+                write!(
+                    f,
+                    "secret is missing whsec_ prefix or decodes to an empty key"
+                )
+            }
         }
     }
 }
@@ -150,10 +163,15 @@ pub fn base64_decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
 ///
 /// `secret` must be of the form `whsec_<base64>`. Returns `"v1,<base64 mac>"`.
 pub fn sign(secret: &str, msg_id: &str, timestamp: i64, body: &str) -> Result<String, SignError> {
-    let encoded_key = secret.strip_prefix("whsec_").unwrap_or(secret);
+    let Some(encoded_key) = secret.strip_prefix("whsec_") else {
+        return Err(SignError::EmptyOrMalformedSecret);
+    };
     let key = base64_engine
         .decode(encoded_key)
         .map_err(|_| SignError::InvalidSecretEncoding)?;
+    if key.is_empty() {
+        return Err(SignError::EmptyOrMalformedSecret);
+    }
 
     let signed_string = format!("{msg_id}.{timestamp}.{body}");
 

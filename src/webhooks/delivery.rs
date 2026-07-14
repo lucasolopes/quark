@@ -564,6 +564,79 @@ mod tests {
         assert!(!req.headers.contains_key("webhook-timestamp"));
     }
 
+    /// A Discord-kind subscription must receive the formatted
+    /// `{"content": ...}` payload (Discord's shape, not Slack/Telegram's
+    /// `{"text": ...}`) and must NOT carry any Standard Webhooks signing
+    /// headers, for the same reason as Slack: the incoming webhook URL is
+    /// the authentication.
+    #[tokio::test]
+    async fn worker_delivers_discord_payload_unsigned() {
+        let (url, state) = spawn_test_server(vec![200]).await;
+        let mut discord_sub = sub(1, &url, vec![EventType::LinkCreated], true, "");
+        discord_sub.kind = SubscriptionKind::Discord;
+        let subs = vec![discord_sub];
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
+            .redirect(Policy::none())
+            .build()
+            .unwrap();
+        let body =
+            r#"{"type":"link.created","data":{"code":"abc123","url":"https://e.com"}}"#.to_string();
+        let ev = WebhookEvent {
+            event_type: EventType::LinkCreated,
+            body,
+        };
+
+        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+
+        let captured = state.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let req = &captured[0];
+        assert_eq!(
+            req.body,
+            r#"{"content":"New short link: abc123 -> https://e.com"}"#
+        );
+        assert!(!req.headers.contains_key("webhook-signature"));
+        assert!(!req.headers.contains_key("webhook-id"));
+        assert!(!req.headers.contains_key("webhook-timestamp"));
+    }
+
+    /// A Telegram-kind subscription must receive the formatted
+    /// `{"text": ...}` payload (same shape as Slack) and must NOT carry any
+    /// Standard Webhooks signing headers, for the same reason as Slack: the
+    /// incoming webhook URL is the authentication.
+    #[tokio::test]
+    async fn worker_delivers_telegram_payload_unsigned() {
+        let (url, state) = spawn_test_server(vec![200]).await;
+        let mut telegram_sub = sub(1, &url, vec![EventType::LinkCreated], true, "");
+        telegram_sub.kind = SubscriptionKind::Telegram;
+        let subs = vec![telegram_sub];
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
+            .redirect(Policy::none())
+            .build()
+            .unwrap();
+        let body =
+            r#"{"type":"link.created","data":{"code":"abc123","url":"https://e.com"}}"#.to_string();
+        let ev = WebhookEvent {
+            event_type: EventType::LinkCreated,
+            body,
+        };
+
+        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+
+        let captured = state.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let req = &captured[0];
+        assert_eq!(
+            req.body,
+            r#"{"text":"New short link: abc123 -> https://e.com"}"#
+        );
+        assert!(!req.headers.contains_key("webhook-signature"));
+        assert!(!req.headers.contains_key("webhook-id"));
+        assert!(!req.headers.contains_key("webhook-timestamp"));
+    }
+
     /// Matching is enforced regardless of the SSRF guard: an inactive
     /// subscription and one subscribed to a different event type must both
     /// be skipped, with zero POSTs, even though the guard here is

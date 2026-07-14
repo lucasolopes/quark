@@ -876,6 +876,19 @@ async fn admin_webhooks_patch(
     if let Some(kind) = req.kind {
         sub.kind = kind;
     }
+    // A kind change can strand the secret in a state where it no longer
+    // matches the resulting kind: switching a channel (secret="") to
+    // Generic would sign with an empty key (silently defeated signing,
+    // since `sign("", ...)` does not error); switching a Generic sub to a
+    // channel leaves a signing secret with nothing to verify it. Reconcile
+    // the secret to the resulting kind, mirroring `admin_webhooks_create`.
+    match sub.kind {
+        SubscriptionKind::Generic if sub.secret.is_empty() => {
+            sub.secret = webhooks::generate_secret();
+        }
+        SubscriptionKind::Generic => {}
+        _ => sub.secret = String::new(),
+    }
     if st.store.put_webhook(&sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
