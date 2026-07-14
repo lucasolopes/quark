@@ -54,6 +54,11 @@ const DEFAULT_PAGE_LIMIT: usize = 50;
 /// Maximum page size accepted for admin listing/search endpoints (clamp ceiling).
 const MAX_PAGE_LIMIT: usize = 500;
 
+/// Document names accepted on the well-known routes (exact, no others).
+const WELLKNOWN_NAMES: [&str; 2] = ["apple-app-site-association", "assetlinks.json"];
+/// Maximum accepted body size for a well-known document (64 KiB).
+const WELLKNOWN_MAX: usize = 65536;
+
 /// Computes the Cache-Control header value for a redirect response,
 /// respecting the link's TTL: never caches past expiry. Pure function,
 /// a TDD target.
@@ -554,6 +559,87 @@ async fn admin_link_patch(
     StatusCode::OK.into_response()
 }
 
+/// Serves a stored well-known document as `application/json`. Public, no auth.
+/// `Some(body)` -> 200 verbatim; `None` -> 404; store error -> 503.
+async fn serve_wellknown(st: &AppState, name: &str) -> Response {
+    match st.store.get_wellknown(name).await {
+        Ok(Some(body)) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn wellknown_aasa(State(st): State<Arc<AppState>>) -> Response {
+    serve_wellknown(&st, "apple-app-site-association").await
+}
+
+async fn wellknown_assetlinks(State(st): State<Arc<AppState>>) -> Response {
+    serve_wellknown(&st, "assetlinks.json").await
+}
+
+async fn admin_wellknown_get(
+    State(st): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    if !WELLKNOWN_NAMES.contains(&name.as_str()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match st.store.get_wellknown(&name).await {
+        Ok(Some(body)) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn admin_wellknown_put(
+    State(st): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    if !WELLKNOWN_NAMES.contains(&name.as_str()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if body.len() > WELLKNOWN_MAX {
+        return (StatusCode::BAD_REQUEST, "body too large").into_response();
+    }
+    let text = match std::str::from_utf8(&body) {
+        Ok(t) => t,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
+    };
+    if serde_json::from_str::<serde_json::Value>(text).is_err() {
+        return (StatusCode::BAD_REQUEST, "invalid json").into_response();
+    }
+    if st.store.put_wellknown(&name, text).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    StatusCode::OK.into_response()
+}
+
+async fn admin_wellknown_delete(
+    State(st): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    if !WELLKNOWN_NAMES.contains(&name.as_str()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if st.store.delete_wellknown(&name).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -630,6 +716,18 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route(
             "/admin/links/:code",
             axum::routing::delete(admin_link_delete).patch(admin_link_patch),
+        )
+        .route(
+            "/.well-known/apple-app-site-association",
+            get(wellknown_aasa),
+        )
+        .route("/apple-app-site-association", get(wellknown_aasa))
+        .route("/.well-known/assetlinks.json", get(wellknown_assetlinks))
+        .route(
+            "/admin/wellknown/:name",
+            get(admin_wellknown_get)
+                .put(admin_wellknown_put)
+                .delete(admin_wellknown_delete),
         )
         .with_state(state);
 

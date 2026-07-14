@@ -726,6 +726,144 @@ async fn create_with_token_when_configured_ok() {
 }
 
 #[tokio::test]
+async fn wellknown_put_then_public_get() {
+    let app = app_admin("secret").await;
+    let body = r#"{"relation":["delegate_permission/common.handle_all_urls"]}"#;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::put("/admin/wellknown/assetlinks.json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .oneshot(
+            Request::get("/.well-known/assetlinks.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["content-type"], "application/json");
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..], body.as_bytes());
+}
+
+#[tokio::test]
+async fn wellknown_unset_get_404() {
+    let app = app().await;
+    let resp = app
+        .oneshot(
+            Request::get("/.well-known/apple-app-site-association")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn wellknown_put_non_json_400() {
+    let app = app_admin("secret").await;
+    let resp = app
+        .oneshot(
+            Request::put("/admin/wellknown/assetlinks.json")
+                .header("x-admin-token", "secret")
+                .body(Body::from("not json at all"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn wellknown_put_bogus_name_404() {
+    let app = app_admin("secret").await;
+    let resp = app
+        .oneshot(
+            Request::put("/admin/wellknown/bogus")
+                .header("x-admin-token", "secret")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn wellknown_put_too_large_400() {
+    let app = app_admin("secret").await;
+    let big = format!(r#"{{"x":"{}"}}"#, "a".repeat(70000));
+    let resp = app
+        .oneshot(
+            Request::put("/admin/wellknown/assetlinks.json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(big))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn wellknown_put_without_token_401() {
+    let app = app_admin("secret").await;
+    let resp = app
+        .oneshot(
+            Request::put("/admin/wellknown/assetlinks.json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn wellknown_aasa_served_on_legacy_root() {
+    let app = app_admin("secret").await;
+    let body = r#"{"applinks":{"apps":[],"details":[]}}"#;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::put("/admin/wellknown/apple-app-site-association")
+                .header("x-admin-token", "secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .oneshot(
+            Request::get("/apple-app-site-association")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["content-type"], "application/json");
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..], body.as_bytes());
+}
+
+#[tokio::test]
 async fn cors_header_present_when_configured() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
