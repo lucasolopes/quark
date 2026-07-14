@@ -92,4 +92,29 @@ describe("Links", () => {
     render(withProviders(<Links />));
     expect(await screen.findByText(/no links yet/i)).toBeInTheDocument();
   });
+
+  it("filters by tag via the API (?tag= in the querystring)", async () => {
+    const base = {
+      links: [
+        { id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1, tags: ["pets"] },
+        { id: 2, code: "BBB1111", url: "https://dog.com", expiry: null, created: 2, tags: ["pets", "promo"] },
+      ],
+      next_after: null,
+    };
+    mockFetchByUrl((url) => {
+      if (url.includes("/admin/tags")) return jsonResponse({ tags: ["pets", "promo"] });
+      if (url.includes("tag=promo"))
+        return jsonResponse({ links: base.links.filter((l) => l.tags.includes("promo")), next_after: null });
+      return jsonResponse(base);
+    });
+    render(withProviders(<Links />));
+    await screen.findByText("AAA0000");
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /filter by tag/i }), "promo");
+
+    await waitFor(() => {
+      expect(screen.getByText("BBB1111")).toBeInTheDocument();
+      expect(screen.queryByText("AAA0000")).not.toBeInTheDocument();
+    });
+  });
 });

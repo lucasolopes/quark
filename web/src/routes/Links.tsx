@@ -22,7 +22,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { mutationErrorToast } from "@/lib/mutation-error";
-import { useDeleteLink, useLinks } from "@/lib/queries";
+import { useDeleteLink, useLinks, useTags } from "@/lib/queries";
 import type { Link } from "@/lib/types";
 
 function matches(link: Link, query: string): boolean {
@@ -38,16 +38,18 @@ function matches(link: Link, query: string): boolean {
 export function Links() {
   const t = useT();
   const [search, setSearch] = useState("");
+  const [tag, setTag] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [editingLink, setEditingLink] = useState<Link | null>(null);
   const [deletingLink, setDeletingLink] = useState<Link | null>(null);
   const [clientMode, setClientMode] = useState(false);
-  const query = useLinks();
+  const query = useLinks(undefined, tag || undefined);
   const deleteLink = useDeleteLink();
+  const tagsQuery = useTags();
 
   const dq = useDebounce(search, 300);
   const serverSearchEnabled = dq !== "" && !clientMode;
-  const serverSearch = useLinks(dq, { enabled: serverSearchEnabled });
+  const serverSearch = useLinks(dq, tag || undefined, { enabled: serverSearchEnabled });
 
   useEffect(() => {
     if (serverSearch.error instanceof ApiError && serverSearch.error.status === 501) setClientMode(true);
@@ -96,20 +98,36 @@ export function Links() {
         </Button>
       </div>
 
-      <div className="relative max-w-sm">
-        <Input
-          type="search"
-          placeholder={t("links.searchPlaceholder")}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          aria-label={t("links.searchAriaLabel")}
-        />
-        {usingServerSearch && serverSearch.isFetching && (
-          <Loader2
-            className="absolute right-2 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground"
-            aria-hidden="true"
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative max-w-sm grow">
+          <Input
+            type="search"
+            placeholder={t("links.searchPlaceholder")}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            aria-label={t("links.searchAriaLabel")}
           />
-        )}
+          {usingServerSearch && serverSearch.isFetching && (
+            <Loader2
+              className="absolute right-2 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground"
+              aria-hidden="true"
+            />
+          )}
+        </div>
+
+        <select
+          value={tag}
+          onChange={(e) => setTag(e.target.value)}
+          aria-label={t("links.tagFilterLabel")}
+          className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        >
+          <option value="">{t("links.tagFilterAllOption")}</option>
+          {(tagsQuery.data?.tags ?? []).map((tagOption) => (
+            <option key={tagOption} value={tagOption}>
+              {tagOption}
+            </option>
+          ))}
+        </select>
       </div>
 
       {query.isPending && <LinksSkeleton />}

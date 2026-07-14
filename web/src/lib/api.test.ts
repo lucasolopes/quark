@@ -41,4 +41,21 @@ describe("api client", () => {
     const [url2] = fetchMock.mock.calls[1];
     expect(String(url2)).not.toContain("q=");
   });
+
+  it("listLinks includes tag in the querystring when provided", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ links: [], next_after: null }), { status: 200 })));
+    await api.listLinks({ tag: "promo" });
+    const [url] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("tag=promo");
+  });
+
+  it("listTags fetches /admin/tags", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ tags: ["promo", "summer"] }), { status: 200 }),
+    );
+    const r = await api.listTags();
+    expect(r.tags).toEqual(["promo", "summer"]);
+  });
 });

@@ -5,10 +5,12 @@ export interface Link {
   url: string;
   expiry: number | null;
   created: number;
+  tags: string[];
 }
 export interface ListLinksResponse { links: Link[]; next_after: number | null; }
-export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; }
+export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; }
 export interface CreateLinkResponse { code: string; url: string; }
+export interface TagsResponse { tags: string[]; }
 export interface ClickEvent {
   id: number; ts: number;
   referer?: string | null; country?: string | null; user_agent?: string | null;
@@ -21,4 +23,4 @@ export interface Aggregates {
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
 export interface BlocklistResponse { domains: string[]; }
-export interface PatchLinkRequest { url?: string; ttl?: number | null; }
+export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; }
