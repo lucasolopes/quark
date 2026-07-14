@@ -1,8 +1,9 @@
-use crate::pixel::{self, PixelBases};
+use crate::pixel::{self, PixelBases, PixelConfig};
 use crate::store::{Store, StoreError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
 pub mod clickhouse;
@@ -103,12 +104,25 @@ pub trait AnalyticsSink: Send + Sync + 'static {
 /// Batch size that triggers an immediate flush (in addition to the 5s timer).
 pub const BATCH: usize = 500;
 
+/// How long a pixel-snapshot refresh (`store.list_pixels()`) is allowed to
+/// run before it's abandoned in favor of the previous snapshot (fail-open:
+/// a wedged store must never stall the worker).
+const PIXEL_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Background worker: accumulates `ClickEvent`s from the channel and flushes
 /// to the sink when the buffer reaches `BATCH`, every 5s, or when the channel
 /// closes (drains and exits). Each flush also forwards the batch to every
 /// active pixel config (server-side conversion forwarding, roadmap #14):
 /// async only, off the redirect hot path, and fail-open (a provider error is
 /// only logged, never propagated to the caller or the sink write).
+///
+/// The pixel config list is read from `store` only once up front and then on
+/// every 5s tick — never on the flush path itself (mirrors the webhook
+/// worker's subscription-snapshot pattern, #1). This means a wedged store
+/// (e.g. an exhausted Postgres pool) can never stall `flush`/forward and
+/// back up the bounded analytics channel: the worker keeps forwarding to the
+/// last-known-good snapshot, and a refresh that fails or times out just
+/// keeps that snapshot (fail-open) instead of blocking.
 ///
 /// `client` is the shared `reqwest::Client` used for provider calls (built
 /// with no redirects and a timeout by the caller); `key` derives the real
@@ -124,6 +138,8 @@ pub fn spawn_worker(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut buf: Vec<ClickEvent> = Vec::with_capacity(BATCH);
+        let mut pixels: Vec<PixelConfig> = Vec::new();
+        refresh_pixel_snapshot(&store, &mut pixels).await;
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -133,27 +149,48 @@ pub fn spawn_worker(
                         Some(ev) => {
                             buf.push(ev);
                             if buf.len() >= BATCH {
-                                flush(&sink, &mut buf, &store, &client, key, &bases).await;
+                                flush(&sink, &mut buf, &pixels, &client, key, &bases).await;
                             }
                         }
                         None => {
-                            flush(&sink, &mut buf, &store, &client, key, &bases).await;
+                            flush(&sink, &mut buf, &pixels, &client, key, &bases).await;
                             break;
                         }
                     }
                 }
                 _ = ticker.tick() => {
-                    flush(&sink, &mut buf, &store, &client, key, &bases).await;
+                    refresh_pixel_snapshot(&store, &mut pixels).await;
+                    flush(&sink, &mut buf, &pixels, &client, key, &bases).await;
                 }
             }
         }
     })
 }
 
+/// Refreshes the cached pixel-config snapshot from `store`, bounded by
+/// `PIXEL_SNAPSHOT_TIMEOUT`. Fail-open: on a store error or a timeout, the
+/// previous snapshot (`pixels`) is left untouched and the failure is only
+/// logged — a wedged or erroring store never stalls the worker and never
+/// empties out a snapshot that was previously known-good.
+async fn refresh_pixel_snapshot(store: &Arc<dyn Store>, pixels: &mut Vec<PixelConfig>) {
+    match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, store.list_pixels()).await {
+        Ok(Ok(configs)) => *pixels = configs,
+        Ok(Err(e)) => {
+            eprintln!("{}", serde_json::json!({"pixel_list_error": e.to_string()}));
+        }
+        Err(_) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"pixel_list_error": "timed out refreshing pixel snapshot"})
+            );
+        }
+    }
+}
+
 async fn flush(
     sink: &Arc<dyn AnalyticsSink>,
     buf: &mut Vec<ClickEvent>,
-    store: &Arc<dyn Store>,
+    pixels: &[PixelConfig],
     client: &reqwest::Client,
     key: u64,
     bases: &PixelBases,
@@ -167,29 +204,23 @@ async fn flush(
             serde_json::json!({"analytics_flush_error": e.to_string()})
         );
     }
-    forward_to_pixels(store, client, key, bases, buf).await;
+    forward_to_pixels(pixels, client, key, bases, buf).await;
     buf.clear();
 }
 
-/// Forwards the flushed batch to every active pixel config. Fail-open: a
-/// listing failure or a per-provider forward failure is only logged, never
+/// Forwards the flushed batch to every active pixel config in the cached
+/// `pixels` snapshot (no store access on this path — see `spawn_worker`).
+/// Fail-open: a per-provider forward failure is only logged, never
 /// propagated (never affects the sink write above nor the redirect hot path,
 /// which has already returned by the time this runs).
 async fn forward_to_pixels(
-    store: &Arc<dyn Store>,
+    pixels: &[PixelConfig],
     client: &reqwest::Client,
     key: u64,
     bases: &PixelBases,
     events: &[ClickEvent],
 ) {
-    let configs = match store.list_pixels().await {
-        Ok(configs) => configs,
-        Err(e) => {
-            eprintln!("{}", serde_json::json!({"pixel_list_error": e.to_string()}));
-            return;
-        }
-    };
-    for config in configs.iter().filter(|c| c.active) {
+    for config in pixels.iter().filter(|c| c.active) {
         let base = bases.base_for(config.provider);
         if let Err(e) = pixel::forward(client, base, config, events, key).await {
             eprintln!(

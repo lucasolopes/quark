@@ -206,6 +206,54 @@ async fn worker_flush_is_fail_open_when_provider_returns_500() {
     assert_eq!(s.aggregates.total, 1);
 }
 
+/// The worker caches the pixel-config list and only refreshes it on the
+/// ticker (never on the flush path itself, see the review that produced
+/// this test: a store call per flush can stall the worker on a wedged
+/// store). A pixel added *after* the worker has started is invisible until
+/// the next tick refreshes the snapshot; once it does, forwarding uses the
+/// refreshed snapshot with no further store call needed on the flush path.
+#[tokio::test]
+async fn worker_forwards_to_a_pixel_added_after_start_once_the_snapshot_refreshes() {
+    let (mock_base, captured) = mock_server("/mp/collect").await;
+    let dir = tempfile::tempdir().unwrap();
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    // Deliberately no pixel configured before the worker starts: the
+    // initial snapshot load must come back empty.
+
+    let bases = PixelBases {
+        ga4: mock_base,
+        meta: "http://127.0.0.1:1".to_string(),
+    };
+    let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(100);
+    let handle = spawn_worker(
+        rx,
+        sink.clone(),
+        store.clone(),
+        reqwest::Client::new(),
+        KEY,
+        bases,
+    );
+
+    // Added only now, after the worker's initial snapshot load already ran.
+    store.put_pixel(&ga4_config(1)).await.unwrap();
+
+    // Past the 5s ticker: the worker refreshes its cached snapshot here,
+    // with no event flowing through the channel (so no per-flush store
+    // call is exercised, only the ticker-driven refresh).
+    tokio::time::sleep(std::time::Duration::from_millis(5_500)).await;
+
+    tx.send(ev(42, 1_752_300_000)).await.unwrap();
+    drop(tx);
+    handle.await.unwrap();
+
+    let calls = captured.lock().unwrap();
+    assert_eq!(
+        calls.len(),
+        1,
+        "pixel added after worker start should be forwarded once the cached snapshot refreshes"
+    );
+}
+
 /// Security regression: a forward failure must never leak the provider URL
 /// (and therefore the credential embedded in its query string) through the
 /// `PixelError` that callers log via `Display`/`to_string()`. Points a

@@ -60,6 +60,7 @@ pub struct PixelConfig {
 pub enum PixelError {
     Http(reqwest::Error),
     Status(reqwest::StatusCode),
+    InvalidBase,
 }
 
 impl std::fmt::Display for PixelError {
@@ -67,6 +68,7 @@ impl std::fmt::Display for PixelError {
         match self {
             PixelError::Http(e) => write!(f, "http: {e}"),
             PixelError::Status(s) => write!(f, "provider returned status {s}"),
+            PixelError::InvalidBase => write!(f, "invalid pixel provider base host"),
         }
     }
 }
@@ -169,10 +171,15 @@ pub fn meta_payload(events: &[ClickEvent], key: u64) -> Value {
 /// Credentials are percent-encoded via `url::Url` (query pairs / path
 /// segments) so a credential containing `&`, `#` or a space can never break
 /// the URL.
-pub fn provider_url(base: &str, config: &PixelConfig) -> String {
+///
+/// Returns `Err(PixelError::InvalidBase)` instead of panicking if `base` is
+/// not a valid base URL. In production `base` is always one of the fixed
+/// hosts in `PixelBases::default()`, so this never fires today, but a
+/// future configurable base must not be able to panic the analytics worker.
+pub fn provider_url(base: &str, config: &PixelConfig) -> Result<String, PixelError> {
     match config.provider {
         Provider::Ga4 => {
-            let mut url = Url::parse(base).expect("pixel base host must be a valid URL");
+            let mut url = Url::parse(base).map_err(|_| PixelError::InvalidBase)?;
             url.set_path("/mp/collect");
             url.query_pairs_mut()
                 .append_pair(
@@ -183,12 +190,12 @@ pub fn provider_url(base: &str, config: &PixelConfig) -> String {
                     "api_secret",
                     config.credentials.api_secret.as_deref().unwrap_or(""),
                 );
-            url.to_string()
+            Ok(url.to_string())
         }
         Provider::MetaCapi => {
-            let mut url = Url::parse(base).expect("pixel base host must be a valid URL");
+            let mut url = Url::parse(base).map_err(|_| PixelError::InvalidBase)?;
             url.path_segments_mut()
-                .expect("pixel base host cannot be a cannot-be-a-base URL")
+                .map_err(|_| PixelError::InvalidBase)?
                 .push("v19.0")
                 .push(config.credentials.pixel_id.as_deref().unwrap_or(""))
                 .push("events");
@@ -196,7 +203,7 @@ pub fn provider_url(base: &str, config: &PixelConfig) -> String {
                 "access_token",
                 config.credentials.access_token.as_deref().unwrap_or(""),
             );
-            url.to_string()
+            Ok(url.to_string())
         }
     }
 }
@@ -219,7 +226,7 @@ pub async fn forward(
         Provider::Ga4 => ga4_payload(events, key),
         Provider::MetaCapi => meta_payload(events, key),
     };
-    let url = provider_url(base, config);
+    let url = provider_url(base, config)?;
     let resp = client
         .post(url)
         .json(&payload)
@@ -353,7 +360,7 @@ mod tests {
 
     #[test]
     fn provider_url_ga4() {
-        let url = provider_url("https://www.google-analytics.com", &ga4_config());
+        let url = provider_url("https://www.google-analytics.com", &ga4_config()).unwrap();
         assert_eq!(
             url,
             "https://www.google-analytics.com/mp/collect?measurement_id=G-ABC123&api_secret=secret1"
@@ -362,7 +369,7 @@ mod tests {
 
     #[test]
     fn provider_url_meta() {
-        let url = provider_url("https://graph.facebook.com", &meta_config());
+        let url = provider_url("https://graph.facebook.com", &meta_config()).unwrap();
         assert_eq!(
             url,
             "https://graph.facebook.com/v19.0/1234567890/events?access_token=token1"
@@ -373,16 +380,25 @@ mod tests {
     fn provider_url_percent_encodes_credentials_with_special_characters() {
         let mut config = ga4_config();
         config.credentials.api_secret = Some("se&cret#1 two".into());
-        let url = provider_url("https://www.google-analytics.com", &config);
+        let url = provider_url("https://www.google-analytics.com", &config).unwrap();
         // Query values are form-urlencoded: space becomes `+`, not `%20`.
         assert!(url.contains("api_secret=se%26cret%231+two"));
         assert!(!url.contains("se&cret#1 two"));
 
         let mut config = meta_config();
         config.credentials.pixel_id = Some("id/with slash".into());
-        let url = provider_url("https://graph.facebook.com", &config);
+        let url = provider_url("https://graph.facebook.com", &config).unwrap();
         assert!(url.contains("id%2Fwith%20slash"));
         assert!(!url.contains("id/with slash"));
+    }
+
+    #[test]
+    fn provider_url_invalid_base_is_an_error_not_a_panic() {
+        let err = provider_url("not a url", &ga4_config()).unwrap_err();
+        assert!(matches!(err, PixelError::InvalidBase));
+
+        let err = provider_url("not a url", &meta_config()).unwrap_err();
+        assert!(matches!(err, PixelError::InvalidBase));
     }
 
     type Captured = Arc<Mutex<Vec<(String, String, Value)>>>;
