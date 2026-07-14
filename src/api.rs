@@ -1,6 +1,7 @@
 use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{AnalyticsSink, ClickEvent};
 use crate::cache::Cache;
+use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::store::{Record, Store, StoreError};
 use crate::{codec, now, permute};
 use axum::body::Bytes;
@@ -554,6 +555,142 @@ async fn admin_link_patch(
     StatusCode::OK.into_response()
 }
 
+/// Maximum number of pixel configs allowed on this instance (instance-level
+/// config for this pass, roadmap #14 — not per-link, so this stays small).
+const PIXELS_CAP: usize = 20;
+/// Placeholder shown instead of a secret credential in `GET /admin/pixels`.
+/// The raw value is never sent back once stored.
+const MASKED_SECRET: &str = "\u{2022}\u{2022}\u{2022}\u{2022}";
+
+#[derive(Deserialize)]
+struct PixelCreateReq {
+    provider: Provider,
+    credentials: PixelCredentials,
+    active: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct MaskedCredentials {
+    measurement_id: Option<String>,
+    api_secret: Option<String>,
+    pixel_id: Option<String>,
+    access_token: Option<String>,
+}
+
+/// Masks the secret fields (`api_secret`/`access_token`); `measurement_id`
+/// and `pixel_id` are provider-facing identifiers, not secrets, so they pass
+/// through unmasked.
+fn mask_credentials(c: &PixelCredentials) -> MaskedCredentials {
+    MaskedCredentials {
+        measurement_id: c.measurement_id.clone(),
+        api_secret: c.api_secret.as_ref().map(|_| MASKED_SECRET.to_string()),
+        pixel_id: c.pixel_id.clone(),
+        access_token: c.access_token.as_ref().map(|_| MASKED_SECRET.to_string()),
+    }
+}
+
+#[derive(Serialize)]
+struct PixelRow {
+    id: u64,
+    provider: Provider,
+    credentials: MaskedCredentials,
+    active: bool,
+    created: u64,
+}
+
+fn to_pixel_row(config: &PixelConfig) -> PixelRow {
+    PixelRow {
+        id: config.id,
+        provider: config.provider,
+        credentials: mask_credentials(&config.credentials),
+        active: config.active,
+        created: config.created,
+    }
+}
+
+/// Minimal credential validation per provider: GA4 needs measurement_id +
+/// api_secret; Meta needs pixel_id + access_token. Both non-empty (trimmed).
+fn has_required_pixel_credentials(provider: Provider, c: &PixelCredentials) -> bool {
+    fn non_empty(s: &Option<String>) -> bool {
+        s.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false)
+    }
+    match provider {
+        Provider::Ga4 => non_empty(&c.measurement_id) && non_empty(&c.api_secret),
+        Provider::MetaCapi => non_empty(&c.pixel_id) && non_empty(&c.access_token),
+    }
+}
+
+async fn admin_pixels_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    match st.store.list_pixels().await {
+        Ok(pixels) => {
+            let rows: Vec<PixelRow> = pixels.iter().map(to_pixel_row).collect();
+            Json(serde_json::json!({ "pixels": rows })).into_response()
+        }
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn admin_pixels_create(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    let req: PixelCreateReq = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
+    };
+    if !has_required_pixel_credentials(req.provider, &req.credentials) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "missing required credentials for provider",
+        )
+            .into_response();
+    }
+    let existing = match st.store.list_pixels().await {
+        Ok(p) => p,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if existing.len() >= PIXELS_CAP {
+        return (StatusCode::BAD_REQUEST, "pixel config limit reached (20)").into_response();
+    }
+    let id = match st.store.next_pixel_id().await {
+        Ok(id) => id,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let config = PixelConfig {
+        id,
+        provider: req.provider,
+        credentials: req.credentials,
+        active: req.active.unwrap_or(true),
+        created: now(),
+    };
+    if st.store.put_pixel(&config).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    (StatusCode::CREATED, Json(to_pixel_row(&config))).into_response()
+}
+
+async fn admin_pixels_delete(
+    State(st): State<Arc<AppState>>,
+    Path(id): Path<u64>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    match st.store.delete_pixel(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -630,6 +767,14 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route(
             "/admin/links/:code",
             axum::routing::delete(admin_link_delete).patch(admin_link_patch),
+        )
+        .route(
+            "/admin/pixels",
+            get(admin_pixels_list).post(admin_pixels_create),
+        )
+        .route(
+            "/admin/pixels/:id",
+            axum::routing::delete(admin_pixels_delete),
         )
         .with_state(state);
 

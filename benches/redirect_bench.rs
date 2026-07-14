@@ -46,7 +46,14 @@ fn bench(c: &mut Criterion) {
             .unwrap();
         let cache = Cache::new(store.clone(), 100_000);
         let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(10_000);
-        let worker = spawn_worker(rx, sink.clone());
+        let worker = spawn_worker(
+            rx,
+            sink.clone(),
+            store.clone(),
+            reqwest::Client::new(),
+            key,
+            quark::pixel::PixelBases::default(),
+        );
         let state = Arc::new(AppState {
             cache,
             store: store.clone(),

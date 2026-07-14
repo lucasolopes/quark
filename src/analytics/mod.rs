@@ -1,4 +1,5 @@
-use crate::store::StoreError;
+use crate::pixel::{self, PixelBases};
+use crate::store::{Store, StoreError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -104,10 +105,22 @@ pub const BATCH: usize = 500;
 
 /// Background worker: accumulates `ClickEvent`s from the channel and flushes
 /// to the sink when the buffer reaches `BATCH`, every 5s, or when the channel
-/// closes (drains and exits).
+/// closes (drains and exits). Each flush also forwards the batch to every
+/// active pixel config (server-side conversion forwarding, roadmap #14):
+/// async only, off the redirect hot path, and fail-open (a provider error is
+/// only logged, never propagated to the caller or the sink write).
+///
+/// `client` is the shared `reqwest::Client` used for provider calls (built
+/// with no redirects and a timeout by the caller); `key` derives the real
+/// short code used as `link_code` in the forwarded payload; `bases` are the
+/// provider hosts (fixed in production, injectable in tests).
 pub fn spawn_worker(
     mut rx: Receiver<ClickEvent>,
     sink: Arc<dyn AnalyticsSink>,
+    store: Arc<dyn Store>,
+    client: reqwest::Client,
+    key: u64,
+    bases: PixelBases,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut buf: Vec<ClickEvent> = Vec::with_capacity(BATCH);
@@ -120,24 +133,31 @@ pub fn spawn_worker(
                         Some(ev) => {
                             buf.push(ev);
                             if buf.len() >= BATCH {
-                                flush(&sink, &mut buf).await;
+                                flush(&sink, &mut buf, &store, &client, key, &bases).await;
                             }
                         }
                         None => {
-                            flush(&sink, &mut buf).await;
+                            flush(&sink, &mut buf, &store, &client, key, &bases).await;
                             break;
                         }
                     }
                 }
                 _ = ticker.tick() => {
-                    flush(&sink, &mut buf).await;
+                    flush(&sink, &mut buf, &store, &client, key, &bases).await;
                 }
             }
         }
     })
 }
 
-async fn flush(sink: &Arc<dyn AnalyticsSink>, buf: &mut Vec<ClickEvent>) {
+async fn flush(
+    sink: &Arc<dyn AnalyticsSink>,
+    buf: &mut Vec<ClickEvent>,
+    store: &Arc<dyn Store>,
+    client: &reqwest::Client,
+    key: u64,
+    bases: &PixelBases,
+) {
     if buf.is_empty() {
         return;
     }
@@ -147,7 +167,40 @@ async fn flush(sink: &Arc<dyn AnalyticsSink>, buf: &mut Vec<ClickEvent>) {
             serde_json::json!({"analytics_flush_error": e.to_string()})
         );
     }
+    forward_to_pixels(store, client, key, bases, buf).await;
     buf.clear();
+}
+
+/// Forwards the flushed batch to every active pixel config. Fail-open: a
+/// listing failure or a per-provider forward failure is only logged, never
+/// propagated (never affects the sink write above nor the redirect hot path,
+/// which has already returned by the time this runs).
+async fn forward_to_pixels(
+    store: &Arc<dyn Store>,
+    client: &reqwest::Client,
+    key: u64,
+    bases: &PixelBases,
+    events: &[ClickEvent],
+) {
+    let configs = match store.list_pixels().await {
+        Ok(configs) => configs,
+        Err(e) => {
+            eprintln!("{}", serde_json::json!({"pixel_list_error": e.to_string()}));
+            return;
+        }
+    };
+    for config in configs.iter().filter(|c| c.active) {
+        let base = bases.base_for(config.provider);
+        if let Err(e) = pixel::forward(client, base, config, events, key).await {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "pixel_forward_error": e.to_string(),
+                    "pixel_id": config.id,
+                })
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -213,9 +266,16 @@ mod tests {
     #[tokio::test]
     async fn worker_drains_and_writes_on_channel_close() {
         let dir = tempfile::tempdir().unwrap();
-        let (_store, sink) = crate::store::open_backends(dir.path()).await.unwrap();
+        let (store, sink) = crate::store::open_backends(dir.path()).await.unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(1000);
-        let handle = spawn_worker(rx, sink.clone());
+        let handle = spawn_worker(
+            rx,
+            sink.clone(),
+            store,
+            reqwest::Client::new(),
+            0x1234,
+            PixelBases::default(),
+        );
 
         for i in 0..250u64 {
             tx.send(ClickEvent {
