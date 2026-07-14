@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { isHttpUrl } from "@/lib/codeguard";
 import { isUnauthorized } from "@/lib/mutation-error";
@@ -28,24 +29,23 @@ interface EditLinkDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-const GENERIC_ERROR = "Não foi possível salvar as alterações. Tente de novo.";
-
-function formatExpiry(expiry: number | null): string {
-  if (expiry == null) return "nunca expira";
-  return `expira em ${new Date(expiry * 1000).toLocaleDateString("pt-BR")}`;
-}
-
 /**
- * Dialog de edição de um link existente. Monta com `key={link.code}` no
- * chamador (Links.tsx) para que os campos sempre partam do link certo —
- * sem isso precisaríamos sincronizar estado via efeito a cada troca de link.
+ * Dialog for editing an existing link. Mounted with `key={link.code}` by the
+ * caller (Links.tsx) so the fields always start from the right link — without
+ * that we'd need to sync state via an effect on every link change.
  */
 export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps) {
+  const t = useT();
   const [url, setUrl] = useState(link.url);
   const [ttl, setTtl] = useState("");
   const [removeExpiry, setRemoveExpiry] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
+
+  function formatExpiry(expiry: number | null): string {
+    if (expiry == null) return t("dialogs.edit.neverExpires");
+    return t("dialogs.edit.expiresOn", { date: new Date(expiry * 1000).toLocaleDateString("pt-BR") });
+  }
 
   function handleOpenChange(next: boolean) {
     if (!next) setErrors({});
@@ -55,15 +55,15 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
   function validate(): FormErrors {
     const next: FormErrors = {};
     if (!url.trim()) {
-      next.url = "URL é obrigatória.";
+      next.url = t("dialogs.edit.urlRequired");
     } else if (!isHttpUrl(url)) {
-      next.url = "URL inválida — use um endereço http:// ou https://.";
+      next.url = t("dialogs.edit.urlInvalid");
     }
     const trimmedTtl = ttl.trim();
     if (!removeExpiry && trimmedTtl) {
       const n = Number(trimmedTtl);
       if (!Number.isInteger(n) || n <= 0) {
-        next.ttl = "TTL deve ser um número de segundos maior que zero.";
+        next.ttl = t("dialogs.edit.ttlInvalid");
       }
     }
     return next;
@@ -82,25 +82,19 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
         code: link.code,
         body: {
           url: url.trim(),
-          // `ttl: null` remove a expiração (o backend aceita isso no PATCH).
-          // Sem marcar "sem expiração", só manda `ttl` se o campo foi preenchido.
           ...(removeExpiry ? { ttl: null } : ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
         },
       });
-      toast.success("Link atualizado.");
+      toast.success(t("dialogs.edit.successToast"));
       onOpenChange(false);
     } catch (err) {
-      // 401: o handler global já limpa o token e redireciona pro /login —
-      // não duplica feedback aqui.
       if (isUnauthorized(err)) return;
       if (err instanceof ApiError && err.status === 403) {
-        setErrors({ url: "Esse destino não é permitido (pode estar bloqueado)." });
+        setErrors({ url: t("dialogs.edit.forbiddenDestination") });
       } else if (err instanceof ApiError && err.status === 429) {
-        toast.error("Muitas requisições. Tente de novo em um instante.");
+        toast.error(t("common.rateLimited"));
       } else {
-        // O PATCH nunca devolve 409 (sem alias na edição, não há colisão a
-        // detectar) — sem branch dedicado pra esse status.
-        setErrors({ form: GENERIC_ERROR });
+        setErrors({ form: t("dialogs.edit.genericError") });
       }
     }
   }
@@ -110,14 +104,14 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
       <DialogContent>
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle>Editar {link.code}</DialogTitle>
-            <DialogDescription>Atualize o destino e/ou o prazo de validade deste link.</DialogDescription>
+            <DialogTitle>{t("dialogs.edit.title", { code: link.code })}</DialogTitle>
+            <DialogDescription>{t("dialogs.edit.description")}</DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-col gap-3 py-3">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="edit-link-url" className="text-sm font-medium">
-                URL
+                {t("dialogs.edit.urlLabel")}
               </label>
               <Input
                 id="edit-link-url"
@@ -136,14 +130,14 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
 
             <div className="flex flex-col gap-1.5">
               <label htmlFor="edit-link-ttl" className="text-sm font-medium">
-                Novo prazo <span className="text-muted-foreground">(segundos a partir de agora, opcional)</span>
+                {t("dialogs.edit.ttlLabel")} <span className="text-muted-foreground">{t("dialogs.edit.ttlOptional")}</span>
               </label>
               <Input
                 id="edit-link-ttl"
                 type="number"
                 min={1}
                 step={1}
-                placeholder={`Atualmente ${formatExpiry(link.expiry)}`}
+                placeholder={t("dialogs.edit.ttlPlaceholder", { expiry: formatExpiry(link.expiry) })}
                 value={ttl}
                 onChange={(e) => setTtl(e.target.value)}
                 aria-invalid={errors.ttl != null}
@@ -164,7 +158,7 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
                     if (e.target.checked) setTtl("");
                   }}
                 />
-                Remover expiração (link nunca expira)
+                {t("dialogs.edit.removeExpiryLabel")}
               </label>
             </div>
 
@@ -177,10 +171,10 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => handleOpenChange(false)}>
-              Cancelar
+              {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={patchLink.isPending}>
-              {patchLink.isPending ? "Salvando…" : "Salvar alterações"}
+              {patchLink.isPending ? t("dialogs.edit.submitting") : t("dialogs.edit.submit")}
             </Button>
           </DialogFooter>
         </form>

@@ -14,11 +14,14 @@ import {
   YAxis,
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useT } from "@/i18n";
 import type { Aggregates } from "@/lib/types";
 
-// Rampa de cinza já usada pelo design system (tokens --chart-1..5 no
-// index.css). Reaproveitar em vez de inventar uma paleta nova mantém os
-// gráficos consistentes com o resto do painel (badges, ícones etc).
+/**
+ * Grayscale ramp already used by the design system (--chart-1..5 tokens in
+ * index.css). Reused instead of inventing a new palette to keep the charts
+ * consistent with the rest of the panel (badges, icons, etc).
+ */
 const CHART_COLORS = [
   "var(--color-chart-1)",
   "var(--color-chart-2)",
@@ -60,27 +63,28 @@ function ChartCard({ title, empty, emptyLabel, children }: ChartCardProps) {
   );
 }
 
-/** Cliques por dia (`per_day`), em ordem cronológica. */
+/** Clicks per day (`per_day`), in chronological order. */
 function PerDayChart({ perDay }: { perDay: Record<string, number> }) {
+  const t = useT();
   const data = Object.entries(perDay)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([day, count]) => ({ day, count, label: formatDay(day) }));
 
   return (
-    <ChartCard title="Cliques por dia" empty={data.length === 0} emptyLabel="Sem dados de dia ainda.">
+    <ChartCard title={t("charts.perDayTitle")} empty={data.length === 0} emptyLabel={t("charts.perDayEmpty")}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
           <XAxis dataKey="label" tick={{ fontSize: 12 }} stroke="var(--color-muted-foreground)" />
           <YAxis allowDecimals={false} tick={{ fontSize: 12 }} stroke="var(--color-muted-foreground)" width={32} />
           <Tooltip
-            formatter={(value) => [`${value}`, "Cliques"]}
-            labelFormatter={(label) => `Dia ${label}`}
+            formatter={(value) => [`${value}`, t("charts.clicks")]}
+            labelFormatter={(label) => t("charts.dayLabel", { label })}
           />
           <Line
             type="monotone"
             dataKey="count"
-            name="Cliques"
+            name={t("charts.clicks")}
             stroke="var(--color-chart-2)"
             strokeWidth={2}
             dot={{ r: 3 }}
@@ -91,15 +95,20 @@ function PerDayChart({ perDay }: { perDay: Record<string, number> }) {
   );
 }
 
-/** Top-N países por volume de cliques (`per_country`), ordem decrescente. */
+/** Top-N countries by click volume (`per_country`), descending order. */
 function PerCountryChart({ perCountry }: { perCountry: Record<string, number> }) {
+  const t = useT();
   const data = Object.entries(perCountry)
     .sort(([, a], [, b]) => b - a)
     .slice(0, TOP_N_COUNTRIES)
-    .map(([country, count]) => ({ country: country || "Desconhecido", count }));
+    .map(([country, count]) => ({ country: country || t("charts.unknown"), count }));
 
   return (
-    <ChartCard title="Cliques por país" empty={data.length === 0} emptyLabel="Sem dados de país ainda.">
+    <ChartCard
+      title={t("charts.perCountryTitle")}
+      empty={data.length === 0}
+      emptyLabel={t("charts.perCountryEmpty")}
+    >
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} layout="vertical" margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" horizontal={false} />
@@ -111,22 +120,27 @@ function PerCountryChart({ perCountry }: { perCountry: Record<string, number> })
             tick={{ fontSize: 12 }}
             stroke="var(--color-muted-foreground)"
           />
-          <Tooltip formatter={(value) => [`${value}`, "Cliques"]} />
-          <Bar dataKey="count" name="Cliques" fill="var(--color-chart-2)" radius={[0, 4, 4, 0]} />
+          <Tooltip formatter={(value) => [`${value}`, t("charts.clicks")]} />
+          <Bar dataKey="count" name={t("charts.clicks")} fill="var(--color-chart-2)" radius={[0, 4, 4, 0]} />
         </BarChart>
       </ResponsiveContainer>
     </ChartCard>
   );
 }
 
-/** Distribuição por dispositivo (`per_device`), como rosca. */
+/** Device distribution (`per_device`), as a donut chart. */
 function PerDeviceChart({ perDevice }: { perDevice: Record<string, number> }) {
+  const t = useT();
   const data = Object.entries(perDevice)
     .sort(([, a], [, b]) => b - a)
-    .map(([device, count]) => ({ device: device || "Desconhecido", count }));
+    .map(([device, count]) => ({ device: device || t("charts.unknown"), count }));
 
   return (
-    <ChartCard title="Cliques por dispositivo" empty={data.length === 0} emptyLabel="Sem dados de dispositivo ainda.">
+    <ChartCard
+      title={t("charts.perDeviceTitle")}
+      empty={data.length === 0}
+      emptyLabel={t("charts.perDeviceEmpty")}
+    >
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
           <Pie
@@ -154,7 +168,7 @@ interface StatsChartsProps {
   aggregates: Aggregates;
 }
 
-/** Os três gráficos da tela de stats: cliques por dia, por país e por dispositivo. */
+/** The three charts on the stats screen: clicks per day, per country and per device. */
 export function StatsCharts({ aggregates }: StatsChartsProps) {
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

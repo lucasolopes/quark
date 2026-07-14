@@ -2,9 +2,9 @@ import { ThemeProvider as NextThemesProvider } from "next-themes";
 import type { ReactNode } from "react";
 
 /**
- * Tema claro/escuro via classe `.dark` no `<html>`, persistido em
- * localStorage (comportamento padrão do next-themes). O toggle em si usa
- * `useTheme()` do next-themes diretamente onde é consumido (Shell.tsx).
+ * Light/dark theme via the `.dark` class on `<html>`, persisted to
+ * localStorage (next-themes' default behavior). The toggle itself uses
+ * next-themes' `useTheme()` directly where it's consumed (Shell.tsx).
  */
 export function ThemeProvider({ children }: { children: ReactNode }) {
   return (

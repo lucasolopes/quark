@@ -1,4 +1,4 @@
 import { describe, it, expect } from "vitest";
 describe("smoke", () => {
-  it("soma", () => { expect(1 + 1).toBe(2); });
+  it("adds", () => { expect(1 + 1).toBe(2); });
 });

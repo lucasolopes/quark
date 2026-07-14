@@ -9,10 +9,10 @@ body {
 }
 
 /*
- * quark design system — três famílias com papéis claros:
- *  Space Grotesk (display/headings/números), Hanken Grotesk (corpo/UI),
- *  JetBrains Mono (códigos, dados, eyebrows). Carregadas via <link> no
- *  index.html (Google Fonts). Fallback system-ui se offline.
+ * quark design system — three type families with clear roles:
+ *  Space Grotesk (display/headings/numbers), Hanken Grotesk (body/UI),
+ *  JetBrains Mono (codes, data, eyebrows). Loaded via <link> in index.html
+ *  (Google Fonts). Falls back to system-ui if offline.
  */
 @theme inline {
   --font-sans: 'Hanken Grotesk', system-ui, sans-serif;
@@ -59,12 +59,12 @@ body {
 }
 
 /*
- * Tema CLARO — superfícies claras do painel Quark (l-*). O acento continua
- * sendo a plasma-lime, mas o focus-ring usa a variante mais escura
- * (accent-dim) pra ter contraste sobre branco.
+ * LIGHT theme — light surfaces for the Quark panel (l-*). The accent is
+ * still plasma-lime, but the focus-ring uses the darker variant
+ * (accent-dim) for contrast over white.
  */
 :root {
-  --radius: 0.875rem; /* 14px — cards 14, md ≈ 11, sm ≈ 8 (escala Quark) */
+  --radius: 0.875rem; /* 14px — cards 14, md ≈ 11, sm ≈ 8 (Quark scale) */
 
   --background: #eef0f4;
   --foreground: #12141c;
@@ -72,7 +72,7 @@ body {
   --card-foreground: #12141c;
   --popover: #ffffff;
   --popover-foreground: #12141c;
-  --primary: #8fd12e; /* accent-dim: lime legível sobre claro */
+  --primary: #8fd12e; /* accent-dim: readable lime over light backgrounds */
   --primary-foreground: #0a0b0f;
   --secondary: #f4f5f8;
   --secondary-foreground: #12141c;
@@ -102,32 +102,32 @@ body {
 }
 
 /*
- * Tema ESCURO — a identidade principal do Quark: superfícies deep-ink,
- * UM acento plasma-lime usado com parcimônia (ação primária, estado ativo,
- * numerais de métrica, focus-ring, glow).
+ * DARK theme — Quark's primary identity: deep-ink surfaces, ONE
+ * plasma-lime accent used sparingly (primary action, active state,
+ * metric numerals, focus-ring, glow).
  */
 .dark {
   --background: #0a0b0f; /* ink */
   --foreground: #e8eaf2; /* text */
   --card: #131521; /* panel */
   --card-foreground: #f3f5fa; /* text-strong */
-  --popover: #1a1d2b; /* panel-2 — menus/diálogos lêem como superfície elevada */
+  --popover: #1a1d2b; /* panel-2 — menus/dialogs read as an elevated surface */
   --popover-foreground: #e8eaf2;
   --primary: #c6f94e; /* plasma-lime */
   --primary-foreground: #0a0b0f; /* on-accent */
   --secondary: #1a1d2b; /* panel-2 */
   --secondary-foreground: #e8eaf2;
-  --muted: #1a1d2b; /* panel-2 — hovers neutros */
+  --muted: #1a1d2b; /* panel-2 — neutral hovers */
   --muted-foreground: #8a90a2; /* text-muted */
-  --accent: #1a1d2b; /* neutro (mantém a lime escassa) */
+  --accent: #1a1d2b; /* neutral (keeps lime scarce) */
   --accent-foreground: #f3f5fa;
   --destructive: #ff6b6b; /* danger */
   --border: rgba(255, 255, 255, 0.09);
   --input: rgba(255, 255, 255, 0.16); /* border-strong */
-  --ring: #c6f94e; /* focus = marca */
+  --ring: #c6f94e; /* focus = brand */
 
   --chart-1: #c6f94e;
-  --chart-2: #4adede; /* cyan — geografia */
+  --chart-2: #4adede; /* cyan — geography */
   --chart-3: #8b7cf6; /* violet — device */
   --chart-4: #ff6b6b; /* danger */
   --chart-5: #8a90a2;
@@ -136,7 +136,7 @@ body {
   --sidebar-foreground: #e8eaf2;
   --sidebar-primary: #c6f94e;
   --sidebar-primary-foreground: #0a0b0f;
-  --sidebar-accent: rgba(198, 249, 78, 0.12); /* estado ativo = lime wash */
+  --sidebar-accent: rgba(198, 249, 78, 0.12); /* active state = lime wash */
   --sidebar-accent-foreground: #c6f94e;
   --sidebar-border: rgba(255, 255, 255, 0.09);
   --sidebar-ring: #c6f94e;
@@ -153,13 +153,13 @@ body {
   html {
     @apply font-sans;
   }
-  /* Numerais tabulares e display em Space Grotesk pros números-herói. */
+  /* Tabular and display numerals in Space Grotesk for hero numbers. */
   .font-heading {
     font-feature-settings: "tnum";
   }
 }
 
-/* Glow lime — reservado pra marca e acentos ativos (não decorar à toa). */
+/* Lime glow — reserved for the brand and active accents (don't decorate freely). */
 @utility glow-accent {
   box-shadow: 0 0 18px rgba(198, 249, 78, 0.6);
 }

@@ -6,9 +6,9 @@ const LINKS_QUERY_KEY = ["links"];
 const BLOCKLIST_QUERY_KEY = ["blocklist"];
 
 /**
- * Cliente único do TanStack Query para a aplicação. `retry: false` porque um
- * 401 já é tratado globalmente via `setUnauthorizedHandler` (ver App.tsx) e
- * novas tentativas automáticas não ajudam nesse caso.
+ * The application's single TanStack Query client. `retry: false` because a
+ * 401 is already handled globally via `setUnauthorizedHandler` (see App.tsx)
+ * and automatic retries don't help in that case.
  */
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,19 +22,20 @@ export const queryClient = new QueryClient({
 const LINKS_PAGE_SIZE = 50;
 
 /**
- * Lista paginada de links via keyset (`after`/`next_after`). Cada página
- * carrega `LINKS_PAGE_SIZE` links; `fetchNextPage` busca a próxima usando o
- * cursor devolvido pela API.
+ * Paginated link list via keyset (`after`/`next_after`). Each page loads
+ * `LINKS_PAGE_SIZE` links; `fetchNextPage` fetches the next one using the
+ * cursor returned by the API.
  *
- * Sem `q`, é a lista base (sempre carregada — fonte do fallback client-side
- * da tela de Links). Com `q`, é a busca server-side paginada; o backend
- * pode responder 501 (sem suporte a busca), caso em que a tela cai pro
- * filtro client-side sobre a lista base. Não define `retry` próprio —
- * herda o `retry: false` global do `queryClient` (mesmo motivo do
- * comentário lá: um 401 já é tratado por `onUnauthorized`, e reintentos
- * automáticos não ajudam nem no 501, que é resposta definitiva, não erro
- * transitório). Um `retry` custom aqui vazaria pra chamada sem `q` também,
- * já que é o mesmo hook.
+ * Without `q`, this is the base list (always loaded — the source for the
+ * Links screen's client-side fallback). With `q`, it's the paginated
+ * server-side search; the backend may respond with 501 (search not
+ * supported), in which case the screen falls back to filtering client-side
+ * over the base list. Doesn't set its own `retry` — inherits the global
+ * `retry: false` from `queryClient` (same reason as that comment: a 401 is
+ * already handled by `onUnauthorized`, and automatic retries don't help on
+ * 501 either, which is a final response, not a transient error). A custom
+ * `retry` here would leak into the call without `q` too, since it's the same
+ * hook.
  */
 export function useLinks(q?: string, options: { enabled?: boolean } = {}) {
   const term = q?.trim() ?? "";
@@ -43,16 +44,12 @@ export function useLinks(q?: string, options: { enabled?: boolean } = {}) {
     queryFn: ({ pageParam }) =>
       api.listLinks({ after: pageParam ?? undefined, limit: LINKS_PAGE_SIZE, q: term || undefined }),
     initialPageParam: null as number | null,
-    // O backend sempre manda `next_after` = id do último link da página,
-    // mesmo quando ela veio incompleta (não manda `null` só porque acabou).
-    // Sem esse corte por tamanho, "Carregar mais" dispararia um fetch extra
-    // que sempre volta vazio depois da última página real.
     getNextPageParam: (lastPage) => (lastPage.links.length < LINKS_PAGE_SIZE ? undefined : lastPage.next_after),
     enabled: options.enabled,
   });
 }
 
-/** Cria um link; sucesso invalida `useLinks` para refletir o novo registro na lista. */
+/** Creates a link; on success invalidates `useLinks` to reflect the new record in the list. */
 export function useCreateLink() {
   const client = useQueryClient();
   return useMutation({
@@ -61,7 +58,7 @@ export function useCreateLink() {
   });
 }
 
-/** Atualiza url e/ou ttl de um link existente; sucesso invalida `useLinks`. */
+/** Updates url and/or ttl of an existing link; on success invalidates `useLinks`. */
 export function usePatchLink() {
   const client = useQueryClient();
   return useMutation({
@@ -70,7 +67,7 @@ export function usePatchLink() {
   });
 }
 
-/** Remove um link; sucesso invalida `useLinks`. */
+/** Deletes a link; on success invalidates `useLinks`. */
 export function useDeleteLink() {
   const client = useQueryClient();
   return useMutation({
@@ -79,7 +76,7 @@ export function useDeleteLink() {
   });
 }
 
-/** Estatísticas agregadas + eventos recentes de um link, para a tela de detalhe. */
+/** Aggregated stats + recent events for a link, for the detail screen. */
 export function useStats(code: string) {
   return useQuery({
     queryKey: ["stats", code],
@@ -88,7 +85,7 @@ export function useStats(code: string) {
   });
 }
 
-/** Lista de domínios bloqueados, para a tela de Blocklist. */
+/** List of blocked domains, for the Blocklist screen. */
 export function useBlocklist() {
   return useQuery({
     queryKey: BLOCKLIST_QUERY_KEY,
@@ -96,7 +93,7 @@ export function useBlocklist() {
   });
 }
 
-/** Adiciona um domínio à blocklist; sucesso invalida `useBlocklist`. */
+/** Adds a domain to the blocklist; on success invalidates `useBlocklist`. */
 export function useAddBlocked() {
   const client = useQueryClient();
   return useMutation({
@@ -105,7 +102,7 @@ export function useAddBlocked() {
   });
 }
 
-/** Remove um domínio da blocklist; sucesso invalida `useBlocklist`. */
+/** Removes a domain from the blocklist; on success invalidates `useBlocklist`. */
 export function useRemoveBlocked() {
   const client = useQueryClient();
   return useMutation({

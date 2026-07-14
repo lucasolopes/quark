@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { isHttpUrl, isNumericCode } from "@/lib/codeguard";
 import { isUnauthorized } from "@/lib/mutation-error";
@@ -27,14 +28,13 @@ interface CreateLinkDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-const GENERIC_ERROR = "Não foi possível criar o link. Tente de novo.";
-
 /**
- * Dialog de criação de link curto. Valida no cliente (URL http/https, alias
- * fora do espaço de código numérico, TTL positivo) antes de chamar a API —
- * evita um round-trip só pra devolver um erro que já sabíamos de antemão.
+ * Short link creation dialog. Validates client-side (http/https URL, alias
+ * outside the numeric-code space, positive TTL) before calling the API —
+ * avoids a round-trip just to get back an error we already knew about.
  */
 export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) {
+  const t = useT();
   const [url, setUrl] = useState("");
   const [alias, setAlias] = useState("");
   const [ttl, setTtl] = useState("");
@@ -56,19 +56,19 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
   function validate(): FormErrors {
     const next: FormErrors = {};
     if (!url.trim()) {
-      next.url = "URL é obrigatória.";
+      next.url = t("dialogs.create.urlRequired");
     } else if (!isHttpUrl(url)) {
-      next.url = "URL inválida — use um endereço http:// ou https://.";
+      next.url = t("dialogs.create.urlInvalid");
     }
     const trimmedAlias = alias.trim();
     if (trimmedAlias && isNumericCode(trimmedAlias)) {
-      next.alias = "Esse alias colide com um código gerado pelo sistema. Escolha outro.";
+      next.alias = t("dialogs.create.aliasCollision");
     }
     const trimmedTtl = ttl.trim();
     if (trimmedTtl) {
       const n = Number(trimmedTtl);
       if (!Number.isInteger(n) || n <= 0) {
-        next.ttl = "TTL deve ser um número de segundos maior que zero.";
+        next.ttl = t("dialogs.create.ttlInvalid");
       }
     }
     return next;
@@ -88,21 +88,19 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
         ...(alias.trim() ? { alias: alias.trim() } : {}),
         ...(ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
       });
-      toast.success("Link criado.");
+      toast.success(t("dialogs.create.successToast"));
       reset();
       onOpenChange(false);
     } catch (err) {
-      // 401: o handler global já limpa o token e redireciona pro /login —
-      // não duplica feedback aqui.
       if (isUnauthorized(err)) return;
       if (err instanceof ApiError && err.status === 409) {
-        setErrors({ alias: "Esse alias já está em uso." });
+        setErrors({ alias: t("dialogs.create.aliasInUse") });
       } else if (err instanceof ApiError && err.status === 403) {
-        setErrors({ url: "Esse destino não é permitido (pode estar bloqueado)." });
+        setErrors({ url: t("dialogs.create.forbiddenDestination") });
       } else if (err instanceof ApiError && err.status === 429) {
-        toast.error("Muitas requisições. Tente de novo em um instante.");
+        toast.error(t("common.rateLimited"));
       } else {
-        setErrors({ form: GENERIC_ERROR });
+        setErrors({ form: t("dialogs.create.genericError") });
       }
     }
   }
@@ -112,19 +110,19 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
       <DialogContent>
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle>Criar link</DialogTitle>
-            <DialogDescription>Encurte uma URL e, se quiser, escolha um alias e um prazo de validade.</DialogDescription>
+            <DialogTitle>{t("dialogs.create.title")}</DialogTitle>
+            <DialogDescription>{t("dialogs.create.description")}</DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-col gap-3 py-3">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="create-link-url" className="text-sm font-medium">
-                URL
+                {t("dialogs.create.urlLabel")}
               </label>
               <Input
                 id="create-link-url"
                 type="text"
-                placeholder="https://exemplo.com/pagina"
+                placeholder={t("dialogs.create.urlPlaceholder")}
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 aria-invalid={errors.url != null}
@@ -139,12 +137,12 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
 
             <div className="flex flex-col gap-1.5">
               <label htmlFor="create-link-alias" className="text-sm font-medium">
-                Alias <span className="text-muted-foreground">(opcional)</span>
+                {t("dialogs.create.aliasLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
               </label>
               <Input
                 id="create-link-alias"
                 type="text"
-                placeholder="promo-verao"
+                placeholder={t("dialogs.create.aliasPlaceholder")}
                 value={alias}
                 onChange={(e) => setAlias(e.target.value)}
                 aria-invalid={errors.alias != null}
@@ -158,14 +156,14 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
 
             <div className="flex flex-col gap-1.5">
               <label htmlFor="create-link-ttl" className="text-sm font-medium">
-                Expira em <span className="text-muted-foreground">(segundos, opcional)</span>
+                {t("dialogs.create.ttlLabel")} <span className="text-muted-foreground">{t("dialogs.create.ttlOptional")}</span>
               </label>
               <Input
                 id="create-link-ttl"
                 type="number"
                 min={1}
                 step={1}
-                placeholder="Sem prazo — nunca expira"
+                placeholder={t("dialogs.create.ttlPlaceholder")}
                 value={ttl}
                 onChange={(e) => setTtl(e.target.value)}
                 aria-invalid={errors.ttl != null}
@@ -186,10 +184,10 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => handleOpenChange(false)}>
-              Cancelar
+              {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={createLink.isPending}>
-              {createLink.isPending ? "Criando…" : "Criar link"}
+              {createLink.isPending ? t("dialogs.create.submitting") : t("dialogs.create.submit")}
             </Button>
           </DialogFooter>
         </form>

@@ -19,6 +19,7 @@ import { CreateLinkDialog } from "@/components/CreateLinkDialog";
 import { EditLinkDialog } from "@/components/EditLinkDialog";
 import { LinkTable } from "@/components/LinkTable";
 import { useDebounce } from "@/hooks/useDebounce";
+import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { mutationErrorToast } from "@/lib/mutation-error";
 import { useDeleteLink, useLinks } from "@/lib/queries";
@@ -35,15 +36,13 @@ function matches(link: Link, query: string): boolean {
 }
 
 export function Links() {
+  const t = useT();
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [editingLink, setEditingLink] = useState<Link | null>(null);
   const [deletingLink, setDeletingLink] = useState<Link | null>(null);
-  // Modo client-side: ligado pra sempre (pelo resto da sessão) na primeira
-  // vez que o servidor responder 501 — ele não sabe buscar e não vale a
-  // pena continuar perguntando.
   const [clientMode, setClientMode] = useState(false);
-  const query = useLinks(); // lista base — sempre carregada, é a fonte do fallback client-side
+  const query = useLinks();
   const deleteLink = useDeleteLink();
 
   const dq = useDebounce(search, 300);
@@ -54,9 +53,6 @@ export function Links() {
     if (serverSearch.error instanceof ApiError && serverSearch.error.status === 501) setClientMode(true);
   }, [serverSearch.error]);
 
-  // A busca client-side filtra só o que já foi carregado nesta sessão — ela
-  // não dispara uma nova página nem uma busca no servidor. "Carregar mais"
-  // antes de buscar amplia o conjunto sobre o qual a busca filtra.
   const allLinks = useMemo(() => query.data?.pages.flatMap((page) => page.links) ?? [], [query.data]);
   const searchResults = useMemo(
     () => serverSearch.data?.pages.flatMap((page) => page.links) ?? [],
@@ -71,11 +67,6 @@ export function Links() {
   }, [allLinks, searchResults, clientMode, dq]);
 
   const activeQuery = usingServerSearch ? serverSearch : query;
-  // 501 é o sinal de "sem suporte a busca" e vira `clientMode` (ver efeito
-  // acima) — não é uma falha real, então não deve acionar este card. Qualquer
-  // outro erro (500, 429, 503…) é uma falha de verdade e não pode ser
-  // confundida com "nenhum resultado", ou o usuário é enganado a pensar que
-  // buscou e não achou nada.
   const serverSearchFailed =
     usingServerSearch && serverSearch.isError && !(serverSearch.error instanceof ApiError && serverSearch.error.status === 501);
 
@@ -83,13 +74,11 @@ export function Links() {
     if (!deletingLink) return;
     try {
       await deleteLink.mutateAsync(deletingLink.code);
-      toast.success("Link excluído.");
+      toast.success(t("links.deleteSuccess"));
       setDeletingLink(null);
     } catch (err) {
       mutationErrorToast(err, (e) =>
-        e instanceof ApiError && e.status === 429
-          ? "Muitas requisições. Tente de novo em um instante."
-          : "Não foi possível excluir o link. Tente de novo.",
+        e instanceof ApiError && e.status === 429 ? t("common.rateLimited") : t("links.deleteGenericError"),
       );
     }
   }
@@ -98,22 +87,22 @@ export function Links() {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="font-heading text-2xl font-semibold">Links</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Todos os links curtos criados no sistema.</p>
+          <h1 className="font-heading text-2xl font-semibold">{t("links.heading")}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t("links.subtitle")}</p>
         </div>
         <Button onClick={() => setCreateOpen(true)}>
           <Plus className="size-4" />
-          Criar link
+          {t("links.createButton")}
         </Button>
       </div>
 
       <div className="relative max-w-sm">
         <Input
           type="search"
-          placeholder="Buscar por código, URL ou alias…"
+          placeholder={t("links.searchPlaceholder")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          aria-label="Buscar links"
+          aria-label={t("links.searchAriaLabel")}
         />
         {usingServerSearch && serverSearch.isFetching && (
           <Loader2
@@ -130,14 +119,14 @@ export function Links() {
           <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
             <AlertTriangle className="size-8 text-destructive" aria-hidden="true" />
             <div>
-              <p className="font-medium">Não foi possível carregar os links.</p>
+              <p className="font-medium">{t("links.loadError")}</p>
               <p className="text-sm text-muted-foreground">
-                {query.error instanceof Error ? query.error.message : "Tente de novo em alguns instantes."}
+                {query.error instanceof Error ? query.error.message : t("common.retryHint")}
               </p>
             </div>
             <Button variant="outline" onClick={() => query.refetch()}>
               <RotateCw className="size-4" />
-              Tentar de novo
+              {t("common.retry")}
             </Button>
           </CardContent>
         </Card>
@@ -148,12 +137,12 @@ export function Links() {
           <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
             <Link2 className="size-8 text-muted-foreground" aria-hidden="true" />
             <div>
-              <p className="font-medium">Nenhum link ainda.</p>
-              <p className="text-sm text-muted-foreground">Crie o primeiro link curto para começar.</p>
+              <p className="font-medium">{t("links.emptyTitle")}</p>
+              <p className="text-sm text-muted-foreground">{t("links.emptySubtitle")}</p>
             </div>
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />
-              Criar link
+              {t("links.createButton")}
             </Button>
           </CardContent>
         </Card>
@@ -164,14 +153,14 @@ export function Links() {
           <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
             <AlertTriangle className="size-8 text-destructive" aria-hidden="true" />
             <div>
-              <p className="font-medium">Não foi possível buscar.</p>
+              <p className="font-medium">{t("links.searchError")}</p>
               <p className="text-sm text-muted-foreground">
-                {serverSearch.error instanceof Error ? serverSearch.error.message : "Tente de novo em alguns instantes."}
+                {serverSearch.error instanceof Error ? serverSearch.error.message : t("common.retryHint")}
               </p>
             </div>
             <Button variant="outline" onClick={() => serverSearch.refetch()}>
               <RotateCw className="size-4" />
-              Tentar de novo
+              {t("common.retry")}
             </Button>
           </CardContent>
         </Card>
@@ -186,7 +175,7 @@ export function Links() {
         filtered.length === 0 && (
           <Card>
             <CardContent className="py-8 text-center text-sm text-muted-foreground">
-              nenhum link encontrado para "{dq}"
+              {t("links.noResults", { term: dq })}
             </CardContent>
           </Card>
         )}
@@ -208,7 +197,7 @@ export function Links() {
           disabled={activeQuery.isFetchingNextPage}
           className="self-center"
         >
-          {activeQuery.isFetchingNextPage ? "Carregando…" : "Carregar mais"}
+          {activeQuery.isFetchingNextPage ? t("common.loadingMore") : t("common.loadMore")}
         </Button>
       )}
 
@@ -226,19 +215,17 @@ export function Links() {
       <AlertDialog open={deletingLink != null} onOpenChange={(open) => !open && setDeletingLink(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Excluir {deletingLink?.code}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Isto não pode ser desfeito. O link deixará de redirecionar imediatamente.
-            </AlertDialogDescription>
+            <AlertDialogTitle>{t("links.deleteTitle", { code: deletingLink?.code ?? "" })}</AlertDialogTitle>
+            <AlertDialogDescription>{t("links.deleteDescription")}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteLink.isPending}>Cancelar</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteLink.isPending}>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               disabled={deleteLink.isPending}
               onClick={handleConfirmDelete}
             >
-              {deleteLink.isPending ? "Excluindo…" : "Excluir"}
+              {deleteLink.isPending ? t("links.deleting") : t("links.delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

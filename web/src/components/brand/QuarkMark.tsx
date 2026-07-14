@@ -1,11 +1,11 @@
 import { cn } from "@/lib/utils";
 
 /**
- * Marca oficial do quark — o glifo "Feistel-crossing": quatro nós lime
- * (as metades L/R entrando e saindo), o X (a troca por round) e o anel
- * central (a round-function ARX). Codifica o próprio motor (permutação
- * reversível com chave). Desenhado em `currentColor` por padrão pra herdar
- * a cor do contexto; passe `className="text-primary"` pra lime.
+ * quark's official mark — the "Feistel-crossing" glyph: four lime nodes
+ * (the L/R halves entering and leaving), the X (the per-round swap) and the
+ * central ring (the ARX round function). Encodes the engine itself
+ * (keyed reversible permutation). Drawn in `currentColor` by default to
+ * inherit the context's color; pass `className="text-primary"` for lime.
  */
 export function QuarkMark({ className }: { className?: string }) {
   return (

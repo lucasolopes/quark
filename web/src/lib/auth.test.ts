@@ -5,8 +5,8 @@ describe("auth token store", () => {
   beforeEach(() => localStorage.clear());
   it("set/get/has/clear", () => {
     expect(hasToken()).toBe(false);
-    setToken("segredo");
-    expect(getToken()).toBe("segredo");
+    setToken("secret");
+    expect(getToken()).toBe("secret");
     expect(hasToken()).toBe(true);
     clearToken();
     expect(getToken()).toBeNull();

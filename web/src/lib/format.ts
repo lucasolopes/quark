@@ -1,9 +1,11 @@
-// Formatação de datas compartilhada pelas telas de Links e Estatísticas.
-// Epoch em SEGUNDOS (como devolvido pela API) — convertido pra milissegundos
-// antes de repassar ao Date/Intl. `0`/`null`/`undefined` significam "sem
-// valor" (não epoch zero de verdade) nas respostas da API, por isso o guard.
+/**
+ * Shared date formatting for the Links and Stats screens.
+ * Epoch in SECONDS (as returned by the API) — converted to milliseconds
+ * before passing to Date/Intl. `0`/`null`/`undefined` mean "no value" (not
+ * a real zero epoch) in API responses, hence the guard.
+ */
 
-/** Data curta (dia/mês/ano), pt-BR. `formatDate(0)` → "—". */
+/** Short date (day/month/year), pt-BR. `formatDate(0)` -> "—". */
 export function formatDate(epochSeconds: number): string {
   if (!epochSeconds) return "—";
   return new Date(epochSeconds * 1000).toLocaleDateString("pt-BR", {
@@ -13,7 +15,7 @@ export function formatDate(epochSeconds: number): string {
   });
 }
 
-/** Data e hora (dia/mês/ano hora:minuto), pt-BR. `formatDateTime(0)` → "—". */
+/** Date and time (day/month/year hour:minute), pt-BR. `formatDateTime(0)` -> "—". */
 export function formatDateTime(epochSeconds: number): string {
   if (!epochSeconds) return "—";
   return new Date(epochSeconds * 1000).toLocaleString("pt-BR", {

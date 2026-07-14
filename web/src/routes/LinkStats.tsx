@@ -6,11 +6,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RecentEventsTable } from "@/components/RecentEventsTable";
 import { StatsCharts } from "@/components/StatsCharts";
+import { useT } from "@/i18n";
 import { formatDateTime } from "@/lib/format";
 import { useStats } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
 export function LinkStats() {
+  const t = useT();
   const { code = "" } = useParams<{ code: string }>();
   const query = useStats(code);
 
@@ -20,16 +22,14 @@ export function LinkStats() {
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label="Voltar para Links"
+          aria-label={t("stats.backAria")}
           render={<Link to="/links" />}
         >
           <ArrowLeft className="size-4" />
         </Button>
         <div>
-          <h1 className="font-heading text-2xl font-semibold">Estatísticas</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Cliques do link <span className="font-mono">{code}</span>.
-          </p>
+          <h1 className="font-heading text-2xl font-semibold">{t("stats.heading")}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t("stats.subtitle", { code })}</p>
         </div>
       </div>
 
@@ -40,18 +40,18 @@ export function LinkStats() {
           <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
             <AlertTriangle className="size-8 text-destructive" aria-hidden="true" />
             <div>
-              <p className="font-medium">Não foi possível carregar as estatísticas.</p>
+              <p className="font-medium">{t("stats.loadError")}</p>
               <p className="text-sm text-muted-foreground">
-                {query.error instanceof Error ? query.error.message : "Tente de novo em alguns instantes."}
+                {query.error instanceof Error ? query.error.message : t("common.retryHint")}
               </p>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => query.refetch()}>
                 <RotateCw className="size-4" />
-                Tentar de novo
+                {t("common.retry")}
               </Button>
               <Button variant="outline" render={<Link to="/links" />}>
-                Voltar para Links
+                {t("stats.backToLinks")}
               </Button>
             </div>
           </CardContent>
@@ -63,10 +63,8 @@ export function LinkStats() {
           <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
             <MousePointerClick className="size-8 text-muted-foreground" aria-hidden="true" />
             <div>
-              <p className="font-medium">Sem cliques ainda.</p>
-              <p className="text-sm text-muted-foreground">
-                Quando alguém abrir este link, os cliques aparecem aqui.
-              </p>
+              <p className="font-medium">{t("stats.emptyTitle")}</p>
+              <p className="text-sm text-muted-foreground">{t("stats.emptySubtitle")}</p>
             </div>
           </CardContent>
         </Card>
@@ -77,18 +75,18 @@ export function LinkStats() {
           <div className="grid gap-4 sm:grid-cols-3">
             <StatCard
               icon={<MousePointerClick className="size-4" aria-hidden="true" />}
-              label="Total de cliques"
+              label={t("stats.totalClicks")}
               value={query.data.aggregates.total.toLocaleString("pt-BR")}
               accent
             />
             <StatCard
               icon={<Timer className="size-4" aria-hidden="true" />}
-              label="Primeiro clique"
+              label={t("stats.firstClick")}
               value={formatDateTime(query.data.aggregates.first_ts)}
             />
             <StatCard
               icon={<TimerReset className="size-4" aria-hidden="true" />}
-              label="Último clique"
+              label={t("stats.lastClick")}
               value={formatDateTime(query.data.aggregates.last_ts)}
             />
           </div>
@@ -97,7 +95,7 @@ export function LinkStats() {
 
           <Card className="py-0">
             <CardHeader className="pt-4">
-              <CardTitle>Eventos recentes</CardTitle>
+              <CardTitle>{t("stats.recentEvents")}</CardTitle>
             </CardHeader>
             <RecentEventsTable events={query.data.recent} />
           </Card>
@@ -111,7 +109,7 @@ interface StatCardProps {
   icon: ReactNode;
   label: string;
   value: string;
-  /** Numeral de métrica (número-herói) — Space Grotesk grande em plasma-lime. */
+  /** Marks the hero metric (headline number) — large Space Grotesk in plasma-lime. */
   accent?: boolean;
 }
 

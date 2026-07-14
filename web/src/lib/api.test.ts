@@ -5,18 +5,18 @@ import { setToken } from "./auth";
 describe("api client", () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
-  it("envia x-admin-token e parseia JSON", async () => {
-    setToken("segredo");
+  it("sends x-admin-token and parses JSON", async () => {
+    setToken("secret");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ links: [], next_after: null }), { status: 200 }),
     );
     const r = await api.listLinks({ limit: 10 });
     expect(r.links).toEqual([]);
     const [, init] = fetchMock.mock.calls[0];
-    expect(new Headers(init!.headers).get("x-admin-token")).toBe("segredo");
+    expect(new Headers(init!.headers).get("x-admin-token")).toBe("secret");
   });
 
-  it("401 dispara onUnauthorized e lança ApiError", async () => {
+  it("401 triggers onUnauthorized and throws ApiError", async () => {
     const onUnauth = vi.fn();
     setUnauthorizedHandler(onUnauth);
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 401 }));
@@ -24,12 +24,12 @@ describe("api client", () => {
     expect(onUnauth).toHaveBeenCalledOnce();
   });
 
-  it("erro !ok vira ApiError com status", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("destino bloqueado", { status: 403 }));
+  it("a non-ok response becomes an ApiError with status", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("blocked destination", { status: 403 }));
     await expect(api.createLink({ url: "https://x.com" })).rejects.toMatchObject({ status: 403 });
   });
 
-  it("listLinks inclui q no querystring quando informado (e omite quando vazio)", async () => {
+  it("listLinks includes q in the querystring when provided (and omits it when empty)", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ links: [], next_after: null }), { status: 200 })));

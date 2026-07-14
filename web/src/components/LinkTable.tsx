@@ -12,13 +12,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useT } from "@/i18n";
 import { formatDate } from "@/lib/format";
 import type { Link } from "@/lib/types";
 
-// A base pública dos links curtos é o próprio host da API (é ele quem
-// resolve `/:code`); sem essa env var, cai no host onde o painel está
-// servido — mais correto do que inventar um domínio. Sem barra final, pra
-// não gerar `//` na concatenação com o código.
+/**
+ * The public base for short links is the API host itself (it resolves `/:code`);
+ * without this env var, falls back to the host serving the panel — more correct
+ * than inventing a domain. No trailing slash, to avoid `//` when concatenated
+ * with the code.
+ */
 const PUBLIC_BASE = (
   (import.meta.env.VITE_API_BASE_URL as string | undefined) || window.location.origin
 ).replace(/\/+$/, "");
@@ -34,6 +37,7 @@ interface LinkTableProps {
 }
 
 export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
+  const t = useT();
   const [justCopiedId, setJustCopiedId] = useState<number | null>(null);
   const [qrLink, setQrLink] = useState<Link | null>(null);
   const navigate = useNavigate();
@@ -41,23 +45,23 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
   async function handleCopy(link: Link) {
     try {
       await navigator.clipboard.writeText(shortUrl(link.code));
-      toast.success("Copiado!");
+      toast.success(t("linkTable.copied"));
       setJustCopiedId(link.id);
       setTimeout(() => setJustCopiedId((current) => (current === link.id ? null : current)), 1500);
     } catch {
-      toast.error("Não foi possível copiar. Copie manualmente.");
+      toast.error(t("linkTable.copyFailed"));
     }
   }
 
   const columns: ColumnDef<Link>[] = [
     {
       accessorKey: "code",
-      header: "Código",
+      header: t("linkTable.columnCode"),
       cell: ({ row }) => (
         <RouterLink
           to={`/links/${row.original.code}`}
           className="font-mono text-sm font-medium text-primary hover:underline"
-          aria-label={`Ver estatísticas de ${row.original.code}`}
+          aria-label={t("linkTable.viewStatsAria", { code: row.original.code })}
         >
           {row.original.code}
         </RouterLink>
@@ -65,7 +69,7 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
     },
     {
       accessorKey: "url",
-      header: "Destino",
+      header: t("linkTable.columnDestination"),
       cell: ({ row }) => (
         <span className="block max-w-64 truncate text-muted-foreground" title={row.original.url}>
           {row.original.url}
@@ -74,27 +78,27 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
     },
     {
       accessorKey: "alias",
-      header: "Alias",
+      header: t("linkTable.columnAlias"),
       cell: ({ row }) => row.original.alias || <span className="text-muted-foreground">—</span>,
     },
     {
       accessorKey: "created",
-      header: "Criado",
+      header: t("linkTable.columnCreated"),
       cell: ({ row }) => formatDate(row.original.created),
     },
     {
       accessorKey: "expiry",
-      header: "Expira",
+      header: t("linkTable.columnExpires"),
       cell: ({ row }) =>
         row.original.expiry == null ? (
-          <span className="text-muted-foreground">nunca</span>
+          <span className="text-muted-foreground">{t("linkTable.never")}</span>
         ) : (
           formatDate(row.original.expiry)
         ),
     },
     {
       id: "actions",
-      header: () => <span className="sr-only">Ações</span>,
+      header: () => <span className="sr-only">{t("linkTable.actionsSr")}</span>,
       cell: ({ row }) => {
         const link = row.original;
         const justCopied = justCopiedId === link.id;
@@ -103,7 +107,7 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label={`Copiar link curto de ${link.code}`}
+              aria-label={t("linkTable.copyAria", { code: link.code })}
               onClick={() => handleCopy(link)}
             >
               {justCopied ? <Check className="size-3.5 text-primary" /> : <Copy className="size-3.5" />}
@@ -111,7 +115,11 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
-                  <Button variant="ghost" size="icon-sm" aria-label={`Mais ações para ${link.code}`} />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t("linkTable.moreActionsAria", { code: link.code })}
+                  />
                 }
               >
                 <MoreHorizontal className="size-3.5" />
@@ -119,19 +127,19 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => navigate(`/links/${link.code}`)}>
                   <BarChart3 className="size-3.5" />
-                  Estatísticas
+                  {t("linkTable.statsMenuItem")}
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setQrLink(link)}>
                   <QrCode className="size-3.5" />
-                  QR code
+                  {t("linkTable.qrMenuItem")}
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => onEdit(link)}>
                   <Pencil className="size-3.5" />
-                  Editar
+                  {t("linkTable.editMenuItem")}
                 </DropdownMenuItem>
                 <DropdownMenuItem variant="destructive" onClick={() => onDelete(link)}>
                   <Trash2 className="size-3.5" />
-                  Excluir
+                  {t("linkTable.deleteMenuItem")}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -146,7 +154,7 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
   return (
     <>
       <Table>
-        <caption className="sr-only">Links curtos cadastrados no sistema</caption>
+        <caption className="sr-only">{t("linkTable.caption")}</caption>
         <TableHeader>
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>

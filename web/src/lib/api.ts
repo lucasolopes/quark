@@ -4,8 +4,11 @@ import type {
   Stats, BlocklistResponse, PatchLinkRequest,
 } from "./types";
 
-// Remove barra(s) final(is) da env — evita `//` ao concatenar com o path
-// (que já começa com `/`), caso a env venha com trailing slash.
+/**
+ * Strips trailing slash(es) from the env var — avoids `//` when concatenated
+ * with the path (which already starts with `/`), in case the env has a
+ * trailing slash.
+ */
 const BASE: string = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "").replace(/\/+$/, "");
 
 let onUnauthorized: () => void = () => {};
@@ -26,7 +29,7 @@ async function req(path: string, opts: RequestInit = {}): Promise<Response> {
   if (token) headers.set("x-admin-token", token);
   if (opts.body) headers.set("content-type", "application/json");
   const res = await fetch(BASE + path, { ...opts, headers });
-  if (res.status === 401) { onUnauthorized(); throw new ApiError(401, "não autorizado"); }
+  if (res.status === 401) { onUnauthorized(); throw new ApiError(401, "unauthorized"); }
   return res;
 }
 

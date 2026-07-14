@@ -2,20 +2,23 @@ import { Link2, LogOut, Moon, ShieldBan, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { QuarkMark } from "@/components/brand/QuarkMark";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/i18n";
 import { clearToken } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
-const NAV = [
-  { to: "/links", label: "Links", icon: Link2 },
-  { to: "/blocklist", label: "Blocklist", icon: ShieldBan },
-];
-
 export function Shell() {
+  const t = useT();
   const navigate = useNavigate();
   const { resolvedTheme, setTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const toggle = () => setTheme(isDark ? "light" : "dark");
+
+  const nav = [
+    { to: "/links", label: t("shell.navLinks"), icon: Link2 },
+    { to: "/blocklist", label: t("shell.navBlocklist"), icon: ShieldBan },
+  ];
 
   function handleLogout() {
     clearToken();
@@ -32,7 +35,7 @@ export function Shell() {
           </span>
         </div>
         <nav className="flex flex-col gap-1 px-2 py-2">
-          {NAV.map(({ to, label, icon: Icon }) => (
+          {nav.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -52,17 +55,18 @@ export function Shell() {
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-end gap-2 border-b border-border px-4">
+          <LanguageSwitcher />
           <Button
             variant="ghost"
             size="icon"
-            aria-label={isDark ? "Usar tema claro" : "Usar tema escuro"}
+            aria-label={isDark ? t("shell.themeToLight") : t("shell.themeToDark")}
             onClick={toggle}
           >
             {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </Button>
           <Button variant="outline" size="sm" onClick={handleLogout}>
             <LogOut className="size-4" />
-            Sair
+            {t("shell.logout")}
           </Button>
         </header>
         <main className="min-w-0 flex-1 overflow-auto p-4 sm:p-6">

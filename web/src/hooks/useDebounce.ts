@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-/** Devolve `value` só depois que ele fica `delayMs` ms sem mudar (debounce). */
+/** Returns `value` only after it has stayed unchanged for `delayMs` ms (debounce). */
 export function useDebounce<T>(value: T, delayMs = 300): T {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {

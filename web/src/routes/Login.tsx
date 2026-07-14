@@ -4,13 +4,16 @@ import { useNavigate } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { QuarkMark } from "@/components/brand/QuarkMark";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useT } from "@/i18n";
 import { ApiError, api } from "@/lib/api";
 import { clearToken, setToken } from "@/lib/auth";
 
 export function Login() {
+  const t = useT();
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
@@ -25,7 +28,7 @@ export function Login() {
       await api.listLinks({ limit: 1 });
     },
     onSuccess: () => {
-      toast.success("Sessão iniciada.");
+      toast.success(t("login.sessionStarted"));
       navigate("/links", { replace: true });
     },
     onError: () => {
@@ -42,24 +45,27 @@ export function Login() {
 
   return (
     <div className="flex min-h-svh items-center justify-center bg-background p-4">
+      <div className="absolute right-4 top-4">
+        <LanguageSwitcher />
+      </div>
       <Card className="w-full max-w-sm">
         <CardHeader>
           <div className="mb-1 flex items-center gap-3">
             <QuarkMark className="size-8 text-primary drop-shadow-[0_0_10px_rgba(198,249,78,0.55)]" />
             <div className="flex flex-col">
               <span className="font-mono text-[11px] tracking-[0.18em] text-muted-foreground uppercase">
-                Painel do operador
+                {t("login.badge")}
               </span>
               <CardTitle className="font-heading text-2xl font-bold tracking-tight">quark</CardTitle>
             </div>
           </div>
-          <CardDescription>Entre com o token de administrador para gerenciar os links.</CardDescription>
+          <CardDescription>{t("login.description")}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-3" noValidate>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="admin-token" className="text-sm font-medium">
-                Token de admin
+                {t("login.tokenLabel")}
               </label>
               <Input
                 id="admin-token"
@@ -77,14 +83,14 @@ export function Login() {
               {mutation.isError && (
                 <p id="admin-token-error" role="alert" className="text-sm text-destructive">
                   {mutation.error instanceof ApiError && mutation.error.status === 401
-                    ? "Token inválido. Verifique e tente novamente."
-                    : "Não foi possível conectar. Tente novamente."}
+                    ? t("login.invalidToken")
+                    : t("login.connectionError")}
                 </p>
               )}
             </div>
             <Button type="submit" disabled={!value.trim() || mutation.isPending} className="mt-1">
               {mutation.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-              Entrar
+              {t("login.submit")}
             </Button>
           </form>
         </CardContent>
