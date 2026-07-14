@@ -3,6 +3,10 @@ use quark::api::{router, AppState};
 use quark::cache::valkey::ValkeyTier;
 use quark::cache::Cache;
 use quark::store::open_backends;
+use quark::webhooks::delivery::{
+    spawn_webhook_worker, WebhookDispatcher, WEBHOOK_CHANNEL_CAPACITY,
+};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 /// L1 cache capacity (max number of entries held in memory).
@@ -128,6 +132,12 @@ async fn main() {
     let real_ip_header =
         std::env::var("QUARK_REAL_IP_HEADER").unwrap_or_else(|_| "cf-connecting-ip".to_string());
 
+    let (wh_tx, wh_rx) = tokio::sync::mpsc::channel(WEBHOOK_CHANNEL_CAPACITY);
+    let clicked = Arc::new(AtomicBool::new(false));
+    let expired = Arc::new(AtomicBool::new(false));
+    spawn_webhook_worker(wh_rx, store.clone(), clicked.clone(), expired.clone());
+    let webhooks = Arc::new(WebhookDispatcher::new(wh_tx, clicked, expired));
+
     let state = Arc::new(AppState {
         cache,
         store,
@@ -140,6 +150,7 @@ async fn main() {
         block_private,
         public_host,
         real_ip_header,
+        webhooks,
     });
     let app = router(state);
 

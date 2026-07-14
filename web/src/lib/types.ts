@@ -22,3 +22,28 @@ export interface Aggregates {
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
 export interface BlocklistResponse { domains: string[]; }
 export interface PatchLinkRequest { url?: string; ttl?: number | null; }
+
+/** The 5 link lifecycle events a webhook subscription can be notified about. */
+export const WEBHOOK_EVENTS = [
+  "link.created",
+  "link.updated",
+  "link.deleted",
+  "link.expired",
+  "link.clicked",
+] as const;
+export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
+
+export interface Webhook {
+  id: number;
+  url: string;
+  events: WebhookEvent[];
+  active: boolean;
+  created: number;
+  /** Masked form of the signing secret, e.g. `whsec_••••` — the raw secret is only ever returned once, at creation. */
+  secret_masked: string;
+}
+export interface ListWebhooksResponse { webhooks: Webhook[]; }
+export interface CreateWebhookRequest { url: string; events: WebhookEvent[]; active?: boolean; }
+export interface CreateWebhookResponse { id: number; secret: string; }
+export interface PatchWebhookRequest { url?: string; events?: WebhookEvent[]; active?: boolean; }
+export interface TestWebhookResponse { delivered: boolean; status: number; }

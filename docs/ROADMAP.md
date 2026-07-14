@@ -15,6 +15,10 @@ bottleneck being geography/RTT, not the server).
 
 ## Done
 
+- **Webhooks (#1):** signed outgoing HTTP events on `link.created/updated/deleted/expired/clicked`,
+  Standard Webhooks HMAC signing, best-effort delivery (queue → worker → retry with backoff/jitter,
+  SSRF-guarded), subscriptions managed in the panel or via `/admin/webhooks`. This is the foundation
+  for #6 (Slack/Discord/Telegram) and #10 (n8n/Zapier). Doc: `docs/WEBHOOKS.md`.
 - **Core (v0.1):** create + redirect + custom alias + expiration (TTL). The short code
   is a calibrated Feistel/ARX permutation (`ROUNDS=4`); codes are **computed, not
   stored** (store keyed by `u64`).

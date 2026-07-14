@@ -156,6 +156,8 @@ quark's persistence, cache, and analytics are each behind a trait (`Store`, `Cac
 
 Store and AnalyticsSink are selected **independently**: e.g. Postgres store + ClickHouse analytics, or Postgres store + its own embedded analytics, are both valid combinations.
 
+- **Webhooks**: signed outgoing HTTP events (`link.created/updated/deleted/expired/clicked`) to any endpoint (Zapier, Make, n8n, Slack, custom), best-effort delivery with retry, config persisted via `Store`. See [`docs/WEBHOOKS.md`](docs/WEBHOOKS.md).
+
 The framing: quark **scales down to one binary with zero external dependencies**, and **scales up to a distributed stack** (Valkey + Postgres + ClickHouse) **one opt-in piece at a time**, never all-or-nothing. Compare that to heavier shorteners (e.g. Dub) that require Postgres + Redis + ClickHouse from day one, even for a single low-traffic instance.
 
 ```mermaid
@@ -259,6 +261,7 @@ binary stays API-only. Dev: `cd web && npm install && npm run dev` (Vite on
 
 - Deploy on a VPS with Coolify (ships a `Dockerfile`): [`docs/DEPLOY.md`](docs/DEPLOY.md)
 - Edge/CDN caching guide: [`docs/EDGE.md`](docs/EDGE.md)
+- Signed outgoing webhooks (events, payload, signature verification): [`docs/WEBHOOKS.md`](docs/WEBHOOKS.md)
 - What's next: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Full system design: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Deeper walkthrough of every component, data model and the Feistel round internals: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)

@@ -2,6 +2,8 @@ import { getToken } from "./auth";
 import type {
   ListLinksResponse, CreateLinkRequest, CreateLinkResponse,
   Stats, BlocklistResponse, PatchLinkRequest,
+  ListWebhooksResponse, CreateWebhookRequest, CreateWebhookResponse,
+  PatchWebhookRequest, TestWebhookResponse,
 } from "./types";
 
 /**
@@ -73,5 +75,22 @@ export const api = {
   async removeBlocked(domain: string): Promise<void> {
     const res = await req("/admin/blocklist", { method: "DELETE", body: JSON.stringify({ domain }) });
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  async listWebhooks(): Promise<ListWebhooksResponse> {
+    return jsonOrThrow(await req("/admin/webhooks"));
+  },
+  async createWebhook(body: CreateWebhookRequest): Promise<CreateWebhookResponse> {
+    return jsonOrThrow(await req("/admin/webhooks", { method: "POST", body: JSON.stringify(body) }));
+  },
+  async patchWebhook(id: number, body: PatchWebhookRequest): Promise<void> {
+    const res = await req(`/admin/webhooks/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  async deleteWebhook(id: number): Promise<void> {
+    const res = await req(`/admin/webhooks/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  async testWebhook(id: number): Promise<TestWebhookResponse> {
+    return jsonOrThrow(await req(`/admin/webhooks/${id}/test`, { method: "POST" }));
   },
 };

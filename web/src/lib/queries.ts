@@ -1,9 +1,10 @@
 import { QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import type { CreateLinkRequest, PatchLinkRequest } from "./types";
+import type { CreateLinkRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest } from "./types";
 
 const LINKS_QUERY_KEY = ["links"];
 const BLOCKLIST_QUERY_KEY = ["blocklist"];
+const WEBHOOKS_QUERY_KEY = ["webhooks"];
 
 /**
  * The application's single TanStack Query client. `retry: false` because a
@@ -108,5 +109,47 @@ export function useRemoveBlocked() {
   return useMutation({
     mutationFn: (domain: string) => api.removeBlocked(domain),
     onSuccess: () => { void client.invalidateQueries({ queryKey: BLOCKLIST_QUERY_KEY }); },
+  });
+}
+
+/** List of registered webhook subscriptions, for the Webhooks screen. */
+export function useWebhooks() {
+  return useQuery({
+    queryKey: WEBHOOKS_QUERY_KEY,
+    queryFn: () => api.listWebhooks(),
+  });
+}
+
+/** Creates a webhook subscription; on success invalidates `useWebhooks`. Response carries the raw secret once. */
+export function useCreateWebhook() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateWebhookRequest) => api.createWebhook(body),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: WEBHOOKS_QUERY_KEY }); },
+  });
+}
+
+/** Updates url/events/active of an existing webhook; on success invalidates `useWebhooks`. */
+export function usePatchWebhook() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: number; body: PatchWebhookRequest }) => api.patchWebhook(id, body),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: WEBHOOKS_QUERY_KEY }); },
+  });
+}
+
+/** Deletes a webhook subscription; on success invalidates `useWebhooks`. */
+export function useDeleteWebhook() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.deleteWebhook(id),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: WEBHOOKS_QUERY_KEY }); },
+  });
+}
+
+/** Sends a test event to a webhook's endpoint. Doesn't touch the list — it doesn't change server state worth refetching. */
+export function useTestWebhook() {
+  return useMutation({
+    mutationFn: (id: number) => api.testWebhook(id),
   });
 }
