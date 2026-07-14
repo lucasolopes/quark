@@ -2054,7 +2054,13 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             origins.iter().filter_map(|o| o.parse().ok()).collect();
         let cors = CorsLayer::new()
             .allow_origin(list)
-            .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+            ])
             .allow_headers(Any);
         app.layer(cors)
     };
