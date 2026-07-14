@@ -21,12 +21,14 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let url: String = r.try_get("url").map_err(StoreError::backend)?;
     let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    let max_visits: Option<i64> = r.try_get("max_visits").map_err(StoreError::backend)?;
     Ok((
         id as u64,
         Record {
             url,
             expiry: expiry.map(|v| v as u64),
             created: created as u64,
+            max_visits: max_visits.map(|v| v as u32),
         },
     ))
 }
@@ -68,6 +70,9 @@ impl PostgresStore {
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS blocked_domains (domain TEXT PRIMARY KEY)",
+                // Idempotent migrations for pre-existing `links` tables (max-visits feature).
+                "ALTER TABLE links ADD COLUMN IF NOT EXISTS max_visits BIGINT",
+                "ALTER TABLE links ADD COLUMN IF NOT EXISTS visits BIGINT NOT NULL DEFAULT 0",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -114,7 +119,7 @@ impl Store for PostgresStore {
     }
 
     async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError> {
-        let row = sqlx::query("SELECT url, expiry, created FROM links WHERE id = $1")
+        let row = sqlx::query("SELECT url, expiry, created, max_visits FROM links WHERE id = $1")
             .bind(id as i64)
             .fetch_optional(&self.pool)
             .await
@@ -124,10 +129,13 @@ impl Store for PostgresStore {
                 let url: String = r.try_get("url").map_err(StoreError::backend)?;
                 let expiry: Option<i64> = r.try_get("expiry").map_err(StoreError::backend)?;
                 let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+                let max_visits: Option<i64> =
+                    r.try_get("max_visits").map_err(StoreError::backend)?;
                 Ok(Some(Record {
                     url,
                     expiry: expiry.map(|v| v as u64),
                     created: created as u64,
+                    max_visits: max_visits.map(|v| v as u32),
                 }))
             }
             None => Ok(None),
@@ -136,13 +144,14 @@ impl Store for PostgresStore {
 
     async fn put_link(&self, id: u64, rec: &Record) -> Result<(), StoreError> {
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created) VALUES ($1,$2,$3,$4) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4",
+            "INSERT INTO links (id, url, expiry, created, max_visits) VALUES ($1,$2,$3,$4,$5) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, max_visits=$5",
         )
         .bind(id as i64)
         .bind(&rec.url)
         .bind(rec.expiry.map(|v| v as i64))
         .bind(rec.created as i64)
+        .bind(rec.max_visits.map(|v| v as i64))
         .execute(&self.pool)
         .await
         .map_err(StoreError::backend)?;
@@ -183,13 +192,14 @@ impl Store for PostgresStore {
             return Ok(false);
         }
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created) VALUES ($1,$2,$3,$4) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4",
+            "INSERT INTO links (id, url, expiry, created, max_visits) VALUES ($1,$2,$3,$4,$5) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, max_visits=$5",
         )
         .bind(id as i64)
         .bind(&rec.url)
         .bind(rec.expiry.map(|v| v as i64))
         .bind(rec.created as i64)
+        .bind(rec.max_visits.map(|v| v as i64))
         .execute(&mut *tx)
         .await
         .map_err(StoreError::backend)?;
@@ -236,7 +246,7 @@ impl Store for PostgresStore {
         limit: usize,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let rows = sqlx::query(
-            "SELECT id, url, expiry, created FROM links \
+            "SELECT id, url, expiry, created, max_visits FROM links \
              WHERE ($1::bigint IS NULL OR id > $1) ORDER BY id LIMIT $2",
         )
         .bind(after.map(|a| a as i64))
@@ -255,7 +265,7 @@ impl Store for PostgresStore {
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let pattern = format!("%{}%", like_escape(q));
         let rows = sqlx::query(
-            "SELECT DISTINCT l.id, l.url, l.expiry, l.created \
+            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.max_visits \
              FROM links l LEFT JOIN aliases a ON a.id = l.id \
              WHERE ($1::bigint IS NULL OR l.id > $1) \
                AND (l.url ILIKE $2 OR a.alias ILIKE $2) \
@@ -300,6 +310,32 @@ impl Store for PostgresStore {
             .await
             .map_err(StoreError::backend)?;
         Ok(())
+    }
+
+    async fn bump_visits(&self, id: u64) -> Result<u64, StoreError> {
+        let row =
+            sqlx::query("UPDATE links SET visits = visits + 1 WHERE id = $1 RETURNING visits")
+                .bind(id as i64)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(StoreError::backend)?;
+        let visits: i64 = row.try_get("visits").map_err(StoreError::backend)?;
+        Ok(visits as u64)
+    }
+
+    async fn visits(&self, id: u64) -> Result<u64, StoreError> {
+        let row = sqlx::query("SELECT visits FROM links WHERE id = $1")
+            .bind(id as i64)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => {
+                let visits: i64 = r.try_get("visits").map_err(StoreError::backend)?;
+                Ok(visits as u64)
+            }
+            None => Ok(0),
+        }
     }
 }
 

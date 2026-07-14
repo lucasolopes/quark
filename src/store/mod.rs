@@ -11,6 +11,12 @@ pub struct Record {
     pub url: String,
     pub expiry: Option<u64>,
     pub created: u64,
+    /// Maximum number of visits before the link expires (`410 Gone`).
+    /// `None` (the default, and every pre-existing link) means unlimited.
+    /// `#[serde(default)]` is load-bearing: old persisted blobs without this
+    /// field must deserialize to `None`, not fail.
+    #[serde(default)]
+    pub max_visits: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -88,6 +94,12 @@ pub trait Store: Send + Sync + 'static {
     async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError>;
     async fn delete_link(&self, id: u64) -> Result<(), StoreError>;
     async fn delete_alias(&self, alias: &str) -> Result<(), StoreError>;
+    /// Atomically increments the visit counter for `id` and returns the new
+    /// total. Separate from `Record` so that a hit doesn't require rewriting
+    /// the whole record. Only called for links that opted into `max_visits`.
+    async fn bump_visits(&self, id: u64) -> Result<u64, StoreError>;
+    /// Reads the current visit count for `id` (0 if never bumped), for display.
+    async fn visits(&self, id: u64) -> Result<u64, StoreError>;
 }
 
 /// Opens only the Store on LMDB (used by tests that don't need the AnalyticsSink).
@@ -123,4 +135,27 @@ pub async fn open_backends(data_path: &Path) -> Result<Backends, StoreError> {
         Err(_) => embedded_sink,
     };
     Ok((store, sink))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Record;
+
+    /// Regression: a `Record` blob persisted before `max_visits` existed (no
+    /// such key in the JSON) must deserialize with `max_visits: None`, not fail.
+    #[test]
+    fn record_without_max_visits_field_deserializes_to_none() {
+        let old_blob = r#"{"url":"https://example.com","expiry":null,"created":100}"#;
+        let rec: Record = serde_json::from_str(old_blob).unwrap();
+        assert_eq!(rec.max_visits, None);
+        assert_eq!(rec.url, "https://example.com");
+        assert_eq!(rec.created, 100);
+    }
+
+    #[test]
+    fn record_with_max_visits_field_round_trips() {
+        let json = r#"{"url":"https://example.com","expiry":null,"created":100,"max_visits":5}"#;
+        let rec: Record = serde_json::from_str(json).unwrap();
+        assert_eq!(rec.max_visits, Some(5));
+    }
 }

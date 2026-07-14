@@ -726,6 +726,160 @@ async fn create_with_token_when_configured_ok() {
 }
 
 #[tokio::test]
+async fn max_visits_expires_after_limit() {
+    let app = app_admin("secret").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(
+                    r#"{"url":"https://example.com","max_visits":2}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    for _ in 0..2 {
+        let r = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/{code}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::FOUND);
+    }
+    let r = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::GONE);
+}
+
+#[tokio::test]
+async fn link_without_max_visits_redirects_unlimited_and_counter_stays_zero() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://example.com").await;
+    for _ in 0..5 {
+        let r = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/{code}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::FOUND);
+    }
+    let r = app
+        .oneshot(
+            Request::get("/admin/links?limit=10")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let links = v["links"].as_array().unwrap();
+    let row = links
+        .iter()
+        .find(|l| l["code"] == code)
+        .expect("created link should be in the list");
+    assert!(row["max_visits"].is_null());
+    assert_eq!(
+        row["visits"], 0,
+        "bump_visits must never be called on the hot path when max_visits is None"
+    );
+}
+
+#[tokio::test]
+async fn admin_patch_sets_and_clears_max_visits() {
+    let app = app_admin("secret").await;
+    let code = create_and_get_code(&app, "https://example.com").await;
+
+    let r = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"max_visits":3}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    let r = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/links?limit=10")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let links = v["links"].as_array().unwrap();
+    let row = links.iter().find(|l| l["code"] == code).unwrap();
+    assert_eq!(row["max_visits"], 3);
+
+    let r = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("x-admin-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"max_visits":null}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    let r = app
+        .oneshot(
+            Request::get("/admin/links?limit=10")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let links = v["links"].as_array().unwrap();
+    let row = links.iter().find(|l| l["code"] == code).unwrap();
+    assert!(row["max_visits"].is_null());
+}
+
+#[tokio::test]
 async fn cors_header_present_when_configured() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();

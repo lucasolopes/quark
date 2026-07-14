@@ -40,6 +40,7 @@ fn bench(c: &mut Criterion) {
                     url: "https://example.com/destination".into(),
                     expiry: None,
                     created: 0,
+                    max_visits: None,
                 },
             )
             .await
