@@ -181,21 +181,34 @@ function PerVariantChart({ perVariant }: { perVariant: Record<string, number> })
   );
 }
 
-/** Donut chart, shared shape for device/OS/browser breakdowns. */
+const DONUT_SIZE = 168;
+const DONUT_CENTER = DONUT_SIZE / 2;
+
+/**
+ * Donut chart, shared shape for device/OS/browser breakdowns. The pie renders
+ * at a fixed pixel size instead of through ResponsiveContainer: recharts 3's
+ * polar charts draw zero sectors when they read the container's first (empty)
+ * measurement, while cartesian charts recover. The breakdown legend sits beside
+ * the ring (own list, not recharts' overlapping outer labels) so short category
+ * counts read cleanly and never clip.
+ */
 function DonutChart({ title, emptyLabel, data }: DonutChartProps) {
+  const total = data.reduce((sum, d) => sum + d.count, 0);
   return (
     <ChartCard title={title} empty={data.length === 0} emptyLabel={emptyLabel}>
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
+      <div className="flex h-full items-center gap-5">
+        <PieChart width={DONUT_SIZE} height={DONUT_SIZE} className="shrink-0">
           <Pie
             data={data}
             dataKey="count"
             nameKey="label"
-            innerRadius="55%"
-            outerRadius="85%"
-            paddingAngle={2}
-            label={({ name, percent }) => `${name} ${Math.round((percent ?? 0) * 100)}%`}
-            labelLine={false}
+            cx={DONUT_CENTER}
+            cy={DONUT_CENTER}
+            innerRadius={52}
+            outerRadius={82}
+            paddingAngle={data.length > 1 ? 2 : 0}
+            stroke="var(--color-card)"
+            strokeWidth={2}
           >
             {data.map((entry, i) => (
               <Cell key={entry.label} fill={CHART_COLORS[i % CHART_COLORS.length]} />
@@ -203,7 +216,21 @@ function DonutChart({ title, emptyLabel, data }: DonutChartProps) {
           </Pie>
           <Tooltip formatter={(value, name) => [`${value}`, `${name}`]} />
         </PieChart>
-      </ResponsiveContainer>
+        <ul className="flex min-w-0 flex-1 flex-col gap-2 text-sm">
+          {data.map((entry, i) => (
+            <li key={entry.label} className="flex items-center gap-2">
+              <span
+                className="size-2.5 shrink-0 rounded-full"
+                style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }}
+              />
+              <span className="truncate text-muted-foreground">{entry.label}</span>
+              <span className="ml-auto font-medium tabular-nums">
+                {total > 0 ? Math.round((entry.count / total) * 100) : 0}%
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </ChartCard>
   );
 }
