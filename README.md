@@ -10,7 +10,7 @@
 
 > Short codes are **computed, not stored**: a keyed bijection. One tiny static binary (~1 MB), no Redis, no database, no external services.
 
-**Quick links:** [Deploy](docs/DEPLOY.md) · [Architecture](docs/ARCHITECTURE.md) · [Edge/CDN](docs/EDGE.md) · [Roadmap](docs/ROADMAP.md)
+**Quick links:** [Deploy](docs/DEPLOY.md) · [Architecture](docs/ARCHITECTURE.md) · [Edge/CDN](docs/EDGE.md) · [Conversion forwarding](docs/CONVERSION-FORWARDING.md) · [Roadmap](docs/ROADMAP.md)
 
 A URL shortener whose short code is a **calibrated, reduced-round ARX permutation** of the internal integer id. The code is not looked up in an index. It is **computed**, in both directions, from a tiny bijective function. That one design choice removes an entire class of problems (collisions) and an entire index (string → id) at once.
 
@@ -259,6 +259,7 @@ binary stays API-only. Dev: `cd web && npm install && npm run dev` (Vite on
 
 - Deploy on a VPS with Coolify (ships a `Dockerfile`): [`docs/DEPLOY.md`](docs/DEPLOY.md)
 - Edge/CDN caching guide: [`docs/EDGE.md`](docs/EDGE.md)
+- Server-side conversion forwarding (GA4/Meta CAPI, no client-side pixel): [`docs/CONVERSION-FORWARDING.md`](docs/CONVERSION-FORWARDING.md)
 - What's next: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Full system design: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Deeper walkthrough of every component, data model and the Feistel round internals: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
