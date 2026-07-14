@@ -2,6 +2,7 @@ pub mod lmdb;
 pub mod postgres;
 
 use crate::analytics::AnalyticsSink;
+use crate::auth::ApiToken;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -88,6 +89,11 @@ pub trait Store: Send + Sync + 'static {
     async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError>;
     async fn delete_link(&self, id: u64) -> Result<(), StoreError>;
     async fn delete_alias(&self, alias: &str) -> Result<(), StoreError>;
+    async fn list_api_tokens(&self) -> Result<Vec<ApiToken>, StoreError>;
+    async fn get_api_token_by_hash(&self, hash: &str) -> Result<Option<ApiToken>, StoreError>;
+    async fn put_api_token(&self, token: &ApiToken) -> Result<(), StoreError>;
+    async fn delete_api_token(&self, id: u64) -> Result<bool, StoreError>;
+    async fn next_api_token_id(&self) -> Result<u64, StoreError>;
 }
 
 /// Opens only the Store on LMDB (used by tests that don't need the AnalyticsSink).
