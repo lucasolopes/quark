@@ -23,4 +23,4 @@ export interface Aggregates {
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
 export interface BlocklistResponse { domains: string[]; }
-export interface PatchLinkRequest { url?: string; ttl?: number | null; max_visits?: number; }
+export interface PatchLinkRequest { url?: string; ttl?: number | null; max_visits?: number | null; }

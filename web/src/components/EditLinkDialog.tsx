@@ -96,7 +96,11 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
         body: {
           url: url.trim(),
           ...(removeExpiry ? { ttl: null } : ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
-          ...(maxVisits.trim() ? { max_visits: Number(maxVisits.trim()) } : {}),
+          ...(maxVisits.trim()
+            ? { max_visits: Number(maxVisits.trim()) }
+            : link.max_visits
+              ? { max_visits: null }
+              : {}),
         },
       });
       toast.success(t("dialogs.edit.successToast"));
