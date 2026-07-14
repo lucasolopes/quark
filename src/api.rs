@@ -87,6 +87,128 @@ fn require_admin_for_create(st: &AppState, headers: &HeaderMap) -> Result<(), St
     }
 }
 
+/// Reasons `create_link_core` can fail. The `create` handler and the
+/// `/admin/import` handler both map this to a response: `create` picks an
+/// HTTP status, `admin_import` picks a human-readable failure reason string.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CreateError {
+    InvalidUrl,
+    NoHost,
+    Blocked,
+    AliasCollision,
+    AliasInUse,
+    InvalidTtl,
+    IdExhausted,
+    Backend,
+}
+
+/// Core link-creation logic shared by `POST /` and `POST /admin/import`:
+/// validates the URL, runs the blocklist/anti-loop guards, computes expiry
+/// from `ttl`, then either claims `alias` (custom code) or allocates the
+/// next numeric id. Holds no admin/rate-limit policy — callers apply those
+/// before invoking this. Returns the created code (the alias, or the
+/// computed base62 code) on success.
+pub async fn create_link_core(
+    st: &AppState,
+    url: &str,
+    alias: Option<&str>,
+    ttl: Option<u64>,
+    headers: &HeaderMap,
+) -> Result<String, CreateError> {
+    if !is_valid_url(url) {
+        return Err(CreateError::InvalidUrl);
+    }
+    let Some(host) = extract_host(url) else {
+        return Err(CreateError::NoHost);
+    };
+    if st.block_private && is_blocked_target(&host, headers, st) {
+        return Err(CreateError::Blocked);
+    }
+    if st.blocklist.is_blocked(&host, now()).await {
+        return Err(CreateError::Blocked);
+    }
+
+    let expiry = match ttl {
+        Some(t) => match now().checked_add(t) {
+            Some(e) => Some(e),
+            None => return Err(CreateError::InvalidTtl),
+        },
+        None => None,
+    };
+    let rec = Record {
+        url: url.to_string(),
+        expiry,
+        created: now(),
+    };
+
+    if let Some(alias) = alias {
+        if codec::from_base62(alias).is_some() {
+            return Err(CreateError::AliasCollision);
+        }
+        let id = match st.store.next_id().await {
+            Ok(id) => id,
+            Err(StoreError::IdSpaceExhausted) => return Err(CreateError::IdExhausted),
+            Err(_) => return Err(CreateError::Backend),
+        };
+        match st.store.put_alias_and_link(alias, id, &rec).await {
+            Ok(true) => {}
+            Ok(false) => return Err(CreateError::AliasInUse),
+            Err(_) => return Err(CreateError::Backend),
+        };
+        return Ok(alias.to_string());
+    }
+
+    let id = match st.store.next_id().await {
+        Ok(id) => id,
+        Err(StoreError::IdSpaceExhausted) => return Err(CreateError::IdExhausted),
+        Err(_) => return Err(CreateError::Backend),
+    };
+    if id > permute::MAX_ID {
+        return Err(CreateError::IdExhausted);
+    }
+    if st.store.put_link(id, &rec).await.is_err() {
+        return Err(CreateError::Backend);
+    }
+    let code = codec::to_base62(permute::encode(id, st.key));
+    Ok(code)
+}
+
+/// Maps a `CreateError` to the exact HTTP status/body `create` has always
+/// returned for it.
+fn create_error_response(err: CreateError) -> Response {
+    match err {
+        CreateError::InvalidUrl => (StatusCode::BAD_REQUEST, "invalid url").into_response(),
+        CreateError::NoHost => (StatusCode::BAD_REQUEST, "url without host").into_response(),
+        CreateError::Blocked => (StatusCode::FORBIDDEN, "blocked destination").into_response(),
+        CreateError::AliasCollision => (
+            StatusCode::BAD_REQUEST,
+            "alias collides with the numeric code space",
+        )
+            .into_response(),
+        CreateError::AliasInUse => (StatusCode::CONFLICT, "alias in use").into_response(),
+        CreateError::InvalidTtl => (StatusCode::BAD_REQUEST, "invalid ttl").into_response(),
+        CreateError::IdExhausted => {
+            (StatusCode::INSUFFICIENT_STORAGE, "id space exhausted").into_response()
+        }
+        CreateError::Backend => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// A short, human-readable reason for an import row failure (used in the
+/// `/admin/import` summary's `failed[].reason`).
+fn create_error_reason(err: &CreateError) -> &'static str {
+    match err {
+        CreateError::InvalidUrl => "invalid url",
+        CreateError::NoHost => "url without host",
+        CreateError::Blocked => "blocked destination",
+        CreateError::AliasCollision => "alias collides with the numeric code space",
+        CreateError::AliasInUse => "alias in use",
+        CreateError::InvalidTtl => "invalid ttl",
+        CreateError::IdExhausted => "id space exhausted",
+        CreateError::Backend => "backend error",
+    }
+}
+
 async fn create(
     State(st): State<Arc<AppState>>,
     conn: Option<ConnectInfo<SocketAddr>>,
@@ -100,74 +222,65 @@ async fn create(
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
     }
-    if !is_valid_url(&req.url) {
-        return (StatusCode::BAD_REQUEST, "invalid url").into_response();
+    match create_link_core(&st, &req.url, req.alias.as_deref(), req.ttl, &headers).await {
+        Ok(code) => Json(CreateResp { code, url: req.url }).into_response(),
+        Err(err) => create_error_response(err),
     }
-    let Some(host) = extract_host(&req.url) else {
-        return (StatusCode::BAD_REQUEST, "url without host").into_response();
+}
+
+#[derive(Serialize)]
+struct ImportFailure {
+    index: usize,
+    url: String,
+    reason: String,
+}
+
+#[derive(Serialize)]
+struct ImportSummary {
+    imported: usize,
+    failed: Vec<ImportFailure>,
+}
+
+/// `POST /admin/import`: bulk-creates links from a CSV or JSON body (see
+/// `crate::import`), driving each row through `create_link_core` so
+/// validation and blocklist rules match `POST /` exactly. Always admin-gated
+/// via `admin_guard`, independent of `require_admin_for_create` (import
+/// stays admin-only even when public create is enabled). Never aborts on a
+/// bad row: every row is attempted, and failures are reported in the
+/// summary instead of failing the request.
+async fn admin_import(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers) {
+        return status.into_response();
+    }
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok());
+    let format = crate::import::detect_format(content_type, &body);
+    let rows = match crate::import::import_rows(&body, format) {
+        Ok(rows) => rows,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid import body").into_response(),
     };
-    if st.block_private && is_blocked_target(&host, &headers, &st) {
-        return (StatusCode::FORBIDDEN, "destination not allowed").into_response();
-    }
-    if st.blocklist.is_blocked(&host, now()).await {
-        return (StatusCode::FORBIDDEN, "blocked destination").into_response();
+    if rows.len() > crate::import::MAX_IMPORT_ROWS {
+        return (StatusCode::BAD_REQUEST, "too many rows").into_response();
     }
 
-    let expiry = match req.ttl {
-        Some(t) => match now().checked_add(t) {
-            Some(e) => Some(e),
-            None => return (StatusCode::BAD_REQUEST, "invalid ttl").into_response(),
-        },
-        None => None,
-    };
-    let rec = Record {
-        url: req.url.clone(),
-        expiry,
-        created: now(),
-    };
-
-    if let Some(alias) = req.alias {
-        if codec::from_base62(&alias).is_some() {
-            return (
-                StatusCode::BAD_REQUEST,
-                "alias collides with the numeric code space",
-            )
-                .into_response();
+    let mut imported = 0usize;
+    let mut failed = Vec::new();
+    for (index, row) in rows.into_iter().enumerate() {
+        match create_link_core(&st, &row.url, row.alias.as_deref(), row.ttl, &headers).await {
+            Ok(_) => imported += 1,
+            Err(err) => failed.push(ImportFailure {
+                index,
+                url: row.url,
+                reason: create_error_reason(&err).to_string(),
+            }),
         }
-        let id = match st.store.next_id().await {
-            Ok(id) => id,
-            Err(StoreError::IdSpaceExhausted) => {
-                return (StatusCode::INSUFFICIENT_STORAGE, "id space exhausted").into_response()
-            }
-            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        };
-        match st.store.put_alias_and_link(&alias, id, &rec).await {
-            Ok(true) => {}
-            Ok(false) => return (StatusCode::CONFLICT, "alias in use").into_response(),
-            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        };
-        return Json(CreateResp {
-            code: alias,
-            url: req.url,
-        })
-        .into_response();
     }
-
-    let id = match st.store.next_id().await {
-        Ok(id) => id,
-        Err(StoreError::IdSpaceExhausted) => {
-            return (StatusCode::INSUFFICIENT_STORAGE, "id space exhausted").into_response()
-        }
-        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    };
-    if id > permute::MAX_ID {
-        return (StatusCode::INSUFFICIENT_STORAGE, "id space exhausted").into_response();
-    }
-    if st.store.put_link(id, &rec).await.is_err() {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
-    let code = codec::to_base62(permute::encode(id, st.key));
-    Json(CreateResp { code, url: req.url }).into_response()
+    Json(ImportSummary { imported, failed }).into_response()
 }
 
 /// Client IP: configurable header (default CF-Connecting-IP) takes priority;
@@ -627,6 +740,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
                 .delete(blocklist_delete),
         )
         .route("/admin/links", get(admin_links_list))
+        .route("/admin/import", post(admin_import))
         .route(
             "/admin/links/:code",
             axum::routing::delete(admin_link_delete).patch(admin_link_patch),

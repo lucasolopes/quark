@@ -3,6 +3,7 @@ pub mod analytics;
 pub mod api;
 pub mod cache;
 pub mod codec;
+pub mod import;
 pub mod permute;
 pub mod store;
 
