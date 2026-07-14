@@ -1,8 +1,9 @@
-import { Atom, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { QuarkMark } from "@/components/brand/QuarkMark";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -43,10 +44,15 @@ export function Login() {
     <div className="flex min-h-svh items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-xl">
-            <Atom className="size-5 text-primary" aria-hidden="true" />
-            quark
-          </CardTitle>
+          <div className="mb-1 flex items-center gap-3">
+            <QuarkMark className="size-8 text-primary drop-shadow-[0_0_10px_rgba(198,249,78,0.55)]" />
+            <div className="flex flex-col">
+              <span className="font-mono text-[11px] tracking-[0.18em] text-muted-foreground uppercase">
+                Painel do operador
+              </span>
+              <CardTitle className="font-heading text-2xl font-bold tracking-tight">quark</CardTitle>
+            </div>
+          </div>
           <CardDescription>Entre com o token de administrador para gerenciar os links.</CardDescription>
         </CardHeader>
         <CardContent>

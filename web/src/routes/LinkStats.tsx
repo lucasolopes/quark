@@ -8,6 +8,7 @@ import { RecentEventsTable } from "@/components/RecentEventsTable";
 import { StatsCharts } from "@/components/StatsCharts";
 import { formatDateTime } from "@/lib/format";
 import { useStats } from "@/lib/queries";
+import { cn } from "@/lib/utils";
 
 export function LinkStats() {
   const { code = "" } = useParams<{ code: string }>();
@@ -77,7 +78,8 @@ export function LinkStats() {
             <StatCard
               icon={<MousePointerClick className="size-4" aria-hidden="true" />}
               label="Total de cliques"
-              value={String(query.data.aggregates.total)}
+              value={query.data.aggregates.total.toLocaleString("pt-BR")}
+              accent
             />
             <StatCard
               icon={<Timer className="size-4" aria-hidden="true" />}
@@ -109,18 +111,32 @@ interface StatCardProps {
   icon: ReactNode;
   label: string;
   value: string;
+  /** Numeral de métrica (número-herói) — Space Grotesk grande em plasma-lime. */
+  accent?: boolean;
 }
 
-function StatCard({ icon, label, value }: StatCardProps) {
+function StatCard({ icon, label, value, accent = false }: StatCardProps) {
   return (
     <Card>
       <CardContent className="flex items-center gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <div
+          className={cn(
+            "flex size-9 shrink-0 items-center justify-center rounded-full",
+            accent ? "bg-primary/12 text-primary" : "bg-muted text-muted-foreground",
+          )}
+        >
           {icon}
         </div>
-        <div>
-          <p className="text-sm text-muted-foreground">{label}</p>
-          <p className="font-heading text-xl font-semibold">{value}</p>
+        <div className="min-w-0">
+          <p className="font-mono text-[11px] tracking-[0.08em] text-muted-foreground uppercase">{label}</p>
+          <p
+            className={cn(
+              "font-heading font-bold tracking-tight tabular-nums",
+              accent ? "text-3xl text-primary" : "text-xl",
+            )}
+          >
+            {value}
+          </p>
         </div>
       </CardContent>
     </Card>

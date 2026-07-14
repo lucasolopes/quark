@@ -1,6 +1,7 @@
-import { Atom, Link2, LogOut, Moon, ShieldBan, Sun } from "lucide-react";
+import { Link2, LogOut, Moon, ShieldBan, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { QuarkMark } from "@/components/brand/QuarkMark";
 import { Button } from "@/components/ui/button";
 import { clearToken } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -24,9 +25,11 @@ export function Shell() {
   return (
     <div className="flex min-h-svh">
       <aside className="flex w-16 shrink-0 flex-col border-r border-sidebar-border bg-sidebar sm:w-56">
-        <div className="flex h-14 items-center justify-center gap-2 px-2 font-heading text-lg font-semibold text-sidebar-foreground sm:justify-start sm:px-4">
-          <Atom className="size-5 text-primary" aria-hidden="true" />
-          <span className="hidden sm:inline">quark</span>
+        <div className="flex h-14 items-center justify-center gap-2.5 px-2 sm:justify-start sm:px-4">
+          <QuarkMark className="size-6 text-primary drop-shadow-[0_0_8px_rgba(198,249,78,0.55)]" />
+          <span className="hidden font-heading text-lg font-bold tracking-tight text-sidebar-foreground sm:inline">
+            quark
+          </span>
         </div>
         <nav className="flex flex-col gap-1 px-2 py-2">
           {NAV.map(({ to, label, icon: Icon }) => (
