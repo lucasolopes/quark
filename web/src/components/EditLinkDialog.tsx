@@ -93,8 +93,8 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
         body: {
           url: url.trim(),
           ...(removeExpiry ? { ttl: null } : ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
-          ...(appIos.trim() ? { app_ios: appIos.trim() } : {}),
-          ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : {}),
+          ...(appIos.trim() ? { app_ios: appIos.trim() } : link.app_ios?.trim() ? { app_ios: null } : {}),
+          ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : link.app_android?.trim() ? { app_android: null } : {}),
         },
       });
       toast.success(t("dialogs.edit.successToast"));
