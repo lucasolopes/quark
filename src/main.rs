@@ -19,6 +19,17 @@ const DEFAULT_BLOCKLIST_TTL_SECS: u64 = 60;
 
 #[tokio::main]
 async fn main() {
+    let strict_cluster = std::env::var("QUARK_STRICT_CLUSTER")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    if let Err(msg) = quark::cluster::cluster_preflight(
+        strict_cluster,
+        std::env::var("QUARK_DATABASE_URL").is_ok(),
+        std::env::var("QUARK_VALKEY_URL").is_ok(),
+    ) {
+        eprintln!("FATAL: {msg}");
+        std::process::exit(1);
+    }
     let path = std::env::var("QUARK_DATA").unwrap_or_else(|_| "./data".into());
     let key = std::env::var("QUARK_KEY")
         .ok()
@@ -55,7 +66,18 @@ async fn main() {
             );
         }
         Ok(n) if !n.is_empty() => {
-            eprintln!("LMDB node-id: {n} (id space partitioned into 8+32 bits)")
+            eprintln!("========================================================================");
+            eprintln!(
+                "WARNING: QUARK_NODE_ID={n} set on the LMDB backend (no QUARK_DATABASE_URL)."
+            );
+            eprintln!("  LMDB stores are per-node: each replica keeps its OWN file and replicas");
+            eprintln!("  do NOT share links. A redirect that lands on a node without the link");
+            eprintln!("  returns 404. node-id only partitions the id space (8+32 bits) so codes");
+            eprintln!("  do not collide; it does NOT make this a shared multi-node store.");
+            eprintln!("  True multi-node needs the Postgres backend (set QUARK_DATABASE_URL).");
+            eprintln!("  The node id MUST be unique per replica (e.g. a StatefulSet ordinal);");
+            eprintln!("  quark cannot detect a duplicate and a collision silently reuses ids.");
+            eprintln!("========================================================================");
         }
         _ => {}
     }

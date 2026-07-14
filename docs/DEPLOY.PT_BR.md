@@ -17,6 +17,7 @@ o Coolify detecta automaticamente: não precisa de Nixpacks nem buildpack.
    | `QUARK_KEY` | um `u64` aleatório: gere com `openssl rand -hex 8` e converta pra decimal, ou use um número grande. **Configure como _secret_.** | **sim** (sem ela o quark usa uma chave de dev e avisa no log) |
    | `QUARK_ADDR` | `0.0.0.0:8080` | já é o default da imagem |
    | `QUARK_DATA` | `/data` | já é o default da imagem |
+   | `QUARK_STRICT_CLUSTER` | qualquer valor não-vazio (ex.: `1`) pra falhar rápido a menos que `QUARK_DATABASE_URL` e `QUARK_VALKEY_URL` estejam definidas. Deixe sem definir pra single-node. Veja [SCALING](SCALING.PT_BR.md). | não (default single-node) |
 6. **Armazenamento persistente:** adicione um **Persistent Storage / Volume** montado em **`/data`**. É onde o LMDB guarda os links; sem isso, os links somem a cada redeploy.
 7. **Health check:** caminho **`/health`** (o quark responde `200 ok`). Configure o health check HTTP do Coolify pra esse path na porta 8080.
 8. **Deploy.** O Coolify builda a imagem e sobe. O domínio que ele te der já serve os redirects.

@@ -3,6 +3,7 @@ pub mod analytics;
 pub mod api;
 pub mod auth;
 pub mod cache;
+pub mod cluster;
 pub mod codec;
 pub mod import;
 pub mod invalidate;
