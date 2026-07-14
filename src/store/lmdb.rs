@@ -621,6 +621,7 @@ mod tests {
             tags: Vec::new(),
             max_visits: None,
             rules: Vec::new(),
+            variants: Vec::new(),
         };
         for id in 1..=5u64 {
             s.put_link(id, &rec(&format!("https://e{id}.com")))
@@ -686,6 +687,7 @@ mod tests {
             tags: tags.iter().map(|t| t.to_string()).collect(),
             max_visits: None,
             rules: Vec::new(),
+            variants: Vec::new(),
         };
         s.put_link(1, &rec("https://a.com", &["rust", "web"]))
             .await

@@ -19,6 +19,7 @@ fn ev(id: u64, ts: u64, c: &str, ua: &str) -> ClickEvent {
         bot: false,
         ip: None,
         fbc: None,
+        variant: None,
     }
 }
 fn ev_full(id: u64, ts: u64, ua: &str, referer: Option<&str>, city: Option<&str>) -> ClickEvent {
@@ -32,6 +33,7 @@ fn ev_full(id: u64, ts: u64, ua: &str, referer: Option<&str>, city: Option<&str>
         bot: false,
         ip: None,
         fbc: None,
+        variant: None,
     }
 }
 
@@ -171,4 +173,30 @@ async fn os_browser_referer_city_ch() {
     assert_eq!(st.aggregates.per_referer.get("direct"), Some(&1));
     assert_eq!(st.aggregates.per_city.get("Sao Paulo"), Some(&1));
     assert_eq!(st.aggregates.per_city.len(), 1, "empty city excluded");
+}
+
+#[tokio::test]
+#[serial(ch)]
+async fn per_variant_aggregates_and_recent_ch() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_CLICKHOUSE_URL not set");
+        return;
+    };
+    let mut a = ev(20, 1_752_300_000, "BR", "iPhone");
+    a.variant = Some(0);
+    let mut b = ev(20, 1_752_300_001, "BR", "iPhone");
+    b.variant = Some(0);
+    let mut c = ev(20, 1_752_300_002, "BR", "iPhone");
+    c.variant = Some(1);
+    let mut d = ev(20, 1_752_300_003, "BR", "iPhone");
+    d.variant = None;
+    s.record_batch(&[a, b, c, d]).await.unwrap();
+    let st = s.stats(20).await.unwrap().unwrap();
+    assert_eq!(st.aggregates.per_variant.get("0"), Some(&2));
+    assert_eq!(st.aggregates.per_variant.get("1"), Some(&1));
+    assert_eq!(st.aggregates.per_variant.get("-1"), None);
+    let variants: Vec<Option<u32>> = st.recent.iter().map(|e| e.variant).collect();
+    assert!(variants.contains(&Some(0)));
+    assert!(variants.contains(&Some(1)));
+    assert!(variants.contains(&None));
 }

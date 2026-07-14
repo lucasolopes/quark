@@ -68,6 +68,8 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 - **Encaminhamento de conversão (#14)**: pixels GA4/Meta CAPI a nível de instância, encaminhados
   async pelo worker de analytics (nunca no caminho quente do redirect), fail-open. Painel: `/pixels`.
   Doc: `docs/CONVERSION-FORWARDING.PT_BR.md`.
+- **Teste A/B (#17)**: um link pode carregar variantes com peso; o redirect divide o tráfego por
+  um sorteio ponderado sem estado, com estatísticas de cliques por variante. Doc: `docs/AB-TESTING.PT_BR.md`.
 
 ## Próximo
 

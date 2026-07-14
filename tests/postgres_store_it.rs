@@ -1,4 +1,4 @@
-use quark::store::{postgres::PostgresStore, Record, Rule, RuleField, Store};
+use quark::store::{postgres::PostgresStore, Record, Rule, RuleField, Store, Variant};
 use serial_test::serial;
 
 async fn fresh() -> Option<PostgresStore> {
@@ -22,6 +22,7 @@ async fn put_get_link_pg() {
         tags: Vec::new(),
         max_visits: None,
         rules: Vec::new(),
+        variants: Vec::new(),
     };
     s.put_link(7, &rec).await.unwrap();
     assert_eq!(
@@ -56,6 +57,7 @@ async fn rules_round_trip_pg() {
                 to: "https://m.example".into(),
             },
         ],
+        variants: Vec::new(),
     };
     s.put_link(42, &rec).await.unwrap();
     let got = s.get_link(42).await.unwrap().unwrap();
@@ -76,6 +78,7 @@ async fn link_without_rules_round_trips_to_empty_vec_pg() {
         tags: Vec::new(),
         max_visits: None,
         rules: Vec::new(),
+        variants: Vec::new(),
     };
     s.put_link(43, &rec).await.unwrap();
     let got = s.get_link(43).await.unwrap().unwrap();
@@ -106,6 +109,7 @@ async fn alias_is_atomic_no_orphan_pg() {
         tags: Vec::new(),
         max_visits: None,
         rules: Vec::new(),
+        variants: Vec::new(),
     };
     assert!(s.put_alias_and_link("promo", 5, &rec).await.unwrap());
     assert!(!s.put_alias_and_link("promo", 9, &rec).await.unwrap());
@@ -126,6 +130,7 @@ async fn tags_round_trip_filter_and_distinct_pg() {
         tags: tags.iter().map(|t| t.to_string()).collect(),
         max_visits: None,
         rules: Vec::new(),
+        variants: Vec::new(),
     };
     s.put_link(1, &rec("https://a.com", &["rust", "web"]))
         .await
@@ -168,6 +173,7 @@ async fn visits_round_trip_pg() {
         tags: Vec::new(),
         max_visits: Some(5),
         rules: Vec::new(),
+        variants: Vec::new(),
     };
     s.put_link(11, &rec).await.unwrap();
     assert_eq!(s.visits(11).await.unwrap(), 0);
@@ -188,6 +194,7 @@ async fn bump_visits_is_atomic_and_increments_pg() {
         tags: Vec::new(),
         max_visits: None,
         rules: Vec::new(),
+        variants: Vec::new(),
     };
     s.put_link(12, &rec).await.unwrap();
     assert_eq!(s.bump_visits(12).await.unwrap(), 1);
@@ -209,4 +216,52 @@ async fn bump_visits_is_atomic_and_increments_pg() {
     results.sort();
     assert_eq!(results, (3..=12).collect::<Vec<u64>>());
     assert_eq!(s.visits(12).await.unwrap(), 12);
+}
+
+#[tokio::test]
+#[serial(pg)]
+async fn variants_round_trip_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let rec = Record {
+        url: "https://default.com".into(),
+        expiry: None,
+        created: 0,
+        tags: Vec::new(),
+        max_visits: None,
+        rules: Vec::new(),
+        variants: vec![
+            Variant {
+                url: "https://a.com".into(),
+                weight: 1,
+            },
+            Variant {
+                url: "https://b.com".into(),
+                weight: 3,
+            },
+        ],
+    };
+    s.put_link(11, &rec).await.unwrap();
+    let got = s.get_link(11).await.unwrap().unwrap();
+    assert_eq!(got.variants.len(), 2);
+    assert_eq!(got.variants[0].url, "https://a.com");
+    assert_eq!(got.variants[0].weight, 1);
+    assert_eq!(got.variants[1].url, "https://b.com");
+    assert_eq!(got.variants[1].weight, 3);
+
+    // A link created without variants round-trips to an empty vec (not null),
+    // matching the JSONB DEFAULT '[]'.
+    let plain = Record {
+        url: "https://plain.com".into(),
+        expiry: None,
+        created: 0,
+        tags: Vec::new(),
+        max_visits: None,
+        rules: Vec::new(),
+        variants: Vec::new(),
+    };
+    s.put_link(12, &plain).await.unwrap();
+    assert!(s.get_link(12).await.unwrap().unwrap().variants.is_empty());
 }

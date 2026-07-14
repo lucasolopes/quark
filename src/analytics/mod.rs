@@ -28,6 +28,10 @@ pub struct ClickEvent {
     pub ip: Option<String>,
     #[serde(skip)]
     pub fbc: Option<String>,
+    /// Index of the A/B variant served for this click; `None` when the link
+    /// has no variants (the common case).
+    #[serde(default)]
+    pub variant: Option<u32>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -51,6 +55,10 @@ pub struct Aggregates {
     /// every `per_*` breakdown, which are human-only.
     #[serde(default)]
     pub bots: u64,
+    /// Clicks per variant index (stringified), keyed the same way the UI
+    /// looks them up against `Record.variants`.
+    #[serde(default)]
+    pub per_variant: BTreeMap<String, u64>,
 }
 
 impl Aggregates {
@@ -82,6 +90,9 @@ impl Aggregates {
             if !city.is_empty() {
                 *self.per_city.entry(city.clone()).or_insert(0) += 1;
             }
+        }
+        if let Some(variant) = ev.variant {
+            *self.per_variant.entry(variant.to_string()).or_insert(0) += 1;
         }
     }
 }
@@ -402,6 +413,7 @@ mod tests {
             bot: false,
             ip: None,
             fbc: None,
+            variant: None,
         }
     }
 
@@ -480,6 +492,7 @@ mod tests {
                 bot: false,
                 ip: None,
                 fbc: None,
+                variant: None,
             })
             .await
             .unwrap();
@@ -514,6 +527,7 @@ mod tests {
             bot: false,
             ip: Some("203.0.113.9".into()),
             fbc: Some("fb.1.100000.abc123".into()),
+            variant: None,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(!json.contains("203.0.113.9"));
@@ -535,6 +549,7 @@ mod tests {
             bot: false,
             ip: None,
             fbc: None,
+            variant: None,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -546,6 +561,7 @@ mod tests {
             bot: false,
             ip: None,
             fbc: None,
+            variant: None,
         });
         assert_eq!(a.first_ts, 0);
         assert_eq!(a.last_ts, 5_000_000_000);
@@ -646,6 +662,7 @@ mod tests {
             bot: false,
             ip: None,
             fbc: None,
+            variant: None,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -659,6 +676,7 @@ mod tests {
             bot: false,
             ip: None,
             fbc: None,
+            variant: None,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -673,6 +691,7 @@ mod tests {
             bot: false,
             ip: None,
             fbc: None,
+            variant: None,
         });
 
         assert_eq!(a.per_os.get("iOS"), Some(&1));
@@ -777,5 +796,76 @@ mod tests {
         );
         assert_eq!(a.per_country.get("BR"), Some(&1));
         assert_eq!(a.per_country.get("US"), Some(&1));
+    }
+
+    #[test]
+    fn apply_increments_per_variant_only_when_some() {
+        let mut a = Aggregates::default();
+        a.apply(&ClickEvent {
+            id: 1,
+            ts: 1,
+            referer: None,
+            country: None,
+            user_agent: Some("Mozilla/5.0 (iPhone)".into()),
+            city: None,
+            bot: false,
+            ip: None,
+            fbc: None,
+            variant: Some(0),
+        });
+        a.apply(&ClickEvent {
+            id: 1,
+            ts: 2,
+            referer: None,
+            country: None,
+            user_agent: Some("Mozilla/5.0 (iPhone)".into()),
+            city: None,
+            bot: false,
+            ip: None,
+            fbc: None,
+            variant: Some(0),
+        });
+        a.apply(&ClickEvent {
+            id: 1,
+            ts: 3,
+            referer: None,
+            country: None,
+            user_agent: Some("Mozilla/5.0 (iPhone)".into()),
+            city: None,
+            bot: false,
+            ip: None,
+            fbc: None,
+            variant: Some(1),
+        });
+        a.apply(&ClickEvent {
+            id: 1,
+            ts: 4,
+            referer: None,
+            country: None,
+            user_agent: Some("Mozilla/5.0 (iPhone)".into()),
+            city: None,
+            bot: false,
+            ip: None,
+            fbc: None,
+            variant: None,
+        });
+        assert_eq!(a.per_variant.get("0"), Some(&2));
+        assert_eq!(a.per_variant.get("1"), Some(&1));
+        assert_eq!(a.total, 4);
+    }
+
+    #[test]
+    fn click_event_without_variant_field_deserializes_to_none() {
+        let old = r#"{"id":1,"ts":1,"referer":null,"country":null,"user_agent":null}"#;
+        let ev: ClickEvent = serde_json::from_str(old).unwrap();
+        assert_eq!(ev.variant, None);
+    }
+
+    #[test]
+    fn aggregates_without_per_variant_field_deserializes_to_empty_map() {
+        let old =
+            r#"{"total":1,"first_ts":1,"last_ts":1,"per_day":{},"per_country":{},"per_device":{}}"#;
+        let a: Aggregates = serde_json::from_str(old).unwrap();
+        assert!(a.per_variant.is_empty());
     }
 }

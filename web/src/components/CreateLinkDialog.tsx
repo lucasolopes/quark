@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,19 @@ import { parseTagsInput } from "@/lib/tags";
 import { applyUtm, deleteUtmTemplate, loadUtmTemplates, saveUtmTemplate, type UtmParams } from "@/lib/utm";
 import { parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import { RulesEditor } from "@/components/RulesEditor";
+import type { Variant } from "@/lib/types";
+
+/** Same cap enforced server-side (`MAX_VARIANTS` in `src/api.rs`). */
+const MAX_VARIANTS = 10;
+
+interface VariantRow {
+  url: string;
+  weight: string;
+}
+
+function emptyVariantRow(): VariantRow {
+  return { url: "", weight: "1" };
+}
 
 interface FormErrors {
   url?: string;
@@ -34,6 +47,7 @@ interface FormErrors {
   maxVisits?: string;
   rules?: string;
   form?: string;
+  variants?: string;
 }
 
 const EMPTY_UTM: UtmParams = {};
@@ -61,6 +75,8 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
   const [tagsInput, setTagsInput] = useState("");
   const [maxVisits, setMaxVisits] = useState("");
   const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>([]);
+  const [showVariants, setShowVariants] = useState(false);
+  const [variantRows, setVariantRows] = useState<VariantRow[]>([]);
   const [errors, setErrors] = useState<FormErrors>({});
   const [utmOpen, setUtmOpen] = useState(false);
   const [utm, setUtm] = useState<UtmParams>(EMPTY_UTM);
@@ -76,6 +92,8 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
     setTagsInput("");
     setMaxVisits("");
     setRuleDrafts([]);
+    setShowVariants(false);
+    setVariantRows([]);
     setErrors({});
     setUtmOpen(false);
     setUtm(EMPTY_UTM);
@@ -114,6 +132,18 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
   const utmPreview = url.trim() ? applyUtm(url.trim(), utm) : "";
   const templateNames = Object.keys(templates);
 
+  function addVariantRow() {
+    setVariantRows((rows) => (rows.length >= MAX_VARIANTS ? rows : [...rows, emptyVariantRow()]));
+  }
+
+  function removeVariantRow(index: number) {
+    setVariantRows((rows) => rows.filter((_, i) => i !== index));
+  }
+
+  function updateVariantRow(index: number, patch: Partial<VariantRow>) {
+    setVariantRows((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }
+
   function handleOpenChange(next: boolean) {
     if (!next) reset();
     onOpenChange(next);
@@ -144,7 +174,26 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
         next.maxVisits = t("dialogs.create.maxVisitsInvalid");
       }
     }
+    if (variantRows.length > MAX_VARIANTS) {
+      next.variants = t("dialogs.create.tooManyVariants", { max: MAX_VARIANTS });
+    } else {
+      for (const row of variantRows) {
+        if (!row.url.trim() || !isHttpUrl(row.url)) {
+          next.variants = t("dialogs.create.variantUrlInvalid");
+          break;
+        }
+        const w = Number(row.weight.trim());
+        if (!Number.isInteger(w) || w <= 0) {
+          next.variants = t("dialogs.create.variantWeightInvalid");
+          break;
+        }
+      }
+    }
     return next;
+  }
+
+  function buildVariants(): Variant[] {
+    return variantRows.map((row) => ({ url: row.url.trim(), weight: Number(row.weight.trim()) }));
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -163,6 +212,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
     const destination = hasAnyUtm(utm) ? applyUtm(trimmedUrl, utm) : trimmedUrl;
     try {
       const tags = parseTagsInput(tagsInput);
+      const variants = buildVariants();
       await createLink.mutateAsync({
         url: destination,
         ...(alias.trim() ? { alias: alias.trim() } : {}),
@@ -170,6 +220,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
         ...(tags.length > 0 ? { tags } : {}),
         ...(maxVisits.trim() ? { max_visits: Number(maxVisits.trim()) } : {}),
         ...(rules.length > 0 ? { rules } : {}),
+        ...(variants.length > 0 ? { variants } : {}),
       });
       toast.success(t("dialogs.create.successToast"));
       reset();
@@ -428,6 +479,83 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
                       <p className="break-all text-sm">{utmPreview}</p>
                     </div>
                   )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="self-start"
+                aria-expanded={showVariants}
+                onClick={() => setShowVariants((v) => !v)}
+              >
+                {t("dialogs.create.variantsToggle")}
+              </Button>
+
+              {showVariants && (
+                <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                  <p className="text-sm text-muted-foreground">{t("dialogs.create.variantsHint")}</p>
+
+                  {variantRows.map((row, i) => (
+                    <div key={i} className="flex items-end gap-2">
+                      <div className="flex flex-1 flex-col gap-1.5">
+                        <label htmlFor={`create-variant-url-${i}`} className="sr-only">
+                          {t("dialogs.create.variantUrlLabel")}
+                        </label>
+                        <Input
+                          id={`create-variant-url-${i}`}
+                          type="text"
+                          placeholder={t("dialogs.create.variantUrlPlaceholder")}
+                          value={row.url}
+                          onChange={(e) => updateVariantRow(i, { url: e.target.value })}
+                        />
+                      </div>
+                      <div className="flex w-20 flex-col gap-1.5">
+                        <label htmlFor={`create-variant-weight-${i}`} className="sr-only">
+                          {t("dialogs.create.variantWeightLabel")}
+                        </label>
+                        <Input
+                          id={`create-variant-weight-${i}`}
+                          type="number"
+                          min={1}
+                          step={1}
+                          placeholder={t("dialogs.create.variantWeightLabel")}
+                          value={row.weight}
+                          onChange={(e) => updateVariantRow(i, { weight: e.target.value })}
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={t("dialogs.create.removeVariant")}
+                        onClick={() => removeVariantRow(i)}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+
+                  {errors.variants && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {errors.variants}
+                    </p>
+                  )}
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="self-start"
+                    disabled={variantRows.length >= MAX_VARIANTS}
+                    onClick={addVariantRow}
+                  >
+                    <Plus className="size-3.5" />
+                    {t("dialogs.create.addVariant")}
+                  </Button>
                 </div>
               )}
             </div>

@@ -67,6 +67,8 @@ bottleneck being geography/RTT, not the server).
 - **Redirect rules (#12)**: per-link geo/device rules (first match wins, `url` stays the default), panel editor in the create/edit dialogs. Doc: `docs/REDIRECT-RULES.md`.
 - **Conversion forwarding (#14)**: instance-level GA4/Meta CAPI pixels, forwarded async from the
   analytics worker (never the redirect hot path), fail-open. Panel: `/pixels`. Doc: `docs/CONVERSION-FORWARDING.md`.
+- **A/B testing (#17)**: a link can carry weighted variants; redirects split traffic by a
+  stateless weighted pick, with per-variant click stats. Doc: `docs/AB-TESTING.md`.
 
 ## Next
 

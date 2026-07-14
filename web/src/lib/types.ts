@@ -12,6 +12,8 @@ export interface Rule {
   to: string;
 }
 
+/** One A/B destination: a URL and its relative weight (>= 1) in the weighted-random pick at redirect time. */
+export interface Variant { url: string; weight: number; }
 export interface Link {
   id: number;
   code: string;
@@ -23,9 +25,10 @@ export interface Link {
   max_visits?: number;
   visits: number;
   rules: Rule[];
+  variants: Variant[];
 }
 export interface ListLinksResponse { links: Link[]; next_after: number | null; }
-export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; max_visits?: number; rules?: Rule[]; }
+export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; max_visits?: number; rules?: Rule[]; variants?: Variant[]; }
 export interface CreateLinkResponse { code: string; url: string; }
 export interface TagsResponse { tags: string[]; }
 export interface ClickEvent {
@@ -43,10 +46,12 @@ export interface Aggregates {
   per_browser: Record<string, number>;
   per_referer: Record<string, number>;
   per_city: Record<string, number>;
+  /** Clicks per variant, keyed by the variant's index in `Link.variants` (as a string). */
+  per_variant: Record<string, number>;
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
 export interface BlocklistResponse { domains: string[]; }
-export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; }
+export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; variants?: Variant[]; }
 
 /** The 5 link lifecycle events a webhook subscription can be notified about. */
 export const WEBHOOK_EVENTS = [

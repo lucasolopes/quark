@@ -198,6 +198,7 @@ mod tests {
             tags: Vec::new(),
             max_visits: None,
             rules: Vec::new(),
+            variants: Vec::new(),
         }
     }
 
@@ -304,7 +305,8 @@ mod tests {
                     created: 0,
                     tags: Vec::new(),
                     max_visits: None,
-                    rules: Vec::new()
+                    rules: Vec::new(),
+                    variants: Vec::new()
                 },
                 now,
                 3600
@@ -319,7 +321,8 @@ mod tests {
                     created: 0,
                     tags: Vec::new(),
                     max_visits: None,
-                    rules: Vec::new()
+                    rules: Vec::new(),
+                    variants: Vec::new()
                 },
                 now,
                 3600
@@ -334,7 +337,8 @@ mod tests {
                     created: 0,
                     tags: Vec::new(),
                     max_visits: None,
-                    rules: Vec::new()
+                    rules: Vec::new(),
+                    variants: Vec::new()
                 },
                 now,
                 3600
@@ -349,7 +353,8 @@ mod tests {
                     created: 0,
                     tags: Vec::new(),
                     max_visits: None,
-                    rules: Vec::new()
+                    rules: Vec::new(),
+                    variants: Vec::new()
                 },
                 now,
                 3600

@@ -14,6 +14,7 @@ async fn round_trip_via_trait_object() {
         tags: Vec::new(),
         max_visits: None,
         rules: Vec::new(),
+        variants: Vec::new(),
     };
     store.put_link(id, &rec).await.unwrap();
 

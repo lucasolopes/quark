@@ -30,6 +30,7 @@ describe("LinkStats", () => {
         per_browser: { Chrome: 25, Safari: 17 },
         per_referer: { "news.ycombinator.com": 30, direct: 12 },
         per_city: {},
+        per_variant: {},
       },
       recent: [],
     }), { status: 200 }));
@@ -64,6 +65,7 @@ describe("LinkStats", () => {
         bots: 0,
         per_day: {}, per_country: {}, per_device: {},
         per_os: {}, per_browser: {}, per_referer: {}, per_city: {},
+        per_variant: {},
       },
       recent: [],
     }), { status: 200 }));

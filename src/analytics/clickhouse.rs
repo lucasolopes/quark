@@ -18,6 +18,8 @@ struct ClickRow<'a> {
     city: &'a str,
     referer_host: String,
     bot: u8,
+    /// A/B variant index served, or -1 when the link has no variants.
+    variant: i32,
 }
 
 #[derive(Row, Deserialize)]
@@ -41,6 +43,7 @@ struct RecentRow {
     referer: String,
     city: String,
     bot: u8,
+    variant: i32,
 }
 
 /// Empty string becomes `None`, otherwise `Some(s)`. Shortens the empty-field pattern.
@@ -99,7 +102,7 @@ impl ClickHouseSink {
     async fn init_schema(&self) -> Result<(), StoreError> {
         self.client
             .query(
-                "CREATE TABLE IF NOT EXISTS clicks (id UInt64, ts UInt64, country String, device String, referer String, os String, browser String, city String, referer_host String, bot UInt8) ENGINE = MergeTree ORDER BY (id, ts)"
+                "CREATE TABLE IF NOT EXISTS clicks (id UInt64, ts UInt64, country String, device String, referer String, os String, browser String, city String, referer_host String, bot UInt8, variant Int32 DEFAULT -1) ENGINE = MergeTree ORDER BY (id, ts)"
             )
             .execute()
             .await
@@ -122,6 +125,13 @@ impl ClickHouseSink {
         // (#5). Same idempotent `IF NOT EXISTS` pattern as above.
         self.client
             .query("ALTER TABLE clicks ADD COLUMN IF NOT EXISTS bot UInt8")
+            .execute()
+            .await
+            .map_err(StoreError::backend)?;
+        // Idempotent migration for tables created before the `variant` column
+        // existed (#17). Same idempotent `IF NOT EXISTS` pattern.
+        self.client
+            .query("ALTER TABLE clicks ADD COLUMN IF NOT EXISTS variant Int32 DEFAULT -1")
             .execute()
             .await
             .map_err(StoreError::backend)
@@ -161,6 +171,7 @@ impl AnalyticsSink for ClickHouseSink {
                 city: e.city.as_deref().unwrap_or(""),
                 referer_host: host,
                 bot,
+                variant: e.variant.map(|v| v as i32).unwrap_or(-1),
             };
             insert.write(&row).await.map_err(StoreError::backend)?;
         }
@@ -294,9 +305,22 @@ impl AnalyticsSink for ClickHouseSink {
             agg.per_city.insert(kv.k, kv.c);
         }
 
+        let per_variant: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT toString(variant) AS k, count() AS c FROM clicks WHERE id = ? AND variant >= 0 GROUP BY k",
+            )
+            .bind(id)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_variant {
+            agg.per_variant.insert(kv.k, kv.c);
+        }
+
         let mut recent_rows: Vec<RecentRow> = self
             .client
-            .query("SELECT ts, country, device, referer, city, bot FROM clicks WHERE id = ? ORDER BY ts DESC LIMIT ?")
+            .query("SELECT ts, country, device, referer, city, bot, variant FROM clicks WHERE id = ? ORDER BY ts DESC LIMIT ?")
             .bind(id)
             .bind(EVENTS_MAX as u64)
             .fetch_all()
@@ -315,6 +339,11 @@ impl AnalyticsSink for ClickHouseSink {
                 bot: r.bot != 0,
                 ip: None,
                 fbc: None,
+                variant: if r.variant >= 0 {
+                    Some(r.variant as u32)
+                } else {
+                    None
+                },
             })
             .collect();
 

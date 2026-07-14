@@ -29,6 +29,10 @@ pub struct Record {
     /// (regression: pre-existing Records must keep working unchanged).
     #[serde(default)]
     pub rules: Vec<Rule>,
+    /// A/B destination variants (roadmap #17). `#[serde(default)]` so that
+    /// old blobs/rows without this field deserialize to an empty `Vec`.
+    #[serde(default)]
+    pub variants: Vec<Variant>,
 }
 
 /// Maximum number of tags kept per link (extra tags beyond this are dropped).
@@ -119,6 +123,35 @@ pub fn resolve_destination<'a>(
         Some(i) => &rec.rules[i].to,
         None => &rec.url,
     }
+}
+
+/// One A/B destination: a URL and its relative weight (>= 1) in the
+/// weighted-random pick performed at redirect time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Variant {
+    pub url: String,
+    pub weight: u32,
+}
+
+/// Deterministic weighted pick over `variants` given a random `u64`. Pure and
+/// stateless: the caller supplies the randomness (one `getrandom` draw per
+/// redirect), so this stays unit-testable with boundary values. A weight of 0
+/// is treated as the minimum of 1 (defensive; validation should already
+/// enforce weight >= 1 at create/patch time).
+pub fn pick_variant(variants: &[Variant], rand: u64) -> usize {
+    if variants.is_empty() {
+        return 0;
+    }
+    let total: u64 = variants.iter().map(|v| v.weight.max(1) as u64).sum();
+    let mut r = rand % total;
+    for (i, v) in variants.iter().enumerate() {
+        let w = v.weight.max(1) as u64;
+        if r < w {
+            return i;
+        }
+        r -= w;
+    }
+    variants.len() - 1
 }
 
 #[derive(Debug)]
@@ -336,6 +369,7 @@ mod rules_tests {
             tags: Vec::new(),
             max_visits: None,
             rules,
+            variants: Vec::new(),
         }
     }
 
@@ -424,5 +458,56 @@ mod rules_tests {
             resolve_destination(&r, Some("BR"), None),
             "https://old.example"
         );
+    }
+}
+
+#[cfg(test)]
+mod variants_tests {
+    use super::{pick_variant, Record, Variant};
+
+    fn v(url: &str, weight: u32) -> Variant {
+        Variant {
+            url: url.to_string(),
+            weight,
+        }
+    }
+
+    #[test]
+    fn pick_variant_equal_weights_splits_at_the_half() {
+        let variants = vec![v("https://a.com", 1), v("https://b.com", 1)];
+        assert_eq!(pick_variant(&variants, 0), 0);
+        assert_eq!(pick_variant(&variants, 1), 1);
+    }
+
+    #[test]
+    fn pick_variant_skewed_weights_favor_the_heavier_bucket() {
+        let variants = vec![v("https://a.com", 3), v("https://b.com", 1)];
+        assert_eq!(pick_variant(&variants, 0), 0);
+        assert_eq!(pick_variant(&variants, 1), 0);
+        assert_eq!(pick_variant(&variants, 2), 0);
+        assert_eq!(pick_variant(&variants, 3), 1);
+        assert_eq!(pick_variant(&variants, 4), 0);
+        assert_eq!(pick_variant(&variants, 7), 1);
+    }
+
+    #[test]
+    fn pick_variant_single_variant_always_zero() {
+        let variants = vec![v("https://only.com", 5)];
+        assert_eq!(pick_variant(&variants, 0), 0);
+        assert_eq!(pick_variant(&variants, 999), 0);
+    }
+
+    #[test]
+    fn pick_variant_empty_is_safe() {
+        assert_eq!(pick_variant(&[], 42), 0);
+    }
+
+    #[test]
+    fn record_without_variants_field_deserializes_to_empty_vec() {
+        // Old blob shape (pre-A/B), no `variants` key at all.
+        let old = r#"{"url":"https://old.com","expiry":null,"created":100}"#;
+        let rec: Record = serde_json::from_str(old).unwrap();
+        assert_eq!(rec.url, "https://old.com");
+        assert!(rec.variants.is_empty());
     }
 }

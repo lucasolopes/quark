@@ -70,6 +70,7 @@ fn ev(id: u64, ts: u64) -> ClickEvent {
         bot: false,
         ip: None,
         fbc: None,
+        variant: None,
     }
 }
 

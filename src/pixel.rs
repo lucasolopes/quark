@@ -287,6 +287,7 @@ mod tests {
             bot: false,
             ip: None,
             fbc: None,
+            variant: None,
         }
     }
 
@@ -389,6 +390,7 @@ mod tests {
                 bot: false,
                 ip: Some("203.0.113.5".into()),
                 fbc: Some("fb.1.200000.abc".into()),
+                variant: None,
             },
             ev(21, 201, Some("US")),
         ];

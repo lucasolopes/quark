@@ -84,6 +84,11 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
               {t("linkTable.rulesBadge", { count: row.original.rules.length })}
             </Badge>
           )}
+          {row.original.variants.length > 0 && (
+            <Badge variant="secondary" className="shrink-0">
+              {t("linkTable.variantsBadge", { count: row.original.variants.length })}
+            </Badge>
+          )}
         </div>
       ),
     },

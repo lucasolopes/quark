@@ -15,6 +15,7 @@ const link: Link = {
   max_visits: 100,
   visits: 12,
   rules: [],
+  variants: [],
 };
 
 describe("EditLinkDialog — tags", () => {

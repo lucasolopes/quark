@@ -4,7 +4,8 @@ use crate::auth::{generate_token, hash_token, ApiToken, Scope};
 use crate::cache::Cache;
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::store::{
-    matched_rule_index, normalize_tags, Record, Rule, RuleField, Store, StoreError,
+    matched_rule_index, normalize_tags, pick_variant, Record, Rule, RuleField, Store, StoreError,
+    Variant,
 };
 use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{self, EventType, SubscriptionKind, WebhookEvent, WebhookSubscription};
@@ -47,6 +48,7 @@ pub struct CreateReq {
     tags: Option<Vec<String>>,
     max_visits: Option<u32>,
     rules: Option<Vec<Rule>>,
+    variants: Option<Vec<Variant>>,
 }
 
 /// Normalizes the `max_visits` request field into the persisted representation:
@@ -233,6 +235,41 @@ fn mask_secret(secret: &str) -> String {
     }
 }
 
+/// Cap on the number of A/B variants a single link may have.
+const MAX_VARIANTS: usize = 10;
+
+/// Validates a set of A/B variants against the same rules as the main `url`:
+/// count cap, `is_valid_url`, SSRF guard (`is_blocked_target` + blocklist),
+/// and a minimum weight of 1. Shared by `create` and `admin_link_patch` so the
+/// two paths can never drift out of sync on SSRF coverage.
+async fn validate_variants(
+    variants: &[Variant],
+    headers: &HeaderMap,
+    st: &AppState,
+) -> Result<(), Response> {
+    if variants.len() > MAX_VARIANTS {
+        return Err((StatusCode::BAD_REQUEST, "too many variants").into_response());
+    }
+    for variant in variants {
+        if variant.weight < 1 {
+            return Err((StatusCode::BAD_REQUEST, "variant weight must be >= 1").into_response());
+        }
+        if !is_valid_url(&variant.url) {
+            return Err((StatusCode::BAD_REQUEST, "invalid variant url").into_response());
+        }
+        let Some(host) = extract_host(&variant.url) else {
+            return Err((StatusCode::BAD_REQUEST, "variant url without host").into_response());
+        };
+        if st.block_private && is_blocked_target(&host, headers, st) {
+            return Err((StatusCode::FORBIDDEN, "variant destination not allowed").into_response());
+        }
+        if st.blocklist.is_blocked(&host, now()).await {
+            return Err((StatusCode::FORBIDDEN, "blocked variant destination").into_response());
+        }
+    }
+    Ok(())
+}
+
 /// Computes the Cache-Control header value for a redirect response,
 /// respecting the link's TTL: never caches past expiry. Pure function,
 /// a TDD target.
@@ -301,6 +338,7 @@ pub async fn create_link_core(
     tags: Vec<String>,
     max_visits: Option<u32>,
     rules: Vec<Rule>,
+    variants: Vec<Variant>,
     headers: &HeaderMap,
 ) -> Result<String, CreateError> {
     if !is_valid_url(url) {
@@ -330,6 +368,7 @@ pub async fn create_link_core(
         tags,
         max_visits,
         rules,
+        variants,
     };
 
     if let Some(alias) = alias {
@@ -442,6 +481,10 @@ async fn create(
         Ok(r) => r,
         Err(resp) => return resp,
     };
+    let variants = req.variants.clone().unwrap_or_default();
+    if let Err(resp) = validate_variants(&variants, &headers, &st).await {
+        return resp;
+    }
     match create_link_core(
         &st,
         &req.url,
@@ -450,6 +493,7 @@ async fn create(
         normalize_tags(req.tags.clone().unwrap_or_default()),
         normalize_max_visits(req.max_visits),
         rules,
+        variants,
         &headers,
     )
     .await
@@ -509,6 +553,7 @@ async fn admin_import(
             row.ttl,
             Vec::new(),
             None,
+            Vec::new(),
             Vec::new(),
             &headers,
         )
@@ -650,13 +695,26 @@ async fn redirect(
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
 
-            // Zero-clone hot path: only the rule-match branch allocates. When
-            // `rec.rules` is empty (every pre-existing link, the common
-            // case), `rec.url` is moved straight into the LOCATION header.
-            let dest: String =
+            // Destination resolution composes geo/device rules (#12) with A/B
+            // variants (#17): a matching geo/device rule is a targeted redirect
+            // and takes precedence (no variant recorded); when no rule matches,
+            // the link's variants (if any) drive a stateless weighted A/B pick
+            // — one getrandom draw, no store write. Links with neither rules nor
+            // variants (the common case) just clone `rec.url`.
+            let (location, variant): (String, Option<u32>) =
                 match matched_rule_index(&rec.rules, country.as_deref(), user_agent.as_deref()) {
-                    Some(i) => rec.rules[i].to.clone(),
-                    None => rec.url.clone(),
+                    Some(i) => (rec.rules[i].to.clone(), None),
+                    None if rec.variants.is_empty() => (rec.url.clone(), None),
+                    None => {
+                        let mut buf = [0u8; 8];
+                        let r = if getrandom::fill(&mut buf).is_ok() {
+                            u64::from_le_bytes(buf)
+                        } else {
+                            0
+                        };
+                        let i = pick_variant(&rec.variants, r);
+                        (rec.variants[i].url.clone(), Some(i as u32))
+                    }
                 };
 
             let ev = ClickEvent {
@@ -679,6 +737,7 @@ async fn redirect(
                 },
                 fbc: fbclid_from_query(raw_query.as_deref())
                     .map(|fbclid| format!("fb.1.{}.{}", now.saturating_mul(1000), fbclid)),
+                variant,
             };
             // Gate check first (cheap: one atomic load) so the payload build
             // — which reads `ev`'s fields — happens before `ev` is moved
@@ -704,7 +763,7 @@ async fn redirect(
             (
                 StatusCode::FOUND,
                 [
-                    (header::LOCATION, dest),
+                    (header::LOCATION, location),
                     (header::CACHE_CONTROL, cache_control),
                 ],
             )
@@ -886,6 +945,7 @@ struct LinkRow {
     max_visits: Option<u32>,
     visits: u64,
     rules: Vec<Rule>,
+    variants: Vec<Variant>,
 }
 
 async fn admin_links_list(
@@ -944,6 +1004,7 @@ async fn admin_links_list(
             max_visits: rec.max_visits,
             visits,
             rules: rec.rules,
+            variants: rec.variants,
         });
     }
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
@@ -1101,6 +1162,16 @@ async fn admin_link_patch(
             Ok(v) => rec.rules = v,
             Err(resp) => return resp,
         }
+    }
+    if let Some(v) = patch.get("variants") {
+        let variants: Vec<Variant> = match serde_json::from_value(v.clone()) {
+            Ok(vs) => vs,
+            Err(_) => return (StatusCode::BAD_REQUEST, "invalid variants").into_response(),
+        };
+        if let Err(resp) = validate_variants(&variants, &headers, &st).await {
+            return resp;
+        }
+        rec.variants = variants;
     }
     if st.store.put_link(id, &rec).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

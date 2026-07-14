@@ -1,3 +1,4 @@
+import { Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -17,8 +18,24 @@ import { isUnauthorized } from "@/lib/mutation-error";
 import { usePatchLink } from "@/lib/queries";
 import { formatTagsInput, parseTagsInput } from "@/lib/tags";
 import { draftsFromRules, parseRuleDrafts, type RuleDraft } from "@/lib/rules";
-import type { Link } from "@/lib/types";
+import type { Link, Variant } from "@/lib/types";
 import { RulesEditor } from "@/components/RulesEditor";
+
+/** Same cap enforced server-side (`MAX_VARIANTS` in `src/api.rs`). */
+const MAX_VARIANTS = 10;
+
+interface VariantRow {
+  url: string;
+  weight: string;
+}
+
+function toVariantRows(variants: Variant[]): VariantRow[] {
+  return variants.map((v) => ({ url: v.url, weight: String(v.weight) }));
+}
+
+function emptyVariantRow(): VariantRow {
+  return { url: "", weight: "1" };
+}
 
 interface FormErrors {
   url?: string;
@@ -26,6 +43,7 @@ interface FormErrors {
   maxVisits?: string;
   rules?: string;
   form?: string;
+  variants?: string;
 }
 
 interface EditLinkDialogProps {
@@ -47,8 +65,22 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
   const [tagsInput, setTagsInput] = useState(formatTagsInput(link.tags ?? []));
   const [maxVisits, setMaxVisits] = useState(link.max_visits ? String(link.max_visits) : "");
   const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>(() => draftsFromRules(link.rules));
+  const [showVariants, setShowVariants] = useState(link.variants.length > 0);
+  const [variantRows, setVariantRows] = useState<VariantRow[]>(() => toVariantRows(link.variants));
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
+
+  function addVariantRow() {
+    setVariantRows((rows) => (rows.length >= MAX_VARIANTS ? rows : [...rows, emptyVariantRow()]));
+  }
+
+  function removeVariantRow(index: number) {
+    setVariantRows((rows) => rows.filter((_, i) => i !== index));
+  }
+
+  function updateVariantRow(index: number, patch: Partial<VariantRow>) {
+    setVariantRows((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }
 
   function formatExpiry(expiry: number | null): string {
     if (expiry == null) return t("dialogs.edit.neverExpires");
@@ -85,7 +117,26 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
         next.maxVisits = t("dialogs.edit.maxVisitsInvalid");
       }
     }
+    if (variantRows.length > MAX_VARIANTS) {
+      next.variants = t("dialogs.edit.tooManyVariants", { max: MAX_VARIANTS });
+    } else {
+      for (const row of variantRows) {
+        if (!row.url.trim() || !isHttpUrl(row.url)) {
+          next.variants = t("dialogs.edit.variantUrlInvalid");
+          break;
+        }
+        const w = Number(row.weight.trim());
+        if (!Number.isInteger(w) || w <= 0) {
+          next.variants = t("dialogs.edit.variantWeightInvalid");
+          break;
+        }
+      }
+    }
     return next;
+  }
+
+  function buildVariants(): Variant[] {
+    return variantRows.map((row) => ({ url: row.url.trim(), weight: Number(row.weight.trim()) }));
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -113,6 +164,7 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
               ? { max_visits: null }
               : {}),
           rules,
+          variants: buildVariants(),
         },
       });
       toast.success(t("dialogs.edit.successToast"));
@@ -232,6 +284,84 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
                 {errors.rules}
               </p>
             )}
+
+=======
+            <div className="flex flex-col gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="self-start"
+                aria-expanded={showVariants}
+                onClick={() => setShowVariants((v) => !v)}
+              >
+                {t("dialogs.edit.variantsToggle")}
+              </Button>
+
+              {showVariants && (
+                <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                  <p className="text-sm text-muted-foreground">{t("dialogs.edit.variantsHint")}</p>
+
+                  {variantRows.map((row, i) => (
+                    <div key={i} className="flex items-end gap-2">
+                      <div className="flex flex-1 flex-col gap-1.5">
+                        <label htmlFor={`edit-variant-url-${i}`} className="sr-only">
+                          {t("dialogs.edit.variantUrlLabel")}
+                        </label>
+                        <Input
+                          id={`edit-variant-url-${i}`}
+                          type="text"
+                          placeholder={t("dialogs.edit.variantUrlPlaceholder")}
+                          value={row.url}
+                          onChange={(e) => updateVariantRow(i, { url: e.target.value })}
+                        />
+                      </div>
+                      <div className="flex w-20 flex-col gap-1.5">
+                        <label htmlFor={`edit-variant-weight-${i}`} className="sr-only">
+                          {t("dialogs.edit.variantWeightLabel")}
+                        </label>
+                        <Input
+                          id={`edit-variant-weight-${i}`}
+                          type="number"
+                          min={1}
+                          step={1}
+                          placeholder={t("dialogs.edit.variantWeightLabel")}
+                          value={row.weight}
+                          onChange={(e) => updateVariantRow(i, { weight: e.target.value })}
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={t("dialogs.edit.removeVariant")}
+                        onClick={() => removeVariantRow(i)}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+
+                  {errors.variants && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {errors.variants}
+                    </p>
+                  )}
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="self-start"
+                    disabled={variantRows.length >= MAX_VARIANTS}
+                    onClick={addVariantRow}
+                  >
+                    <Plus className="size-3.5" />
+                    {t("dialogs.edit.addVariant")}
+                  </Button>
+                </div>
+              )}
+            </div>
 
             {errors.form && (
               <p className="text-sm text-destructive" role="alert">

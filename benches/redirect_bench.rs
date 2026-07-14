@@ -43,6 +43,7 @@ fn bench(c: &mut Criterion) {
                     tags: Vec::new(),
                     max_visits: None,
                     rules: Vec::new(),
+                    variants: Vec::new(),
                 },
             )
             .await
@@ -118,6 +119,7 @@ fn bench(c: &mut Criterion) {
                     bot: false,
                     ip: None,
                     fbc: None,
+                    variant: None,
                 };
                 let _ = tx.try_send(black_box(ev));
             }
