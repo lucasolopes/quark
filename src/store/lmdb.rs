@@ -1,4 +1,4 @@
-use crate::analytics::{Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
+use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::store::{Record, Store, StoreError};
 use heed::byteorder::BigEndian;
 use heed::types::{Bytes, Str, U64};
@@ -271,10 +271,13 @@ impl AnalyticsSink for LmdbStore {
             Some(b) => serde_json::from_slice::<Aggregates>(b)?,
             None => return Ok(None),
         };
-        let recent: Vec<ClickEvent> = match self.events.get(&rtxn, &id)? {
+        let mut recent: Vec<ClickEvent> = match self.events.get(&rtxn, &id)? {
             Some(b) => serde_json::from_slice(b)?,
             None => Vec::new(),
         };
+        for e in &mut recent {
+            e.bot = is_bot(e.user_agent.as_deref());
+        }
         Ok(Some(Stats {
             aggregates: agg,
             recent,

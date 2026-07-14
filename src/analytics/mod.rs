@@ -14,6 +14,11 @@ pub struct ClickEvent {
     pub country: Option<String>,
     pub user_agent: Option<String>,
     pub city: Option<String>,
+    /// Response-side flag: whether `user_agent` looks like a bot/crawler.
+    /// Not necessarily persisted with a meaningful value; the `Stats`
+    /// builder (re)computes it via `is_bot` for every event in `recent`.
+    #[serde(default)]
+    pub bot: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -32,6 +37,11 @@ pub struct Aggregates {
     pub per_referer: BTreeMap<String, u64>,
     #[serde(default)]
     pub per_city: BTreeMap<String, u64>,
+    /// Count of clicks flagged as bot/crawler by `is_bot`. These clicks are
+    /// still counted in `total` (an honest raw count) but are excluded from
+    /// every `per_*` breakdown, which are human-only.
+    #[serde(default)]
+    pub bots: u64,
 }
 
 impl Aggregates {
@@ -42,6 +52,10 @@ impl Aggregates {
         }
         if ev.ts > self.last_ts {
             self.last_ts = ev.ts;
+        }
+        if is_bot(ev.user_agent.as_deref()) {
+            self.bots += 1;
+            return;
         }
         *self.per_day.entry(day_bucket(ev.ts)).or_insert(0) += 1;
         if let Some(c) = &ev.country {
@@ -146,6 +160,45 @@ pub fn browser_from_ua(ua: Option<&str>) -> &'static str {
             }
         }
         None => "Other",
+    }
+}
+
+/// Lightweight bot/crawler heuristic from the User-Agent (no external dep,
+/// same style as `device_from_ua`/`os_from_ua`).
+///
+/// Case-insensitive substring match against common crawler/bot/library
+/// tokens. An empty or absent User-Agent is treated as a bot: no real
+/// browser sends no UA. This is a heuristic only ("potential" bots), not a
+/// guarantee.
+pub fn is_bot(ua: Option<&str>) -> bool {
+    const BOT_TOKENS: &[&str] = &[
+        "bot",
+        "crawler",
+        "spider",
+        "crawl",
+        "slurp",
+        "bingpreview",
+        "facebookexternalhit",
+        "embedly",
+        "curl",
+        "wget",
+        "python-requests",
+        "httpie",
+        "go-http-client",
+        "axios",
+        "headless",
+        "phantomjs",
+        "preview",
+        "monitor",
+        "uptime",
+        "pingdom",
+    ];
+    match ua {
+        Some(s) if !s.is_empty() => {
+            let s = s.to_ascii_lowercase();
+            BOT_TOKENS.iter().any(|t| s.contains(t))
+        }
+        _ => true,
     }
 }
 
@@ -255,6 +308,7 @@ mod tests {
             country: Some(country.into()),
             user_agent: Some(ua.into()),
             city: None,
+            bot: false,
         }
     }
 
@@ -263,7 +317,10 @@ mod tests {
         let mut a = Aggregates::default();
         a.apply(&ev(1, 1_752_300_000, "BR", "Mozilla/5.0 (iPhone)"));
         a.apply(&ev(1, 1_752_300_050, "BR", "Mozilla/5.0 (Windows NT 10.0)"));
-        a.apply(&ev(1, 1_752_400_000, "US", "curl/8.0"));
+        // Not "curl/8.0": that's a bot UA under `is_bot` and would be
+        // excluded from breakdowns (covered separately in
+        // `apply_mix_counts_bots_and_excludes_from_breakdowns`).
+        a.apply(&ev(1, 1_752_400_000, "US", "SomeOtherClient/1.0"));
         assert_eq!(a.total, 3);
         assert_eq!(a.first_ts, 1_752_300_000);
         assert_eq!(a.last_ts, 1_752_400_000);
@@ -273,6 +330,7 @@ mod tests {
         assert_eq!(a.per_device.get("Desktop"), Some(&1));
         assert_eq!(a.per_device.get("Other"), Some(&1));
         assert_eq!(a.per_day.values().sum::<u64>(), 3);
+        assert_eq!(a.bots, 0);
     }
 
     #[test]
@@ -319,6 +377,7 @@ mod tests {
                 country: Some("BR".into()),
                 user_agent: Some("iPhone".into()),
                 city: None,
+                bot: false,
             })
             .await
             .unwrap();
@@ -341,6 +400,7 @@ mod tests {
             country: None,
             user_agent: None,
             city: None,
+            bot: false,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -349,6 +409,7 @@ mod tests {
             country: None,
             user_agent: None,
             city: None,
+            bot: false,
         });
         assert_eq!(a.first_ts, 0);
         assert_eq!(a.last_ts, 5_000_000_000);
@@ -446,6 +507,7 @@ mod tests {
                 "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1".into(),
             ),
             city: Some("Sao Paulo".into()),
+            bot: false,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -456,6 +518,7 @@ mod tests {
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".into(),
             ),
             city: None,
+            bot: false,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -467,6 +530,7 @@ mod tests {
                     .into(),
             ),
             city: Some("".into()),
+            bot: false,
         });
 
         assert_eq!(a.per_os.get("iOS"), Some(&1));
@@ -500,5 +564,76 @@ mod tests {
         assert!(a.per_browser.is_empty());
         assert!(a.per_referer.is_empty());
         assert!(a.per_city.is_empty());
+        assert_eq!(a.bots, 0, "old blob without `bots` must default to 0");
+    }
+
+    #[test]
+    fn click_event_deserializes_pre_branch_blob_without_bot_field() {
+        let old_json = r#"{
+            "id": 1,
+            "ts": 1752300000,
+            "referer": null,
+            "country": "BR",
+            "user_agent": "curl/8.0",
+            "city": null
+        }"#;
+
+        let e: ClickEvent =
+            serde_json::from_str(old_json).expect("old event without `bot` must deserialize");
+
+        assert!(!e.bot, "old blob without `bot` must default to false");
+    }
+
+    #[test]
+    fn is_bot_googlebot_is_bot() {
+        assert!(is_bot(Some(
+            "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+        )));
+    }
+
+    #[test]
+    fn is_bot_curl_is_bot() {
+        assert!(is_bot(Some("curl/7.68.0")));
+    }
+
+    #[test]
+    fn is_bot_none_is_bot() {
+        assert!(is_bot(None));
+    }
+
+    #[test]
+    fn is_bot_empty_string_is_bot() {
+        assert!(is_bot(Some("")));
+    }
+
+    #[test]
+    fn is_bot_chrome_desktop_is_not_bot() {
+        assert!(!is_bot(Some(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )));
+    }
+
+    #[test]
+    fn is_bot_iphone_safari_is_not_bot() {
+        assert!(!is_bot(Some(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        )));
+    }
+
+    #[test]
+    fn apply_mix_counts_bots_and_excludes_from_breakdowns() {
+        let mut a = Aggregates::default();
+        a.apply(&ev(1, 1_752_300_000, "BR", "Mozilla/5.0 (iPhone)"));
+        a.apply(&ev(1, 1_752_300_050, "US", "Mozilla/5.0 (Windows NT 10.0)"));
+        a.apply(&ev(1, 1_752_300_100, "JP", "Googlebot/2.1"));
+
+        assert_eq!(a.bots, 1);
+        assert_eq!(a.total, 3);
+        assert!(
+            !a.per_country.contains_key("JP"),
+            "bot's country must not appear in per_country breakdown"
+        );
+        assert_eq!(a.per_country.get("BR"), Some(&1));
+        assert_eq!(a.per_country.get("US"), Some(&1));
     }
 }

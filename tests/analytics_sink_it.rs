@@ -9,6 +9,7 @@ fn ev(id: u64, ts: u64) -> ClickEvent {
         country: Some("BR".into()),
         user_agent: Some("iPhone".into()),
         city: None,
+        bot: false,
     }
 }
 

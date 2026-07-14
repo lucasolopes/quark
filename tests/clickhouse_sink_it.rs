@@ -16,6 +16,7 @@ fn ev(id: u64, ts: u64, c: &str, ua: &str) -> ClickEvent {
         country: Some(c.into()),
         user_agent: Some(ua.into()),
         city: None,
+        bot: false,
     }
 }
 fn ev_full(id: u64, ts: u64, ua: &str, referer: Option<&str>, city: Option<&str>) -> ClickEvent {
@@ -26,6 +27,7 @@ fn ev_full(id: u64, ts: u64, ua: &str, referer: Option<&str>, city: Option<&str>
         country: Some("BR".into()),
         user_agent: Some(ua.into()),
         city: city.map(String::from),
+        bot: false,
     }
 }
 

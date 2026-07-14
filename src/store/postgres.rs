@@ -1,4 +1,4 @@
-use crate::analytics::{Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
+use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::store::{Record, Store, StoreError};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{PgPool, Row};
@@ -396,13 +396,16 @@ impl AnalyticsSink for PostgresStore {
             .fetch_optional(&self.pool)
             .await
             .map_err(StoreError::backend)?;
-        let recent: Vec<ClickEvent> = match row {
+        let mut recent: Vec<ClickEvent> = match row {
             Some(r) => {
                 let v: serde_json::Value = r.try_get("recent").map_err(StoreError::backend)?;
                 serde_json::from_value(v)?
             }
             None => Vec::new(),
         };
+        for e in &mut recent {
+            e.bot = is_bot(e.user_agent.as_deref());
+        }
         Ok(Some(Stats {
             aggregates: agg,
             recent,

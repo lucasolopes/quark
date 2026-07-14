@@ -97,6 +97,7 @@ fn bench(c: &mut Criterion) {
                     country: None,
                     user_agent: Some("Mozilla/5.0 (X11; Linux x86_64)".to_string()),
                     city: None,
+                    bot: false,
                 };
                 let _ = tx.try_send(black_box(ev));
             }

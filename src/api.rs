@@ -264,6 +264,7 @@ async fn redirect(
                     .get("cf-ipcity")
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string()),
+                bot: false,
             };
             let _ = st.analytics_tx.try_send(ev);
 

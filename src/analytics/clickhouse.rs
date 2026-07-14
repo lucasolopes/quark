@@ -289,6 +289,10 @@ impl AnalyticsSink for ClickHouseSink {
                 country: non_empty(r.country),
                 user_agent: None,
                 city: non_empty(r.city),
+                // ClickHouse does not select the user agent for recent
+                // rows, so the bot flag cannot be recomputed here yet; a
+                // dedicated `bot` column (Task 2) will carry it instead.
+                bot: false,
             })
             .collect();
 
