@@ -1,11 +1,12 @@
 import { QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import type { CreateLinkRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest } from "./types";
+import type { CreateLinkRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest } from "./types";
 
 const LINKS_QUERY_KEY = ["links"];
 const BLOCKLIST_QUERY_KEY = ["blocklist"];
 const WEBHOOKS_QUERY_KEY = ["webhooks"];
 const TAGS_QUERY_KEY = ["tags"];
+const TOKENS_QUERY_KEY = ["tokens"];
 
 /**
  * The application's single TanStack Query client. `retry: false` because a
@@ -188,5 +189,31 @@ export function useImport() {
   return useMutation({
     mutationFn: ({ body, contentType }: { body: string; contentType: string }) => api.importLinks(body, contentType),
     onSuccess: () => { void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY }); },
+  });
+}
+
+/** List of API tokens, for the Tokens screen. Never includes the hash or plaintext. */
+export function useTokens() {
+  return useQuery({
+    queryKey: TOKENS_QUERY_KEY,
+    queryFn: () => api.listTokens(),
+  });
+}
+
+/** Creates an API token; on success invalidates `useTokens`. The response carries the plaintext once. */
+export function useCreateToken() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateTokenRequest) => api.createToken(body),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: TOKENS_QUERY_KEY }); },
+  });
+}
+
+/** Revokes (deletes) an API token; on success invalidates `useTokens`. */
+export function useDeleteToken() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.deleteToken(id),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: TOKENS_QUERY_KEY }); },
   });
 }

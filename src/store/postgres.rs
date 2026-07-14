@@ -1,4 +1,5 @@
 use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
+use crate::auth::ApiToken;
 use crate::store::{Record, Store, StoreError};
 use crate::webhooks::{SubscriptionKind, WebhookSubscription};
 use sqlx::postgres::{PgPoolOptions, PgRow};
@@ -55,6 +56,26 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
     })
 }
 
+/// Maps an `api_tokens` row into an `ApiToken`.
+fn row_to_api_token(r: &PgRow) -> Result<ApiToken, StoreError> {
+    let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+    let name: String = r.try_get("name").map_err(StoreError::backend)?;
+    let token_hash: String = r.try_get("token_hash").map_err(StoreError::backend)?;
+    let scopes: serde_json::Value = r.try_get("scopes").map_err(StoreError::backend)?;
+    let rate_limit_per_min: Option<i64> = r
+        .try_get("rate_limit_per_min")
+        .map_err(StoreError::backend)?;
+    let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    Ok(ApiToken {
+        id: id as u64,
+        name,
+        token_hash,
+        scopes: serde_json::from_value(scopes)?,
+        rate_limit_per_min: rate_limit_per_min.map(|v| v as u32),
+        created: created as u64,
+    })
+}
+
 pub struct PostgresStore {
     pool: PgPool,
 }
@@ -88,6 +109,7 @@ impl PostgresStore {
             for ddl in [
                 "CREATE SEQUENCE IF NOT EXISTS quark_id_seq",
                 "CREATE SEQUENCE IF NOT EXISTS quark_webhook_id_seq",
+                "CREATE SEQUENCE IF NOT EXISTS quark_api_token_id_seq",
                 "CREATE TABLE IF NOT EXISTS links (id BIGINT PRIMARY KEY, url TEXT NOT NULL, expiry BIGINT, created BIGINT NOT NULL, tags JSONB NOT NULL DEFAULT '[]')",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'",
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
@@ -101,6 +123,8 @@ impl PostgresStore {
                 // (same fallback `SubscriptionKind::from_str_or_generic` and
                 // the LMDB/serde `#[serde(default)]` path use).
                 "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'generic'",
+                "CREATE TABLE IF NOT EXISTS api_tokens (id BIGINT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, scopes JSONB NOT NULL, rate_limit_per_min BIGINT, created BIGINT NOT NULL)",
+                "CREATE INDEX IF NOT EXISTS api_tokens_token_hash_idx ON api_tokens (token_hash)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -123,9 +147,10 @@ impl PostgresStore {
     /// Used in tests: resets all state.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, stats, events, webhooks",
+            "TRUNCATE links, aliases, stats, events, webhooks, api_tokens",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
+            "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
         ] {
             sqlx::query(q)
                 .execute(&self.pool)
@@ -423,6 +448,72 @@ impl Store for PostgresStore {
         rows.iter()
             .map(|r| r.try_get::<String, _>("tag").map_err(StoreError::backend))
             .collect()
+    }
+
+    async fn list_api_tokens(&self) -> Result<Vec<ApiToken>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT id, name, token_hash, scopes, rate_limit_per_min, created \
+             FROM api_tokens ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        rows.iter().map(row_to_api_token).collect()
+    }
+
+    /// Hot path of auth: indexed lookup by `token_hash`
+    /// (`api_tokens_token_hash_idx`).
+    async fn get_api_token_by_hash(&self, hash: &str) -> Result<Option<ApiToken>, StoreError> {
+        let row = sqlx::query(
+            "SELECT id, name, token_hash, scopes, rate_limit_per_min, created \
+             FROM api_tokens WHERE token_hash = $1",
+        )
+        .bind(hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => Ok(Some(row_to_api_token(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn put_api_token(&self, token: &ApiToken) -> Result<(), StoreError> {
+        let scopes = serde_json::to_value(&token.scopes)?;
+        sqlx::query(
+            "INSERT INTO api_tokens (id, name, token_hash, scopes, rate_limit_per_min, created) \
+             VALUES ($1,$2,$3,$4,$5,$6) \
+             ON CONFLICT (id) DO UPDATE SET \
+             name=$2, token_hash=$3, scopes=$4, rate_limit_per_min=$5, created=$6",
+        )
+        .bind(token.id as i64)
+        .bind(&token.name)
+        .bind(&token.token_hash)
+        .bind(&scopes)
+        .bind(token.rate_limit_per_min.map(|v| v as i64))
+        .bind(token.created as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn delete_api_token(&self, id: u64) -> Result<bool, StoreError> {
+        let res = sqlx::query("DELETE FROM api_tokens WHERE id = $1")
+            .bind(id as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn next_api_token_id(&self) -> Result<u64, StoreError> {
+        let row = sqlx::query("SELECT nextval('quark_api_token_id_seq') AS id")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
+        Ok(id as u64)
     }
 }
 

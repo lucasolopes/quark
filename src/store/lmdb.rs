@@ -1,4 +1,5 @@
 use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
+use crate::auth::ApiToken;
 use crate::store::{Record, Store, StoreError};
 use crate::webhooks::WebhookSubscription;
 use heed::byteorder::BigEndian;
@@ -17,7 +18,7 @@ const LOCAL_BITS: u32 = 40 - NODE_BITS;
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1;
 
 /// Number of named LMDB sub-databases opened in the environment.
-const MAX_DBS: u32 = 7;
+const MAX_DBS: u32 = 8;
 /// Virtual address space (mmap) reserved for the LMDB environment.
 const MAP_SIZE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 
@@ -57,6 +58,7 @@ pub struct LmdbStore {
     events: Database<BeU64, Bytes>,
     blocked: Database<Str, Str>,
     webhooks: Database<BeU64, Bytes>,
+    api_tokens: Database<BeU64, Bytes>,
     node_id: Option<u8>,
 }
 
@@ -84,6 +86,7 @@ impl LmdbStore {
         let events = env.create_database(&mut wtxn, Some("events"))?;
         let blocked = env.create_database(&mut wtxn, Some("blocked"))?;
         let webhooks = env.create_database(&mut wtxn, Some("webhooks"))?;
+        let api_tokens = env.create_database(&mut wtxn, Some("api_tokens"))?;
         wtxn.commit()?;
         Ok(LmdbStore {
             env,
@@ -94,6 +97,7 @@ impl LmdbStore {
             events,
             blocked,
             webhooks,
+            api_tokens,
             node_id,
         })
     }
@@ -294,6 +298,55 @@ impl Store for LmdbStore {
         }
         Ok(set.into_iter().collect())
     }
+
+    async fn list_api_tokens(&self) -> Result<Vec<ApiToken>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        for item in self.api_tokens.iter(&rtxn)? {
+            let (_, bytes) = item?;
+            out.push(serde_json::from_slice(bytes)?);
+        }
+        Ok(out)
+    }
+
+    /// LMDB has no secondary index, so the hot-path lookup by hash scans the
+    /// (small, admin-managed) token set. Postgres backs this with a real
+    /// index for the network-backend case.
+    async fn get_api_token_by_hash(&self, hash: &str) -> Result<Option<ApiToken>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        for item in self.api_tokens.iter(&rtxn)? {
+            let (_, bytes) = item?;
+            let token: ApiToken = serde_json::from_slice(bytes)?;
+            if token.token_hash == hash {
+                return Ok(Some(token));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn put_api_token(&self, token: &ApiToken) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec(token)?;
+        let mut wtxn = self.env.write_txn()?;
+        self.api_tokens.put(&mut wtxn, &token.id, &bytes)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn delete_api_token(&self, id: u64) -> Result<bool, StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        let existed = self.api_tokens.delete(&mut wtxn, &id)?;
+        wtxn.commit()?;
+        Ok(existed)
+    }
+
+    async fn next_api_token_id(&self) -> Result<u64, StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        let cur = self.meta.get(&wtxn, "next_api_token_id")?.unwrap_or(0);
+        let next = cur + 1;
+        self.meta.put(&mut wtxn, "next_api_token_id", &next)?;
+        wtxn.commit()?;
+        Ok(next)
+    }
 }
 
 #[async_trait::async_trait]
@@ -358,6 +411,7 @@ impl AnalyticsSink for LmdbStore {
 #[cfg(test)]
 mod tests {
     use super::{compose_id, parse_node_id, LmdbStore, LOCAL_BITS, LOCAL_MAX};
+    use crate::auth::{hash_token, ApiToken, Scope};
     use crate::store::{Record, Store, StoreError};
     use crate::webhooks::{EventType, WebhookSubscription};
 
@@ -585,5 +639,60 @@ mod tests {
         let mut tags = s.list_tags().await.unwrap();
         tags.sort();
         assert_eq!(tags, vec!["rust".to_string(), "web".to_string()]);
+    }
+
+    fn sample_token(id: u64, hash: String) -> ApiToken {
+        ApiToken {
+            id,
+            name: "ci".into(),
+            token_hash: hash,
+            scopes: vec![Scope::LinksRead],
+            rate_limit_per_min: Some(60),
+            created: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn api_token_crud_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let id = store.next_api_token_id().await.unwrap();
+        let hash = hash_token("qtok_abc123");
+        let token = sample_token(id, hash.clone());
+        store.put_api_token(&token).await.unwrap();
+
+        assert_eq!(
+            store.get_api_token_by_hash(&hash).await.unwrap(),
+            Some(token)
+        );
+        assert_eq!(store.list_api_tokens().await.unwrap().len(), 1);
+        assert!(store.delete_api_token(id).await.unwrap());
+        assert_eq!(store.get_api_token_by_hash(&hash).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn get_api_token_by_hash_returns_none_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        assert_eq!(
+            store.get_api_token_by_hash("no-such-hash").await.unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_api_token_returns_false_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        assert!(!store.delete_api_token(999).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn next_api_token_id_increments() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let a = store.next_api_token_id().await.unwrap();
+        let b = store.next_api_token_id().await.unwrap();
+        assert_eq!(b, a + 1);
     }
 }

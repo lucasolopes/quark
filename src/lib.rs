@@ -1,6 +1,7 @@
 pub mod abuse;
 pub mod analytics;
 pub mod api;
+pub mod auth;
 pub mod cache;
 pub mod codec;
 pub mod import;

@@ -1,5 +1,6 @@
 use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{device_from_ua, AnalyticsSink, ClickEvent};
+use crate::auth::{generate_token, hash_token, ApiToken, Scope};
 use crate::cache::Cache;
 use crate::store::{normalize_tags, Record, Store, StoreError};
 use crate::webhooks::delivery::WebhookDispatcher;
@@ -399,7 +400,7 @@ async fn admin_import(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::LinksWrite).await {
         return status.into_response();
     }
     let content_type = headers
@@ -592,15 +593,8 @@ async fn stats(
     Path(code): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(expected) = st.admin_token.as_deref() else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let provided = headers
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
-        return StatusCode::UNAUTHORIZED.into_response();
+    if let Err(status) = admin_guard(&st, &headers, Scope::Analytics).await {
+        return status.into_response();
     }
     let id = match resolve_code(&st, &code).await {
         Ok(Some(id)) => id,
@@ -628,26 +622,71 @@ struct BlocklistReq {
     domain: String,
 }
 
-/// Authorizes an admin request: `Ok(())` if the token matches; `Err(status)` otherwise.
-/// No token configured -> 404 (endpoint disabled); wrong token -> 401.
-/// Returns `StatusCode` (not `Response`) to stay `Copy`/small — avoids clippy's
-/// `result_large_err` lint, which would trigger with `Response` in the `Err`.
-fn admin_guard(st: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
-    let Some(expected) = st.admin_token.as_deref() else {
-        return Err(StatusCode::NOT_FOUND);
-    };
+/// Authorizes an admin request against a required `Scope`: `Ok(())` if
+/// authorized; `Err(status)` otherwise. Returns `StatusCode` (not `Response`)
+/// to stay `Copy`/small — avoids clippy's `result_large_err` lint, which
+/// would trigger with `Response` in the `Err`.
+///
+/// Order (exact status contract, must not regress the env-token-only path):
+/// 1. The env `QUARK_ADMIN_TOKEN`, compared in constant time, is always
+///    `Full` (superuser) and never touches the store — this preserves the
+///    pre-existing behavior byte for byte.
+/// 2. Otherwise, a non-empty provided token is hashed and looked up as an
+///    API token: found + scope covers `required` + (no per-token rate limit,
+///    or under it) -> `Ok`; found but insufficient scope -> `403`; found but
+///    over its rate limit -> `429`; not found -> `401` if an env token is
+///    configured, else `404` (endpoint fully disabled when nothing is set up).
+/// 3. An empty provided token (nothing supplied) follows the same not-found
+///    rule: `401` if an env token is configured, else `404`.
+async fn admin_guard(
+    st: &AppState,
+    headers: &HeaderMap,
+    required: Scope,
+) -> Result<(), StatusCode> {
     let provided = headers
         .get("x-admin-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
-        return Err(StatusCode::UNAUTHORIZED);
+
+    if let Some(expected) = st.admin_token.as_deref() {
+        if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+            return Ok(());
+        }
     }
+
+    let not_found_status = if st.admin_token.is_some() {
+        StatusCode::UNAUTHORIZED
+    } else {
+        StatusCode::NOT_FOUND
+    };
+
+    if provided.is_empty() {
+        return Err(not_found_status);
+    }
+
+    let hash = hash_token(provided);
+    let token = match st.store.get_api_token_by_hash(&hash).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return Err(not_found_status),
+        Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
+    };
+
+    if !token.scopes.iter().any(|s| s.covers(required)) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    if let Some(limit) = token.rate_limit_per_min {
+        let key = format!("tok:{}", token.id);
+        if !st.ratelimiter.check_with_limit(&key, now(), limit).await {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+    }
+
     Ok(())
 }
 
 async fn blocklist_get(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Blocklist).await {
         return status.into_response();
     }
     match st.store.list_blocked_domains().await {
@@ -661,7 +700,7 @@ async fn blocklist_add(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Blocklist).await {
         return status.into_response();
     }
     let req: BlocklistReq = match serde_json::from_slice(&body) {
@@ -680,7 +719,7 @@ async fn blocklist_delete(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Blocklist).await {
         return status.into_response();
     }
     let req: BlocklistReq = match serde_json::from_slice(&body) {
@@ -719,7 +758,7 @@ async fn admin_links_list(
     headers: HeaderMap,
     Query(p): Query<ListParams>,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::LinksRead).await {
         return status.into_response();
     }
     let limit = p
@@ -771,7 +810,7 @@ async fn admin_links_list(
 /// `GET /admin/tags`: the distinct set of tags across all links, for the
 /// panel's filter control.
 async fn admin_tags_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::LinksRead).await {
         return status.into_response();
     }
     match st.store.list_tags().await {
@@ -800,7 +839,7 @@ async fn admin_link_delete(
     Path(code): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::LinksWrite).await {
         return status.into_response();
     }
     let (id, alias) = match resolve_for_admin(&st, &code).await {
@@ -842,7 +881,7 @@ async fn admin_link_patch(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::LinksWrite).await {
         return status.into_response();
     }
     let (id, alias) = match resolve_for_admin(&st, &code).await {
@@ -951,7 +990,7 @@ struct WebhookRow {
 }
 
 async fn admin_webhooks_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Webhooks).await {
         return status.into_response();
     }
     match st.store.list_webhooks().await {
@@ -974,12 +1013,51 @@ async fn admin_webhooks_list(State(st): State<Arc<AppState>>, headers: HeaderMap
     }
 }
 
+/// Maximum number of API tokens that may exist at once.
+const MAX_API_TOKENS: usize = 100;
+
+/// Token row shape for `GET /admin/tokens`: never includes the hash or the
+/// plaintext, only what an operator needs to recognize/manage a token.
+#[derive(Serialize)]
+struct ApiTokenRow {
+    id: u64,
+    name: String,
+    scopes: Vec<Scope>,
+    rate_limit_per_min: Option<u32>,
+    created: u64,
+}
+
+impl From<ApiToken> for ApiTokenRow {
+    fn from(t: ApiToken) -> Self {
+        ApiTokenRow {
+            id: t.id,
+            name: t.name,
+            scopes: t.scopes,
+            rate_limit_per_min: t.rate_limit_per_min,
+            created: t.created,
+        }
+    }
+}
+
+async fn admin_tokens_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
+        return status.into_response();
+    }
+    match st.store.list_api_tokens().await {
+        Ok(tokens) => {
+            let rows: Vec<ApiTokenRow> = tokens.into_iter().map(ApiTokenRow::from).collect();
+            Json(serde_json::json!({ "tokens": rows })).into_response()
+        }
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
 async fn admin_webhooks_create(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(req): Json<WebhookCreateReq>,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Webhooks).await {
         return status.into_response();
     }
     if let Err((status, msg)) = validate_webhook_url(&req.url) {
@@ -1028,7 +1106,7 @@ async fn admin_webhooks_patch(
     headers: HeaderMap,
     Json(req): Json<WebhookPatchReq>,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Webhooks).await {
         return status.into_response();
     }
     let mut sub = match st.store.get_webhook(id).await {
@@ -1075,10 +1153,83 @@ async fn admin_webhooks_delete(
     Path(id): Path<u64>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Webhooks).await {
         return status.into_response();
     }
     match st.store.delete_webhook(id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateTokenReq {
+    name: String,
+    scopes: Vec<Scope>,
+    rate_limit_per_min: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct CreateTokenResp {
+    id: u64,
+    token: String,
+}
+
+async fn admin_tokens_create(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
+        return status.into_response();
+    }
+    let req: CreateTokenReq = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
+    };
+    let existing = match st.store.list_api_tokens().await {
+        Ok(t) => t,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if existing.len() >= MAX_API_TOKENS {
+        return (StatusCode::BAD_REQUEST, "token cap reached").into_response();
+    }
+    let id = match st.store.next_api_token_id().await {
+        Ok(id) => id,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let plaintext = generate_token();
+    let token = ApiToken {
+        id,
+        name: req.name,
+        token_hash: hash_token(&plaintext),
+        scopes: req.scopes,
+        rate_limit_per_min: req.rate_limit_per_min,
+        created: now(),
+    };
+    if st.store.put_api_token(&token).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    (
+        StatusCode::CREATED,
+        Json(CreateTokenResp {
+            id,
+            token: plaintext,
+        }),
+    )
+        .into_response()
+}
+
+async fn admin_tokens_delete(
+    State(st): State<Arc<AppState>>,
+    Path(id): Path<u64>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
+        return status.into_response();
+    }
+    match st.store.delete_api_token(id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -1094,7 +1245,7 @@ async fn admin_webhooks_test(
     Path(id): Path<u64>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers) {
+    if let Err(status) = admin_guard(&st, &headers, Scope::Webhooks).await {
         return status.into_response();
     }
     let sub = match st.store.get_webhook(id).await {
@@ -1269,6 +1420,14 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         )
         .route("/admin/webhooks/:id/test", post(admin_webhooks_test))
         .route("/admin/tags", get(admin_tags_list))
+        .route(
+            "/admin/tokens",
+            get(admin_tokens_list).post(admin_tokens_create),
+        )
+        .route(
+            "/admin/tokens/:id",
+            axum::routing::delete(admin_tokens_delete),
+        )
         .with_state(state);
 
     let app = if origins.is_empty() {

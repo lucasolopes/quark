@@ -6,6 +6,17 @@ use quark::store::open_backends;
 use std::sync::Arc;
 use tower::ServiceExt;
 
+/// A `WebhookDispatcher` for tests that don't exercise webhooks: the
+/// receiver is dropped immediately, so `emit` silently no-ops.
+fn test_webhook_dispatcher() -> Arc<quark::webhooks::delivery::WebhookDispatcher> {
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
+        tx,
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    ))
+}
+
 async fn app_admin(token: &str) -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path()).await.unwrap();
@@ -24,6 +35,7 @@ async fn app_admin(token: &str) -> axum::Router {
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
     });
     router(state)
 }
@@ -46,6 +58,7 @@ async fn app_no_admin() -> axum::Router {
         block_private: true,
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
     });
     router(state)
 }

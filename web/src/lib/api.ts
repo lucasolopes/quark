@@ -5,6 +5,7 @@ import type {
   ListWebhooksResponse, CreateWebhookRequest, CreateWebhookResponse,
   PatchWebhookRequest, TestWebhookResponse,
   ImportSummary, TagsResponse,
+  ListTokensResponse, CreateTokenRequest, CreateTokenResponse,
 } from "./types";
 
 /**
@@ -108,5 +109,15 @@ export const api = {
     return jsonOrThrow(
       await req("/admin/import", { method: "POST", body, headers: { "content-type": contentType } }),
     );
+  },
+  async listTokens(): Promise<ListTokensResponse> {
+    return jsonOrThrow(await req("/admin/tokens"));
+  },
+  async createToken(body: CreateTokenRequest): Promise<CreateTokenResponse> {
+    return jsonOrThrow(await req("/admin/tokens", { method: "POST", body: JSON.stringify(body) }));
+  },
+  async deleteToken(id: number): Promise<void> {
+    const res = await req(`/admin/tokens/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
 };

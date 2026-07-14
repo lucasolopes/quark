@@ -63,3 +63,16 @@ export interface TestWebhookResponse { delivered: boolean; status: number; }
 export interface ImportFailure { index: number; url: string; reason: string; }
 export interface ImportSummary { imported: number; failed: ImportFailure[]; }
 export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; }
+export type Scope = "links_read" | "links_write" | "blocklist" | "webhooks" | "analytics" | "full";
+export const ALL_SCOPES: Scope[] = ["links_read", "links_write", "blocklist", "webhooks", "analytics", "full"];
+
+export interface ApiToken {
+  id: number;
+  name: string;
+  scopes: Scope[];
+  rate_limit_per_min: number | null;
+  created: number;
+}
+export interface ListTokensResponse { tokens: ApiToken[]; }
+export interface CreateTokenRequest { name: string; scopes: Scope[]; rate_limit_per_min?: number; }
+export interface CreateTokenResponse { id: number; token: string; }

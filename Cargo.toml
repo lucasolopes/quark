@@ -41,6 +41,7 @@ tower = "0.5"
 criterion = { version = "0.5", features = ["async_tokio"] }
 sqids = "0.4.2"
 harsh = "0.2.2"
+hmac = "0.13.0"
 
 [[bench]]
 name = "permute_bench"

@@ -62,6 +62,7 @@ bottleneck being geography/RTT, not the server).
   [`docs/IMPORT.md`](IMPORT.md).
 - **UTM builder + templates**: collapsible UTM section in the create-link dialog, with a live
   destination preview and named templates saved locally (`localStorage`).
+- **#9 API tokens with scopes + quota**: named tokens (`links_read`, `links_write`, `blocklist`, `webhooks`, `analytics`, `full`) with an optional per-token rate limit, managed under `/admin/tokens` and the panel's **API tokens** page; the env `QUARK_ADMIN_TOKEN` keeps behaving as `full`, unchanged. Doc: `docs/API-TOKENS.md`.
 
 ## Next
 

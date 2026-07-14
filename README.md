@@ -238,6 +238,7 @@ Every var below is optional except `QUARK_KEY` in production. Unset a backend va
 - Redirects carry a **TTL-aware `Cache-Control`** header, so a CDN/browser can cache the 302 (and never past a link's expiry). See [`docs/EDGE.md`](docs/EDGE.md) for putting Cloudflare in front.
 - The domain blocklist is managed via `GET/POST/DELETE /admin/blocklist` (JSON body `{"domain": "..."}` for POST/DELETE), protected by `QUARK_ADMIN_TOKEN` (header `x-admin-token`; unset → 404, wrong token → 401).
 - **Import**: `POST /admin/import` bulk-creates links from a CSV or JSON export (Bitly, Kutt, YOURLS, or generic), same admin token, partial-success reporting per row. See [`docs/IMPORT.md`](docs/IMPORT.md).
+- Beyond the env admin token, named **API tokens** with per-permission scopes and an optional per-token rate limit can be managed under `/admin/tokens` (superuser scope only); see [`docs/API-TOKENS.md`](docs/API-TOKENS.md).
 
 ### Local dev stack
 

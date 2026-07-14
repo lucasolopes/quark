@@ -468,6 +468,24 @@ mod tests {
         async fn next_webhook_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }
+        async fn list_api_tokens(&self) -> Result<Vec<crate::auth::ApiToken>, StoreError> {
+            unimplemented!()
+        }
+        async fn get_api_token_by_hash(
+            &self,
+            _hash: &str,
+        ) -> Result<Option<crate::auth::ApiToken>, StoreError> {
+            unimplemented!()
+        }
+        async fn put_api_token(&self, _token: &crate::auth::ApiToken) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn delete_api_token(&self, _id: u64) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
+        async fn next_api_token_id(&self) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
     }
 
     fn sub(
