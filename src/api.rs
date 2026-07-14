@@ -914,6 +914,35 @@ async fn admin_webhooks_test(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
+    send_test_event_guarded(&sub, is_internal_host).await
+}
+
+/// Core of `admin_webhooks_test`, with the SSRF host-block predicate
+/// injected. Production always calls this through `admin_webhooks_test`,
+/// which wires in the real `is_internal_host`; unit tests exercise real HTTP
+/// delivery (kind-branching, signing, headers) against a local test server
+/// via this seam with a permissive predicate, since every loopback/private
+/// address a local test server can bind to is, correctly, always blocked by
+/// `is_internal_host` (mirrors `webhooks::delivery::deliver_to_matching_guarded`).
+async fn send_test_event_guarded(
+    sub: &WebhookSubscription,
+    is_blocked: impl Fn(&str) -> bool,
+) -> Response {
+    // SSRF guard applies to the test-send too: an admin-controlled URL is
+    // still an operator-supplied URL, and this endpoint fires synchronously
+    // instead of through the queue's own guard (see
+    // `webhooks::delivery::deliver_to_matching_guarded`).
+    let host = match extract_host(&sub.url) {
+        Some(h) => h,
+        None => return (StatusCode::BAD_REQUEST, "invalid webhook url").into_response(),
+    };
+    if is_blocked(&host) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "webhook url resolves to an internal host",
+        )
+            .into_response();
+    }
     let body = webhook_event_payload(
         EventType::LinkCreated,
         "TEST0000",
@@ -923,11 +952,17 @@ async fn admin_webhooks_test(
         now(),
         None,
     );
-    let msg_id = generate_event_id();
-    let ts = now() as i64;
-    let signature = match webhooks::sign(&sub.secret, &msg_id, ts, &body) {
-        Ok(s) => s,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    let ev = WebhookEvent {
+        event_type: EventType::LinkCreated,
+        body,
+    };
+    // Same request-shaping as a real delivery (`deliver_one`): Generic gets
+    // a signed envelope, channel kinds get an unsigned, channel-formatted
+    // payload. This is what review Task 1 of #6 required — the test-send
+    // must exercise the same branch a real event would take.
+    let req = match webhooks::delivery::build_outgoing_request(sub, &ev) {
+        Some(r) => r,
+        None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(WEBHOOK_TEST_TIMEOUT_SECS))
@@ -937,15 +972,13 @@ async fn admin_webhooks_test(
         Ok(c) => c,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let result = client
+    let mut builder = client
         .post(&sub.url)
-        .header("content-type", "application/json")
-        .header("webhook-id", &msg_id)
-        .header("webhook-timestamp", ts.to_string())
-        .header("webhook-signature", &signature)
-        .body(body)
-        .send()
-        .await;
+        .header("content-type", "application/json");
+    for (name, value) in &req.extra_headers {
+        builder = builder.header(*name, value);
+    }
+    let result = builder.body(req.body).send().await;
     match result {
         Ok(resp) => Json(serde_json::json!({
             "delivered": resp.status().is_success(),
@@ -1069,7 +1102,17 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::{access_log_line, cache_control_for, parse_cors_origins};
+    use super::{
+        access_log_line, cache_control_for, parse_cors_origins, send_test_event_guarded, EventType,
+        SubscriptionKind, WebhookSubscription,
+    };
+    use axum::body::Bytes;
+    use axum::extract::State;
+    use axum::http::HeaderMap as ReqHeaderMap;
+    use axum::routing::any;
+    use axum::Router as TestRouter;
+    use std::sync::Mutex;
+    use tokio::net::TcpListener;
 
     #[test]
     fn parse_cors_origins_splits_and_trims() {
@@ -1128,5 +1171,121 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&line)
             .expect("access_log_line should escape correctly and remain valid JSON");
         assert_eq!(v["path"], path);
+    }
+
+    /// Captured request: headers (lowercased names) + raw body. Mirrors the
+    /// mock server in `webhooks::delivery`'s test module.
+    struct Captured {
+        headers: std::collections::HashMap<String, String>,
+        body: String,
+    }
+
+    struct ServerState {
+        captured: Mutex<Vec<Captured>>,
+    }
+
+    async fn handler(
+        State(state): State<std::sync::Arc<ServerState>>,
+        headers: ReqHeaderMap,
+        body: Bytes,
+    ) -> axum::http::StatusCode {
+        let mut map = std::collections::HashMap::new();
+        for (k, v) in headers.iter() {
+            map.insert(
+                k.as_str().to_ascii_lowercase(),
+                v.to_str().unwrap().to_string(),
+            );
+        }
+        state.captured.lock().unwrap().push(Captured {
+            headers: map,
+            body: String::from_utf8(body.to_vec()).unwrap(),
+        });
+        axum::http::StatusCode::OK
+    }
+
+    /// Spins a local server capturing every POST it receives. Returns the
+    /// base URL and the shared state to inspect.
+    async fn spawn_test_server() -> (String, std::sync::Arc<ServerState>) {
+        let state = std::sync::Arc::new(ServerState {
+            captured: Mutex::new(Vec::new()),
+        });
+        let app = TestRouter::new()
+            .route("/hook", any(handler))
+            .with_state(state.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}/hook"), state)
+    }
+
+    fn sub(url: &str, secret: &str, kind: SubscriptionKind) -> WebhookSubscription {
+        WebhookSubscription {
+            id: 1,
+            url: url.to_string(),
+            events: vec![EventType::LinkCreated],
+            secret: secret.to_string(),
+            active: true,
+            created: 0,
+            kind,
+        }
+    }
+
+    /// Regression for review Task 1 of #6: a Slack-kind subscription's
+    /// test-send must receive the same channel-formatted, unsigned payload a
+    /// real delivery would send — not the signed Generic envelope the
+    /// endpoint used to always build. This is exercised through
+    /// `send_test_event_guarded` (the SSRF-guard-injectable core of
+    /// `admin_webhooks_test`) since the guard's real predicate always blocks
+    /// the loopback address a local test server binds to (see that
+    /// function's doc comment).
+    #[tokio::test]
+    async fn test_send_on_slack_sub_is_unsigned_channel_payload() {
+        let (url, state) = spawn_test_server().await;
+        let slack_sub = sub(&url, "", SubscriptionKind::Slack);
+
+        let resp = send_test_event_guarded(&slack_sub, |_| false).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+
+        let captured = state.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let req = &captured[0];
+        let body: serde_json::Value = serde_json::from_str(&req.body).unwrap();
+        assert!(body["text"].as_str().unwrap().contains("TEST0000"));
+        assert!(!req.headers.contains_key("webhook-signature"));
+        assert!(!req.headers.contains_key("webhook-id"));
+        assert!(!req.headers.contains_key("webhook-timestamp"));
+    }
+
+    /// Counterpart: a Generic subscription's test-send must remain the
+    /// signed Standard Webhooks envelope, body verbatim.
+    #[tokio::test]
+    async fn test_send_on_generic_sub_stays_signed() {
+        let (url, state) = spawn_test_server().await;
+        let secret = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw".to_string();
+        let generic_sub = sub(&url, &secret, SubscriptionKind::Generic);
+
+        let resp = send_test_event_guarded(&generic_sub, |_| false).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+
+        let captured = state.captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let req = &captured[0];
+        let body: serde_json::Value = serde_json::from_str(&req.body).unwrap();
+        assert_eq!(body["data"]["code"], "TEST0000");
+        let msg_id = req.headers.get("webhook-id").expect("webhook-id header");
+        let ts: i64 = req
+            .headers
+            .get("webhook-timestamp")
+            .expect("webhook-timestamp header")
+            .parse()
+            .unwrap();
+        let sig = req
+            .headers
+            .get("webhook-signature")
+            .expect("webhook-signature header");
+        let expected = crate::webhooks::sign(&secret, msg_id, ts, &req.body).unwrap();
+        assert_eq!(sig, &expected);
     }
 }

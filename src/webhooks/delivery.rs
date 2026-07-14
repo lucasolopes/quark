@@ -176,9 +176,9 @@ async fn deliver_to_matching_guarded(
 
 /// The per-attempt body plus any extra headers to send with it, computed
 /// once per delivery (not per retry attempt) by `deliver_one`.
-struct OutgoingRequest {
-    body: String,
-    extra_headers: Vec<(&'static str, String)>,
+pub(crate) struct OutgoingRequest {
+    pub(crate) body: String,
+    pub(crate) extra_headers: Vec<(&'static str, String)>,
 }
 
 /// Builds the outgoing request for `sub`/`ev`, branching on the
@@ -188,7 +188,15 @@ struct OutgoingRequest {
 /// wrap it in that channel's JSON shape, unsigned, with no extra headers
 /// (the receiver authenticates by the secret URL itself). Returns `None`
 /// only if signing fails for `Generic` (invalid secret encoding).
-fn build_outgoing_request(sub: &WebhookSubscription, ev: &WebhookEvent) -> Option<OutgoingRequest> {
+///
+/// Shared with `api::admin_webhooks_test`, so the "send test event" admin
+/// endpoint produces byte-for-byte the same request shape a real delivery
+/// would (see review Task 1 of #6: the test-send previously always sent a
+/// signed Generic envelope, which is the wrong shape for channel kinds).
+pub(crate) fn build_outgoing_request(
+    sub: &WebhookSubscription,
+    ev: &WebhookEvent,
+) -> Option<OutgoingRequest> {
     match sub.kind {
         SubscriptionKind::Generic => {
             let msg_id = generate_msg_id();
