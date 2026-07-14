@@ -20,7 +20,16 @@ describe("LinkStats", () => {
 
   it("shows the total clicks", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-      aggregates: { total: 42, first_ts: 1700000000, last_ts: 1700100000, per_day: { "2024-01-01": 42 }, per_country: { BR: 40, US: 2 }, per_device: { Mobile: 30, Desktop: 12 } },
+      aggregates: {
+        total: 42, first_ts: 1700000000, last_ts: 1700100000,
+        per_day: { "2024-01-01": 42 },
+        per_country: { BR: 40, US: 2 },
+        per_device: { Mobile: 30, Desktop: 12 },
+        per_os: { Windows: 20, iOS: 22 },
+        per_browser: { Chrome: 25, Safari: 17 },
+        per_referer: { "news.ycombinator.com": 30, direct: 12 },
+        per_city: {},
+      },
       recent: [],
     }), { status: 200 }));
     render(wrap("6lB362J"));
@@ -29,10 +38,53 @@ describe("LinkStats", () => {
 
   it("empty state when total is 0", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-      aggregates: { total: 0, first_ts: 0, last_ts: 0, per_day: {}, per_country: {}, per_device: {} },
+      aggregates: {
+        total: 0, first_ts: 0, last_ts: 0,
+        per_day: {}, per_country: {}, per_device: {},
+        per_os: {}, per_browser: {}, per_referer: {}, per_city: {},
+      },
       recent: [],
     }), { status: 200 }));
     render(wrap("6lB362J"));
     expect(await screen.findByText(/no clicks yet/i)).toBeInTheDocument();
+  });
+
+  it("shows the new OS, browser and referrer charts, and hides the city chart when per_city is empty", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      aggregates: {
+        total: 42, first_ts: 1700000000, last_ts: 1700100000,
+        per_day: { "2024-01-01": 42 },
+        per_country: { BR: 40, US: 2 },
+        per_device: { Mobile: 30, Desktop: 12 },
+        per_os: { Windows: 20, iOS: 22 },
+        per_browser: { Chrome: 25, Safari: 17 },
+        per_referer: { "news.ycombinator.com": 30, direct: 12 },
+        per_city: {},
+      },
+      recent: [],
+    }), { status: 200 }));
+    render(wrap("6lB362J"));
+    expect(await screen.findByText("Clicks per OS")).toBeInTheDocument();
+    expect(screen.getByText("Clicks per browser")).toBeInTheDocument();
+    expect(screen.getByText("Clicks per referrer")).toBeInTheDocument();
+    expect(screen.queryByText("Clicks per city")).not.toBeInTheDocument();
+  });
+
+  it("shows the city chart when per_city has data", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      aggregates: {
+        total: 5, first_ts: 1700000000, last_ts: 1700100000,
+        per_day: { "2024-01-01": 5 },
+        per_country: { BR: 5 },
+        per_device: { Mobile: 5 },
+        per_os: { iOS: 5 },
+        per_browser: { Safari: 5 },
+        per_referer: { direct: 5 },
+        per_city: { "Sao Paulo": 5 },
+      },
+      recent: [],
+    }), { status: 200 }));
+    render(wrap("6lB362J"));
+    expect(await screen.findByText("Clicks per city")).toBeInTheDocument();
   });
 });

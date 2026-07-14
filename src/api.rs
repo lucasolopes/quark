@@ -402,6 +402,10 @@ async fn redirect(
                     .get(header::USER_AGENT)
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string()),
+                city: headers
+                    .get("cf-ipcity")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string()),
             };
             // Gate check first (cheap: one atomic load) so the payload build
             // — which reads `ev`'s fields — happens before `ev` is moved

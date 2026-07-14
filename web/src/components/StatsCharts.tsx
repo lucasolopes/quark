@@ -31,6 +31,8 @@ const CHART_COLORS = [
 ];
 
 const TOP_N_COUNTRIES = 8;
+const TOP_N_REFERERS = 8;
+const TOP_N_CITIES = 8;
 
 function formatDay(day: string): string {
   const [, month, date] = day.split("-");
@@ -95,28 +97,43 @@ function PerDayChart({ perDay }: { perDay: Record<string, number> }) {
   );
 }
 
-/** Top-N countries by click volume (`per_country`), descending order. */
-function PerCountryChart({ perCountry }: { perCountry: Record<string, number> }) {
-  const t = useT();
-  const data = Object.entries(perCountry)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, TOP_N_COUNTRIES)
-    .map(([country, count]) => ({ country: country || t("charts.unknown"), count }));
+interface BreakdownDatum {
+  label: string;
+  count: number;
+}
 
+/** `per_*` map turned into sorted, top-N chart data with the unknown-key fallback applied. */
+function toBreakdownData(
+  map: Record<string, number>,
+  unknownLabel: string,
+  topN?: number,
+  relabel?: (label: string) => string,
+): BreakdownDatum[] {
+  const sorted = Object.entries(map)
+    .sort(([, a], [, b]) => b - a)
+    .map(([label, count]) => ({ label: label ? (relabel ? relabel(label) : label) : unknownLabel, count }));
+  return topN === undefined ? sorted : sorted.slice(0, topN);
+}
+
+interface TopNBarChartProps {
+  title: string;
+  emptyLabel: string;
+  data: BreakdownDatum[];
+}
+
+/** Horizontal top-N bar chart, shared shape for country/referrer/city breakdowns. */
+function TopNBarChart({ title, emptyLabel, data }: TopNBarChartProps) {
+  const t = useT();
   return (
-    <ChartCard
-      title={t("charts.perCountryTitle")}
-      empty={data.length === 0}
-      emptyLabel={t("charts.perCountryEmpty")}
-    >
+    <ChartCard title={title} empty={data.length === 0} emptyLabel={emptyLabel}>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} layout="vertical" margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" horizontal={false} />
           <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12 }} stroke="var(--color-muted-foreground)" />
           <YAxis
             type="category"
-            dataKey="country"
-            width={64}
+            dataKey="label"
+            width={96}
             tick={{ fontSize: 12 }}
             stroke="var(--color-muted-foreground)"
           />
@@ -128,25 +145,22 @@ function PerCountryChart({ perCountry }: { perCountry: Record<string, number> })
   );
 }
 
-/** Device distribution (`per_device`), as a donut chart. */
-function PerDeviceChart({ perDevice }: { perDevice: Record<string, number> }) {
-  const t = useT();
-  const data = Object.entries(perDevice)
-    .sort(([, a], [, b]) => b - a)
-    .map(([device, count]) => ({ device: device || t("charts.unknown"), count }));
+interface DonutChartProps {
+  title: string;
+  emptyLabel: string;
+  data: BreakdownDatum[];
+}
 
+/** Donut chart, shared shape for device/OS/browser breakdowns. */
+function DonutChart({ title, emptyLabel, data }: DonutChartProps) {
   return (
-    <ChartCard
-      title={t("charts.perDeviceTitle")}
-      empty={data.length === 0}
-      emptyLabel={t("charts.perDeviceEmpty")}
-    >
+    <ChartCard title={title} empty={data.length === 0} emptyLabel={emptyLabel}>
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
           <Pie
             data={data}
             dataKey="count"
-            nameKey="device"
+            nameKey="label"
             innerRadius="55%"
             outerRadius="85%"
             paddingAngle={2}
@@ -154,7 +168,7 @@ function PerDeviceChart({ perDevice }: { perDevice: Record<string, number> }) {
             labelLine={false}
           >
             {data.map((entry, i) => (
-              <Cell key={entry.device} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+              <Cell key={entry.label} fill={CHART_COLORS[i % CHART_COLORS.length]} />
             ))}
           </Pie>
           <Tooltip formatter={(value, name) => [`${value}`, `${name}`]} />
@@ -168,13 +182,61 @@ interface StatsChartsProps {
   aggregates: Aggregates;
 }
 
-/** The three charts on the stats screen: clicks per day, per country and per device. */
+/**
+ * Every chart on the stats screen: clicks per day, then top-N and distribution
+ * breakdowns for country, device, OS, browser, referrer and (when present) city.
+ * `per_city` is usually empty (most deploys don't send `cf-ipcity`), so its
+ * card is omitted entirely rather than shown empty.
+ */
+/**
+ * `referer_host()` on the backend returns the untranslated keys `"direct"`
+ * and `"other"` for absent/unparseable referrers (see `src/analytics/mod.rs`).
+ * Real hostnames pass through unchanged; only those two known keys are mapped
+ * to their localized labels.
+ */
+function relabelReferer(t: ReturnType<typeof useT>, label: string): string {
+  if (label === "direct") return t("charts.refererDirect");
+  if (label === "other") return t("charts.refererOther");
+  return label;
+}
+
 export function StatsCharts({ aggregates }: StatsChartsProps) {
+  const t = useT();
+  const cityData = toBreakdownData(aggregates.per_city, t("charts.unknown"), TOP_N_CITIES);
+
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       <PerDayChart perDay={aggregates.per_day} />
-      <PerCountryChart perCountry={aggregates.per_country} />
-      <PerDeviceChart perDevice={aggregates.per_device} />
+      <TopNBarChart
+        title={t("charts.perCountryTitle")}
+        emptyLabel={t("charts.perCountryEmpty")}
+        data={toBreakdownData(aggregates.per_country, t("charts.unknown"), TOP_N_COUNTRIES)}
+      />
+      <DonutChart
+        title={t("charts.perDeviceTitle")}
+        emptyLabel={t("charts.perDeviceEmpty")}
+        data={toBreakdownData(aggregates.per_device, t("charts.unknown"))}
+      />
+      <DonutChart
+        title={t("charts.perOsTitle")}
+        emptyLabel={t("charts.perOsEmpty")}
+        data={toBreakdownData(aggregates.per_os, t("charts.unknown"))}
+      />
+      <DonutChart
+        title={t("charts.perBrowserTitle")}
+        emptyLabel={t("charts.perBrowserEmpty")}
+        data={toBreakdownData(aggregates.per_browser, t("charts.unknown"))}
+      />
+      <TopNBarChart
+        title={t("charts.perRefererTitle")}
+        emptyLabel={t("charts.perRefererEmpty")}
+        data={toBreakdownData(aggregates.per_referer, t("charts.unknown"), TOP_N_REFERERS, (label) =>
+          relabelReferer(t, label),
+        )}
+      />
+      {cityData.length > 0 && (
+        <TopNBarChart title={t("charts.perCityTitle")} emptyLabel={t("charts.perCityEmpty")} data={cityData} />
+      )}
     </div>
   );
 }
