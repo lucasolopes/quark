@@ -14,6 +14,7 @@ const link: Link = {
   tags: ["promo", "summer"],
   max_visits: 100,
   visits: 12,
+  rules: [],
 };
 
 describe("EditLinkDialog — tags", () => {

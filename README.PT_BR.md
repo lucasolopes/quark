@@ -273,6 +273,7 @@ inclui um builder de UTM opcional com templates salvos localmente (`localStorage
 - Webhooks de saída assinados (eventos, payload, verificação de assinatura): [`docs/WEBHOOKS.PT_BR.md`](docs/WEBHOOKS.PT_BR.md)
 - Analytics de cliques e postura de privacidade (o que é capturado, o que nunca é armazenado): [`docs/ANALYTICS.PT_BR.md`](docs/ANALYTICS.PT_BR.md)
 - Migrando do Bitly/Kutt/YOURLS: [`docs/IMPORT.PT_BR.md`](docs/IMPORT.PT_BR.md)
+- Regras de redirecionamento por geo/dispositivo: [`docs/REDIRECT-RULES.PT_BR.md`](docs/REDIRECT-RULES.PT_BR.md)
 - O que vem a seguir: [`docs/ROADMAP.PT_BR.md`](docs/ROADMAP.PT_BR.md)
 - Design de sistema completo: [`docs/specs/2026-07-12-quark-design.md`](docs/specs/2026-07-12-quark-design.md)
 - Passo a passo mais profundo de cada componente, modelo de dados e os internos do round Feistel: [`docs/ARCHITECTURE.PT_BR.md`](docs/ARCHITECTURE.PT_BR.md)

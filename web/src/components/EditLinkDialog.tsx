@@ -16,12 +16,15 @@ import { isHttpUrl } from "@/lib/codeguard";
 import { isUnauthorized } from "@/lib/mutation-error";
 import { usePatchLink } from "@/lib/queries";
 import { formatTagsInput, parseTagsInput } from "@/lib/tags";
+import { draftsFromRules, parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import type { Link } from "@/lib/types";
+import { RulesEditor } from "@/components/RulesEditor";
 
 interface FormErrors {
   url?: string;
   ttl?: string;
   maxVisits?: string;
+  rules?: string;
   form?: string;
 }
 
@@ -43,6 +46,7 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
   const [removeExpiry, setRemoveExpiry] = useState(false);
   const [tagsInput, setTagsInput] = useState(formatTagsInput(link.tags ?? []));
   const [maxVisits, setMaxVisits] = useState(link.max_visits ? String(link.max_visits) : "");
+  const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>(() => draftsFromRules(link.rules));
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
 
@@ -87,6 +91,10 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const nextErrors = validate();
+    const { rules, error: rulesError } = parseRuleDrafts(ruleDrafts);
+    if (rulesError) {
+      nextErrors.rules = t(rulesError === "invalidUrl" ? "rules.rowInvalidUrl" : "rules.rowIncomplete");
+    }
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
       return;
@@ -104,6 +112,7 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
             : link.max_visits
               ? { max_visits: null }
               : {}),
+          rules,
         },
       });
       toast.success(t("dialogs.edit.successToast"));
@@ -216,6 +225,13 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
                 </p>
               )}
             </div>
+
+            <RulesEditor idPrefix="edit-link" drafts={ruleDrafts} onChange={setRuleDrafts} />
+            {errors.rules && (
+              <p className="text-sm text-destructive" role="alert">
+                {errors.rules}
+              </p>
+            )}
 
             {errors.form && (
               <p className="text-sm text-destructive" role="alert">

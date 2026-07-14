@@ -75,9 +75,16 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
       accessorKey: "url",
       header: t("linkTable.columnDestination"),
       cell: ({ row }) => (
-        <span className="block max-w-64 truncate text-muted-foreground" title={row.original.url}>
-          {row.original.url}
-        </span>
+        <div className="flex max-w-64 items-center gap-1.5">
+          <span className="truncate text-muted-foreground" title={row.original.url}>
+            {row.original.url}
+          </span>
+          {row.original.rules.length > 0 && (
+            <Badge variant="secondary" className="shrink-0">
+              {t("linkTable.rulesBadge", { count: row.original.rules.length })}
+            </Badge>
+          )}
+        </div>
       ),
     },
     {

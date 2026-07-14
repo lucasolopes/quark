@@ -116,4 +116,24 @@ describe("CreateLinkDialog", () => {
     expect(screen.getByLabelText(/source/i)).toHaveValue("twitter");
     expect(screen.getByLabelText(/medium/i)).toHaveValue("social");
   });
+
+  it("adding a redirect rule sends it in the create request", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
+    );
+    render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
+
+    await userEvent.click(screen.getByText(/redirect rules/i));
+    await userEvent.click(screen.getByRole("button", { name: /add rule/i }));
+    await userEvent.selectOptions(screen.getByLabelText(/match on/i), "country");
+    await userEvent.type(screen.getByLabelText(/values/i), "BR, PT");
+    await userEvent.type(screen.getByLabelText(/destination url/i), "https://ok.com/br");
+
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.rules).toEqual([{ field: "country", values: ["BR", "PT"], to: "https://ok.com/br" }]);
+  });
 });

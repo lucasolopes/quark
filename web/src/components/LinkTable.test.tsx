@@ -13,6 +13,7 @@ const link: Link = {
   created: 1700000000,
   tags: [],
   visits: 0,
+  rules: [],
 };
 
 describe("LinkTable — QR code", () => {
@@ -76,5 +77,21 @@ describe("LinkTable — visits", () => {
     const unlimited: Link = { ...link, visits: 7 };
     render(withProviders(<LinkTable links={[unlimited]} onEdit={() => {}} onDelete={() => {}} />));
     expect(screen.getByText("7")).toBeInTheDocument();
+  });
+});
+
+describe("LinkTable — redirect rules badge", () => {
+  it("shows a rule-count badge when the link has rules", () => {
+    const linkWithRules: Link = {
+      ...link,
+      rules: [{ field: "country", values: ["BR"], to: "https://example.com/br" }],
+    };
+    render(withProviders(<LinkTable links={[linkWithRules]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.getByText("1 rules")).toBeInTheDocument();
+  });
+
+  it("shows no badge when the link has no rules", () => {
+    render(withProviders(<LinkTable links={[link]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.queryByText(/rules?$/)).not.toBeInTheDocument();
   });
 });

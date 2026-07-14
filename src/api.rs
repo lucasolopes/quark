@@ -2,7 +2,9 @@ use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{device_from_ua, AnalyticsSink, ClickEvent};
 use crate::auth::{generate_token, hash_token, ApiToken, Scope};
 use crate::cache::Cache;
-use crate::store::{normalize_tags, Record, Store, StoreError};
+use crate::store::{
+    matched_rule_index, normalize_tags, Record, Rule, RuleField, Store, StoreError,
+};
 use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{self, EventType, SubscriptionKind, WebhookEvent, WebhookSubscription};
 use crate::{codec, now, permute};
@@ -43,12 +45,70 @@ pub struct CreateReq {
     ttl: Option<u64>,
     tags: Option<Vec<String>>,
     max_visits: Option<u32>,
+    rules: Option<Vec<Rule>>,
 }
 
 /// Normalizes the `max_visits` request field into the persisted representation:
 /// `0` or absent means unlimited (`None`); any `n > 0` is `Some(n)`.
 fn normalize_max_visits(raw: Option<u32>) -> Option<u32> {
     raw.filter(|&n| n > 0)
+}
+
+/// Maximum number of geo/device rules a single link may carry.
+const MAX_RULES: usize = 20;
+
+/// Validates and normalizes rules for `create`/`admin_link_patch`: caps the
+/// count, normalizes country codes to uppercase and device values to the
+/// canonical `Mobile`/`Desktop`/`Other` set, and runs each rule's `to`
+/// through the SAME SSRF/blocklist guards as the link's main `url` (a rule
+/// destination must not smuggle an internal/blocked host).
+async fn validate_rules(
+    rules: Vec<Rule>,
+    headers: &HeaderMap,
+    st: &AppState,
+) -> Result<Vec<Rule>, Response> {
+    if rules.len() > MAX_RULES {
+        return Err((StatusCode::BAD_REQUEST, "too many rules").into_response());
+    }
+    let mut out = Vec::with_capacity(rules.len());
+    for mut rule in rules {
+        match rule.field {
+            RuleField::Country => {
+                rule.values = rule.values.iter().map(|v| v.to_ascii_uppercase()).collect();
+            }
+            RuleField::Device => {
+                let mut normalized = Vec::with_capacity(rule.values.len());
+                for v in &rule.values {
+                    match ["Mobile", "Desktop", "Other"]
+                        .into_iter()
+                        .find(|c| c.eq_ignore_ascii_case(v))
+                    {
+                        Some(c) => normalized.push(c.to_string()),
+                        None => {
+                            return Err(
+                                (StatusCode::BAD_REQUEST, "invalid device value").into_response()
+                            )
+                        }
+                    }
+                }
+                rule.values = normalized;
+            }
+        }
+        if !is_valid_url(&rule.to) {
+            return Err((StatusCode::BAD_REQUEST, "invalid rule destination").into_response());
+        }
+        let Some(host) = extract_host(&rule.to) else {
+            return Err((StatusCode::BAD_REQUEST, "rule destination without host").into_response());
+        };
+        if st.block_private && is_blocked_target(&host, headers, st) {
+            return Err((StatusCode::FORBIDDEN, "rule destination not allowed").into_response());
+        }
+        if st.blocklist.is_blocked(&host, now()).await {
+            return Err((StatusCode::FORBIDDEN, "blocked rule destination").into_response());
+        }
+        out.push(rule);
+    }
+    Ok(out)
 }
 
 #[derive(Serialize)]
@@ -226,6 +286,12 @@ pub enum CreateError {
 /// next numeric id. Holds no admin/rate-limit policy — callers apply those
 /// before invoking this. Returns the created code (the alias, or the
 /// computed base62 code) on success.
+///
+/// Takes each per-feature field (`tags`, `max_visits`, `rules`, …) as its own
+/// parameter: this is the single creation chokepoint every roadmap feature
+/// threads its new `Record` field through, so the argument list grows with the
+/// data model by design.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_link_core(
     st: &AppState,
     url: &str,
@@ -233,6 +299,7 @@ pub async fn create_link_core(
     ttl: Option<u64>,
     tags: Vec<String>,
     max_visits: Option<u32>,
+    rules: Vec<Rule>,
     headers: &HeaderMap,
 ) -> Result<String, CreateError> {
     if !is_valid_url(url) {
@@ -261,6 +328,7 @@ pub async fn create_link_core(
         created: now(),
         tags,
         max_visits,
+        rules,
     };
 
     if let Some(alias) = alias {
@@ -369,6 +437,10 @@ async fn create(
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
     }
+    let rules = match validate_rules(req.rules.clone().unwrap_or_default(), &headers, &st).await {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
     match create_link_core(
         &st,
         &req.url,
@@ -376,6 +448,7 @@ async fn create(
         req.ttl,
         normalize_tags(req.tags.clone().unwrap_or_default()),
         normalize_max_visits(req.max_visits),
+        rules,
         &headers,
     )
     .await
@@ -435,6 +508,7 @@ async fn admin_import(
             row.ttl,
             Vec::new(),
             None,
+            Vec::new(),
             &headers,
         )
         .await
@@ -553,6 +627,24 @@ async fn redirect(
             }
             let cache_control = cache_control_for(rec.expiry, now);
 
+            let country = headers
+                .get("cf-ipcountry")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let user_agent = headers
+                .get(header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+
+            // Zero-clone hot path: only the rule-match branch allocates. When
+            // `rec.rules` is empty (every pre-existing link, the common
+            // case), `rec.url` is moved straight into the LOCATION header.
+            let dest: String =
+                match matched_rule_index(&rec.rules, country.as_deref(), user_agent.as_deref()) {
+                    Some(i) => rec.rules[i].to.clone(),
+                    None => rec.url.clone(),
+                };
+
             let ev = ClickEvent {
                 id,
                 ts: now,
@@ -560,14 +652,8 @@ async fn redirect(
                     .get(header::REFERER)
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string()),
-                country: headers
-                    .get("cf-ipcountry")
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string()),
-                user_agent: headers
-                    .get(header::USER_AGENT)
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string()),
+                country,
+                user_agent,
                 city: headers
                     .get("cf-ipcity")
                     .and_then(|v| v.to_str().ok())
@@ -598,7 +684,7 @@ async fn redirect(
             (
                 StatusCode::FOUND,
                 [
-                    (header::LOCATION, rec.url),
+                    (header::LOCATION, dest),
                     (header::CACHE_CONTROL, cache_control),
                 ],
             )
@@ -779,6 +865,7 @@ struct LinkRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_visits: Option<u32>,
     visits: u64,
+    rules: Vec<Rule>,
 }
 
 async fn admin_links_list(
@@ -836,6 +923,7 @@ async fn admin_links_list(
             tags: rec.tags,
             max_visits: rec.max_visits,
             visits,
+            rules: rec.rules,
         });
     }
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
@@ -982,6 +1070,16 @@ async fn admin_link_patch(
             rec.max_visits = normalize_max_visits(Some(n));
         } else {
             return (StatusCode::BAD_REQUEST, "invalid max_visits").into_response();
+        }
+    }
+    if let Some(r) = patch.get("rules") {
+        let parsed: Vec<Rule> = match serde_json::from_value(r.clone()) {
+            Ok(v) => v,
+            Err(_) => return (StatusCode::BAD_REQUEST, "invalid rules").into_response(),
+        };
+        match validate_rules(parsed, &headers, &st).await {
+            Ok(v) => rec.rules = v,
+            Err(resp) => return resp,
         }
     }
     if st.store.put_link(id, &rec).await.is_err() {

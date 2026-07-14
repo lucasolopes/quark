@@ -24,12 +24,15 @@ import { isUnauthorized } from "@/lib/mutation-error";
 import { useCreateLink } from "@/lib/queries";
 import { parseTagsInput } from "@/lib/tags";
 import { applyUtm, deleteUtmTemplate, loadUtmTemplates, saveUtmTemplate, type UtmParams } from "@/lib/utm";
+import { parseRuleDrafts, type RuleDraft } from "@/lib/rules";
+import { RulesEditor } from "@/components/RulesEditor";
 
 interface FormErrors {
   url?: string;
   alias?: string;
   ttl?: string;
   maxVisits?: string;
+  rules?: string;
   form?: string;
 }
 
@@ -57,6 +60,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
   const [ttl, setTtl] = useState("");
   const [tagsInput, setTagsInput] = useState("");
   const [maxVisits, setMaxVisits] = useState("");
+  const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>([]);
   const [errors, setErrors] = useState<FormErrors>({});
   const [utmOpen, setUtmOpen] = useState(false);
   const [utm, setUtm] = useState<UtmParams>(EMPTY_UTM);
@@ -71,6 +75,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
     setTtl("");
     setTagsInput("");
     setMaxVisits("");
+    setRuleDrafts([]);
     setErrors({});
     setUtmOpen(false);
     setUtm(EMPTY_UTM);
@@ -145,6 +150,10 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const nextErrors = validate();
+    const { rules, error: rulesError } = parseRuleDrafts(ruleDrafts);
+    if (rulesError) {
+      nextErrors.rules = t(rulesError === "invalidUrl" ? "rules.rowInvalidUrl" : "rules.rowIncomplete");
+    }
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
       return;
@@ -160,6 +169,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
         ...(ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
         ...(tags.length > 0 ? { tags } : {}),
         ...(maxVisits.trim() ? { max_visits: Number(maxVisits.trim()) } : {}),
+        ...(rules.length > 0 ? { rules } : {}),
       });
       toast.success(t("dialogs.create.successToast"));
       reset();
@@ -442,6 +452,13 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
                 </p>
               )}
             </div>
+
+            <RulesEditor idPrefix="create-link" drafts={ruleDrafts} onChange={setRuleDrafts} />
+            {errors.rules && (
+              <p className="text-sm text-destructive" role="alert">
+                {errors.rules}
+              </p>
+            )}
 
             {errors.form && (
               <p className="text-sm text-destructive" role="alert">

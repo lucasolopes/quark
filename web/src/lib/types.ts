@@ -1,3 +1,17 @@
+/** The visitor attribute a `Rule` matches on (roadmap #12). OS/browser rules are out of scope. */
+export type RuleField = "country" | "device";
+
+/**
+ * A single geo/device redirect rule: if the visitor's `field` value is in
+ * `values`, the redirect goes to `to` instead of the link's default `url`.
+ * Evaluated in order, first match wins (see `docs/REDIRECT-RULES.md`).
+ */
+export interface Rule {
+  field: RuleField;
+  values: string[];
+  to: string;
+}
+
 export interface Link {
   id: number;
   code: string;
@@ -8,9 +22,10 @@ export interface Link {
   tags: string[];
   max_visits?: number;
   visits: number;
+  rules: Rule[];
 }
 export interface ListLinksResponse { links: Link[]; next_after: number | null; }
-export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; max_visits?: number; }
+export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; max_visits?: number; rules?: Rule[]; }
 export interface CreateLinkResponse { code: string; url: string; }
 export interface TagsResponse { tags: string[]; }
 export interface ClickEvent {
@@ -31,7 +46,7 @@ export interface Aggregates {
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
 export interface BlocklistResponse { domains: string[]; }
-export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; }
+export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; }
 
 /** The 5 link lifecycle events a webhook subscription can be notified about. */
 export const WEBHOOK_EVENTS = [

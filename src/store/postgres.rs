@@ -26,6 +26,8 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let tags: serde_json::Value = r.try_get("tags").map_err(StoreError::backend)?;
     let tags: Vec<String> = serde_json::from_value(tags)?;
     let max_visits: Option<i64> = r.try_get("max_visits").map_err(StoreError::backend)?;
+    let rules: serde_json::Value = r.try_get("rules").map_err(StoreError::backend)?;
+    let rules: Vec<crate::store::Rule> = serde_json::from_value(rules)?;
     Ok((
         id as u64,
         Record {
@@ -34,6 +36,7 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
             created: created as u64,
             tags,
             max_visits: max_visits.map(|v| v as u32),
+            rules,
         },
     ))
 }
@@ -114,6 +117,7 @@ impl PostgresStore {
                 "CREATE SEQUENCE IF NOT EXISTS quark_api_token_id_seq",
                 "CREATE TABLE IF NOT EXISTS links (id BIGINT PRIMARY KEY, url TEXT NOT NULL, expiry BIGINT, created BIGINT NOT NULL, tags JSONB NOT NULL DEFAULT '[]')",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'",
+                "ALTER TABLE links ADD COLUMN IF NOT EXISTS rules JSONB NOT NULL DEFAULT '[]'",
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
@@ -178,12 +182,13 @@ impl Store for PostgresStore {
     }
 
     async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError> {
-        let row =
-            sqlx::query("SELECT url, expiry, created, tags, max_visits FROM links WHERE id = $1")
-                .bind(id as i64)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(StoreError::backend)?;
+        let row = sqlx::query(
+            "SELECT url, expiry, created, tags, max_visits, rules FROM links WHERE id = $1",
+        )
+        .bind(id as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
         match row {
             Some(r) => {
                 let url: String = r.try_get("url").map_err(StoreError::backend)?;
@@ -193,12 +198,15 @@ impl Store for PostgresStore {
                 let tags: Vec<String> = serde_json::from_value(tags)?;
                 let max_visits: Option<i64> =
                     r.try_get("max_visits").map_err(StoreError::backend)?;
+                let rules: serde_json::Value = r.try_get("rules").map_err(StoreError::backend)?;
+                let rules: Vec<crate::store::Rule> = serde_json::from_value(rules)?;
                 Ok(Some(Record {
                     url,
                     expiry: expiry.map(|v| v as u64),
                     created: created as u64,
                     tags,
                     max_visits: max_visits.map(|v| v as u32),
+                    rules,
                 }))
             }
             None => Ok(None),
@@ -207,9 +215,10 @@ impl Store for PostgresStore {
 
     async fn put_link(&self, id: u64, rec: &Record) -> Result<(), StoreError> {
         let tags = serde_json::to_value(&rec.tags)?;
+        let rules = serde_json::to_value(&rec.rules)?;
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created, tags, max_visits) VALUES ($1,$2,$3,$4,$5,$6) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6",
+            "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules) VALUES ($1,$2,$3,$4,$5,$6,$7) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7",
         )
         .bind(id as i64)
         .bind(&rec.url)
@@ -217,6 +226,7 @@ impl Store for PostgresStore {
         .bind(rec.created as i64)
         .bind(&tags)
         .bind(rec.max_visits.map(|v| v as i64))
+        .bind(&rules)
         .execute(&self.pool)
         .await
         .map_err(StoreError::backend)?;
@@ -257,9 +267,10 @@ impl Store for PostgresStore {
             return Ok(false);
         }
         let tags = serde_json::to_value(&rec.tags)?;
+        let rules = serde_json::to_value(&rec.rules)?;
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created, tags, max_visits) VALUES ($1,$2,$3,$4,$5,$6) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6",
+            "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules) VALUES ($1,$2,$3,$4,$5,$6,$7) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7",
         )
         .bind(id as i64)
         .bind(&rec.url)
@@ -267,6 +278,7 @@ impl Store for PostgresStore {
         .bind(rec.created as i64)
         .bind(&tags)
         .bind(rec.max_visits.map(|v| v as i64))
+        .bind(&rules)
         .execute(&mut *tx)
         .await
         .map_err(StoreError::backend)?;
@@ -315,7 +327,7 @@ impl Store for PostgresStore {
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = sqlx::query(
-            "SELECT id, url, expiry, created, tags, max_visits FROM links \
+            "SELECT id, url, expiry, created, tags, max_visits, rules FROM links \
              WHERE ($1::bigint IS NULL OR id > $1) \
                AND ($2::jsonb IS NULL OR tags @> $2) \
              ORDER BY id LIMIT $3",
@@ -339,7 +351,7 @@ impl Store for PostgresStore {
         let pattern = format!("%{}%", like_escape(q));
         let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = sqlx::query(
-            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits \
+            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits, l.rules \
              FROM links l LEFT JOIN aliases a ON a.id = l.id \
              WHERE ($1::bigint IS NULL OR l.id > $1) \
                AND (l.url ILIKE $2 OR a.alias ILIKE $2) \

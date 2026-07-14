@@ -13,6 +13,7 @@ async fn round_trip_via_trait_object() {
         created: 1,
         tags: Vec::new(),
         max_visits: None,
+        rules: Vec::new(),
     };
     store.put_link(id, &rec).await.unwrap();
 

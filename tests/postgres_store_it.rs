@@ -1,4 +1,4 @@
-use quark::store::{postgres::PostgresStore, Record, Store};
+use quark::store::{postgres::PostgresStore, Record, Rule, RuleField, Store};
 use serial_test::serial;
 
 async fn fresh() -> Option<PostgresStore> {
@@ -21,6 +21,7 @@ async fn put_get_link_pg() {
         created: 100,
         tags: Vec::new(),
         max_visits: None,
+        rules: Vec::new(),
     };
     s.put_link(7, &rec).await.unwrap();
     assert_eq!(
@@ -28,6 +29,57 @@ async fn put_get_link_pg() {
         "https://example.com"
     );
     assert!(s.get_link(999).await.unwrap().is_none());
+}
+
+#[tokio::test]
+#[serial(pg)]
+async fn rules_round_trip_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let rec = Record {
+        url: "https://default.example".into(),
+        expiry: None,
+        created: 0,
+        tags: Vec::new(),
+        max_visits: None,
+        rules: vec![
+            Rule {
+                field: RuleField::Country,
+                values: vec!["BR".into()],
+                to: "https://br.example".into(),
+            },
+            Rule {
+                field: RuleField::Device,
+                values: vec!["Mobile".into()],
+                to: "https://m.example".into(),
+            },
+        ],
+    };
+    s.put_link(42, &rec).await.unwrap();
+    let got = s.get_link(42).await.unwrap().unwrap();
+    assert_eq!(got.rules, rec.rules);
+}
+
+#[tokio::test]
+#[serial(pg)]
+async fn link_without_rules_round_trips_to_empty_vec_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let rec = Record {
+        url: "https://no-rules.example".into(),
+        expiry: None,
+        created: 0,
+        tags: Vec::new(),
+        max_visits: None,
+        rules: Vec::new(),
+    };
+    s.put_link(43, &rec).await.unwrap();
+    let got = s.get_link(43).await.unwrap().unwrap();
+    assert!(got.rules.is_empty());
 }
 
 #[tokio::test]
@@ -53,6 +105,7 @@ async fn alias_is_atomic_no_orphan_pg() {
         created: 0,
         tags: Vec::new(),
         max_visits: None,
+        rules: Vec::new(),
     };
     assert!(s.put_alias_and_link("promo", 5, &rec).await.unwrap());
     assert!(!s.put_alias_and_link("promo", 9, &rec).await.unwrap());
@@ -72,6 +125,7 @@ async fn tags_round_trip_filter_and_distinct_pg() {
         created: 0,
         tags: tags.iter().map(|t| t.to_string()).collect(),
         max_visits: None,
+        rules: Vec::new(),
     };
     s.put_link(1, &rec("https://a.com", &["rust", "web"]))
         .await
@@ -113,6 +167,7 @@ async fn visits_round_trip_pg() {
         created: 0,
         tags: Vec::new(),
         max_visits: Some(5),
+        rules: Vec::new(),
     };
     s.put_link(11, &rec).await.unwrap();
     assert_eq!(s.visits(11).await.unwrap(), 0);
@@ -132,6 +187,7 @@ async fn bump_visits_is_atomic_and_increments_pg() {
         created: 0,
         tags: Vec::new(),
         max_visits: None,
+        rules: Vec::new(),
     };
     s.put_link(12, &rec).await.unwrap();
     assert_eq!(s.bump_visits(12).await.unwrap(), 1);

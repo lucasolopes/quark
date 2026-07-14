@@ -64,6 +64,7 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 - **Builder de UTM + templates**: seção colapsável de UTM no diálogo de criar link, com
   prévia ao vivo do destino e templates nomeados salvos localmente (`localStorage`).
 - **#9 Tokens de API com escopos + quota**: tokens nomeados (`links_read`, `links_write`, `blocklist`, `webhooks`, `analytics`, `full`) com limite de requisições opcional por token, gerenciados em `/admin/tokens` e na página **Tokens de API** do painel; o `QUARK_ADMIN_TOKEN` do env continua se comportando como `full`, sem mudanças. Doc: `docs/API-TOKENS.PT_BR.md`.
+- **Regras de redirecionamento (#12)**: regras por link de geo/dispositivo (primeira que combina vence, `url` continua o padrão), editor no painel nos diálogos de criar/editar. Doc: `docs/REDIRECT-RULES.PT_BR.md`.
 
 ## Próximo
 

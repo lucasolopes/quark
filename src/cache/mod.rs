@@ -197,6 +197,7 @@ mod tests {
             created: 0,
             tags: Vec::new(),
             max_visits: None,
+            rules: Vec::new(),
         }
     }
 
@@ -302,7 +303,8 @@ mod tests {
                     expiry: None,
                     created: 0,
                     tags: Vec::new(),
-                    max_visits: None
+                    max_visits: None,
+                    rules: Vec::new()
                 },
                 now,
                 3600
@@ -316,7 +318,8 @@ mod tests {
                     expiry: Some(now + 100),
                     created: 0,
                     tags: Vec::new(),
-                    max_visits: None
+                    max_visits: None,
+                    rules: Vec::new()
                 },
                 now,
                 3600
@@ -330,7 +333,8 @@ mod tests {
                     expiry: Some(now + 999_999),
                     created: 0,
                     tags: Vec::new(),
-                    max_visits: None
+                    max_visits: None,
+                    rules: Vec::new()
                 },
                 now,
                 3600
@@ -344,7 +348,8 @@ mod tests {
                     expiry: Some(now - 1),
                     created: 0,
                     tags: Vec::new(),
-                    max_visits: None
+                    max_visits: None,
+                    rules: Vec::new()
                 },
                 now,
                 3600

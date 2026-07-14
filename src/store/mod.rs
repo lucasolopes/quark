@@ -23,6 +23,11 @@ pub struct Record {
     /// field must deserialize to `None`, not fail.
     #[serde(default)]
     pub max_visits: Option<u32>,
+    /// Geo/device redirect rules (roadmap #12). `#[serde(default)]` so that
+    /// old blobs/rows without this field deserialize to an empty `Vec`
+    /// (regression: pre-existing Records must keep working unchanged).
+    #[serde(default)]
+    pub rules: Vec<Rule>,
 }
 
 /// Maximum number of tags kept per link (extra tags beyond this are dropped).
@@ -51,6 +56,68 @@ pub fn normalize_tags(raw: Vec<String>) -> Vec<String> {
         }
     }
     out
+}
+
+/// A single geo/device redirect rule: if the visitor's `field` value is in
+/// `values`, the redirect goes to `to` instead of the link's default `url`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Rule {
+    pub field: RuleField,
+    pub values: Vec<String>,
+    pub to: String,
+}
+
+/// The visitor attribute a `Rule` matches on. OS/browser rules are out of
+/// scope for this task (need finer UA parsers not yet on main).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleField {
+    Country,
+    Device,
+}
+
+/// Finds the index of the first rule (in order) that matches the visitor's
+/// `country`/`ua`, or `None` if no rule matches (including the empty-rules
+/// case). Pure (no I/O); returns an index rather than a reference so callers
+/// can decide independently whether to clone the match or move the link's
+/// default `url` — this is what lets the redirect hot path stay
+/// clone-free when a link has no rules.
+pub fn matched_rule_index(
+    rules: &[Rule],
+    country: Option<&str>,
+    ua: Option<&str>,
+) -> Option<usize> {
+    if rules.is_empty() {
+        return None;
+    }
+    let country_upper = country.map(|c| c.to_ascii_uppercase());
+    let device = crate::analytics::device_from_ua(ua);
+    rules.iter().position(|rule| match rule.field {
+        RuleField::Country => match &country_upper {
+            Some(c) => rule.values.iter().any(|v| v.eq_ignore_ascii_case(c)),
+            None => false,
+        },
+        RuleField::Device => rule.values.iter().any(|v| v.eq_ignore_ascii_case(device)),
+    })
+}
+
+/// Resolves the redirect destination for a click: with no rules (the common
+/// case, every pre-existing link), returns `&rec.url` with just a
+/// `Vec::is_empty()` check — no extra cost. With rules, evaluates them in
+/// order and returns the first match's `to`; falls back to `&rec.url` if
+/// none match. Pure (no I/O): reuses the `country`/`user_agent` already read
+/// for the click's `ClickEvent`. Kept for tests/callers that want a borrowed
+/// destination; the redirect handler uses `matched_rule_index` directly so it
+/// can move `rec.url` instead of cloning it.
+pub fn resolve_destination<'a>(
+    rec: &'a Record,
+    country: Option<&str>,
+    ua: Option<&str>,
+) -> &'a str {
+    match matched_rule_index(&rec.rules, country, ua) {
+        Some(i) => &rec.rules[i].to,
+        None => &rec.url,
+    }
 }
 
 #[derive(Debug)]
@@ -248,5 +315,108 @@ mod tests {
         let json = r#"{"url":"https://example.com","expiry":null,"created":100,"max_visits":5}"#;
         let rec: Record = serde_json::from_str(json).unwrap();
         assert_eq!(rec.max_visits, Some(5));
+    }
+}
+
+#[cfg(test)]
+mod rules_tests {
+    use super::{resolve_destination, Record, Rule, RuleField};
+
+    fn rec(url: &str, rules: Vec<Rule>) -> Record {
+        Record {
+            url: url.into(),
+            expiry: None,
+            created: 0,
+            tags: Vec::new(),
+            max_visits: None,
+            rules,
+        }
+    }
+
+    #[test]
+    fn no_rules_returns_default_url() {
+        let r = rec("https://default.example", vec![]);
+        assert_eq!(
+            resolve_destination(&r, Some("BR"), None),
+            "https://default.example"
+        );
+    }
+
+    #[test]
+    fn country_rule_matches_uppercased() {
+        let r = rec(
+            "https://default.example",
+            vec![Rule {
+                field: RuleField::Country,
+                values: vec!["BR".into()],
+                to: "https://br.example".into(),
+            }],
+        );
+        assert_eq!(
+            resolve_destination(&r, Some("br"), None),
+            "https://br.example"
+        );
+        assert_eq!(
+            resolve_destination(&r, Some("US"), None),
+            "https://default.example"
+        );
+        assert_eq!(
+            resolve_destination(&r, None, None),
+            "https://default.example"
+        );
+    }
+
+    #[test]
+    fn device_rule_matches_via_device_from_ua() {
+        let r = rec(
+            "https://default.example",
+            vec![Rule {
+                field: RuleField::Device,
+                values: vec!["Mobile".into()],
+                to: "https://m.example".into(),
+            }],
+        );
+        assert_eq!(
+            resolve_destination(&r, None, Some("Mozilla/5.0 (iPhone; CPU iPhone OS)")),
+            "https://m.example"
+        );
+        assert_eq!(
+            resolve_destination(&r, None, Some("Mozilla/5.0 (Windows NT 10.0; Win64)")),
+            "https://default.example"
+        );
+    }
+
+    #[test]
+    fn first_matching_rule_wins() {
+        let r = rec(
+            "https://default.example",
+            vec![
+                Rule {
+                    field: RuleField::Country,
+                    values: vec!["BR".into()],
+                    to: "https://first.example".into(),
+                },
+                Rule {
+                    field: RuleField::Country,
+                    values: vec!["BR".into()],
+                    to: "https://second.example".into(),
+                },
+            ],
+        );
+        assert_eq!(
+            resolve_destination(&r, Some("BR"), None),
+            "https://first.example"
+        );
+    }
+
+    #[test]
+    fn old_blob_without_rules_deserializes_to_empty_vec() {
+        let old_json = r#"{"url":"https://old.example","expiry":null,"created":0}"#;
+        let r: Record = serde_json::from_str(old_json).unwrap();
+        assert!(r.rules.is_empty());
+        assert_eq!(
+            resolve_destination(&r, Some("BR"), None),
+            "https://old.example"
+        );
     }
 }

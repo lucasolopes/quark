@@ -42,6 +42,7 @@ fn bench(c: &mut Criterion) {
                     created: 0,
                     tags: Vec::new(),
                     max_visits: None,
+                    rules: Vec::new(),
                 },
             )
             .await
