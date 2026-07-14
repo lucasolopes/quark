@@ -187,6 +187,38 @@ async fn relay_delivers_all_enqueued() {
     assert!(row_state(&pool, &key_b).await.2.is_some());
 }
 
+/// Regression (found live): a delivery whose subscription is NOT in the relay's
+/// cached snapshot (e.g. the sub was created after the last 10s refresh) must
+/// NOT be dead-lettered. The relay looks the sub up in the store authoritatively
+/// and delivers it. Before the fix it was marked dead with attempts=0.
+#[tokio::test]
+#[serial(pg)]
+async fn delivery_for_sub_missing_from_snapshot_is_looked_up_not_dead_lettered() {
+    let Some((store, pool)) = setup().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let (url, mock) = spawn_mock(vec![200]).await;
+    let sub = add_sub(&store, &url).await;
+    let now = quark::now();
+    let key = format!("evt_test.{}", sub.id);
+    store
+        .enqueue_deliveries(&[row(&key, sub.id, now)])
+        .await
+        .unwrap();
+
+    let claimed = poll_once(&store, &relay_client(), &[], now, RELAY_BATCH, |_| false).await;
+    assert_eq!(claimed, 1);
+
+    assert_eq!(mock.captured.lock().unwrap().len(), 1);
+    let (_attempts, _next, delivered_at, dead) = row_state(&pool, &key).await;
+    assert!(
+        delivered_at.is_some(),
+        "delivered via store lookup, not dropped"
+    );
+    assert!(!dead, "must not be dead-lettered on a snapshot miss");
+}
+
 /// A 500 endpoint: attempts grow, next_attempt_at grows, then dead=true after
 /// MAX (DLQ), and the row stops being claimed.
 #[tokio::test]

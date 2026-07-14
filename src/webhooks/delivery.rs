@@ -495,16 +495,39 @@ async fn deliver_claimed(
     is_blocked: impl Fn(&str) -> bool,
     now: u64,
 ) {
-    let Some(sub) = subs.iter().find(|s| s.id == delivery.subscription_id) else {
-        eprintln!(
-            "{}",
-            serde_json::json!({
-                "webhook_relay_sub_missing": delivery.subscription_id,
-                "delivery_key": &delivery.delivery_key,
-            })
-        );
-        mark_dead_logged(store, delivery.id, delivery.attempts).await;
-        return;
+    let fetched;
+    let sub = match subs.iter().find(|s| s.id == delivery.subscription_id) {
+        Some(s) => s,
+        None => match store.get_webhook(delivery.subscription_id).await {
+            Ok(Some(s)) => {
+                fetched = s;
+                &fetched
+            }
+            Ok(None) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "webhook_relay_sub_deleted": delivery.subscription_id,
+                        "delivery_key": &delivery.delivery_key,
+                    })
+                );
+                mark_dead_logged(store, delivery.id, delivery.attempts).await;
+                return;
+            }
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "webhook_relay_sub_lookup_error": e.to_string(),
+                        "delivery_key": &delivery.delivery_key,
+                    })
+                );
+                let next =
+                    now.saturating_add(relay_backoff_secs(delivery.attempts.saturating_add(1)));
+                let _ = store.mark_retry(delivery.id, next, delivery.attempts).await;
+                return;
+            }
+        },
     };
 
     let host = match extract_host(&sub.url) {
