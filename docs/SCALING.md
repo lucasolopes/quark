@@ -140,12 +140,12 @@ defeat its purpose. On the LMDB backend there is no outbox at all; every event,
 lifecycle included, rides the in-memory best-effort channel. See
 [WEBHOOKS](WEBHOOKS.md) for the full delivery model.
 
-**One residual gap.** The outbox row is inserted right after the link mutation
-commits, not inside the same transaction (the storage layer does not otherwise
-know about webhooks). A crash in the narrow window between the link commit and
-the outbox insert loses that one event. Folding the insert into the same
-transaction is a planned follow-up. This is far smaller than the in-memory gap it
-replaces.
+**Enqueue is atomic with the mutation.** The outbox rows are inserted in the
+same transaction as the link mutation that produced the event. The handler
+reads the matching active subscriptions (outside the transaction) and hands the
+delivery rows to the storage layer, which commits the link change and the
+outbox inserts together. Either both land or neither does, so a crash can no
+longer lose an event between the link write and the outbox insert.
 
 ## `QUARK_NODE_ID`: defensive LMDB partitioning
 

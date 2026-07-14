@@ -143,11 +143,12 @@ mataria o propósito. No backend LMDB não há outbox nenhum; todo evento, ciclo
 vida incluso, vai pelo canal best-effort em memória. Veja
 [WEBHOOKS](WEBHOOKS.PT_BR.md) para o modelo de entrega completo.
 
-**Um gap residual.** A linha do outbox é inserida logo após a mutação do link
-commitar, não dentro da mesma transação (a camada de store não conhece webhooks
-de outra forma). Um crash na janela estreita entre o commit do link e a inserção
-no outbox perde aquele evento. Dobrar a inserção na mesma transação é um
-follow-up planejado. Isso é muito menor que o gap em memória que substitui.
+**A inserção é atômica com a mutação.** As linhas do outbox entram na mesma
+transação da mutação do link que gerou o evento. O handler lê as assinaturas
+ativas que casam (fora da transação) e passa as linhas de entrega para a camada
+de store, que comita a mudança do link e os inserts do outbox juntos. Ou os
+dois entram ou nenhum, então um crash não perde mais um evento entre a gravação
+do link e a inserção no outbox.
 
 ## `QUARK_NODE_ID`: particionamento defensivo do LMDB
 

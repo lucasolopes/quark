@@ -165,6 +165,34 @@ impl Store for LmdbStore {
         Ok(true)
     }
 
+    // The `_tx` variants exist to make the link mutation atomic with the
+    // webhook-outbox enqueue on Postgres. On the single-node LMDB backend
+    // lifecycle events ride the in-memory channel and `deliveries` is always
+    // empty, so these delegate to the plain op and ignore it (single-node
+    // behavior is unchanged).
+    async fn put_link_tx(
+        &self,
+        id: u64,
+        rec: &Record,
+        _deliveries: &[OutboxRow],
+    ) -> Result<(), StoreError> {
+        self.put_link(id, rec).await
+    }
+
+    async fn put_alias_and_link_tx(
+        &self,
+        alias: &str,
+        id: u64,
+        rec: &Record,
+        _deliveries: &[OutboxRow],
+    ) -> Result<bool, StoreError> {
+        self.put_alias_and_link(alias, id, rec).await
+    }
+
+    async fn delete_link_tx(&self, id: u64, _deliveries: &[OutboxRow]) -> Result<(), StoreError> {
+        self.delete_link(id).await
+    }
+
     async fn add_blocked_domain(&self, domain: &str) -> Result<(), StoreError> {
         let d = domain.trim().to_ascii_lowercase();
         let mut wtxn = self.env.write_txn()?;

@@ -151,6 +151,63 @@ fn row_to_pixel(r: &PgRow) -> Result<PixelConfig, StoreError> {
     })
 }
 
+/// Upserts a link row inside an open transaction (same SQL as `put_link`).
+/// Shared by the `_tx` mutation methods so the link write and the outbox
+/// enqueue commit atomically.
+async fn upsert_link_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: u64,
+    rec: &Record,
+) -> Result<(), StoreError> {
+    let tags = serde_json::to_value(&rec.tags)?;
+    let rules = serde_json::to_value(&rec.rules)?;
+    let variants = serde_json::to_value(&rec.variants)?;
+    sqlx::query(
+        "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) \
+         ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10",
+    )
+    .bind(id as i64)
+    .bind(&rec.url)
+    .bind(rec.expiry.map(|v| v as i64))
+    .bind(rec.created as i64)
+    .bind(&tags)
+    .bind(rec.max_visits.map(|v| v as i64))
+    .bind(&rules)
+    .bind(&variants)
+    .bind(&rec.app_ios)
+    .bind(&rec.app_android)
+    .execute(&mut **tx)
+    .await
+    .map_err(StoreError::backend)?;
+    Ok(())
+}
+
+/// Enqueues the webhook-outbox `rows` inside an open transaction, with
+/// `ON CONFLICT (delivery_key) DO NOTHING` (same idempotent insert as
+/// `enqueue_deliveries`, but sharing the mutation's transaction). An empty
+/// slice is a no-op (the LMDB case never reaches here).
+async fn enqueue_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rows: &[OutboxRow],
+) -> Result<(), StoreError> {
+    for row in rows {
+        sqlx::query(
+            "INSERT INTO webhook_deliveries (delivery_key, subscription_id, event_type, payload, created, next_attempt_at) \
+             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (delivery_key) DO NOTHING",
+        )
+        .bind(&row.delivery_key)
+        .bind(row.subscription_id as i64)
+        .bind(&row.event_type)
+        .bind(&row.payload)
+        .bind(row.created as i64)
+        .bind(row.next_attempt_at as i64)
+        .execute(&mut **tx)
+        .await
+        .map_err(StoreError::backend)?;
+    }
+    Ok(())
+}
+
 pub struct PostgresStore {
     pool: PgPool,
 }
@@ -368,6 +425,56 @@ impl Store for PostgresStore {
         .map_err(StoreError::backend)?;
         tx.commit().await.map_err(StoreError::backend)?;
         Ok(true)
+    }
+
+    async fn put_link_tx(
+        &self,
+        id: u64,
+        rec: &Record,
+        deliveries: &[OutboxRow],
+    ) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
+        upsert_link_in_tx(&mut tx, id, rec).await?;
+        enqueue_in_tx(&mut tx, deliveries).await?;
+        tx.commit().await.map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn put_alias_and_link_tx(
+        &self,
+        alias: &str,
+        id: u64,
+        rec: &Record,
+        deliveries: &[OutboxRow],
+    ) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
+        let res = sqlx::query(
+            "INSERT INTO aliases (alias, id) VALUES ($1,$2) ON CONFLICT (alias) DO NOTHING",
+        )
+        .bind(alias)
+        .bind(id as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(StoreError::backend)?;
+        if res.rows_affected() == 0 {
+            return Ok(false);
+        }
+        upsert_link_in_tx(&mut tx, id, rec).await?;
+        enqueue_in_tx(&mut tx, deliveries).await?;
+        tx.commit().await.map_err(StoreError::backend)?;
+        Ok(true)
+    }
+
+    async fn delete_link_tx(&self, id: u64, deliveries: &[OutboxRow]) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
+        sqlx::query("DELETE FROM links WHERE id = $1")
+            .bind(id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(StoreError::backend)?;
+        enqueue_in_tx(&mut tx, deliveries).await?;
+        tx.commit().await.map_err(StoreError::backend)?;
+        Ok(())
     }
 
     async fn add_blocked_domain(&self, domain: &str) -> Result<(), StoreError> {

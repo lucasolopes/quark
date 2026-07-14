@@ -425,14 +425,10 @@ pub async fn create_link_core(
             Err(StoreError::IdSpaceExhausted) => return Err(CreateError::IdExhausted),
             Err(_) => return Err(CreateError::Backend),
         };
-        match st.store.put_alias_and_link(alias, id, &rec).await {
-            Ok(true) => {}
-            Ok(false) => return Err(CreateError::AliasInUse),
-            Err(_) => return Err(CreateError::Backend),
-        };
         let canonical_code = codec::to_base62(permute::encode(id, st.key));
-        st.webhooks
-            .emit_lifecycle(WebhookEvent {
+        let rows = st
+            .webhooks
+            .lifecycle_deliveries(WebhookEvent {
                 event_type: EventType::LinkCreated,
                 body: webhook_event_payload(
                     EventType::LinkCreated,
@@ -445,6 +441,11 @@ pub async fn create_link_core(
                 ),
             })
             .await;
+        match st.store.put_alias_and_link_tx(alias, id, &rec, &rows).await {
+            Ok(true) => {}
+            Ok(false) => return Err(CreateError::AliasInUse),
+            Err(_) => return Err(CreateError::Backend),
+        };
         return Ok(alias.to_string());
     }
 
@@ -456,12 +457,10 @@ pub async fn create_link_core(
     if id > permute::MAX_ID {
         return Err(CreateError::IdExhausted);
     }
-    if st.store.put_link(id, &rec).await.is_err() {
-        return Err(CreateError::Backend);
-    }
     let code = codec::to_base62(permute::encode(id, st.key));
-    st.webhooks
-        .emit_lifecycle(WebhookEvent {
+    let rows = st
+        .webhooks
+        .lifecycle_deliveries(WebhookEvent {
             event_type: EventType::LinkCreated,
             body: webhook_event_payload(
                 EventType::LinkCreated,
@@ -474,6 +473,9 @@ pub async fn create_link_core(
             ),
         })
         .await;
+    if st.store.put_link_tx(id, &rec, &rows).await.is_err() {
+        return Err(CreateError::Backend);
+    }
     Ok(code)
 }
 
@@ -1198,16 +1200,10 @@ async fn admin_link_delete(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    if st.store.delete_link(id).await.is_err() {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
-    if let Some(a) = &alias {
-        let _ = st.store.delete_alias(a).await;
-    }
-    st.cache.invalidate(id).await;
     let canonical_code = codec::to_base62(permute::encode(id, st.key));
-    st.webhooks
-        .emit_lifecycle(WebhookEvent {
+    let rows = st
+        .webhooks
+        .lifecycle_deliveries(WebhookEvent {
             event_type: EventType::LinkDeleted,
             body: webhook_event_payload(
                 EventType::LinkDeleted,
@@ -1220,6 +1216,13 @@ async fn admin_link_delete(
             ),
         })
         .await;
+    if st.store.delete_link_tx(id, &rows).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if let Some(a) = &alias {
+        let _ = st.store.delete_alias(a).await;
+    }
+    st.cache.invalidate(id).await;
     StatusCode::OK.into_response()
 }
 
@@ -1342,13 +1345,10 @@ async fn admin_link_patch(
             return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
         }
     }
-    if st.store.put_link(id, &rec).await.is_err() {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
-    st.cache.invalidate(id).await;
     let canonical_code = codec::to_base62(permute::encode(id, st.key));
-    st.webhooks
-        .emit_lifecycle(WebhookEvent {
+    let rows = st
+        .webhooks
+        .lifecycle_deliveries(WebhookEvent {
             event_type: EventType::LinkUpdated,
             body: webhook_event_payload(
                 EventType::LinkUpdated,
@@ -1361,6 +1361,10 @@ async fn admin_link_patch(
             ),
         })
         .await;
+    if st.store.put_link_tx(id, &rec, &rows).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    st.cache.invalidate(id).await;
     StatusCode::OK.into_response()
 }
 

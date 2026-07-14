@@ -83,21 +83,26 @@ impl WebhookDispatcher {
         }
     }
 
-    /// Routes a lifecycle event (created/updated/deleted). On the Postgres
-    /// backend (`outbox` set) it fans the event out into one durable delivery
-    /// row per matching active subscription (`delivery_key =
-    /// "<event_id>.<sub_id>"`) via `enqueue_deliveries`, so the leased relay
-    /// delivers it at-least-once with persisted retry and a DLQ. On LMDB (no
-    /// outbox) it falls back to the in-memory `emit`.
+    /// Builds the durable delivery rows for a lifecycle event
+    /// (created/updated/deleted) WITHOUT enqueuing them. On the Postgres
+    /// backend (`outbox` set) it reads the current active subscriptions
+    /// (`list_webhooks` + `matches`) and returns one `OutboxRow` per match
+    /// (`delivery_key = "<event_id>.<sub_id>"`, payload = `ev.body`); the caller
+    /// then enqueues those rows inside the SAME transaction as the link
+    /// mutation (via the `_tx` store methods), closing the dual-write window.
+    /// On LMDB (no outbox) it falls back to the in-memory best-effort `emit`
+    /// and returns an empty `Vec` (single-node stays in-memory, unchanged).
     ///
-    /// Best-effort at the admin layer: a store error is logged and swallowed,
-    /// it never fails the admin request. This must NOT be called from the
-    /// redirect hot path (it does a synchronous DB read+write); `link.clicked`
-    /// and `link.expired` use `emit` instead.
-    pub async fn emit_lifecycle(&self, ev: WebhookEvent) {
+    /// The subscription read is a read, not part of the atomic write, so it
+    /// stays outside the mutation's transaction. A store error is logged and
+    /// swallowed (returns an empty `Vec`): lifecycle delivery is best-effort at
+    /// the admin layer and never fails the admin request. This must NOT be
+    /// called from the redirect hot path; `link.clicked`/`link.expired` use
+    /// `emit` instead.
+    pub async fn lifecycle_deliveries(&self, ev: WebhookEvent) -> Vec<OutboxRow> {
         let Some(store) = &self.outbox else {
             self.emit(ev);
-            return;
+            return Vec::new();
         };
         let subs = match store.list_webhooks().await {
             Ok(subs) => subs,
@@ -106,13 +111,12 @@ impl WebhookDispatcher {
                     "{}",
                     serde_json::json!({"webhook_outbox_snapshot_error": e.to_string()})
                 );
-                return;
+                return Vec::new();
             }
         };
         let event_id = outbox_event_id(&ev.body);
         let now = crate::now();
-        let rows: Vec<OutboxRow> = subs
-            .iter()
+        subs.iter()
             .filter(|s| matches(s, &ev.event_type))
             .map(|s| OutboxRow {
                 delivery_key: format!("{event_id}.{}", s.id),
@@ -122,11 +126,30 @@ impl WebhookDispatcher {
                 created: now,
                 next_attempt_at: now,
             })
-            .collect();
-        if rows.is_empty() {
+            .collect()
+    }
+
+    /// Routes a lifecycle event and enqueues it in its OWN transaction (the
+    /// non-atomic path retained for callers that are not tied to a link
+    /// mutation). The four api.rs lifecycle sites now use `lifecycle_deliveries`
+    /// plus a `_tx` store method instead, so the enqueue is atomic with the
+    /// mutation. On LMDB this is a plain in-memory `emit` (empty rows).
+    ///
+    /// Best-effort at the admin layer: a store error is logged and swallowed.
+    /// Must NOT be called from the redirect hot path.
+    pub async fn emit_lifecycle(&self, ev: WebhookEvent) {
+        let has_outbox = self.outbox.is_some();
+        let rows = self.lifecycle_deliveries(ev).await;
+        if !has_outbox || rows.is_empty() {
             return;
         }
-        if let Err(e) = store.enqueue_deliveries(&rows).await {
+        if let Err(e) = self
+            .outbox
+            .as_ref()
+            .expect("outbox is Some when has_outbox")
+            .enqueue_deliveries(&rows)
+            .await
+        {
             eprintln!(
                 "{}",
                 serde_json::json!({"webhook_outbox_enqueue_error": e.to_string()})
@@ -790,6 +813,30 @@ mod tests {
         ) -> Result<bool, StoreError> {
             unimplemented!()
         }
+        async fn put_link_tx(
+            &self,
+            _id: u64,
+            _rec: &Record,
+            _deliveries: &[OutboxRow],
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn put_alias_and_link_tx(
+            &self,
+            _alias: &str,
+            _id: u64,
+            _rec: &Record,
+            _deliveries: &[OutboxRow],
+        ) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
+        async fn delete_link_tx(
+            &self,
+            _id: u64,
+            _deliveries: &[OutboxRow],
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
         async fn add_blocked_domain(&self, _domain: &str) -> Result<(), StoreError> {
             unimplemented!()
         }
@@ -1239,5 +1286,80 @@ mod tests {
             body: "b".to_string(),
         });
         drop(rx);
+    }
+
+    /// On the outbox backend, `lifecycle_deliveries` reads matching active
+    /// subscriptions and returns one row per match (stable `delivery_key`),
+    /// WITHOUT touching the in-memory channel and WITHOUT enqueuing.
+    #[tokio::test]
+    async fn lifecycle_deliveries_builds_rows_for_matching_active_subs() {
+        let store: Arc<dyn Store> = Arc::new(StubStore {
+            subs: vec![
+                sub(
+                    7,
+                    "https://a",
+                    vec![EventType::LinkCreated],
+                    true,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                ),
+                sub(
+                    8,
+                    "https://b",
+                    vec![EventType::LinkDeleted],
+                    true,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                ),
+                sub(
+                    9,
+                    "https://c",
+                    vec![EventType::LinkCreated],
+                    false,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                ),
+            ],
+        });
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let dispatcher = WebhookDispatcher::new(
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .with_outbox(store);
+
+        let rows = dispatcher
+            .lifecycle_deliveries(WebhookEvent {
+                event_type: EventType::LinkCreated,
+                body: r#"{"id":"evt_abc","type":"link.created"}"#.to_string(),
+            })
+            .await;
+
+        assert_eq!(rows.len(), 1, "only the active link.created sub matches");
+        assert_eq!(rows[0].delivery_key, "evt_abc.7");
+        assert_eq!(rows[0].subscription_id, 7);
+        // Outbox path must not emit onto the in-memory channel.
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// Without an outbox (LMDB), `lifecycle_deliveries` returns no rows and
+    /// falls back to the in-memory `emit` (single-node behavior unchanged).
+    #[tokio::test]
+    async fn lifecycle_deliveries_lmdb_emits_in_memory_and_returns_empty() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let dispatcher = WebhookDispatcher::new(
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let rows = dispatcher
+            .lifecycle_deliveries(WebhookEvent {
+                event_type: EventType::LinkCreated,
+                body: "{}".to_string(),
+            })
+            .await;
+
+        assert!(rows.is_empty());
+        let ev = rx.try_recv().expect("LMDB path emits in-memory");
+        assert_eq!(ev.event_type, EventType::LinkCreated);
     }
 }

@@ -228,12 +228,13 @@ a no-op (this is the same rule as [Replay and
 idempotency](#replay-and-idempotency); the durable path just makes the id
 stable and persisted rather than random per attempt).
 
-**One honest gap.** The outbox row is inserted right after the link mutation
-commits, not inside the same transaction (the storage layer does not otherwise
-know about webhooks). A crash in the narrow window between the link commit and
-the outbox insert loses that one event. This is far smaller than the in-memory
-gap it replaces, and folding the insert into the same transaction is a planned
-follow-up.
+**Enqueue is atomic with the mutation.** The outbox rows are inserted in the
+same transaction as the link mutation that produced the event: the create,
+patch, and delete paths build the matching delivery rows (a read of the active
+subscriptions, outside the transaction) and hand them to the storage layer,
+which writes the link change and the `ON CONFLICT (delivery_key) DO NOTHING`
+inserts together. Either both commit or neither does, so a crash can no longer
+lose an event between the link write and the outbox insert.
 
 ## Configuring a subscription
 

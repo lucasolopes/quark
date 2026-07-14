@@ -246,6 +246,37 @@ pub trait Store: Send + Sync + 'static {
         id: u64,
         rec: &Record,
     ) -> Result<bool, StoreError>;
+    /// Transactional variant of `put_link`: upserts the link AND enqueues
+    /// `deliveries` (webhook outbox rows) in ONE transaction, so a crash can
+    /// never persist the mutation without its lifecycle deliveries (or vice
+    /// versa). The enqueue uses `ON CONFLICT (delivery_key) DO NOTHING`, so a
+    /// duplicate delivery is a no-op while the link still upserts. Used by the
+    /// create-numeric and patch paths. On LMDB `deliveries` is always empty
+    /// (lifecycle events ride the in-memory channel) and this delegates to
+    /// `put_link`, ignoring it.
+    async fn put_link_tx(
+        &self,
+        id: u64,
+        rec: &Record,
+        deliveries: &[OutboxRow],
+    ) -> Result<(), StoreError>;
+    /// Transactional variant of `put_alias_and_link`: claims the alias, puts
+    /// the link, and enqueues `deliveries` in ONE transaction. Returns
+    /// `Ok(false)` WITHOUT writing the link or the deliveries (the transaction
+    /// rolls back) when the alias is already in use, so the enqueue is
+    /// naturally conditional on the mutation succeeding. On LMDB `deliveries`
+    /// is empty and this delegates to `put_alias_and_link`.
+    async fn put_alias_and_link_tx(
+        &self,
+        alias: &str,
+        id: u64,
+        rec: &Record,
+        deliveries: &[OutboxRow],
+    ) -> Result<bool, StoreError>;
+    /// Transactional variant of `delete_link`: deletes the link AND enqueues
+    /// `deliveries` in ONE transaction. On LMDB `deliveries` is empty and this
+    /// delegates to `delete_link`.
+    async fn delete_link_tx(&self, id: u64, deliveries: &[OutboxRow]) -> Result<(), StoreError>;
     async fn add_blocked_domain(&self, domain: &str) -> Result<(), StoreError>;
     async fn remove_blocked_domain(&self, domain: &str) -> Result<(), StoreError>;
     async fn list_blocked_domains(&self) -> Result<Vec<String>, StoreError>;

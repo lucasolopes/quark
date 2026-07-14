@@ -1,11 +1,78 @@
-use quark::store::{postgres::PostgresStore, Record, Rule, RuleField, Store, Variant};
+use quark::store::{postgres::PostgresStore, OutboxRow, Record, Rule, RuleField, Store, Variant};
+use quark::webhooks::{EventType, SubscriptionKind, WebhookSubscription};
 use serial_test::serial;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Row};
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
     let s = PostgresStore::open(&url).await.unwrap();
     s.reset_for_tests().await.unwrap();
     Some(s)
+}
+
+/// A fresh store plus a raw pool used to inspect `webhook_deliveries` rows the
+/// `Store` trait does not expose.
+async fn fresh_with_pool() -> Option<(PostgresStore, PgPool)> {
+    let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
+    let s = PostgresStore::open(&url).await.unwrap();
+    s.reset_for_tests().await.unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&url)
+        .await
+        .unwrap();
+    Some((s, pool))
+}
+
+fn plain_rec(url: &str) -> Record {
+    Record {
+        url: url.into(),
+        expiry: None,
+        created: 100,
+        tags: Vec::new(),
+        max_visits: None,
+        rules: Vec::new(),
+        variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
+    }
+}
+
+async fn add_sub(store: &PostgresStore, url: &str) -> WebhookSubscription {
+    let id = store.next_webhook_id().await.unwrap();
+    let sub = WebhookSubscription {
+        id,
+        url: url.to_string(),
+        events: vec![EventType::LinkCreated],
+        secret: "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw".to_string(),
+        active: true,
+        created: 1,
+        kind: SubscriptionKind::Generic,
+    };
+    store.put_webhook(&sub).await.unwrap();
+    sub
+}
+
+fn outbox_row(key: &str, sub_id: u64, at: u64) -> OutboxRow {
+    OutboxRow {
+        delivery_key: key.to_string(),
+        subscription_id: sub_id,
+        event_type: "link.created".to_string(),
+        payload: r#"{"id":"evt_test","type":"link.created"}"#.to_string(),
+        created: at,
+        next_attempt_at: at,
+    }
+}
+
+async fn count_deliveries(pool: &PgPool, key: &str) -> i64 {
+    sqlx::query("SELECT COUNT(*) AS n FROM webhook_deliveries WHERE delivery_key=$1")
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        .try_get("n")
+        .unwrap()
 }
 
 #[tokio::test]
@@ -300,4 +367,159 @@ async fn wellknown_round_trip_pg() {
     s.delete_wellknown("assetlinks.json").await.unwrap();
     assert_eq!(s.get_wellknown("assetlinks.json").await.unwrap(), None);
     s.delete_wellknown("assetlinks.json").await.unwrap();
+}
+
+/// `put_link_tx` writes BOTH the link and the delivery rows in one transaction:
+/// after the call, the link and its `webhook_deliveries` row are present.
+#[tokio::test]
+#[serial(pg)]
+async fn put_link_tx_writes_link_and_deliveries_atomically() {
+    let Some((s, pool)) = fresh_with_pool().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let sub = add_sub(&s, "https://e.com/hook").await;
+    let key = format!("evt_test.{}", sub.id);
+    let rec = plain_rec("https://example.com");
+    s.put_link_tx(42, &rec, &[outbox_row(&key, sub.id, quark::now())])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        s.get_link(42).await.unwrap().unwrap().url,
+        "https://example.com"
+    );
+    assert_eq!(count_deliveries(&pool, &key).await, 1);
+}
+
+/// `put_link_tx` with no deliveries still upserts the link (patch on a link
+/// with no matching subscription).
+#[tokio::test]
+#[serial(pg)]
+async fn put_link_tx_with_no_deliveries_upserts_link() {
+    let Some((s, pool)) = fresh_with_pool().await else {
+        return;
+    };
+    let rec = plain_rec("https://only-link.com");
+    s.put_link_tx(43, &rec, &[]).await.unwrap();
+    assert_eq!(
+        s.get_link(43).await.unwrap().unwrap().url,
+        "https://only-link.com"
+    );
+    assert_eq!(count_deliveries(&pool, "none").await, 0);
+}
+
+/// `put_alias_and_link_tx` writes the alias, the link, and the deliveries in
+/// one transaction.
+#[tokio::test]
+#[serial(pg)]
+async fn put_alias_and_link_tx_writes_all_atomically() {
+    let Some((s, pool)) = fresh_with_pool().await else {
+        return;
+    };
+    let sub = add_sub(&s, "https://e.com/hook").await;
+    let key = format!("evt_test.{}", sub.id);
+    let rec = plain_rec("https://aliased.com");
+    let claimed = s
+        .put_alias_and_link_tx("promo", 5, &rec, &[outbox_row(&key, sub.id, quark::now())])
+        .await
+        .unwrap();
+    assert!(claimed);
+    assert_eq!(s.get_alias("promo").await.unwrap(), Some(5));
+    assert_eq!(
+        s.get_link(5).await.unwrap().unwrap().url,
+        "https://aliased.com"
+    );
+    assert_eq!(count_deliveries(&pool, &key).await, 1);
+}
+
+/// On an alias conflict, `put_alias_and_link_tx` returns `Ok(false)` and rolls
+/// back: NEITHER the link NOR the deliveries are written.
+#[tokio::test]
+#[serial(pg)]
+async fn put_alias_and_link_tx_conflict_rolls_back_link_and_deliveries() {
+    let Some((s, pool)) = fresh_with_pool().await else {
+        return;
+    };
+    let sub = add_sub(&s, "https://e.com/hook").await;
+    // Claim the alias first with a different id.
+    assert!(s
+        .put_alias_and_link_tx("promo", 5, &plain_rec("https://first.com"), &[])
+        .await
+        .unwrap());
+
+    let key = format!("evt_test.{}", sub.id);
+    let claimed = s
+        .put_alias_and_link_tx(
+            "promo",
+            9,
+            &plain_rec("https://second.com"),
+            &[outbox_row(&key, sub.id, quark::now())],
+        )
+        .await
+        .unwrap();
+    assert!(!claimed, "alias already in use");
+    // The losing link (id 9) must not exist, and its delivery must not be enqueued.
+    assert!(s.get_link(9).await.unwrap().is_none());
+    assert_eq!(
+        count_deliveries(&pool, &key).await,
+        0,
+        "deliveries rolled back with the mutation"
+    );
+    // The original alias still points at id 5.
+    assert_eq!(s.get_alias("promo").await.unwrap(), Some(5));
+}
+
+/// `delete_link_tx` deletes the link AND enqueues the deliveries atomically.
+#[tokio::test]
+#[serial(pg)]
+async fn delete_link_tx_deletes_link_and_enqueues_deliveries() {
+    let Some((s, pool)) = fresh_with_pool().await else {
+        return;
+    };
+    let sub = add_sub(&s, "https://e.com/hook").await;
+    s.put_link(77, &plain_rec("https://doomed.com"))
+        .await
+        .unwrap();
+    let key = format!("evt_test.{}", sub.id);
+    s.delete_link_tx(77, &[outbox_row(&key, sub.id, quark::now())])
+        .await
+        .unwrap();
+    assert!(s.get_link(77).await.unwrap().is_none());
+    assert_eq!(count_deliveries(&pool, &key).await, 1);
+}
+
+/// `ON CONFLICT (delivery_key) DO NOTHING` inside the tx: re-enqueuing an
+/// existing `delivery_key` still upserts the link and leaves exactly one
+/// delivery row.
+#[tokio::test]
+#[serial(pg)]
+async fn put_link_tx_on_conflict_upserts_link_and_keeps_one_delivery() {
+    let Some((s, pool)) = fresh_with_pool().await else {
+        return;
+    };
+    let sub = add_sub(&s, "https://e.com/hook").await;
+    let key = format!("evt_test.{}", sub.id);
+    let at = quark::now();
+    s.put_link_tx(
+        50,
+        &plain_rec("https://v1.com"),
+        &[outbox_row(&key, sub.id, at)],
+    )
+    .await
+    .unwrap();
+    // Second call reuses the same delivery_key but a new link body.
+    s.put_link_tx(
+        50,
+        &plain_rec("https://v2.com"),
+        &[outbox_row(&key, sub.id, at)],
+    )
+    .await
+    .unwrap();
+    assert_eq!(s.get_link(50).await.unwrap().unwrap().url, "https://v2.com");
+    assert_eq!(
+        count_deliveries(&pool, &key).await,
+        1,
+        "duplicate delivery_key inserts one row"
+    );
 }

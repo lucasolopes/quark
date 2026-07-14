@@ -233,12 +233,13 @@ Trate um `webhook-id` repetido como no-op (é a mesma regra de [Replay e
 idempotência](#replay-e-idempotência); o caminho durável só torna o id estável
 e persistido em vez de aleatório por tentativa).
 
-**Uma brecha honesta.** A linha da outbox é inserida logo depois de a mutação
-do link comitar, não dentro da mesma transação (a camada de armazenamento não
-conhece webhooks de outra forma). Um crash na janela estreita entre o commit
-do link e a inserção na outbox perde aquele evento. Isso é bem menor que a
-brecha em memória que substitui, e dobrar a inserção pra dentro da mesma
-transação é um follow-up planejado.
+**A inserção é atômica com a mutação.** As linhas da outbox entram na mesma
+transação da mutação do link que gerou o evento: os fluxos de criar, editar e
+apagar montam as linhas de entrega que casam (uma leitura das assinaturas
+ativas, fora da transação) e as passam para a camada de armazenamento, que
+grava a mudança do link junto com os inserts `ON CONFLICT (delivery_key) DO
+NOTHING`. Ou os dois comitam ou nenhum, então um crash não perde mais um evento
+entre a gravação do link e a inserção na outbox.
 
 ## Configurando uma assinatura
 
