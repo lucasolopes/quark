@@ -11,7 +11,7 @@ export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; 
 export interface CreateLinkResponse { code: string; url: string; }
 export interface ClickEvent {
   id: number; ts: number;
-  referer?: string | null; country?: string | null; user_agent?: string | null;
+  referer?: string | null; country?: string | null; user_agent?: string | null; city?: string | null;
 }
 export interface Aggregates {
   total: number; first_ts: number; last_ts: number;

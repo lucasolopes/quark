@@ -103,10 +103,15 @@ interface BreakdownDatum {
 }
 
 /** `per_*` map turned into sorted, top-N chart data with the unknown-key fallback applied. */
-function toBreakdownData(map: Record<string, number>, unknownLabel: string, topN?: number): BreakdownDatum[] {
+function toBreakdownData(
+  map: Record<string, number>,
+  unknownLabel: string,
+  topN?: number,
+  relabel?: (label: string) => string,
+): BreakdownDatum[] {
   const sorted = Object.entries(map)
     .sort(([, a], [, b]) => b - a)
-    .map(([label, count]) => ({ label: label || unknownLabel, count }));
+    .map(([label, count]) => ({ label: label ? (relabel ? relabel(label) : label) : unknownLabel, count }));
   return topN === undefined ? sorted : sorted.slice(0, topN);
 }
 
@@ -183,6 +188,18 @@ interface StatsChartsProps {
  * `per_city` is usually empty (most deploys don't send `cf-ipcity`), so its
  * card is omitted entirely rather than shown empty.
  */
+/**
+ * `referer_host()` on the backend returns the untranslated keys `"direct"`
+ * and `"other"` for absent/unparseable referrers (see `src/analytics/mod.rs`).
+ * Real hostnames pass through unchanged; only those two known keys are mapped
+ * to their localized labels.
+ */
+function relabelReferer(t: ReturnType<typeof useT>, label: string): string {
+  if (label === "direct") return t("charts.refererDirect");
+  if (label === "other") return t("charts.refererOther");
+  return label;
+}
+
 export function StatsCharts({ aggregates }: StatsChartsProps) {
   const t = useT();
   const cityData = toBreakdownData(aggregates.per_city, t("charts.unknown"), TOP_N_CITIES);
@@ -213,7 +230,9 @@ export function StatsCharts({ aggregates }: StatsChartsProps) {
       <TopNBarChart
         title={t("charts.perRefererTitle")}
         emptyLabel={t("charts.perRefererEmpty")}
-        data={toBreakdownData(aggregates.per_referer, t("charts.unknown"), TOP_N_REFERERS)}
+        data={toBreakdownData(aggregates.per_referer, t("charts.unknown"), TOP_N_REFERERS, (label) =>
+          relabelReferer(t, label),
+        )}
       />
       {cityData.length > 0 && (
         <TopNBarChart title={t("charts.perCityTitle")} emptyLabel={t("charts.perCityEmpty")} data={cityData} />

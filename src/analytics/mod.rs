@@ -24,9 +24,13 @@ pub struct Aggregates {
     pub per_day: BTreeMap<String, u64>,
     pub per_country: BTreeMap<String, u64>,
     pub per_device: BTreeMap<String, u64>,
+    #[serde(default)]
     pub per_os: BTreeMap<String, u64>,
+    #[serde(default)]
     pub per_browser: BTreeMap<String, u64>,
+    #[serde(default)]
     pub per_referer: BTreeMap<String, u64>,
+    #[serde(default)]
     pub per_city: BTreeMap<String, u64>,
 }
 
@@ -474,5 +478,27 @@ mod tests {
         assert_eq!(a.per_referer.get("direct"), Some(&1));
         assert_eq!(a.per_city.get("Sao Paulo"), Some(&1));
         assert_eq!(a.per_city.len(), 1, "empty city must not pollute per_city");
+    }
+
+    #[test]
+    fn aggregates_deserializes_pre_branch_blob_without_new_fields() {
+        let old_json = r#"{
+            "total": 3,
+            "first_ts": 1752300000,
+            "last_ts": 1752400000,
+            "per_day": {"2025-07-12": 3},
+            "per_country": {"BR": 2, "US": 1},
+            "per_device": {"Mobile": 1, "Desktop": 2}
+        }"#;
+
+        let a: Aggregates =
+            serde_json::from_str(old_json).expect("old blob without new fields must deserialize");
+
+        assert_eq!(a.total, 3);
+        assert_eq!(a.per_country.get("BR"), Some(&2));
+        assert!(a.per_os.is_empty());
+        assert!(a.per_browser.is_empty());
+        assert!(a.per_referer.is_empty());
+        assert!(a.per_city.is_empty());
     }
 }

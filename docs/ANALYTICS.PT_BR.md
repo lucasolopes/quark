@@ -25,7 +25,9 @@ A partir desse evento, o quark calcula:
 
 ## Postura de privacidade
 
-**O quark nunca armazena um endereço IP.** Nem no backend LMDB, nem no ClickHouse, nem em memória além da própria requisição que está sendo tratada no momento. País e cidade vêm de um header que o proxy de borda já calculou (`cf-ipcountry`, `cf-ipcity`); o quark só lê esse header e segue. Não existe base GeoIP, não existe lookup de IP pra localização, não existe dependência que precisasse de uma.
+**A analytics de clique nunca armazena um endereço IP.** Nem no backend LMDB, nem no ClickHouse, nem no `ClickEvent` ou nos agregados que ele alimenta. País e cidade vêm de um header que o proxy de borda já calculou (`cf-ipcountry`, `cf-ipcity`); o quark só lê esse header e segue. Não existe base GeoIP, não existe lookup de IP pra localização, não existe dependência que precisasse de uma.
+
+Isso vale só pro caminho da analytics de clique. O rate limiter opcional (`src/abuse/ratelimit.rs`, `POST /`) é um mecanismo separado de proteção contra abuso: ele mantém o IP de quem chamou de forma transitória, em memória ou no Valkey, sob uma chave como `quark:rl:{ip}:{window}`, por cerca de um minuto (a janela do rate limit), depois descarta ou deixa expirar. Esse IP nunca é associado a um evento de clique e nunca chega no armazenamento de analytics.
 
 O que o quark mantém:
 

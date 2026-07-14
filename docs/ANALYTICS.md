@@ -25,7 +25,9 @@ From that event, quark computes:
 
 ## Privacy posture
 
-**quark never stores an IP address.** Not in the LMDB backend, not in ClickHouse, not in memory beyond the single request that's being handled. Country and city come from a header the edge proxy already computed (`cf-ipcountry`, `cf-ipcity`); quark reads that header and moves on. There's no GeoIP database, no IP-to-location lookup, no dependency that would need one.
+**Click analytics never stores an IP address.** Not in the LMDB backend, not in ClickHouse, not in the `ClickEvent` or in the aggregates it feeds. Country and city come from a header the edge proxy already computed (`cf-ipcountry`, `cf-ipcity`); quark reads that header and moves on. There's no GeoIP database, no IP-to-location lookup, no dependency that would need one.
+
+This applies to the click-analytics path only. The optional rate limiter (`src/abuse/ratelimit.rs`, `POST /`) is a separate mechanism for abuse protection: it keeps the caller's IP transiently, in memory or in Valkey under a key like `quark:rl:{ip}:{window}`, for roughly one minute (the rate-limit window), then drops or expires it. That IP is never joined with a click event and never reaches the analytics store.
 
 What quark does keep:
 

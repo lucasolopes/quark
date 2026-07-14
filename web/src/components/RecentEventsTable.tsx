@@ -31,6 +31,7 @@ export function RecentEventsTable({ events }: RecentEventsTableProps) {
         <TableRow>
           <TableHead>{t("events.timeHeader")}</TableHead>
           <TableHead>{t("events.countryHeader")}</TableHead>
+          <TableHead>{t("events.cityHeader")}</TableHead>
           <TableHead>{t("events.refererHeader")}</TableHead>
         </TableRow>
       </TableHeader>
@@ -39,6 +40,7 @@ export function RecentEventsTable({ events }: RecentEventsTableProps) {
           <TableRow key={`${event.ts}-${i}`}>
             <TableCell>{formatDateTime(event.ts)}</TableCell>
             <TableCell>{event.country || <span className="text-muted-foreground">—</span>}</TableCell>
+            <TableCell>{event.city || <span className="text-muted-foreground">—</span>}</TableCell>
             <TableCell className="max-w-64 truncate" title={event.referer ?? undefined}>
               {event.referer || <span className="text-muted-foreground">{t("events.direct")}</span>}
             </TableCell>
