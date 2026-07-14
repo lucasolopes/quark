@@ -423,7 +423,12 @@ async fn admin_links_list(
         .unwrap_or(DEFAULT_PAGE_LIMIT)
         .clamp(1, MAX_PAGE_LIMIT);
     let q = p.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let tag = p.tag.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let tag = p
+        .tag
+        .as_deref()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+    let tag = tag.as_deref();
     let links = match q {
         Some(term) => match st.store.search_links(term, p.after, limit, tag).await {
             Ok(l) => l,

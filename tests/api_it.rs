@@ -580,6 +580,29 @@ async fn create_with_tags_then_filter_by_tag() {
     assert_eq!(links[0]["tags"], serde_json::json!(["rust", "web"]));
 
     let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/links?tag=RUST")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let links = v["links"].as_array().unwrap();
+    assert_eq!(
+        links.len(),
+        1,
+        "uppercase filter must match the lowercase stored tag"
+    );
+    assert_eq!(links[0]["url"], "https://a.com");
+
+    let resp = app
         .oneshot(
             Request::get("/admin/links?tag=web")
                 .header("x-admin-token", "secret")
