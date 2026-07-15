@@ -40,18 +40,20 @@ export function Links() {
   const [search, setSearch] = useState("");
   const [tag, setTag] = useState("");
   const [folder, setFolder] = useState("");
+  const [brokenOnly, setBrokenOnly] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingLink, setEditingLink] = useState<Link | null>(null);
   const [deletingLink, setDeletingLink] = useState<Link | null>(null);
   const [clientMode, setClientMode] = useState(false);
-  const query = useLinks(undefined, tag || undefined, folder || undefined);
+  const health = brokenOnly ? "broken" : undefined;
+  const query = useLinks(undefined, tag || undefined, folder || undefined, health);
   const deleteLink = useDeleteLink();
   const tagsQuery = useTags();
   const foldersQuery = useFolders();
 
   const dq = useDebounce(search, 300);
   const serverSearchEnabled = dq !== "" && !clientMode;
-  const serverSearch = useLinks(dq, tag || undefined, folder || undefined, { enabled: serverSearchEnabled });
+  const serverSearch = useLinks(dq, tag || undefined, folder || undefined, health, { enabled: serverSearchEnabled });
 
   useEffect(() => {
     if (serverSearch.error instanceof ApiError && serverSearch.error.status === 501) setClientMode(true);
@@ -144,6 +146,16 @@ export function Links() {
             </option>
           ))}
         </select>
+
+        <label className="flex h-9 items-center gap-2 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            className="size-4 rounded border-input accent-primary"
+            checked={brokenOnly}
+            onChange={(e) => setBrokenOnly(e.target.checked)}
+          />
+          {t("links.brokenFilterLabel")}
+        </label>
       </div>
 
       {query.isPending && <LinksSkeleton />}

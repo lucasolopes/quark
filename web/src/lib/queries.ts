@@ -45,12 +45,19 @@ const LINKS_PAGE_SIZE = 50;
  * `?folder=`, combinable); both are part of the query key alongside `q` so
  * switching a filter refetches instead of reusing a stale cache entry.
  */
-export function useLinks(q?: string, tag?: string, folder?: string, options: { enabled?: boolean } = {}) {
+export function useLinks(
+  q?: string,
+  tag?: string,
+  folder?: string,
+  health?: string,
+  options: { enabled?: boolean } = {},
+) {
   const term = q?.trim() ?? "";
   const tagTerm = tag?.trim() ?? "";
   const folderTerm = folder?.trim() ?? "";
+  const healthTerm = health?.trim() ?? "";
   return useInfiniteQuery({
-    queryKey: [...LINKS_QUERY_KEY, term, tagTerm, folderTerm],
+    queryKey: [...LINKS_QUERY_KEY, term, tagTerm, folderTerm, healthTerm],
     queryFn: ({ pageParam }) =>
       api.listLinks({
         after: pageParam ?? undefined,
@@ -58,9 +65,12 @@ export function useLinks(q?: string, tag?: string, folder?: string, options: { e
         q: term || undefined,
         tag: tagTerm || undefined,
         folder: folderTerm || undefined,
+        health: healthTerm || undefined,
       }),
     initialPageParam: null as number | null,
-    getNextPageParam: (lastPage) => (lastPage.links.length < LINKS_PAGE_SIZE ? undefined : lastPage.next_after),
+    // Rely on the server cursor, not page length: with the `broken` filter a
+    // page can be shorter than the page size while more links remain.
+    getNextPageParam: (lastPage) => lastPage.next_after ?? undefined,
     enabled: options.enabled,
   });
 }

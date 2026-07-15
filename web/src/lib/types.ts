@@ -14,6 +14,8 @@ export interface Rule {
 
 /** One A/B destination: a URL and its relative weight (>= 1) in the weighted-random pick at redirect time. */
 export interface Variant { url: string; weight: number; }
+/** Destination health from the background checker; absent when never probed. */
+export interface LinkHealth { healthy: boolean; status?: number; checked_at: number; }
 export interface Link {
   id: number;
   code: string;
@@ -24,6 +26,7 @@ export interface Link {
   folder?: string;
   fallback_url?: string;
   has_password?: boolean;
+  health?: LinkHealth;
   expiry: number | null;
   created: number;
   tags: string[];

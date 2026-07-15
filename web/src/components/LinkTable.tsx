@@ -96,6 +96,24 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
               aria-label={t("linkTable.protectedAria")}
             />
           )}
+          {row.original.health && (
+            <span
+              role="img"
+              aria-label={
+                row.original.health.healthy
+                  ? t("linkTable.healthOk")
+                  : t("linkTable.healthBroken", { status: row.original.health.status ?? "—" })
+              }
+              title={
+                row.original.health.healthy
+                  ? t("linkTable.healthOk")
+                  : t("linkTable.healthBroken", { status: row.original.health.status ?? "—" })
+              }
+              className={`size-2 shrink-0 rounded-full ${
+                row.original.health.healthy ? "bg-emerald-500" : "bg-red-500"
+              }`}
+            />
+          )}
         </div>
       ),
     },
