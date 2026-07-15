@@ -58,6 +58,7 @@ async fn node(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>, url: &str) ->
         cache,
         store,
         key: 0,
+        signing_key: [0u8; 32],
         analytics_tx,
         sink,
         admin_token: None,

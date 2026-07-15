@@ -19,9 +19,11 @@ into the password. Checking a submitted password compares it against that hash.
 
 When the password is correct, quark sets a signed cookie (`qk_pw_<code>`) scoped
 to that one link. The cookie carries an expiry and an HMAC-SHA256 signature made
-with the server key, so it cannot be forged or reused for another link or after
-it lapses. While the cookie is valid (12 hours) the visitor is redirected
-straight through without seeing the prompt again.
+with a dedicated 32-byte signing key (`QUARK_SIGNING_KEY`, separate from the code
+key), so it cannot be forged or reused for another link or after it lapses. While
+the cookie is valid (12 hours) the visitor is redirected straight through without
+seeing the prompt again. A protected link's redirect is always sent `no-store`,
+so a shared CDN can never cache it and serve it to someone who lacks the cookie.
 
 The redirect hot path pays nothing for unprotected links: a link with no
 password takes exactly the same path it always did. The argon2 check runs only
@@ -48,7 +50,7 @@ flowchart TD
 On a correct password quark redirects back to `GET /:code` with the cookie set,
 rather than redirecting to the destination directly. That way the normal
 redirect path does the destination resolution (deep-link / geo rules / A/B
-variants), the visit-count bump, and click recording exactly once — the unlock
+variants), the visit-count bump, and click recording exactly once. The unlock
 step only opens the gate.
 
 ## Setting a password

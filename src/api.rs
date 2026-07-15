@@ -29,6 +29,10 @@ pub struct AppState {
     pub cache: Cache,
     pub store: Arc<dyn Store>,
     pub key: u64,
+    /// Dedicated 32-byte secret for signing unlock cookies (link passwords).
+    /// Kept separate from `key` (the 64-bit code-permutation key) so the MAC
+    /// secret has full entropy and no shared purpose with the public codec.
+    pub signing_key: [u8; 32],
     pub analytics_tx: tokio::sync::mpsc::Sender<ClickEvent>,
     pub sink: Arc<dyn AnalyticsSink>,
     pub admin_token: Option<String>,
@@ -556,12 +560,19 @@ async fn create(
             return (status, "invalid fallback url").into_response();
         }
     }
-    // Hash a non-empty password; the plaintext is never stored or logged.
+    // Hash a non-empty password; the plaintext is never stored or logged. argon2
+    // is memory-hard, so hash off the async worker.
     let password_hash = match req.password.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(pw) => match crate::password::hash_password(pw) {
-            Ok(h) => Some(h),
-            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "could not hash password").into_response(),
-        },
+        Some(pw) => {
+            let pw = pw.to_string();
+            match tokio::task::spawn_blocking(move || crate::password::hash_password(&pw)).await {
+                Ok(Ok(h)) => Some(h),
+                _ => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "could not hash password")
+                        .into_response()
+                }
+            }
+        }
         None => None,
     };
     match create_link_core(
@@ -799,8 +810,9 @@ fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     })
 }
 
-/// Whether the request carries a valid, unexpired unlock cookie for `code`.
-fn is_unlocked(headers: &HeaderMap, key: u64, code: &str, now: u64) -> bool {
+/// Whether the request carries a valid, unexpired unlock cookie for `code`
+/// (the link's canonical code). `key` is the dedicated 32-byte signing secret.
+fn is_unlocked(headers: &HeaderMap, key: &[u8], code: &str, now: u64) -> bool {
     match cookie_value(headers, &format!("qk_pw_{code}")) {
         Some(v) => crate::password::unlock_token_valid(v, key, code, now),
         None => false,
@@ -838,8 +850,13 @@ fn form_field(body: &Bytes, name: &str) -> Option<String> {
 /// Renders the self-contained password interstitial. No external assets (inline
 /// CSS only) so it works on any deployment. Bilingual by a simple
 /// `Accept-Language` sniff; `error` shows a generic "wrong password" message.
-fn interstitial_html(code: &str, pt: bool, error: bool) -> String {
-    let code = html_escape(code);
+fn interstitial_html(code: &str, query: Option<&str>, pt: bool, error: bool) -> String {
+    // Preserve the original query string on the form's action so params the
+    // redirect consumes (e.g. `fbclid` for Meta CAPI) survive the unlock round-trip.
+    let action = match query.filter(|q| !q.is_empty()) {
+        Some(q) => html_escape(&format!("/{code}?{q}")),
+        None => html_escape(&format!("/{code}")),
+    };
     let (title, prompt, placeholder, button, err_msg) = if pt {
         (
             "Link protegido",
@@ -895,7 +912,7 @@ button:hover {{ filter: brightness(1.05); }}
 <h1>{title}</h1>
 <p>{prompt}</p>
 {error_block}
-<form method="post" action="/{code}">
+<form method="post" action="{action}">
 <label for="pw">{placeholder}</label>
 <input id="pw" name="password" type="password" autocomplete="current-password" autofocus required>
 <button type="submit">{button}</button>
@@ -907,8 +924,14 @@ button:hover {{ filter: brightness(1.05); }}
     )
 }
 
-/// Builds the `200 text/html` interstitial response (never cached).
-fn interstitial_response(code: &str, headers: &HeaderMap, error: bool) -> Response {
+/// Builds the `200 text/html` interstitial response (never cached). `query` is
+/// the original request query string, preserved onto the form action.
+fn interstitial_response(
+    code: &str,
+    query: Option<&str>,
+    headers: &HeaderMap,
+    error: bool,
+) -> Response {
     let pt = headers
         .get(header::ACCEPT_LANGUAGE)
         .and_then(|v| v.to_str().ok())
@@ -923,7 +946,7 @@ fn interstitial_response(code: &str, headers: &HeaderMap, error: bool) -> Respon
                 "text/html; charset=utf-8".to_string(),
             ),
         ],
-        interstitial_html(code, pt, error),
+        interstitial_html(code, query, pt, error),
     )
         .into_response()
 }
@@ -937,6 +960,7 @@ async fn unlock(
     State(st): State<Arc<AppState>>,
     Path(code): Path<String>,
     conn: Option<ConnectInfo<SocketAddr>>,
+    RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -955,6 +979,13 @@ async fn unlock(
         }
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
+    // The GET path consumes the query string (e.g. `fbclid`); preserve it across
+    // the unlock round-trip so protected links keep attribution parity with
+    // unprotected ones.
+    let location = match raw_query.as_deref().filter(|q| !q.is_empty()) {
+        Some(q) => format!("/{code}?{q}"),
+        None => format!("/{code}"),
+    };
     let rec = match st.cache.get(id).await {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -966,28 +997,33 @@ async fn unlock(
         }
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    let Some(hash) = rec.password_hash.as_deref() else {
+    let Some(hash) = rec.password_hash.clone() else {
         // Not protected: nothing to unlock, send them to the normal GET.
-        return (
-            StatusCode::SEE_OTHER,
-            [(header::LOCATION, format!("/{code}"))],
-        )
-            .into_response();
+        return (StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response();
     };
     let submitted = form_field(&body, "password").unwrap_or_default();
-    if !crate::password::verify_password(&submitted, hash) {
-        return interstitial_response(&code, &headers, true);
+    // argon2 is memory-hard; verify off the async worker so it never stalls the
+    // runtime that serves redirects.
+    let ok = tokio::task::spawn_blocking(move || crate::password::verify_password(&submitted, &hash))
+        .await
+        .unwrap_or(false);
+    if !ok {
+        return interstitial_response(&code, raw_query.as_deref(), &headers, true);
     }
-    let (token, _expiry) = crate::password::unlock_token(st.key, &code, now());
+    // Key the unlock cookie to the canonical code (not the path string) with
+    // Path=/, so it is honored whether the visitor returns via the alias or the
+    // code, and the cookie name is always a safe base62 string.
+    let canonical = codec::to_base62(permute::encode(id, st.key));
+    let (token, _expiry) = crate::password::unlock_token(&st.signing_key, &canonical, now());
     let secure = if request_is_https(&headers) { "; Secure" } else { "" };
     let cookie = format!(
-        "qk_pw_{code}={token}; Max-Age={}; Path=/{code}; HttpOnly; SameSite=Lax{secure}",
+        "qk_pw_{canonical}={token}; Max-Age={}; Path=/; HttpOnly; SameSite=Lax{secure}",
         crate::password::UNLOCK_TTL_SECS,
     );
     (
         StatusCode::SEE_OTHER,
         [
-            (header::LOCATION, format!("/{code}")),
+            (header::LOCATION, location),
             (header::SET_COOKIE, cookie),
             (header::CACHE_CONTROL, "no-store".to_string()),
         ],
@@ -1038,9 +1074,14 @@ async fn redirect(
             // Password gate: a protected link without a valid unlock cookie shows
             // the interstitial. Placed BEFORE the visit bump so merely viewing the
             // form never consumes a visit; placed AFTER the expiry check so an
-            // expired link stays expired regardless of the password.
-            if rec.password_hash.is_some() && !is_unlocked(&headers, st.key, &code, now) {
-                return interstitial_response(&code, &headers, false);
+            // expired link stays expired regardless of the password. The unlock
+            // cookie is keyed to the link's canonical code (not the path string),
+            // so it works whether the visitor arrived via the alias or the code.
+            let canonical = codec::to_base62(permute::encode(id, st.key));
+            if rec.password_hash.is_some()
+                && !is_unlocked(&headers, &st.signing_key, &canonical, now)
+            {
+                return interstitial_response(&code, raw_query.as_deref(), &headers, false);
             }
             if let Some(max) = rec.max_visits {
                 let n = match st.store.bump_visits(id).await {
@@ -1051,7 +1092,14 @@ async fn redirect(
                     return expired_response(rec.fallback_url.as_deref());
                 }
             }
-            let cache_control = cache_control_for(rec.expiry, now);
+            // A password-protected link must never be cached by a shared CDN/proxy:
+            // a cached 302-to-destination would let visitors who never entered the
+            // password follow it. Force `no-store` for protected links.
+            let cache_control = if rec.password_hash.is_some() {
+                "no-store".to_string()
+            } else {
+                cache_control_for(rec.expiry, now)
+            };
 
             let country = headers
                 .get("cf-ipcountry")
@@ -1612,9 +1660,11 @@ async fn admin_link_patch(
             if s.is_empty() {
                 rec.password_hash = None;
             } else {
-                match crate::password::hash_password(s) {
-                    Ok(h) => rec.password_hash = Some(h),
-                    Err(_) => {
+                let pw = s.to_string();
+                match tokio::task::spawn_blocking(move || crate::password::hash_password(&pw)).await
+                {
+                    Ok(Ok(h)) => rec.password_hash = Some(h),
+                    _ => {
                         return (StatusCode::INTERNAL_SERVER_ERROR, "could not hash password")
                             .into_response()
                     }

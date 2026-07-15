@@ -21,6 +21,7 @@ async fn app_with(
         cache,
         store,
         key: 0x1234,
+        signing_key: [0u8; 32],
         analytics_tx: tx,
         sink,
         admin_token: admin.map(|s| s.to_string()),

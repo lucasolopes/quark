@@ -16,6 +16,7 @@ async fn app() -> axum::Router {
         cache,
         store,
         key: 0x1234,
+        signing_key: [0u8; 32],
         analytics_tx,
         sink,
         admin_token: None,
@@ -599,6 +600,29 @@ async fn protected_link_unlock_then_redirects() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FOUND);
     assert_eq!(resp.headers()["location"], "https://secret.example.com");
+    // Regression: a protected link's redirect must never be cacheable, or a
+    // shared CDN would serve it to visitors who never entered the password.
+    assert_eq!(resp.headers()["cache-control"], "no-store");
+}
+
+#[tokio::test]
+async fn protected_unlock_preserves_query_string() {
+    let app = app_admin("secret").await;
+    let code = create_protected(&app, "https://secret.example.com", "hunter2").await;
+
+    // Regression: the query string (e.g. fbclid) must survive the unlock
+    // round-trip, so attribution parity with unprotected links is kept.
+    let resp = app
+        .oneshot(
+            Request::post(format!("/{code}?fbclid=abc123&x=1"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("password=hunter2"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(resp.headers()["location"], format!("/{code}?fbclid=abc123&x=1"));
 }
 
 #[tokio::test]
@@ -684,6 +708,7 @@ async fn unlock_post_is_rate_limited() {
         cache,
         store,
         key: 0x1234,
+        signing_key: [0u8; 32],
         analytics_tx: tx,
         sink,
         admin_token: Some("secret".to_string()),
@@ -776,6 +801,7 @@ async fn rate_limit_429_after_exceeding() {
         cache,
         store,
         key: 0x1234,
+        signing_key: [0u8; 32],
         analytics_tx: tx,
         sink,
         admin_token: None,
@@ -899,6 +925,7 @@ async fn app_admin(token: &str) -> axum::Router {
         cache,
         store,
         key: 0x1234,
+        signing_key: [0u8; 32],
         analytics_tx: tx,
         sink,
         admin_token: Some(token.to_string()),
@@ -1326,6 +1353,7 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
         cache,
         store,
         key: 0x1234,
+        signing_key: [0u8; 32],
         analytics_tx,
         sink,
         admin_token: None,
@@ -2017,6 +2045,7 @@ async fn cors_header_present_when_configured() {
         cache,
         store,
         key: 0x1234,
+        signing_key: [0u8; 32],
         analytics_tx: tx,
         sink,
         admin_token: None,

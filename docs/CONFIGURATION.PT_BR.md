@@ -17,6 +17,7 @@ roda como um binário único sem dependências em `0.0.0.0:8080` com store LMDB.
 | Variável | Default | Função |
 |---|---|---|
 | `QUARK_KEY` | fallback de dev `11400714819323198485` (aviso alto) | A chave da permutação, lida como `u64` **decimal**. É o que torna o espaço de códigos imprevisível por instância. Use um valor aleatório em produção e mantenha fora do controle de versão. Uma string hex não parseia e cai silenciosamente na chave de dev. |
+| `QUARK_SIGNING_KEY` | aleatória por processo (aviso alto) | Segredo base64 (>= 32 bytes) que assina os cookies de unlock de senha, separado do `QUARK_KEY`. Sem setar, gera uma chave aleatória a cada start, então os cookies de unlock não sobrevivem a um restart nem são compartilhados entre nós. Set (e compartilhe entre réplicas) para deploys multi-nó ou persistentes. Só importa se você usa links com senha. |
 | `QUARK_ADDR` | `0.0.0.0:8080` | Endereço de bind HTTP. |
 | `QUARK_DATA` | `./data` (imagem: `/data`) | Diretório de dados do LMDB, criado se faltar. Só usado quando o store é LMDB (sem `QUARK_DATABASE_URL`). |
 

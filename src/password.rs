@@ -18,11 +18,11 @@ type HmacSha256 = Hmac<Sha256>;
 /// How long a successful unlock is remembered by the signed cookie.
 pub const UNLOCK_TTL_SECS: u64 = 12 * 3600;
 
-/// HMAC-SHA256 over `"<code>.<expiry>"` keyed by the server key, base64url
-/// (no pad). Binds an unlock token to one code and one expiry, so a token
-/// cannot be replayed for a different link or after it lapses.
-fn sign_unlock(key: u64, code: &str, expiry: u64) -> Vec<u8> {
-    let mut mac = HmacSha256::new_from_slice(&key.to_be_bytes()).expect("HMAC accepts any key length");
+/// HMAC-SHA256 over `"<code>.<expiry>"` keyed by the dedicated 32-byte signing
+/// key, base64url (no pad). Binds an unlock token to one code and one expiry, so
+/// a token cannot be replayed for a different link or after it lapses.
+fn sign_unlock(key: &[u8], code: &str, expiry: u64) -> Vec<u8> {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(code.as_bytes());
     mac.update(b".");
     mac.update(expiry.to_string().as_bytes());
@@ -32,7 +32,7 @@ fn sign_unlock(key: u64, code: &str, expiry: u64) -> Vec<u8> {
 /// Builds the unlock cookie *value* (`"<expiry>.<base64url(mac)>"`) for a code
 /// unlocked at `now`, plus the absolute `expiry` (for the cookie's `Max-Age`).
 /// The caller adds the cookie name/attributes.
-pub fn unlock_token(key: u64, code: &str, now: u64) -> (String, u64) {
+pub fn unlock_token(key: &[u8], code: &str, now: u64) -> (String, u64) {
     let expiry = now.saturating_add(UNLOCK_TTL_SECS);
     let mac = b64.encode(sign_unlock(key, code, expiry));
     (format!("{expiry}.{mac}"), expiry)
@@ -40,7 +40,7 @@ pub fn unlock_token(key: u64, code: &str, now: u64) -> (String, u64) {
 
 /// Whether an unlock cookie value is a valid, unexpired token for `code`.
 /// Constant-time MAC comparison via `verify_slice`.
-pub fn unlock_token_valid(token: &str, key: u64, code: &str, now: u64) -> bool {
+pub fn unlock_token_valid(token: &str, key: &[u8], code: &str, now: u64) -> bool {
     let Some((exp_str, mac_b64)) = token.split_once('.') else {
         return false;
     };
@@ -53,7 +53,7 @@ pub fn unlock_token_valid(token: &str, key: u64, code: &str, now: u64) -> bool {
     let Ok(provided) = b64.decode(mac_b64) else {
         return false;
     };
-    let mut mac = HmacSha256::new_from_slice(&key.to_be_bytes()).expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(code.as_bytes());
     mac.update(b".");
     mac.update(expiry.to_string().as_bytes());
@@ -115,35 +115,38 @@ mod tests {
 
     use super::{unlock_token, unlock_token_valid};
 
+    const KEY: &[u8; 32] = b"unit-test-signing-key-0123456789";
+    const KEY2: &[u8; 32] = b"another-signing-key-abcdefghijkl";
+
     #[test]
     fn fresh_unlock_token_is_valid() {
-        let (tok, _exp) = unlock_token(0xDEAD_BEEF, "abc123", 1000);
-        assert!(unlock_token_valid(&tok, 0xDEAD_BEEF, "abc123", 1000));
+        let (tok, _exp) = unlock_token(KEY, "abc123", 1000);
+        assert!(unlock_token_valid(&tok, KEY, "abc123", 1000));
     }
 
     #[test]
     fn unlock_token_for_another_code_is_rejected() {
-        let (tok, _) = unlock_token(0xDEAD_BEEF, "abc123", 1000);
-        assert!(!unlock_token_valid(&tok, 0xDEAD_BEEF, "other", 1000));
+        let (tok, _) = unlock_token(KEY, "abc123", 1000);
+        assert!(!unlock_token_valid(&tok, KEY, "other", 1000));
     }
 
     #[test]
     fn unlock_token_with_wrong_key_is_rejected() {
-        let (tok, _) = unlock_token(0xDEAD_BEEF, "abc123", 1000);
-        assert!(!unlock_token_valid(&tok, 0x1234, "abc123", 1000));
+        let (tok, _) = unlock_token(KEY, "abc123", 1000);
+        assert!(!unlock_token_valid(&tok, KEY2, "abc123", 1000));
     }
 
     #[test]
     fn expired_unlock_token_is_rejected() {
-        let (tok, exp) = unlock_token(0xDEAD_BEEF, "abc123", 1000);
-        assert!(!unlock_token_valid(&tok, 0xDEAD_BEEF, "abc123", exp));
-        assert!(!unlock_token_valid(&tok, 0xDEAD_BEEF, "abc123", exp + 1));
+        let (tok, exp) = unlock_token(KEY, "abc123", 1000);
+        assert!(!unlock_token_valid(&tok, KEY, "abc123", exp));
+        assert!(!unlock_token_valid(&tok, KEY, "abc123", exp + 1));
     }
 
     #[test]
     fn tampered_unlock_token_is_rejected() {
-        let (tok, _) = unlock_token(0xDEAD_BEEF, "abc123", 1000);
-        assert!(!unlock_token_valid("garbage", 0xDEAD_BEEF, "abc123", 1000));
-        assert!(!unlock_token_valid(&format!("{tok}x"), 0xDEAD_BEEF, "abc123", 1000));
+        let (tok, _) = unlock_token(KEY, "abc123", 1000);
+        assert!(!unlock_token_valid("garbage", KEY, "abc123", 1000));
+        assert!(!unlock_token_valid(&format!("{tok}x"), KEY, "abc123", 1000));
     }
 }

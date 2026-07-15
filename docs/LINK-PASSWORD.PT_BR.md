@@ -18,9 +18,12 @@ na senha. Conferir uma senha enviada é compará-la contra esse hash.
 
 Quando a senha está certa, o quark seta um cookie assinado (`qk_pw_<code>`)
 restrito àquele link. O cookie carrega uma expiração e uma assinatura
-HMAC-SHA256 feita com a chave do servidor, então não dá pra forjar nem reusar
-pra outro link ou depois de expirar. Enquanto o cookie vale (12 horas) o
-visitante é redirecionado direto, sem ver o prompt de novo.
+HMAC-SHA256 feita com uma chave de assinatura dedicada de 32 bytes
+(`QUARK_SIGNING_KEY`, separada da chave dos códigos), então não dá pra forjar
+nem reusar pra outro link ou depois de expirar. Enquanto o cookie vale (12 horas)
+o visitante é redirecionado direto, sem ver o prompt de novo. O redirect de um
+link protegido sempre vai com `no-store`, então um CDN compartilhado nunca
+consegue cachear e servir pra quem não tem o cookie.
 
 O caminho quente do redirect não paga nada por links sem senha: um link sem
 senha segue exatamente o mesmo caminho de sempre. O argon2 só roda quando alguém
@@ -47,7 +50,7 @@ flowchart TD
 Com a senha correta o quark redireciona de volta pro `GET /:code` com o cookie
 setado, em vez de ir direto pro destino. Assim o caminho normal de redirect faz
 a resolução de destino (deep-link / regras geo / variantes A/B), o incremento de
-visitas e o registro do clique uma vez só — o passo de unlock só abre o portão.
+visitas e o registro do clique uma vez só. O passo de unlock só abre o portão.
 
 ## Definindo uma senha
 
