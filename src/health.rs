@@ -70,9 +70,15 @@ pub async fn safe_to_probe(url: &str) -> bool {
         return false;
     }
     // Resolve and reject if ANY resolved address is internal. Port is
-    // irrelevant to the address classification; use 80 for the lookup.
-    let resolved = tokio::net::lookup_host((host.as_str(), 80u16)).await;
-    let Ok(addrs) = resolved else {
+    // irrelevant to the address classification; use 80 for the lookup. The
+    // lookup is bounded by a timeout so a hanging resolver cannot stall a whole
+    // probe chunk past the lease TTL.
+    let resolved = tokio::time::timeout(
+        Duration::from_secs(PROBE_TIMEOUT_SECS),
+        tokio::net::lookup_host((host.as_str(), 80u16)),
+    )
+    .await;
+    let Ok(Ok(addrs)) = resolved else {
         return false;
     };
     let mut any = false;
@@ -100,17 +106,24 @@ fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
                 || v4.is_documentation()
         }
         std::net::IpAddr::V6(v6) => {
-            // An IPv4-mapped address (`::ffff:a.b.c.d`) routes to the v4 target
-            // on a dual-stack host, so classify it by its embedded v4 address.
-            if let Some(v4) = v6.to_ipv4_mapped() {
+            if v6.is_loopback() || v6.is_unspecified() {
+                return true;
+            }
+            // An IPv4-mapped (`::ffff:a.b.c.d`) or deprecated IPv4-compatible
+            // (`::a.b.c.d`) address routes to the embedded v4 target on a
+            // dual-stack host, so classify it by that v4 address.
+            let seg = v6.segments();
+            if seg[..6].iter().all(|&x| x == 0) || v6.to_ipv4_mapped().is_some() {
+                let v4 = std::net::Ipv4Addr::new(
+                    (seg[6] >> 8) as u8,
+                    (seg[6] & 0xff) as u8,
+                    (seg[7] >> 8) as u8,
+                    (seg[7] & 0xff) as u8,
+                );
                 return is_internal_ip(&std::net::IpAddr::V4(v4));
             }
-            v6.is_loopback()
-                || v6.is_unspecified()
-                // unique-local fc00::/7
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
-                // link-local fe80::/10
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
+            // unique-local fc00::/7 or link-local fe80::/10
+            (seg[0] & 0xfe00) == 0xfc00 || (seg[0] & 0xffc0) == 0xfe80
         }
     }
 }
@@ -144,13 +157,15 @@ fn transition_body(event_type: EventType, code: &str, url: &str, status: Option<
 /// A link never seen before is treated as previously healthy, so a
 /// newly-discovered broken destination fires `link.broken` exactly once (the
 /// health it writes suppresses a repeat on the next sweep).
+/// Returns `(probed_count, lost_lease)`; `lost_lease` is true when the sweep
+/// stopped early because another node took over the lease.
 pub async fn sweep<P, F, R, RF>(
     store: &Arc<dyn Store>,
     webhooks: &WebhookDispatcher,
     key: u64,
     renew: R,
     prober: P,
-) -> Result<usize, String>
+) -> Result<(usize, bool), String>
 where
     P: Fn(String) -> F,
     F: Future<Output = Option<LinkHealth>>,
@@ -165,6 +180,9 @@ where
         .collect();
     let mut after: Option<u64> = None;
     let mut checked = 0usize;
+    // The caller acquired the lease immediately before this call, so the first
+    // chunk needs no renewal; subsequent chunks renew to hold it across a long sweep.
+    let mut first_chunk = true;
     loop {
         let page = store
             .list_links(after, LIST_PAGE, None, None)
@@ -182,10 +200,11 @@ where
         while !page.is_empty() {
             let take = page.len().min(PROBE_CONCURRENCY);
             let chunk: Vec<(u64, Record)> = page.drain(..take).collect();
-            if !renew().await {
+            if !first_chunk && !renew().await {
                 // Lost the lease (another node took over): stop this sweep.
-                return Ok(checked);
+                return Ok((checked, true));
             }
+            first_chunk = false;
             let results: Vec<(u64, String, Option<LinkHealth>)> = stream::iter(chunk.into_iter())
                 .map(|(id, rec)| {
                     let prober = &prober;
@@ -231,7 +250,7 @@ where
             break;
         }
     }
-    Ok(checked)
+    Ok((checked, false))
 }
 
 /// Spawns the periodic checker. The first sweep runs at the first tick
@@ -276,11 +295,16 @@ pub fn spawn_link_checker(
                     }
                 }
             };
-            // Renew the lease between chunks so a slow sweep keeps it; returns
-            // false if this node lost it (then the sweep stops).
-            let renew = || async { store.try_acquire_health_lease(&holder, ttl).await.unwrap_or(false) };
+            // Renew the lease between chunks so a slow sweep keeps it. On a
+            // transient store error assume we still hold it (unwrap_or(true)) so
+            // a DB blip does not abort the sweep; only a definitive Ok(false)
+            // (another node took over) stops it.
+            let renew = || async { store.try_acquire_health_lease(&holder, ttl).await.unwrap_or(true) };
             match sweep(&store, &webhooks, key, renew, prober).await {
-                Ok(n) => eprintln!("{}", serde_json::json!({ "health_sweep_checked": n })),
+                Ok((n, false)) => eprintln!("{}", serde_json::json!({ "health_sweep_checked": n })),
+                Ok((n, true)) => {
+                    eprintln!("{}", serde_json::json!({ "health_sweep_lease_lost": n }))
+                }
                 Err(e) => eprintln!("{}", serde_json::json!({ "health_sweep_error": e })),
             }
         }
@@ -314,8 +338,12 @@ mod tests {
             "169.254.169.254", // cloud metadata (link-local)
             "0.0.0.0",
             "::1",
-            "fc00::1", // unique-local
-            "fe80::1", // link-local
+            "fc00::1",         // unique-local
+            "fe80::1",         // link-local
+            "::ffff:127.0.0.1", // IPv4-mapped loopback
+            "::ffff:169.254.169.254", // IPv4-mapped metadata
+            "::7f00:1",        // IPv4-compatible 127.0.0.1 (deprecated)
+            "::a9fe:a9fe",     // IPv4-compatible 169.254.169.254
         ] {
             assert!(super::is_internal_ip(&s.parse::<IpAddr>().unwrap()), "{s} must be internal");
         }
@@ -388,8 +416,9 @@ mod tests {
             })
         };
         let renew = || async { true };
-        let checked = sweep(&store, &dispatcher, 0x1234, renew, prober).await.unwrap();
+        let (checked, lost) = sweep(&store, &dispatcher, 0x1234, renew, prober).await.unwrap();
         assert_eq!(checked, 2, "internal link 3 is skipped");
+        assert!(!lost, "lease was never lost");
 
         // Health persisted for 1 and 2 only.
         let health: HashMap<u64, LinkHealth> =
