@@ -15,6 +15,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useT } from "@/i18n";
 import { formatDate } from "@/lib/format";
+import { tagColor } from "@/lib/tag-color";
 import type { Link } from "@/lib/types";
 
 /**
@@ -121,11 +122,24 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
         const hiddenCount = tags.length - visible.length;
         return (
           <div className="flex flex-wrap gap-1">
-            {visible.map((tag) => (
-              <Badge key={tag} variant="secondary">
-                {tag}
-              </Badge>
-            ))}
+            {visible.map((tag) => {
+              const color = tagColor(tag);
+              return (
+                <Badge
+                  key={tag}
+                  variant="secondary"
+                  className="gap-1.5 border-transparent"
+                  style={{ backgroundColor: color.bg, color: color.text }}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="size-1.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: color.dot }}
+                  />
+                  {tag}
+                </Badge>
+              );
+            })}
             {hiddenCount > 0 && <Badge variant="outline">{t("linkTable.moreTags", { count: hiddenCount })}</Badge>}
           </div>
         );

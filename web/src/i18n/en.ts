@@ -46,6 +46,7 @@ export const en = {
     searchAriaLabel: "Search links",
     tagFilterLabel: "Filter by tag",
     tagFilterAllOption: "All tags",
+    tagFilterOption: "{name} ({count})",
     folderFilterLabel: "Filter by folder",
     folderFilterAll: "All folders",
     folderFilterOption: "{name} ({count})",

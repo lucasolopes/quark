@@ -48,6 +48,7 @@ export const ptBR: Messages = {
     searchAriaLabel: "Buscar links",
     tagFilterLabel: "Filtrar por tag",
     tagFilterAllOption: "Todas as tags",
+    tagFilterOption: "{name} ({count})",
     folderFilterLabel: "Filtrar por pasta",
     folderFilterAll: "Todas as pastas",
     folderFilterOption: "{name} ({count})",

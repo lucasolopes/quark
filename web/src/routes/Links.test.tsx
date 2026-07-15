@@ -131,7 +131,8 @@ describe("Links", () => {
       next_after: null,
     };
     mockFetchByUrl((url) => {
-      if (url.includes("/admin/tags")) return jsonResponse({ tags: ["pets", "promo"] });
+      if (url.includes("/admin/tags"))
+        return jsonResponse({ tags: [{ name: "pets", count: 2 }, { name: "promo", count: 1 }] });
       if (url.includes("tag=promo"))
         return jsonResponse({ links: base.links.filter((l) => l.tags.includes("promo")), next_after: null });
       return jsonResponse(base);

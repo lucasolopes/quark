@@ -125,8 +125,8 @@ export function Links() {
         >
           <option value="">{t("links.tagFilterAllOption")}</option>
           {(tagsQuery.data?.tags ?? []).map((tagOption) => (
-            <option key={tagOption} value={tagOption}>
-              {tagOption}
+            <option key={tagOption.name} value={tagOption.name}>
+              {t("links.tagFilterOption", { name: tagOption.name, count: tagOption.count })}
             </option>
           ))}
         </select>

@@ -33,7 +33,9 @@ export interface Link {
 export interface ListLinksResponse { links: Link[]; next_after: number | null; }
 export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; max_visits?: number; rules?: Rule[]; variants?: Variant[]; app_ios?: string; app_android?: string; folder?: string; }
 export interface CreateLinkResponse { code: string; url: string; }
-export interface TagsResponse { tags: string[]; }
+/** A tag in use by at least one link, with how many links carry it. */
+export interface Tag { name: string; count: number; }
+export interface TagsResponse { tags: Tag[]; }
 
 /** A folder in use by at least one link, with how many links carry it. */
 export interface Folder { name: string; count: number; }

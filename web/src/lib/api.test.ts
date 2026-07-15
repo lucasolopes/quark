@@ -53,9 +53,12 @@ describe("api client", () => {
 
   it("listTags fetches /admin/tags", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ tags: ["promo", "summer"] }), { status: 200 }),
+      new Response(
+        JSON.stringify({ tags: [{ name: "promo", count: 3 }, { name: "summer", count: 1 }] }),
+        { status: 200 },
+      ),
     );
     const r = await api.listTags();
-    expect(r.tags).toEqual(["promo", "summer"]);
+    expect(r.tags).toEqual([{ name: "promo", count: 3 }, { name: "summer", count: 1 }]);
   });
 });
