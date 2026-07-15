@@ -51,6 +51,7 @@ pub struct CreateReq {
     app_ios: Option<String>,
     app_android: Option<String>,
     folder: Option<String>,
+    fallback_url: Option<String>,
 }
 
 /// Normalizes the `max_visits` request field into the persisted representation:
@@ -377,6 +378,7 @@ pub async fn create_link_core(
     app_ios: Option<String>,
     app_android: Option<String>,
     folder: Option<String>,
+    fallback_url: Option<String>,
     headers: &HeaderMap,
 ) -> Result<String, CreateError> {
     if !is_valid_url(url) {
@@ -407,6 +409,7 @@ pub async fn create_link_core(
         app_ios,
         app_android,
         folder,
+        fallback_url,
     };
 
     if let Some(alias) = alias {
@@ -537,6 +540,19 @@ async fn create(
             return (status, "invalid app destination").into_response();
         }
     }
+    // Trim + drop empty so an empty field means "no fallback"; validate the
+    // destination with the same rules/status codes as the main URL.
+    let fallback_url = req
+        .fallback_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if let Some(fb) = fallback_url.as_deref() {
+        if let Err(status) = app_destination_ok(&st, &headers, fb).await {
+            return (status, "invalid fallback url").into_response();
+        }
+    }
     match create_link_core(
         &st,
         &req.url,
@@ -549,6 +565,7 @@ async fn create(
         req.app_ios.clone(),
         req.app_android.clone(),
         normalize_folder(req.folder.clone()),
+        fallback_url,
         &headers,
     )
     .await
@@ -610,6 +627,7 @@ async fn admin_import(
             None,
             Vec::new(),
             Vec::new(),
+            None,
             None,
             None,
             None,
@@ -736,6 +754,29 @@ fn fbclid_from_query(raw: Option<&str>) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// Response for an expired link (whether by time or by visit count): a `302`
+/// to the link's configured fallback URL when one is set, otherwise the
+/// historical `410 Gone`. Both carry `Cache-Control: no-store` — visit-count
+/// expiry is decided per-request, so the response must never be cached.
+fn expired_response(fallback: Option<&str>) -> Response {
+    match fallback {
+        Some(url) => (
+            StatusCode::FOUND,
+            [
+                (header::LOCATION, url.to_string()),
+                (header::CACHE_CONTROL, "no-store".to_string()),
+            ],
+        )
+            .into_response(),
+        None => (
+            StatusCode::GONE,
+            [(header::CACHE_CONTROL, "no-store".to_string())],
+            "expired link",
+        )
+            .into_response(),
+    }
+}
+
 async fn redirect(
     State(st): State<Arc<AppState>>,
     Path(code): Path<String>,
@@ -773,12 +814,7 @@ async fn redirect(
                             ),
                         });
                     }
-                    return (
-                        StatusCode::GONE,
-                        [(header::CACHE_CONTROL, "no-store".to_string())],
-                        "expired link",
-                    )
-                        .into_response();
+                    return expired_response(rec.fallback_url.as_deref());
                 }
             }
             if let Some(max) = rec.max_visits {
@@ -787,12 +823,7 @@ async fn redirect(
                     Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
                 };
                 if n > max as u64 {
-                    return (
-                        StatusCode::GONE,
-                        [(header::CACHE_CONTROL, "no-store".to_string())],
-                        "expired link",
-                    )
-                        .into_response();
+                    return expired_response(rec.fallback_url.as_deref());
                 }
             }
             let cache_control = cache_control_for(rec.expiry, now);
@@ -1035,6 +1066,8 @@ struct LinkRow {
     app_android: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     folder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback_url: Option<String>,
 }
 
 async fn admin_links_list(
@@ -1102,6 +1135,7 @@ async fn admin_links_list(
             app_ios: rec.app_ios,
             app_android: rec.app_android,
             folder: rec.folder,
+            fallback_url: rec.fallback_url,
         });
     }
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
@@ -1324,6 +1358,22 @@ async fn admin_link_patch(
             rec.folder = normalize_folder(Some(s.to_string()));
         } else {
             return (StatusCode::BAD_REQUEST, "invalid folder").into_response();
+        }
+    }
+    if let Some(v) = patch.get("fallback_url") {
+        if v.is_null() {
+            rec.fallback_url = None;
+        } else if let Some(s) = v.as_str() {
+            let s = s.trim();
+            if s.is_empty() {
+                rec.fallback_url = None;
+            } else if let Err(status) = app_destination_ok(&st, &headers, s).await {
+                return (status, "invalid fallback url").into_response();
+            } else {
+                rec.fallback_url = Some(s.to_string());
+            }
+        } else {
+            return (StatusCode::BAD_REQUEST, "invalid fallback url").into_response();
         }
     }
     let canonical_code = codec::to_base62(permute::encode(id, st.key));
@@ -2106,6 +2156,7 @@ mod tests {
             app_ios: app_ios.map(str::to_string),
             app_android: app_android.map(str::to_string),
             folder: None,
+            fallback_url: None,
         }
     }
 

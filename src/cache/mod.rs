@@ -229,6 +229,7 @@ mod tests {
             app_ios: None,
             app_android: None,
             folder: None,
+            fallback_url: None,
         }
     }
 
@@ -351,7 +352,8 @@ mod tests {
                     variants: Vec::new(),
                     app_ios: None,
                     app_android: None,
-                    folder: None
+                    folder: None,
+                    fallback_url: None
                 },
                 now,
                 3600
@@ -370,7 +372,8 @@ mod tests {
                     variants: Vec::new(),
                     app_ios: None,
                     app_android: None,
-                    folder: None
+                    folder: None,
+                    fallback_url: None
                 },
                 now,
                 3600
@@ -389,7 +392,8 @@ mod tests {
                     variants: Vec::new(),
                     app_ios: None,
                     app_android: None,
-                    folder: None
+                    folder: None,
+                    fallback_url: None
                 },
                 now,
                 3600
@@ -408,7 +412,8 @@ mod tests {
                     variants: Vec::new(),
                     app_ios: None,
                     app_android: None,
-                    folder: None
+                    folder: None,
+                    fallback_url: None
                 },
                 now,
                 3600

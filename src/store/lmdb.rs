@@ -704,6 +704,7 @@ mod tests {
             app_ios: None,
             app_android: None,
             folder: None,
+            fallback_url: None,
         };
         for id in 1..=5u64 {
             s.put_link(id, &rec(&format!("https://e{id}.com")))
@@ -773,6 +774,7 @@ mod tests {
             app_ios: None,
             app_android: None,
             folder: None,
+            fallback_url: None,
         };
         s.put_link(1, &rec("https://a.com", &["rust", "web"]))
             .await
@@ -810,6 +812,7 @@ mod tests {
             app_ios: None,
             app_android: None,
             folder: folder.map(str::to_string),
+            fallback_url: None,
         };
         s.put_link(1, &rec("https://a.com", Some("Marketing")))
             .await
@@ -951,6 +954,7 @@ mod tests {
             app_ios: Some("https://apps.apple.com/x".into()),
             app_android: None,
             folder: None,
+            fallback_url: None,
         };
         s.put_link(1, &rec).await.unwrap();
         let got = s.get_link(1).await.unwrap().unwrap();
