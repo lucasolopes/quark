@@ -18,7 +18,7 @@ import { isUnauthorized } from "@/lib/mutation-error";
 import { usePatchLink } from "@/lib/queries";
 import { formatTagsInput, parseTagsInput } from "@/lib/tags";
 import { draftsFromRules, parseRuleDrafts, type RuleDraft } from "@/lib/rules";
-import type { Link, Variant } from "@/lib/types";
+import type { Folder, Link, Variant } from "@/lib/types";
 import { RulesEditor } from "@/components/RulesEditor";
 
 /** Same cap enforced server-side (`MAX_VARIANTS` in `src/api.rs`). */
@@ -52,6 +52,8 @@ interface EditLinkDialogProps {
   link: Link;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Existing folders (from `useFolders`, lifted to the parent) offered in the folder field's datalist. */
+  folders?: Folder[];
 }
 
 /**
@@ -59,12 +61,13 @@ interface EditLinkDialogProps {
  * caller (Links.tsx) so the fields always start from the right link — without
  * that we'd need to sync state via an effect on every link change.
  */
-export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps) {
+export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditLinkDialogProps) {
   const t = useT();
   const [url, setUrl] = useState(link.url);
   const [ttl, setTtl] = useState("");
   const [removeExpiry, setRemoveExpiry] = useState(false);
   const [tagsInput, setTagsInput] = useState(formatTagsInput(link.tags ?? []));
+  const [folder, setFolder] = useState(link.folder ?? "");
   const [maxVisits, setMaxVisits] = useState(link.max_visits ? String(link.max_visits) : "");
   const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>(() => draftsFromRules(link.rules));
   const [showVariants, setShowVariants] = useState(link.variants.length > 0);
@@ -177,6 +180,7 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
           variants: buildVariants(),
           ...(appIos.trim() ? { app_ios: appIos.trim() } : link.app_ios?.trim() ? { app_ios: null } : {}),
           ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : link.app_android?.trim() ? { app_android: null } : {}),
+          ...(folder.trim() ? { folder: folder.trim() } : link.folder?.trim() ? { folder: null } : {}),
         },
       });
       toast.success(t("dialogs.edit.successToast"));
@@ -267,6 +271,25 @@ export function EditLinkDialog({ link, open, onOpenChange }: EditLinkDialogProps
                 value={tagsInput}
                 onChange={(e) => setTagsInput(e.target.value)}
               />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="edit-link-folder" className="text-sm font-medium">
+                {t("dialogs.edit.folderLabel")} <span className="text-muted-foreground">{t("dialogs.edit.folderOptional")}</span>
+              </label>
+              <Input
+                id="edit-link-folder"
+                type="text"
+                list="edit-link-folder-options"
+                placeholder={t("dialogs.edit.folderPlaceholder")}
+                value={folder}
+                onChange={(e) => setFolder(e.target.value)}
+              />
+              <datalist id="edit-link-folder-options">
+                {folders.map((f) => (
+                  <option key={f.name} value={f.name} />
+                ))}
+              </datalist>
             </div>
 
             <div className="flex flex-col gap-1.5">

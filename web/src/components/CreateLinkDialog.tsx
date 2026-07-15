@@ -26,7 +26,7 @@ import { parseTagsInput } from "@/lib/tags";
 import { applyUtm, deleteUtmTemplate, loadUtmTemplates, saveUtmTemplate, type UtmParams } from "@/lib/utm";
 import { parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import { RulesEditor } from "@/components/RulesEditor";
-import type { Variant } from "@/lib/types";
+import type { Folder, Variant } from "@/lib/types";
 
 /** Same cap enforced server-side (`MAX_VARIANTS` in `src/api.rs`). */
 const MAX_VARIANTS = 10;
@@ -62,6 +62,8 @@ function hasAnyUtm(params: UtmParams): boolean {
 interface CreateLinkDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Existing folders (from `useFolders`, lifted to the parent) offered in the folder field's datalist. */
+  folders?: Folder[];
 }
 
 /**
@@ -69,12 +71,13 @@ interface CreateLinkDialogProps {
  * outside the numeric-code space, positive TTL) before calling the API —
  * avoids a round-trip just to get back an error we already knew about.
  */
-export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) {
+export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLinkDialogProps) {
   const t = useT();
   const [url, setUrl] = useState("");
   const [alias, setAlias] = useState("");
   const [ttl, setTtl] = useState("");
   const [tagsInput, setTagsInput] = useState("");
+  const [folder, setFolder] = useState("");
   const [maxVisits, setMaxVisits] = useState("");
   const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>([]);
   const [showVariants, setShowVariants] = useState(false);
@@ -94,6 +97,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
     setAlias("");
     setTtl("");
     setTagsInput("");
+    setFolder("");
     setMaxVisits("");
     setRuleDrafts([]);
     setShowVariants(false);
@@ -235,6 +239,7 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
         ...(variants.length > 0 ? { variants } : {}),
         ...(appIos.trim() ? { app_ios: appIos.trim() } : {}),
         ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : {}),
+        ...(folder.trim() ? { folder: folder.trim() } : {}),
       });
       toast.success(t("dialogs.create.successToast"));
       reset();
@@ -334,6 +339,25 @@ export function CreateLinkDialog({ open, onOpenChange }: CreateLinkDialogProps) 
                 value={tagsInput}
                 onChange={(e) => setTagsInput(e.target.value)}
               />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="create-link-folder" className="text-sm font-medium">
+                {t("dialogs.create.folderLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
+              </label>
+              <Input
+                id="create-link-folder"
+                type="text"
+                list="create-link-folder-options"
+                placeholder={t("dialogs.create.folderPlaceholder")}
+                value={folder}
+                onChange={(e) => setFolder(e.target.value)}
+              />
+              <datalist id="create-link-folder-options">
+                {folders.map((f) => (
+                  <option key={f.name} value={f.name} />
+                ))}
+              </datalist>
             </div>
 
             <div className="flex flex-col gap-2 rounded-lg border border-input p-2.5">

@@ -22,7 +22,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { mutationErrorToast } from "@/lib/mutation-error";
-import { useDeleteLink, useLinks, useTags } from "@/lib/queries";
+import { useDeleteLink, useFolders, useLinks, useTags } from "@/lib/queries";
 import type { Link } from "@/lib/types";
 
 function matches(link: Link, query: string): boolean {
@@ -39,17 +39,19 @@ export function Links() {
   const t = useT();
   const [search, setSearch] = useState("");
   const [tag, setTag] = useState("");
+  const [folder, setFolder] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [editingLink, setEditingLink] = useState<Link | null>(null);
   const [deletingLink, setDeletingLink] = useState<Link | null>(null);
   const [clientMode, setClientMode] = useState(false);
-  const query = useLinks(undefined, tag || undefined);
+  const query = useLinks(undefined, tag || undefined, folder || undefined);
   const deleteLink = useDeleteLink();
   const tagsQuery = useTags();
+  const foldersQuery = useFolders();
 
   const dq = useDebounce(search, 300);
   const serverSearchEnabled = dq !== "" && !clientMode;
-  const serverSearch = useLinks(dq, tag || undefined, { enabled: serverSearchEnabled });
+  const serverSearch = useLinks(dq, tag || undefined, folder || undefined, { enabled: serverSearchEnabled });
 
   useEffect(() => {
     if (serverSearch.error instanceof ApiError && serverSearch.error.status === 501) setClientMode(true);
@@ -125,6 +127,20 @@ export function Links() {
           {(tagsQuery.data?.tags ?? []).map((tagOption) => (
             <option key={tagOption} value={tagOption}>
               {tagOption}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={folder}
+          onChange={(e) => setFolder(e.target.value)}
+          aria-label={t("links.folderFilterLabel")}
+          className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        >
+          <option value="">{t("links.folderFilterAll")}</option>
+          {(foldersQuery.data?.folders ?? []).map((folderOption) => (
+            <option key={folderOption.name} value={folderOption.name}>
+              {t("links.folderFilterOption", { name: folderOption.name, count: folderOption.count })}
             </option>
           ))}
         </select>
@@ -219,7 +235,11 @@ export function Links() {
         </Button>
       )}
 
-      <CreateLinkDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <CreateLinkDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        folders={foldersQuery.data?.folders ?? []}
+      />
 
       {editingLink && (
         <EditLinkDialog
@@ -227,6 +247,7 @@ export function Links() {
           link={editingLink}
           open
           onOpenChange={(open) => !open && setEditingLink(null)}
+          folders={foldersQuery.data?.folders ?? []}
         />
       )}
 

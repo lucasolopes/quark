@@ -5,6 +5,7 @@ import type { CreateLinkRequest, CreatePixelRequest, CreateTokenRequest, CreateW
 const LINKS_QUERY_KEY = ["links"];
 const WEBHOOKS_QUERY_KEY = ["webhooks"];
 const TAGS_QUERY_KEY = ["tags"];
+const FOLDERS_QUERY_KEY = ["folders"];
 const TOKENS_QUERY_KEY = ["tokens"];
 const PIXELS_QUERY_KEY = ["pixels"];
 
@@ -40,21 +41,23 @@ const LINKS_PAGE_SIZE = 50;
  * `retry` here would leak into the call without `q` too, since it's the same
  * hook.
  *
- * `tag` filters the list server-side (`GET /admin/links?tag=`); it's part of
- * the query key alongside `q` so switching the tag filter refetches instead
- * of reusing a stale cache entry.
+ * `tag` and `folder` filter the list server-side (`GET /admin/links?tag=`,
+ * `?folder=`, combinable); both are part of the query key alongside `q` so
+ * switching a filter refetches instead of reusing a stale cache entry.
  */
-export function useLinks(q?: string, tag?: string, options: { enabled?: boolean } = {}) {
+export function useLinks(q?: string, tag?: string, folder?: string, options: { enabled?: boolean } = {}) {
   const term = q?.trim() ?? "";
   const tagTerm = tag?.trim() ?? "";
+  const folderTerm = folder?.trim() ?? "";
   return useInfiniteQuery({
-    queryKey: [...LINKS_QUERY_KEY, term, tagTerm],
+    queryKey: [...LINKS_QUERY_KEY, term, tagTerm, folderTerm],
     queryFn: ({ pageParam }) =>
       api.listLinks({
         after: pageParam ?? undefined,
         limit: LINKS_PAGE_SIZE,
         q: term || undefined,
         tag: tagTerm || undefined,
+        folder: folderTerm || undefined,
       }),
     initialPageParam: null as number | null,
     getNextPageParam: (lastPage) => (lastPage.links.length < LINKS_PAGE_SIZE ? undefined : lastPage.next_after),
@@ -62,7 +65,7 @@ export function useLinks(q?: string, tag?: string, options: { enabled?: boolean 
   });
 }
 
-/** Creates a link; on success invalidates `useLinks` and `useTags` (a new tag may now exist). */
+/** Creates a link; on success invalidates `useLinks`, `useTags` and `useFolders` (a new tag or folder may now exist). */
 export function useCreateLink() {
   const client = useQueryClient();
   return useMutation({
@@ -70,11 +73,12 @@ export function useCreateLink() {
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY });
       void client.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+      void client.invalidateQueries({ queryKey: FOLDERS_QUERY_KEY });
     },
   });
 }
 
-/** Updates url/ttl/tags of an existing link; on success invalidates `useLinks` and `useTags`. */
+/** Updates url/ttl/tags/folder of an existing link; on success invalidates `useLinks`, `useTags` and `useFolders`. */
 export function usePatchLink() {
   const client = useQueryClient();
   return useMutation({
@@ -82,11 +86,12 @@ export function usePatchLink() {
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY });
       void client.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+      void client.invalidateQueries({ queryKey: FOLDERS_QUERY_KEY });
     },
   });
 }
 
-/** Deletes a link; on success invalidates `useLinks` and `useTags` (its tags may no longer be in use). */
+/** Deletes a link; on success invalidates `useLinks`, `useTags` and `useFolders` (its tags or folder may no longer be in use). */
 export function useDeleteLink() {
   const client = useQueryClient();
   return useMutation({
@@ -94,6 +99,7 @@ export function useDeleteLink() {
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY });
       void client.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+      void client.invalidateQueries({ queryKey: FOLDERS_QUERY_KEY });
     },
   });
 }
@@ -112,6 +118,14 @@ export function useTags() {
   return useQuery({
     queryKey: TAGS_QUERY_KEY,
     queryFn: () => api.listTags(),
+  });
+}
+
+/** Distinct folders in use (with counts), for the Links screen's folder filter and the dialogs' folder picker. */
+export function useFolders() {
+  return useQuery({
+    queryKey: FOLDERS_QUERY_KEY,
+    queryFn: () => api.listFolders(),
   });
 }
 
