@@ -935,6 +935,22 @@ mod tests {
         ) -> Result<bool, StoreError> {
             unimplemented!()
         }
+        async fn put_session(&self, _session: &crate::auth::Session) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn get_session_by_hash(
+            &self,
+            _token_hash: &str,
+            _now: u64,
+        ) -> Result<Option<crate::auth::Session>, StoreError> {
+            unimplemented!()
+        }
+        async fn delete_session(&self, _token_hash: &str) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn gc_sessions(&self, _now: u64) -> Result<(), StoreError> {
+            unimplemented!()
+        }
         async fn next_pixel_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }

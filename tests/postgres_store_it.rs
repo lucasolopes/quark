@@ -659,3 +659,31 @@ async fn list_broken_link_ids_pg() {
     s.put_link_health(2, &quark::store::LinkHealth { checked_at: 1, status: None, healthy: false }).await.unwrap();
     assert_eq!(s.list_broken_link_ids().await.unwrap(), vec![1, 2]);
 }
+
+#[tokio::test]
+#[serial]
+async fn session_round_trip_and_gc_pg() {
+    let Some(s) = fresh().await else { return };
+    let sess = quark::auth::Session {
+        token_hash: "h1".into(),
+        subject: "sub-1".into(),
+        display: "a@example.com".into(),
+        scopes: vec![quark::auth::Scope::LinksRead, quark::auth::Scope::Analytics],
+        created: 10,
+        expires: 100,
+    };
+    s.put_session(&sess).await.unwrap();
+    let got = s.get_session_by_hash("h1", 50).await.unwrap().unwrap();
+    assert_eq!(got.subject, "sub-1");
+    assert_eq!(got.scopes, vec![quark::auth::Scope::LinksRead, quark::auth::Scope::Analytics]);
+    // Expired is not returned.
+    assert!(s.get_session_by_hash("h1", 100).await.unwrap().is_none());
+    // gc drops expired rows only.
+    s.put_session(&quark::auth::Session { token_hash: "old".into(), expires: 5, ..sess.clone() }).await.unwrap();
+    s.gc_sessions(50).await.unwrap();
+    assert!(s.get_session_by_hash("old", 4).await.unwrap().is_none());
+    assert!(s.get_session_by_hash("h1", 50).await.unwrap().is_some());
+    // delete (logout).
+    s.delete_session("h1").await.unwrap();
+    assert!(s.get_session_by_hash("h1", 50).await.unwrap().is_none());
+}

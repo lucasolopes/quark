@@ -34,6 +34,22 @@ pub struct ApiToken {
     pub created: u64,
 }
 
+/// An authenticated panel session, created after a successful OIDC login. The
+/// opaque session token is generated once (like an API token) and only its
+/// SHA-256 hash is persisted; the cookie holds the raw token. Server-side and
+/// revocable (delete the row / logout).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Session {
+    pub token_hash: String,
+    /// IdP subject (`sub`), the stable account id.
+    pub subject: String,
+    /// Human-readable label for the panel (email or name).
+    pub display: String,
+    pub scopes: Vec<Scope>,
+    pub created: u64,
+    pub expires: u64,
+}
+
 /// Base62 alphabet (digits, uppercase, lowercase) used by `generate_token`.
 const BASE62_ALPHABET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
