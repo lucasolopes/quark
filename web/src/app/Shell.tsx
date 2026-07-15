@@ -15,13 +15,29 @@ export function Shell() {
   const isDark = resolvedTheme === "dark";
   const toggle = () => setTheme(isDark ? "light" : "dark");
 
-  const nav = [
-    { to: "/links", label: t("shell.navLinks"), icon: Link2 },
-    { to: "/webhooks", label: t("shell.navWebhooks"), icon: Webhook },
-    { to: "/import", label: t("shell.navImport"), icon: Upload },
-    { to: "/tokens", label: t("shell.navTokens"), icon: KeyRound },
-    { to: "/pixels", label: t("shell.navPixels"), icon: Radio },
-    { to: "/app-links", label: t("shell.navAppLinks"), icon: Smartphone },
+  const navGroups = [
+    {
+      label: t("shell.navGroupLinks"),
+      items: [
+        { to: "/links", label: t("shell.navLinks"), icon: Link2 },
+        { to: "/import", label: t("shell.navImport"), icon: Upload },
+      ],
+    },
+    {
+      label: t("shell.navGroupData"),
+      items: [{ to: "/pixels", label: t("shell.navPixels"), icon: Radio }],
+    },
+    {
+      label: t("shell.navGroupAuto"),
+      items: [{ to: "/webhooks", label: t("shell.navWebhooks"), icon: Webhook }],
+    },
+    {
+      label: t("shell.navGroupDev"),
+      items: [
+        { to: "/tokens", label: t("shell.navTokens"), icon: KeyRound },
+        { to: "/app-links", label: t("shell.navAppLinks"), icon: Smartphone },
+      ],
+    },
   ];
 
   function handleLogout() {
@@ -38,22 +54,29 @@ export function Shell() {
             quark
           </span>
         </div>
-        <nav className="flex flex-col gap-1 px-2 py-2">
-          {nav.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              title={label}
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground sm:justify-start",
-                  isActive && "bg-sidebar-accent text-sidebar-accent-foreground",
-                )
-              }
-            >
-              <Icon className="size-4 shrink-0" aria-hidden="true" />
-              <span className="hidden sm:inline">{label}</span>
-            </NavLink>
+        <nav className="flex flex-col gap-4 px-2 py-2">
+          {navGroups.map((group) => (
+            <div key={group.label} className="flex flex-col gap-1">
+              <div className="hidden px-3 pb-1 font-mono text-[10px] font-medium tracking-[0.14em] text-sidebar-foreground/45 uppercase sm:block">
+                {group.label}
+              </div>
+              {group.items.map(({ to, label, icon: Icon }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  title={label}
+                  className={({ isActive }) =>
+                    cn(
+                      "flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground sm:justify-start",
+                      isActive && "bg-sidebar-accent text-sidebar-accent-foreground",
+                    )
+                  }
+                >
+                  <Icon className="size-4 shrink-0" aria-hidden="true" />
+                  <span className="hidden sm:inline">{label}</span>
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
       </aside>
