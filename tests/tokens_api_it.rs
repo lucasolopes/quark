@@ -24,6 +24,7 @@ async fn app_admin(token: &str) -> axum::Router {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store,
         key: 0x1234,
@@ -268,6 +269,7 @@ async fn api_token_works_when_no_env_admin_token_is_configured() {
     store.put_api_token(&token).await.unwrap();
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store,
         key: 0x1234,

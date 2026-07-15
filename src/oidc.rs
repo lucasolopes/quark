@@ -207,13 +207,19 @@ pub fn verify_id_token(
     val.validate_exp = true;
     let data = decode::<serde_json::Value>(id_token, key, &val).map_err(|e| e.to_string())?;
     let claims = data.claims;
-    // Multi-audience id_tokens (OIDC): when `aud` has more than one value, the
-    // `azp` (authorized party) MUST be our client id, else a token minted for a
-    // different client that merely lists us in `aud` would be accepted.
-    if let Some(serde_json::Value::Array(auds)) = claims.get("aud") {
-        if auds.len() > 1 && claims.get("azp").and_then(|v| v.as_str()) != Some(client_id) {
-            return Err("multi-audience token without matching azp".to_string());
+    // OIDC azp (authorized party): whenever it is present it MUST be our client
+    // id, and a multi-audience token MUST carry it. This rejects a token minted
+    // for a different client that merely lists us in `aud`.
+    match claims.get("azp").and_then(|v| v.as_str()) {
+        Some(azp) if azp != client_id => {
+            return Err("azp does not match client id".to_string());
         }
+        None => {
+            if matches!(claims.get("aud"), Some(serde_json::Value::Array(a)) if a.len() > 1) {
+                return Err("multi-audience token without azp".to_string());
+            }
+        }
+        _ => {}
     }
     if claims.get("nonce").and_then(|v| v.as_str()) != Some(nonce) {
         return Err("nonce mismatch".to_string());
@@ -298,16 +304,20 @@ impl OidcRuntime {
     /// not in the cached set (handles IdP key rotation without a restart).
     pub async fn verify(&self, id_token: &str, nonce: &str) -> Result<Claims, String> {
         let kid = token_kid(id_token);
+        // Try the cached JWKS first. Any failure here (key not found OR signature
+        // verification) may be a key rotation, so retry once with a fresh JWKS.
         {
             let jwks = self.jwks.read().await;
             if let Ok(key) = select_key(&jwks, kid.as_deref()) {
-                return verify_id_token(
+                if let Ok(claims) = verify_id_token(
                     id_token,
                     &key,
                     &self.config.issuer,
                     &self.config.client_id,
                     nonce,
-                );
+                ) {
+                    return Ok(claims);
+                }
             }
         }
         let fresh = fetch_jwks(&self.client, &self.discovery.jwks_uri).await?;

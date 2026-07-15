@@ -53,9 +53,10 @@ export const api = {
   async me(): Promise<MeResponse> {
     return jsonOrThrow(await req("/admin/me"));
   },
-  /** Revokes the current OIDC session server-side and clears its cookie. */
+  /** Revokes the current OIDC session server-side and clears its cookie. The
+   * custom header defeats cross-site forced-logout CSRF (it forces a preflight). */
   async logout(): Promise<void> {
-    await req("/admin/logout", { method: "POST" });
+    await req("/admin/logout", { method: "POST", headers: { "x-quark-csrf": "1" } });
   },
   async createLink(body: CreateLinkRequest): Promise<CreateLinkResponse> {
     return jsonOrThrow(await req("/", { method: "POST", body: JSON.stringify(body) }));

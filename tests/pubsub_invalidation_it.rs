@@ -56,6 +56,7 @@ async fn node(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>, url: &str) ->
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store,
         key: 0,

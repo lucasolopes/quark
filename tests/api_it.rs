@@ -14,6 +14,7 @@ async fn app() -> axum::Router {
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store,
         key: 0x1234,
@@ -754,6 +755,7 @@ async fn unlock_post_is_rate_limited() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store,
         key: 0x1234,
@@ -848,6 +850,7 @@ async fn rate_limit_429_after_exceeding() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store,
         key: 0x1234,
@@ -973,6 +976,7 @@ async fn app_admin(token: &str) -> axum::Router {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store,
         key: 0x1234,
@@ -1402,6 +1406,7 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
     let (analytics_tx, rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store,
         key: 0x1234,
@@ -2095,6 +2100,7 @@ async fn cors_header_present_when_configured() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store,
         key: 0x1234,
@@ -2421,6 +2427,7 @@ async fn admin_links_reports_health_and_broken_filter() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -2508,6 +2515,7 @@ async fn session_cookie_authorizes_admin_by_scope() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -2601,6 +2609,7 @@ async fn admin_me_reports_session_and_oidc_state() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -2660,6 +2669,7 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -2741,4 +2751,69 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
         StatusCode::OK,
         "insufficient token must not block a sufficient session"
     );
+}
+
+#[tokio::test]
+async fn logout_requires_csrf_header_and_revokes_session() {
+    use quark::auth::{hash_token, Scope, Session};
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        oidc_configured: false,
+        cache,
+        store: store.clone(),
+        key: 0x1234,
+        signing_key: [0u8; 32],
+        analytics_tx: tx,
+        sink,
+        admin_token: Some("secret".to_string()),
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+    });
+    let app = router(state);
+    store
+        .put_session(&Session {
+            token_hash: hash_token("sess"),
+            subject: "s".into(),
+            display: "s@example.com".into(),
+            scopes: vec![Scope::Full],
+            created: 1,
+            expires: 100_000_000_000,
+        })
+        .await
+        .unwrap();
+
+    // Without the CSRF header (a cross-site simple POST) -> 403, session kept.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/logout")
+                .header("cookie", "qk_session=sess")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert!(store.get_session_by_hash(&hash_token("sess"), 2).await.unwrap().is_some());
+
+    // With the header (the panel's request) -> 204, session revoked.
+    let resp = app
+        .oneshot(
+            Request::post("/admin/logout")
+                .header("cookie", "qk_session=sess")
+                .header("x-quark-csrf", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert!(store.get_session_by_hash(&hash_token("sess"), 2).await.unwrap().is_none());
 }

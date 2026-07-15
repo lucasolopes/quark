@@ -58,7 +58,10 @@ multi-instance deployment.
 The panel and the API should be same-origin (or behind one proxy that routes
 `/admin/*` to quark) so the session cookie is sent. When they are on different
 origins, set `QUARK_CORS_ORIGINS` to the panel origin (quark then allows
-credentialed CORS).
+credentialed CORS) and set `QUARK_OIDC_POST_LOGIN_URL` to the panel URL. With the
+default `/`, the panel must be served at the API host root (a proxy or same-origin
+deployment); a bare single-binary quark serves no page at `/`, so set
+`QUARK_OIDC_POST_LOGIN_URL` there.
 
 ## Provider setup
 

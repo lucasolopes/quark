@@ -41,8 +41,12 @@ pub struct AppState {
     pub public_host: Option<String>,
     pub real_ip_header: String,
     pub webhooks: Arc<WebhookDispatcher>,
-    /// OIDC login runtime, present only when `QUARK_OIDC_ISSUER` is configured.
+    /// OIDC login runtime, present only when OIDC is configured AND initialized.
     pub oidc: Option<Arc<crate::oidc::OidcRuntime>>,
+    /// Whether OIDC was configured at all (`QUARK_OIDC_ISSUER` set), independent
+    /// of whether init succeeded. Gates the "public shortener" fallback so a
+    /// failed IdP init on an OIDC-only deploy fails closed, not open.
+    pub oidc_configured: bool,
 }
 
 #[derive(Deserialize)]
@@ -314,7 +318,7 @@ async fn require_admin_for_create(st: &AppState, headers: &HeaderMap) -> Result<
     // configured. When either a token or OIDC is set, create requires a
     // credential covering LinksWrite (env token / API token / OIDC session),
     // reusing the same authorization as every other write.
-    if st.admin_token.is_none() && st.oidc.is_none() {
+    if st.admin_token.is_none() && !st.oidc_configured {
         return Ok(());
     }
     admin_guard(st, headers, Scope::LinksWrite).await
@@ -1266,18 +1270,21 @@ async fn admin_guard(
     }
 
     // Admin surface is "disabled" (404) only when neither a token nor OIDC is
-    // configured; otherwise a missing/wrong credential is 401.
-    let not_found_status = if st.admin_token.is_some() || st.oidc.is_some() {
+    // configured; otherwise a missing/wrong credential is 401. Keyed on whether
+    // OIDC was configured (not on init success) so a failed IdP init still keeps
+    // the surface locked.
+    let not_found_status = if st.admin_token.is_some() || st.oidc_configured {
         StatusCode::UNAUTHORIZED
     } else {
         StatusCode::NOT_FOUND
     };
 
     // Try every presented credential; any one that covers `required` authorizes.
-    // A valid-but-insufficient credential (found token/session that lacks the
-    // scope) yields 403 only if nothing else covers — so a low-scope API token
-    // in localStorage never blocks a sufficiently-scoped OIDC session.
+    // A valid-but-insufficient credential yields 403, and a covering-but-throttled
+    // API token yields 429, but only if NOTHING else covers — so a low-scope or
+    // rate-limited API token in localStorage never blocks a sufficient session.
     let mut saw_insufficient = false;
+    let mut saw_rate_limited = false;
 
     // 2) Scoped API token in x-admin-token.
     if !provided.is_empty() {
@@ -1285,15 +1292,19 @@ async fn admin_guard(
         match st.store.get_api_token_by_hash(&hash).await {
             Ok(Some(token)) => {
                 if token.scopes.iter().any(|s| s.covers(required)) {
-                    if let Some(limit) = token.rate_limit_per_min {
-                        let key = format!("tok:{}", token.id);
-                        if !st.ratelimiter.check_with_limit(&key, now(), limit).await {
-                            return Err(StatusCode::TOO_MANY_REQUESTS);
+                    match token.rate_limit_per_min {
+                        Some(limit) => {
+                            let key = format!("tok:{}", token.id);
+                            if st.ratelimiter.check_with_limit(&key, now(), limit).await {
+                                return Ok(());
+                            }
+                            saw_rate_limited = true;
                         }
+                        None => return Ok(()),
                     }
-                    return Ok(());
+                } else {
+                    saw_insufficient = true;
                 }
-                saw_insufficient = true;
             }
             Ok(None) => {}
             Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
@@ -1315,6 +1326,9 @@ async fn admin_guard(
         }
     }
 
+    if saw_rate_limited {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
     if saw_insufficient {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -1342,8 +1356,10 @@ async fn oidc_login(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Resp
     let url = oidc.authorize_url(&state, &nonce, &challenge);
     let value = crate::oidc::sign_login_state(&st.signing_key, &state, &verifier, &nonce);
     let secure = if request_is_https(&headers) { "; Secure" } else { "" };
+    // Path=/ (not /admin) so the cookie is sent to the callback regardless of the
+    // configured QUARK_OIDC_REDIRECT_URL path.
     let cookie =
-        format!("{LOGIN_COOKIE}={value}; Max-Age=600; Path=/admin; HttpOnly; SameSite=Lax{secure}");
+        format!("{LOGIN_COOKIE}={value}; Max-Age=600; Path=/; HttpOnly; SameSite=Lax{secure}");
     (
         StatusCode::SEE_OTHER,
         [
@@ -1428,19 +1444,35 @@ async fn oidc_callback(
     );
     // Redirect to the configured post-login URL (the panel), default "/".
     let dest = oidc.config.post_login_url.clone();
-    (
+    // Clear the now-consumed login-state cookie so it cannot be replayed.
+    let clear_login = format!("{LOGIN_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
+    let mut resp = (
         StatusCode::SEE_OTHER,
         [
             (header::LOCATION, dest),
-            (header::SET_COOKIE, cookie),
             (header::CACHE_CONTROL, "no-store".to_string()),
         ],
     )
-        .into_response()
+        .into_response();
+    // Append both Set-Cookie headers (an array of tuples would overwrite one).
+    let h = resp.headers_mut();
+    if let Ok(v) = cookie.parse() {
+        h.append(header::SET_COOKIE, v);
+    }
+    if let Ok(v) = clear_login.parse() {
+        h.append(header::SET_COOKIE, v);
+    }
+    resp
 }
 
 /// `POST /admin/logout`: revoke the current session and clear the cookie.
+/// Requires the `x-quark-csrf` header the panel sends: without it a cross-site
+/// simple POST could force-logout via the SameSite=None cookie, and with it the
+/// request is preflighted so the CORS allowlist gates any cross-origin caller.
 async fn oidc_logout(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if headers.get("x-quark-csrf").is_none() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     if let Some(raw) = cookie_value(&headers, SESSION_COOKIE) {
         let _ = st.store.delete_session(&hash_token(raw)).await;
     }
@@ -2654,6 +2686,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             .allow_headers([
                 header::CONTENT_TYPE,
                 axum::http::HeaderName::from_static("x-admin-token"),
+                axum::http::HeaderName::from_static("x-quark-csrf"),
             ])
             .allow_credentials(true);
         app.layer(cors)

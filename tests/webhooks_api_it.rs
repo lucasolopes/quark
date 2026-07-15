@@ -32,6 +32,7 @@ async fn app_admin_with_dispatcher(
     ));
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store,
         key: 0x1234,
@@ -70,6 +71,7 @@ async fn app_admin_with_dispatcher_clicked_subscribed(
     ));
     let state = Arc::new(AppState {
         oidc: None,
+        oidc_configured: false,
         cache,
         store,
         key: 0x1234,
