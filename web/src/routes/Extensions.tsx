@@ -95,7 +95,7 @@ function IntegrationCard({ integration }: { integration: Integration }) {
   const isSoon = integration.poweredBy === "soon";
 
   return (
-    <Card className="flex flex-col justify-between gap-3">
+    <Card className="flex flex-col justify-between gap-3 transition-[transform,border-color] duration-200 hover:-translate-y-[3px] hover:border-primary/30 motion-reduce:transition-none motion-reduce:hover:translate-y-0">
       <CardContent className="flex flex-col gap-3">
         <div className="flex items-start justify-between gap-2">
           <span
