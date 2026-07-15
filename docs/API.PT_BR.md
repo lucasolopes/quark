@@ -157,8 +157,13 @@ Parâmetros de query: `after` (cursor de id), `limit` (default 50, teto 500),
 Sucesso: `200` com `{"links": [...], "next_after": <id ou null>}`. Cada linha
 traz `id`, `code`, `alias` opcional, `url`, `expiry`, `created`, `tags`,
 `max_visits` opcional, `visits`, `rules`, `variants`, um `folder` opcional
-(omitido quando o link não tem pasta), um `fallback_url` opcional, e
-`has_password` (um bool; o hash da senha nunca é devolvido).
+(omitido quando o link não tem pasta), um `fallback_url` opcional,
+`has_password` (um bool; o hash da senha nunca é devolvido), e um objeto
+`health` opcional (`{healthy, status, checked_at}`, omitido quando o link nunca
+foi sondado; veja [LINK-HEALTH](LINK-HEALTH.PT_BR.md)).
+
+Parâmetros de query incluem `after`, `limit`, `q`, `tag`, `folder` e
+`health=broken` (só links cuja última sonda de saúde falhou).
 
 `501 Not Implemented` volta quando `q` é usado no backend LMDB (busca é só
 Postgres; o painel cai para filtro client-side).

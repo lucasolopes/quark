@@ -50,6 +50,7 @@ export const en = {
     folderFilterLabel: "Filter by folder",
     folderFilterAll: "All folders",
     folderFilterOption: "{name} ({count})",
+    brokenFilterLabel: "Broken only",
     loadError: "Could not load links.",
     emptyTitle: "No links yet.",
     emptySubtitle: "Create the first short link to get started.",
@@ -87,6 +88,8 @@ export const en = {
     caption: "Short links registered in the system",
     rulesBadge: "{count} rules",
     protectedAria: "Password-protected",
+    healthOk: "Destination reachable",
+    healthBroken: "Destination broken (HTTP {status})",
   },
   tokens: {
     heading: "API tokens",

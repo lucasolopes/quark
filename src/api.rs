@@ -4,8 +4,8 @@ use crate::auth::{generate_token, hash_token, ApiToken, Scope};
 use crate::cache::Cache;
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::store::{
-    matched_rule_index, normalize_folder, normalize_tags, pick_variant, Record, Rule, RuleField,
-    Store, StoreError, Variant,
+    matched_rule_index, normalize_folder, normalize_tags, pick_variant, LinkHealth, Record, Rule,
+    RuleField, Store, StoreError, Variant,
 };
 use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{self, EventType, SubscriptionKind, WebhookEvent, WebhookSubscription};
@@ -1326,6 +1326,18 @@ struct ListParams {
     q: Option<String>,
     tag: Option<String>,
     folder: Option<String>,
+    /// `broken` restricts the list to links whose last health probe failed.
+    health: Option<String>,
+}
+
+/// Health of a link's destination as exposed to the panel (never includes
+/// anything sensitive; omitted from a row when the link was never probed).
+#[derive(Serialize)]
+struct HealthInfo {
+    healthy: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<u16>,
+    checked_at: u64,
 }
 
 #[derive(Serialize)]
@@ -1353,6 +1365,9 @@ struct LinkRow {
     fallback_url: Option<String>,
     /// Whether the link is password-protected. The hash itself is never exposed.
     has_password: bool,
+    /// Destination health from the background checker; omitted when unchecked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    health: Option<HealthInfo>,
 }
 
 async fn admin_links_list(
@@ -1375,32 +1390,75 @@ async fn admin_links_list(
         .filter(|s| !s.is_empty());
     let tag = tag.as_deref();
     let folder = p.folder.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let links = match q {
-        Some(term) => match st
-            .store
-            .search_links(term, p.after, limit, tag, folder)
-            .await
-        {
-            Ok(l) => l,
-            Err(StoreError::Unsupported) => return StatusCode::NOT_IMPLEMENTED.into_response(),
+    let broken_only = p.health.as_deref() == Some("broken");
+    // The `broken` filter is driven by the health table (a small set),
+    // cursor-paginated by id, so each page carries real broken rows (search `q`
+    // is ignored for this filter; tag/folder still apply). Otherwise the normal
+    // link listing/search runs.
+    let (links, next_after): (Vec<(u64, Record)>, Option<u64>) = if broken_only {
+        let ids = match st.store.list_broken_link_ids().await {
+            Ok(v) => v,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        },
-        None => match st.store.list_links(p.after, limit, tag, folder).await {
-            Ok(l) => l,
-            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        },
+        };
+        let mut picked: Vec<(u64, Record)> = Vec::new();
+        let mut last: Option<u64> = None;
+        for id in ids.into_iter().filter(|&id| p.after.map_or(true, |a| id > a)) {
+            let rec = match st.store.get_link(id).await {
+                Ok(Some(r)) => r,
+                Ok(None) => continue,
+                Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            };
+            if let Some(t) = tag {
+                if !rec.tags.iter().any(|x| x == t) {
+                    continue;
+                }
+            }
+            if let Some(f) = folder {
+                if !rec.folder.as_deref().map_or(false, |x| x.eq_ignore_ascii_case(f)) {
+                    continue;
+                }
+            }
+            last = Some(id);
+            picked.push((id, rec));
+            if picked.len() == limit {
+                break;
+            }
+        }
+        let next = if picked.len() == limit { last } else { None };
+        (picked, next)
+    } else {
+        let links = match q {
+            Some(term) => match st.store.search_links(term, p.after, limit, tag, folder).await {
+                Ok(l) => l,
+                Err(StoreError::Unsupported) => return StatusCode::NOT_IMPLEMENTED.into_response(),
+                Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            },
+            None => match st.store.list_links(p.after, limit, tag, folder).await {
+                Ok(l) => l,
+                Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            },
+        };
+        let next = if links.len() == limit {
+            links.last().map(|(id, _)| *id)
+        } else {
+            None
+        };
+        (links, next)
     };
     let alias_map: std::collections::HashMap<u64, String> = match st.store.list_aliases().await {
         Ok(pairs) => pairs.into_iter().map(|(a, id)| (id, a)).collect(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    let next_after = if links.len() == limit {
-        links.last().map(|(id, _)| *id)
-    } else {
-        None
-    };
+    // Fetch health for just this page's ids (not the whole table).
+    let page_ids: Vec<u64> = links.iter().map(|(id, _)| *id).collect();
+    let health_map: std::collections::HashMap<u64, LinkHealth> =
+        match st.store.link_health_for(&page_ids).await {
+            Ok(v) => v.into_iter().collect(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
     let mut rows: Vec<LinkRow> = Vec::with_capacity(links.len());
     for (id, rec) in links {
+        let health = health_map.get(&id);
         let visits = match st.store.visits(id).await {
             Ok(v) => v,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -1422,6 +1480,11 @@ async fn admin_links_list(
             folder: rec.folder,
             fallback_url: rec.fallback_url,
             has_password: rec.password_hash.is_some(),
+            health: health.map(|h| HealthInfo {
+                healthy: h.healthy,
+                status: h.status,
+                checked_at: h.checked_at,
+            }),
         });
     }
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()

@@ -31,6 +31,7 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
   armazenados** (store chaveado por `u64`).
 - **Expiração por máximo de visitas (#11):** um link expira por TTL ou por um número máximo de visitas, o que vier primeiro. Um link expirado pode ter um `fallback_url` e redirecionar pra lá (`302`) em vez de devolver `410`.
 - **Links protegidos por senha:** senha opt-in por link (argon2id). Um link protegido serve um interstitial self-contained; a senha correta seta um cookie de unlock assinado, por-code, de 12h, e o redirect segue. O texto puro nunca é armazenado; só `has_password` é exposto. Doc: `docs/LINK-PASSWORD.md`.
+- **Monitoramento de link quebrado:** checker de fundo opt-in (`QUARK_HEALTH_CHECK_SECS`) sonda cada destino, grava a saúde e emite webhooks `link.broken`/`link.recovered` na transição. O painel mostra uma bolinha de status e um filtro "só quebrados". Doc: `docs/LINK-HEALTH.md`.
 - **Arquitetura plugável**: traits `Store` / `CacheTier` / `AnalyticsSink`:
   - **L2 Valkey** (`QUARK_VALKEY_URL`): cache compartilhado, circuit-breaker + timeout, fail-open.
   - **Postgres** (`QUARK_DATABASE_URL`): store relacional multi-nó (sequência de id atômica).

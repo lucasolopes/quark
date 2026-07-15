@@ -2406,3 +2406,88 @@ async fn admin_patch_with_invalid_device_value_400() {
         .unwrap();
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn admin_links_reports_health_and_broken_filter() {
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        cache,
+        store: store.clone(),
+        key: 0x1234,
+        signing_key: [0u8; 32],
+        analytics_tx: tx,
+        sink,
+        admin_token: Some("secret".to_string()),
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+    });
+    let app = router(state);
+
+    let mk = |url: &str| {
+        Request::post("/")
+            .header("content-type", "application/json")
+            .header("x-admin-token", "secret")
+            .body(Body::from(format!(r#"{{"url":"{url}"}}"#)))
+            .unwrap()
+    };
+    app.clone().oneshot(mk("https://ok.example.com")).await.unwrap();
+    app.clone().oneshot(mk("https://dead.example.com")).await.unwrap();
+
+    // Read back the two ids assigned by the store.
+    let list = |q: &str| {
+        Request::get(format!("/admin/links{q}"))
+            .header("x-admin-token", "secret")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let resp = app.clone().oneshot(list("")).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let rows = v["links"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    // No health recorded yet: the field is omitted.
+    assert!(rows.iter().all(|r| r.get("health").is_none()));
+    let id_by_url = |url: &str| -> u64 {
+        rows.iter()
+            .find(|r| r["url"] == url)
+            .unwrap()["id"]
+            .as_u64()
+            .unwrap()
+    };
+    let ok_id = id_by_url("https://ok.example.com");
+    let dead_id = id_by_url("https://dead.example.com");
+
+    store
+        .put_link_health(ok_id, &quark::store::LinkHealth { checked_at: 10, status: Some(200), healthy: true })
+        .await
+        .unwrap();
+    store
+        .put_link_health(dead_id, &quark::store::LinkHealth { checked_at: 10, status: Some(404), healthy: false })
+        .await
+        .unwrap();
+
+    // Unfiltered list now carries health on both rows.
+    let resp = app.clone().oneshot(list("")).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let rows = v["links"].as_array().unwrap();
+    let health_of = |id: u64| rows.iter().find(|r| r["id"].as_u64() == Some(id)).unwrap()["health"].clone();
+    assert_eq!(health_of(ok_id)["healthy"], true);
+    assert_eq!(health_of(dead_id)["healthy"], false);
+    assert_eq!(health_of(dead_id)["status"], 404);
+
+    // ?health=broken narrows to the dead link only.
+    let resp = app.oneshot(list("?health=broken")).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let rows = v["links"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"].as_u64(), Some(dead_id));
+    assert_eq!(rows[0]["health"]["healthy"], false);
+}

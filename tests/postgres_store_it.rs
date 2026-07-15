@@ -601,3 +601,61 @@ async fn put_link_tx_on_conflict_upserts_link_and_keeps_one_delivery() {
         "duplicate delivery_key inserts one row"
     );
 }
+
+#[tokio::test]
+#[serial]
+async fn link_health_round_trip_pg() {
+    let Some(s) = fresh().await else { return };
+    assert!(s.list_link_health().await.unwrap().is_empty());
+
+    s.put_link_health(
+        1,
+        &quark::store::LinkHealth { checked_at: 100, status: Some(200), healthy: true },
+    )
+    .await
+    .unwrap();
+    s.put_link_health(
+        2,
+        &quark::store::LinkHealth { checked_at: 100, status: None, healthy: false },
+    )
+    .await
+    .unwrap();
+    // Overwrite id 1: healthy -> broken.
+    s.put_link_health(
+        1,
+        &quark::store::LinkHealth { checked_at: 200, status: Some(500), healthy: false },
+    )
+    .await
+    .unwrap();
+
+    let map: std::collections::HashMap<u64, quark::store::LinkHealth> =
+        s.list_link_health().await.unwrap().into_iter().collect();
+    assert_eq!(map.len(), 2);
+    assert_eq!(
+        map[&1],
+        quark::store::LinkHealth { checked_at: 200, status: Some(500), healthy: false }
+    );
+    assert_eq!(map[&2].status, None);
+    assert!(!map[&2].healthy);
+}
+
+#[tokio::test]
+#[serial]
+async fn health_lease_single_holder_and_renew_pg() {
+    let Some(s) = fresh().await else { return };
+    // First holder acquires; a different holder is refused while it is valid;
+    // the holder can renew.
+    assert!(s.try_acquire_health_lease("node-a", 60).await.unwrap());
+    assert!(!s.try_acquire_health_lease("node-b", 60).await.unwrap());
+    assert!(s.try_acquire_health_lease("node-a", 60).await.unwrap());
+}
+
+#[tokio::test]
+#[serial]
+async fn list_broken_link_ids_pg() {
+    let Some(s) = fresh().await else { return };
+    s.put_link_health(3, &quark::store::LinkHealth { checked_at: 1, status: Some(200), healthy: true }).await.unwrap();
+    s.put_link_health(1, &quark::store::LinkHealth { checked_at: 1, status: Some(404), healthy: false }).await.unwrap();
+    s.put_link_health(2, &quark::store::LinkHealth { checked_at: 1, status: None, healthy: false }).await.unwrap();
+    assert_eq!(s.list_broken_link_ids().await.unwrap(), vec![1, 2]);
+}

@@ -36,6 +36,25 @@ describe("LinkTable — A/B variants badge", () => {
   });
 });
 
+describe("LinkTable — health indicator", () => {
+  it("shows a broken indicator (with the status) when the destination is broken", () => {
+    const broken: Link = { ...link, health: { healthy: false, status: 404, checked_at: 1700000000 } };
+    render(withProviders(<LinkTable links={[broken]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.getByRole("img", { name: /broken \(HTTP 404\)/i })).toBeInTheDocument();
+  });
+
+  it("shows a reachable indicator when the destination is healthy", () => {
+    const healthy: Link = { ...link, health: { healthy: true, status: 200, checked_at: 1700000000 } };
+    render(withProviders(<LinkTable links={[healthy]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.getByRole("img", { name: /reachable/i })).toBeInTheDocument();
+  });
+
+  it("shows no health indicator when the link was never checked", () => {
+    render(withProviders(<LinkTable links={[link]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.queryByRole("img", { name: /reachable|broken/i })).not.toBeInTheDocument();
+  });
+});
+
 describe("LinkTable — QR code", () => {
   it("opens the QR code dialog with the short URL and the download button", async () => {
     render(withProviders(<LinkTable links={[link]} onEdit={() => {}} onDelete={() => {}} />));

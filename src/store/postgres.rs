@@ -1,7 +1,7 @@
 use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::auth::ApiToken;
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
-use crate::store::{OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant};
+use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant};
 use crate::webhooks::{SubscriptionKind, WebhookSubscription};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{PgPool, Row};
@@ -262,6 +262,8 @@ impl PostgresStore {
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS fallback_url TEXT",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS password_hash TEXT",
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS link_health (id BIGINT PRIMARY KEY, checked_at BIGINT NOT NULL, status INT, healthy BOOLEAN NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS health_lease (id INT PRIMARY KEY, holder TEXT NOT NULL, expires_at BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS webhooks (id BIGINT PRIMARY KEY, url TEXT NOT NULL, events JSONB NOT NULL, secret TEXT NOT NULL, active BOOLEAN NOT NULL, created BIGINT NOT NULL, kind TEXT NOT NULL DEFAULT 'generic')",
@@ -319,7 +321,7 @@ impl PostgresStore {
     /// Used in tests: resets all state.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries RESTART IDENTITY",
+            "TRUNCATE links, aliases, link_health, health_lease, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
@@ -491,6 +493,11 @@ impl Store for PostgresStore {
             .execute(&mut *tx)
             .await
             .map_err(StoreError::backend)?;
+        sqlx::query("DELETE FROM link_health WHERE id = $1")
+            .bind(id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(StoreError::backend)?;
         enqueue_in_tx(&mut tx, deliveries).await?;
         tx.commit().await.map_err(StoreError::backend)?;
         Ok(())
@@ -567,6 +574,11 @@ impl Store for PostgresStore {
 
     async fn delete_link(&self, id: u64) -> Result<(), StoreError> {
         sqlx::query("DELETE FROM links WHERE id = $1")
+            .bind(id as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        sqlx::query("DELETE FROM link_health WHERE id = $1")
             .bind(id as i64)
             .execute(&self.pool)
             .await
@@ -770,6 +782,111 @@ impl Store for PostgresStore {
             }
             None => Ok(0),
         }
+    }
+
+    async fn put_link_health(&self, id: u64, health: &LinkHealth) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO link_health (id, checked_at, status, healthy) VALUES ($1,$2,$3,$4) \
+             ON CONFLICT (id) DO UPDATE SET checked_at=$2, status=$3, healthy=$4",
+        )
+        .bind(id as i64)
+        .bind(health.checked_at as i64)
+        .bind(health.status.map(|s| s as i32))
+        .bind(health.healthy)
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn list_link_health(&self) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
+        let rows = sqlx::query("SELECT id, checked_at, status, healthy FROM link_health")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+            let checked_at: i64 = r.try_get("checked_at").map_err(StoreError::backend)?;
+            let status: Option<i32> = r.try_get("status").map_err(StoreError::backend)?;
+            let healthy: bool = r.try_get("healthy").map_err(StoreError::backend)?;
+            out.push((
+                id as u64,
+                LinkHealth {
+                    checked_at: checked_at as u64,
+                    status: status.map(|s| s as u16),
+                    healthy,
+                },
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn list_broken_link_ids(&self) -> Result<Vec<u64>, StoreError> {
+        let rows = sqlx::query("SELECT id FROM link_health WHERE healthy = false ORDER BY id")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+            out.push(id as u64);
+        }
+        Ok(out)
+    }
+
+    async fn try_acquire_health_lease(
+        &self,
+        holder: &str,
+        ttl_secs: u64,
+    ) -> Result<bool, StoreError> {
+        // Use the DATABASE clock for both the new expiry and the takeover
+        // comparison, so app-node clock skew cannot decide lease ownership.
+        let row = sqlx::query(
+            "INSERT INTO health_lease (id, holder, expires_at) \
+             VALUES (1, $1, EXTRACT(EPOCH FROM now())::bigint + $2) \
+             ON CONFLICT (id) DO UPDATE \
+               SET holder = $1, expires_at = EXTRACT(EPOCH FROM now())::bigint + $2 \
+             WHERE health_lease.expires_at < EXTRACT(EPOCH FROM now())::bigint \
+                OR health_lease.holder = $1 \
+             RETURNING holder",
+        )
+        .bind(holder)
+        .bind(ttl_secs as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(row.is_some())
+    }
+
+    async fn link_health_for(&self, ids: &[u64]) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let id_list: Vec<i64> = ids.iter().map(|&i| i as i64).collect();
+        let rows = sqlx::query(
+            "SELECT id, checked_at, status, healthy FROM link_health WHERE id = ANY($1)",
+        )
+        .bind(&id_list)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+            let checked_at: i64 = r.try_get("checked_at").map_err(StoreError::backend)?;
+            let status: Option<i32> = r.try_get("status").map_err(StoreError::backend)?;
+            let healthy: bool = r.try_get("healthy").map_err(StoreError::backend)?;
+            out.push((
+                id as u64,
+                LinkHealth {
+                    checked_at: checked_at as u64,
+                    status: status.map(|s| s as u16),
+                    healthy,
+                },
+            ));
+        }
+        Ok(out)
     }
 
     async fn next_pixel_id(&self) -> Result<u64, StoreError> {

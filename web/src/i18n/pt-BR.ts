@@ -52,6 +52,7 @@ export const ptBR: Messages = {
     folderFilterLabel: "Filtrar por pasta",
     folderFilterAll: "Todas as pastas",
     folderFilterOption: "{name} ({count})",
+    brokenFilterLabel: "Só quebrados",
     loadError: "Não foi possível carregar os links.",
     emptyTitle: "Nenhum link ainda.",
     emptySubtitle: "Crie o primeiro link curto para começar.",
@@ -89,6 +90,8 @@ export const ptBR: Messages = {
     caption: "Links curtos cadastrados no sistema",
     rulesBadge: "{count} regras",
     protectedAria: "Protegido por senha",
+    healthOk: "Destino acessível",
+    healthBroken: "Destino quebrado (HTTP {status})",
   },
   tokens: {
     heading: "Tokens de API",

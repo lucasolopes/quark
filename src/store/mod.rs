@@ -265,6 +265,18 @@ impl From<serde_json::Error> for StoreError {
     }
 }
 
+/// Health of a link's destination, recorded by the background checker
+/// (broken-link monitoring). Kept off `Record` so a probe every sweep does not
+/// rewrite the whole link record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinkHealth {
+    /// Unix seconds of the last probe.
+    pub checked_at: u64,
+    /// HTTP status observed, or `None` on a connection error / timeout.
+    pub status: Option<u16>,
+    pub healthy: bool,
+}
+
 /// Persistence interface. The hot path is always served from the L1 cache;
 /// the async methods accommodate network backends (Postgres/Valkey) without a
 /// blocking workaround.
@@ -360,6 +372,28 @@ pub trait Store: Send + Sync + 'static {
     async fn bump_visits(&self, id: u64) -> Result<u64, StoreError>;
     /// Reads the current visit count for `id` (0 if never bumped), for display.
     async fn visits(&self, id: u64) -> Result<u64, StoreError>;
+    /// Records the latest health probe result for a link (broken-link
+    /// monitoring). Upserts by id; a link is probed at most once per sweep.
+    async fn put_link_health(&self, id: u64, health: &LinkHealth) -> Result<(), StoreError>;
+    /// All recorded link-health entries. Used by the checker to detect
+    /// healthy<->broken transitions across the whole link set.
+    async fn list_link_health(&self) -> Result<Vec<(u64, LinkHealth)>, StoreError>;
+    /// Health entries for a specific set of link ids (missing ids are simply
+    /// absent from the result). Used by the admin list so a page load reads only
+    /// the current page's health, not the whole table.
+    async fn link_health_for(&self, ids: &[u64]) -> Result<Vec<(u64, LinkHealth)>, StoreError>;
+    /// Ids of all links whose last probe was broken, ascending. Drives the
+    /// panel's "broken only" filter without scanning the whole link table.
+    async fn list_broken_link_ids(&self) -> Result<Vec<u64>, StoreError>;
+    /// Tries to acquire (or renew) the single broken-link-checker lease for
+    /// `ttl_secs`, identified by `holder`. Returns `true` if this caller now
+    /// holds it. Lets any replica run the checker while ensuring only one sweeps
+    /// at a time; the single-node LMDB backend always returns `true`.
+    async fn try_acquire_health_lease(
+        &self,
+        holder: &str,
+        ttl_secs: u64,
+    ) -> Result<bool, StoreError>;
     async fn next_pixel_id(&self) -> Result<u64, StoreError>;
     async fn get_pixel(&self, id: u64) -> Result<Option<PixelConfig>, StoreError>;
     async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError>;

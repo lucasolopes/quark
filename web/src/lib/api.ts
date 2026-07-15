@@ -48,13 +48,14 @@ export const api = {
   async createLink(body: CreateLinkRequest): Promise<CreateLinkResponse> {
     return jsonOrThrow(await req("/", { method: "POST", body: JSON.stringify(body) }));
   },
-  async listLinks(params: { after?: number; limit?: number; q?: string; tag?: string; folder?: string } = {}): Promise<ListLinksResponse> {
+  async listLinks(params: { after?: number; limit?: number; q?: string; tag?: string; folder?: string; health?: string } = {}): Promise<ListLinksResponse> {
     const sp = new URLSearchParams();
     if (params.after != null) sp.set("after", String(params.after));
     if (params.limit != null) sp.set("limit", String(params.limit));
     if (params.q && params.q.trim() !== "") sp.set("q", params.q.trim());
     if (params.tag && params.tag.trim() !== "") sp.set("tag", params.tag.trim());
     if (params.folder && params.folder.trim() !== "") sp.set("folder", params.folder.trim());
+    if (params.health && params.health.trim() !== "") sp.set("health", params.health.trim());
     const qs = sp.toString();
     return jsonOrThrow(await req(`/admin/links${qs ? `?${qs}` : ""}`));
   },

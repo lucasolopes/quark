@@ -31,6 +31,7 @@ bottleneck being geography/RTT, not the server).
   stored** (store keyed by `u64`).
 - **Max-visits expiration (#11):** a link expires by TTL or by a maximum number of visits, whichever comes first. An expired link can carry a `fallback_url` and redirect there (`302`) instead of returning `410`.
 - **Password-protected links:** an opt-in per-link password (argon2id). A protected link serves a self-contained interstitial; the correct password sets a signed, per-code, 12h unlock cookie and the redirect proceeds. The plaintext is never stored; only `has_password` is exposed. Doc: `docs/LINK-PASSWORD.md`.
+- **Broken-link monitoring:** an opt-in background checker (`QUARK_HEALTH_CHECK_SECS`) probes each destination, records its health, and emits `link.broken`/`link.recovered` webhooks on a transition. Panel shows a status dot and a "broken only" filter. Doc: `docs/LINK-HEALTH.md`.
 - **Pluggable architecture**: `Store` / `CacheTier` / `AnalyticsSink` traits:
   - **L2 Valkey** (`QUARK_VALKEY_URL`): shared cache, circuit breaker + timeout, fail-open.
   - **Postgres** (`QUARK_DATABASE_URL`): multi-node relational store (atomic id sequence).
