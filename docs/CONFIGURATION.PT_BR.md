@@ -59,7 +59,8 @@ passa e o comportamento single-node fica intacto.
 | Variável | Default | Função |
 |---|---|---|
 | `QUARK_ADMIN_TOKEN` | sem setar | O token do operador, enviado no header `x-admin-token`. Sempre se comporta como escopo `full`. Sem setar, `POST /` fica um encurtador público aberto e todo endpoint `/admin/*` mais `GET /:code/stats` responde `404` (desligado). Setado, esses endpoints exigem ele ou um token de API com escopo, e `POST /` exige um token que cubra `links_write`. Veja [API-TOKENS](API-TOKENS.PT_BR.md). |
-| `QUARK_CORS_ORIGINS` | sem setar (só mesma origem) | Lista de origens separadas por vírgula liberadas a chamar a API, para o painel web hospedado à parte. Vazio significa sem camada de CORS. |
+| `QUARK_CORS_ORIGINS` | sem setar (só mesma origem) | Lista de origens separadas por vírgula liberadas a chamar a API, para o painel web hospedado à parte. Vazio significa sem camada de CORS. CORS com credenciais (pro cookie de sessão OIDC) é ligado quando setado. |
+| `QUARK_OIDC_ISSUER` (+ `QUARK_OIDC_CLIENT_ID`/`_SECRET`/`_REDIRECT_URL`/`_SCOPES`/`_ADMIN_CLAIM`/`_ADMIN_VALUE`/`_READONLY_VALUE`) | sem setar (OIDC off) | Liga o "entrar com seu provedor de identidade" (OIDC Authorization Code + PKCE). Off a menos que `QUARK_OIDC_ISSUER` esteja setado; o token de admin segue como break-glass. Detalhes completos e setup por provedor em [OIDC-LOGIN](OIDC-LOGIN.PT_BR.md). |
 | `QUARK_ACCESS_LOG` | sem setar (off) | Liga uma linha de log de acesso em JSON por requisição (`{"method","path","status","latency_ms"}`) no stdout. Off por default para o caminho quente do redirect não pagar custo síncrono de stdout. |
 
 ## Proteção contra abuso
