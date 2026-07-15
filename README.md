@@ -283,6 +283,7 @@ includes an optional UTM builder with locally saved templates (`localStorage`).
 - Horizontal scaling (replicas + Postgres + Valkey) and `QUARK_NODE_ID`: [`docs/SCALING.md`](docs/SCALING.md)
 - A/B testing (weighted variants + per-variant stats): [`docs/AB-TESTING.md`](docs/AB-TESTING.md)
 - Password-protected links (argon2 + interstitial): [`docs/LINK-PASSWORD.md`](docs/LINK-PASSWORD.md)
+- Broken-link monitoring (health checker + webhooks): [`docs/LINK-HEALTH.md`](docs/LINK-HEALTH.md)
 
 ## Contributing
 
