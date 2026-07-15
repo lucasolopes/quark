@@ -185,3 +185,48 @@ describe("EditLinkDialog — app destinations", () => {
     expect(body).toHaveProperty("app_ios", "https://apps.apple.com/app/y");
   });
 });
+
+describe("EditLinkDialog — fallback url", () => {
+  beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
+
+  it("pre-populates and sends an edited fallback_url", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const l = makeLink({ fallback_url: "https://old.com" });
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    const field = screen.getByLabelText(/fallback/i);
+    expect(field).toHaveValue("https://old.com");
+    await userEvent.clear(field);
+    await userEvent.type(field, "https://new.com");
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const body = patchBody(fetchMock);
+    expect(body).toHaveProperty("fallback_url", "https://new.com");
+  });
+
+  it("sends fallback_url: null when an existing fallback is cleared", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const l = makeLink({ fallback_url: "https://old.com" });
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.clear(screen.getByLabelText(/fallback/i));
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const body = patchBody(fetchMock);
+    expect(body).toHaveProperty("fallback_url", null);
+  });
+
+  it("omits fallback_url when it was empty and stays empty", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const body = patchBody(fetchMock);
+    expect(body).not.toHaveProperty("fallback_url");
+  });
+});
