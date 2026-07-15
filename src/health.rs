@@ -7,10 +7,11 @@
 //! redirect hot path is never touched by this module.
 
 use crate::abuse::{extract_host, is_internal_host};
-use crate::store::{LinkHealth, Store};
+use crate::store::{LinkHealth, Record, Store};
 use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{EventType, WebhookEvent};
 use crate::{codec, permute};
+use futures_util::stream::{self, StreamExt};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -23,6 +24,10 @@ pub const MIN_CHECK_SECS: u64 = 60;
 const PROBE_TIMEOUT_SECS: u64 = 10;
 /// Links fetched per `list_links` page during a sweep.
 const LIST_PAGE: usize = 500;
+/// Destinations probed concurrently within a chunk. Bounds how long a chunk
+/// takes (~one probe timeout) so the lease can be renewed between chunks well
+/// inside its TTL, even when many destinations time out.
+const PROBE_CONCURRENCY: usize = 16;
 
 /// Whether an observed HTTP status counts as healthy: `2xx`/`3xx` (a live server,
 /// even one that redirects) is healthy; everything else (and no status at all,
@@ -139,15 +144,18 @@ fn transition_body(event_type: EventType, code: &str, url: &str, status: Option<
 /// A link never seen before is treated as previously healthy, so a
 /// newly-discovered broken destination fires `link.broken` exactly once (the
 /// health it writes suppresses a repeat on the next sweep).
-pub async fn sweep<P, F>(
+pub async fn sweep<P, F, R, RF>(
     store: &Arc<dyn Store>,
     webhooks: &WebhookDispatcher,
     key: u64,
+    renew: R,
     prober: P,
 ) -> Result<usize, String>
 where
     P: Fn(String) -> F,
     F: Future<Output = Option<LinkHealth>>,
+    R: Fn() -> RF,
+    RF: Future<Output = bool>,
 {
     let prev: HashMap<u64, LinkHealth> = store
         .list_link_health()
@@ -167,35 +175,57 @@ where
             break;
         }
         after = page.last().map(|(id, _)| *id);
-        for (id, rec) in page {
-            // The prober returns None to skip a link (internal/unresolvable
-            // destination); such links are left unchecked, never probed.
-            let Some(health) = prober(rec.url.clone()).await else {
-                continue;
-            };
-            checked += 1;
-            let was_healthy = prev.get(&id).map(|p| p.healthy).unwrap_or(true);
-            if was_healthy != health.healthy {
-                let et = if health.healthy {
-                    EventType::LinkRecovered
-                } else {
-                    EventType::LinkBroken
-                };
-                let code = codec::to_base62(permute::encode(id, key));
-                // Persist the new state only once the transition event is
-                // enqueued; if the best-effort channel is full, leave the old
-                // state so the next sweep retries (no permanently-lost alert).
-                if !webhooks.try_emit(WebhookEvent {
-                    event_type: et,
-                    body: transition_body(et, &code, &rec.url, health.status),
-                }) {
-                    continue;
-                }
+        // Probe in bounded-concurrency chunks; renew the lease before each chunk
+        // (each chunk lasts about one probe timeout, far inside the lease TTL) so
+        // a slow sweep keeps the lease and no second node starts a rival sweep.
+        let mut page = page;
+        while !page.is_empty() {
+            let take = page.len().min(PROBE_CONCURRENCY);
+            let chunk: Vec<(u64, Record)> = page.drain(..take).collect();
+            if !renew().await {
+                // Lost the lease (another node took over): stop this sweep.
+                return Ok(checked);
             }
-            store
-                .put_link_health(id, &health)
-                .await
-                .map_err(|e| e.to_string())?;
+            let results: Vec<(u64, String, Option<LinkHealth>)> = stream::iter(chunk.into_iter())
+                .map(|(id, rec)| {
+                    let prober = &prober;
+                    async move {
+                        let health = prober(rec.url.clone()).await;
+                        (id, rec.url, health)
+                    }
+                })
+                .buffer_unordered(PROBE_CONCURRENCY)
+                .collect()
+                .await;
+            for (id, url, maybe_health) in results {
+                // None => skipped (internal/unresolvable), left unchecked.
+                let Some(health) = maybe_health else {
+                    continue;
+                };
+                checked += 1;
+                let was_healthy = prev.get(&id).map(|p| p.healthy).unwrap_or(true);
+                if was_healthy != health.healthy {
+                    let et = if health.healthy {
+                        EventType::LinkRecovered
+                    } else {
+                        EventType::LinkBroken
+                    };
+                    let code = codec::to_base62(permute::encode(id, key));
+                    // Persist the new state only once the transition event is
+                    // enqueued; if the best-effort channel is full, leave the old
+                    // state so the next sweep retries (no permanently-lost alert).
+                    if !webhooks.try_emit(WebhookEvent {
+                        event_type: et,
+                        body: transition_body(et, &code, &url, health.status),
+                    }) {
+                        continue;
+                    }
+                }
+                store
+                    .put_link_health(id, &health)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
         }
         if n < LIST_PAGE {
             break;
@@ -246,7 +276,10 @@ pub fn spawn_link_checker(
                     }
                 }
             };
-            match sweep(&store, &webhooks, key, prober).await {
+            // Renew the lease between chunks so a slow sweep keeps it; returns
+            // false if this node lost it (then the sweep stops).
+            let renew = || async { store.try_acquire_health_lease(&holder, ttl).await.unwrap_or(false) };
+            match sweep(&store, &webhooks, key, renew, prober).await {
                 Ok(n) => eprintln!("{}", serde_json::json!({ "health_sweep_checked": n })),
                 Err(e) => eprintln!("{}", serde_json::json!({ "health_sweep_error": e })),
             }
@@ -258,7 +291,6 @@ pub fn spawn_link_checker(
 mod tests {
     use super::*;
     use crate::store::lmdb::LmdbStore;
-    use crate::store::Record;
     use std::sync::atomic::AtomicBool;
 
     #[test]
@@ -355,7 +387,8 @@ mod tests {
                 healthy,
             })
         };
-        let checked = sweep(&store, &dispatcher, 0x1234, prober).await.unwrap();
+        let renew = || async { true };
+        let checked = sweep(&store, &dispatcher, 0x1234, renew, prober).await.unwrap();
         assert_eq!(checked, 2, "internal link 3 is skipped");
 
         // Health persisted for 1 and 2 only.

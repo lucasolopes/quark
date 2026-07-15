@@ -54,11 +54,11 @@ flowchart TD
 |---|---|
 | `QUARK_HEALTH_CHECK_SECS` | Seconds between sweeps. Unset disables the checker. Values below 60 are clamped up to 60. |
 
-In a multi-instance deployment the checker has no cross-node coordination yet,
-so set `QUARK_HEALTH_CHECK_SECS` on **exactly one** instance. If every replica
-had it set, each would probe every destination and a single break could fire the
-webhook once per replica. A shared-lease sweeper that lets every node keep the
-env is a planned refinement.
+In a multi-instance deployment it is safe to set `QUARK_HEALTH_CHECK_SECS` on
+every replica. A lease (a `health_lease` row on Postgres) ensures only one node
+sweeps at a time; the holder renews it during the sweep, and if it dies another
+replica takes over within the lease TTL. On the single-node LMDB backend the
+lease is always granted.
 
 ## Limits
 
@@ -66,11 +66,14 @@ env is a planned refinement.
   the next sweep recovers it (both transitions emit their event).
 - The cadence is global; there is no per-link interval or opt-out.
 - Health events are best-effort in-memory, like `link.clicked`/`link.expired`.
-- The checker runs on one instance (see Configuration); a cross-node lease is a
-  later refinement.
 - The probe resolves the destination host and refuses to contact internal,
-  loopback, or link-local addresses, so a public name pointing at an internal IP
-  is not probed (SSRF guard).
+  loopback, or link-local addresses (including IPv4-mapped IPv6), so a public
+  name pointing at an internal IP is not probed (SSRF guard). This check and the
+  actual request resolve DNS independently, so a name that flips between a public
+  and an internal address in that window (DNS rebinding) is not fully closed;
+  the exposure is a blind boolean (does an internal endpoint answer), the same
+  hostname-based posture used elsewhere in quark. Pinning the resolved IP is a
+  planned hardening.
 - The "broken only" filter is applied per page. On an account with many links
   where broken ones are rare, "Load more" may fetch pages that contain no broken
   links yet before reaching them; keep loading to page through.

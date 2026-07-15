@@ -234,9 +234,9 @@ async fn main() {
     }
 
     // Broken-link monitoring (opt-in). Runs when QUARK_HEALTH_CHECK_SECS is set.
-    // The checker has no cross-node coordination yet, so in a multi-instance
-    // deployment set this on EXACTLY ONE instance to avoid every replica probing
-    // every destination (a shared-lease sweeper is a planned refinement).
+    // Safe to enable on every replica: a lease (Postgres) ensures only one node
+    // sweeps at a time, renewed during the sweep, with automatic failover if the
+    // holder dies. On the single-node LMDB backend the lease is always granted.
     match std::env::var("QUARK_HEALTH_CHECK_SECS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
@@ -251,7 +251,7 @@ async fn main() {
                 state.key,
             );
             eprintln!(
-                "link health checker: sweeping every {}s (run on ONE instance only; no cross-node lease yet)",
+                "link health checker: sweeping every {}s (lease-coordinated; safe on all replicas)",
                 period.as_secs()
             );
         }

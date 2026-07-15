@@ -54,11 +54,11 @@ flowchart TD
 |---|---|
 | `QUARK_HEALTH_CHECK_SECS` | Segundos entre varreduras. Sem setar, desliga o checker. Valores abaixo de 60 são elevados pra 60. |
 
-Num deploy com várias instâncias o checker ainda não tem coordenação entre nós,
-então set `QUARK_HEALTH_CHECK_SECS` em **exatamente uma** instância. Se todas as
-réplicas tivessem, cada uma sondaria todo destino e uma única quebra dispararia o
-webhook uma vez por réplica. Um sweeper com lease compartilhado (que deixa toda
-instância manter a env) fica pra um refinamento futuro.
+Num deploy com várias instâncias é seguro setar `QUARK_HEALTH_CHECK_SECS` em
+todas as réplicas. Um lease (uma linha `health_lease` no Postgres) garante que só
+um nó varre por vez; o holder renova durante a varredura, e se ele morrer outra
+réplica assume dentro do TTL do lease. No backend single-node LMDB o lease é
+sempre concedido.
 
 ## Limites
 
@@ -66,11 +66,14 @@ instância manter a env) fica pra um refinamento futuro.
   quebrado e a próxima varredura recupera (as duas transições emitem seu evento).
 - A cadência é global; não há intervalo por link nem opt-out.
 - Eventos de saúde são best-effort in-memory, como `link.clicked`/`link.expired`.
-- O checker roda numa instância (veja Configuração); um lease entre nós fica pra
-  um refinamento futuro.
 - A sonda resolve o host do destino e se recusa a contatar endereços internos,
-  de loopback ou link-local, então um nome público apontando pra um IP interno
-  não é sondado (guard de SSRF).
+  de loopback ou link-local (incluindo IPv6 IPv4-mapeado), então um nome público
+  apontando pra um IP interno não é sondado (guard de SSRF). Essa checagem e a
+  requisição de fato resolvem o DNS de forma independente, então um nome que
+  troca entre um IP público e um interno nessa janela (DNS rebinding) não está
+  100% fechado; a exposição é um booleano cego (um endpoint interno responde?),
+  a mesma postura por-hostname usada no resto do quark. Fixar o IP resolvido é
+  uma blindagem planejada.
 - O filtro "só quebrados" é aplicado por página. Numa conta com muitos links
   onde os quebrados são raros, "Carregar mais" pode buscar páginas sem nenhum
   link quebrado antes de chegar neles; siga carregando pra paginar.
