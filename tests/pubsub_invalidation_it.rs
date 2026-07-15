@@ -25,6 +25,7 @@ fn rec(url: &str) -> Record {
         app_android: None,
         folder: None,
         fallback_url: None,
+        password_hash: None,
     }
 }
 

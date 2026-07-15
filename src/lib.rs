@@ -7,6 +7,7 @@ pub mod cluster;
 pub mod codec;
 pub mod import;
 pub mod invalidate;
+pub mod password;
 pub mod permute;
 pub mod pixel;
 pub mod store;

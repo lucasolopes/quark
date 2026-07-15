@@ -23,6 +23,7 @@ async fn set_get_round_trip() {
         app_android: None,
         folder: None,
         fallback_url: None,
+        password_hash: None,
     };
     tier.set(id, &rec, 60).await.unwrap();
     let got = tier.get(id).await.unwrap().unwrap();

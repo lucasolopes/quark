@@ -52,6 +52,7 @@ pub struct CreateReq {
     app_android: Option<String>,
     folder: Option<String>,
     fallback_url: Option<String>,
+    password: Option<String>,
 }
 
 /// Normalizes the `max_visits` request field into the persisted representation:
@@ -379,6 +380,7 @@ pub async fn create_link_core(
     app_android: Option<String>,
     folder: Option<String>,
     fallback_url: Option<String>,
+    password_hash: Option<String>,
     headers: &HeaderMap,
 ) -> Result<String, CreateError> {
     if !is_valid_url(url) {
@@ -410,6 +412,7 @@ pub async fn create_link_core(
         app_android,
         folder,
         fallback_url,
+        password_hash,
     };
 
     if let Some(alias) = alias {
@@ -553,6 +556,14 @@ async fn create(
             return (status, "invalid fallback url").into_response();
         }
     }
+    // Hash a non-empty password; the plaintext is never stored or logged.
+    let password_hash = match req.password.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(pw) => match crate::password::hash_password(pw) {
+            Ok(h) => Some(h),
+            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "could not hash password").into_response(),
+        },
+        None => None,
+    };
     match create_link_core(
         &st,
         &req.url,
@@ -566,6 +577,7 @@ async fn create(
         req.app_android.clone(),
         normalize_folder(req.folder.clone()),
         fallback_url,
+        password_hash,
         &headers,
     )
     .await
@@ -627,6 +639,7 @@ async fn admin_import(
             None,
             Vec::new(),
             Vec::new(),
+            None,
             None,
             None,
             None,
@@ -777,6 +790,211 @@ fn expired_response(fallback: Option<&str>) -> Response {
     }
 }
 
+/// Reads the value of cookie `name` from the request `Cookie` header.
+fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
+    raw.split(';').find_map(|kv| {
+        let (k, v) = kv.trim().split_once('=')?;
+        (k == name).then_some(v)
+    })
+}
+
+/// Whether the request carries a valid, unexpired unlock cookie for `code`.
+fn is_unlocked(headers: &HeaderMap, key: u64, code: &str, now: u64) -> bool {
+    match cookie_value(headers, &format!("qk_pw_{code}")) {
+        Some(v) => crate::password::unlock_token_valid(v, key, code, now),
+        None => false,
+    }
+}
+
+/// Whether the original client request arrived over HTTPS, per `X-Forwarded-Proto`
+/// (quark runs behind a TLS-terminating proxy/CDN). Absent → treated as plain
+/// HTTP so the `Secure` cookie attribute is not set on local/dev HTTP.
+fn request_is_https(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.eq_ignore_ascii_case("https"))
+        .unwrap_or(false)
+}
+
+/// Minimal HTML-attribute/text escaping for the one untrusted value embedded in
+/// the interstitial (the code/alias from the path).
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// Extracts a field from an `application/x-www-form-urlencoded` body.
+fn form_field(body: &Bytes, name: &str) -> Option<String> {
+    url::form_urlencoded::parse(body)
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.into_owned())
+}
+
+/// Renders the self-contained password interstitial. No external assets (inline
+/// CSS only) so it works on any deployment. Bilingual by a simple
+/// `Accept-Language` sniff; `error` shows a generic "wrong password" message.
+fn interstitial_html(code: &str, pt: bool, error: bool) -> String {
+    let code = html_escape(code);
+    let (title, prompt, placeholder, button, err_msg) = if pt {
+        (
+            "Link protegido",
+            "Este link é protegido por senha.",
+            "Senha",
+            "Acessar",
+            "Senha incorreta. Tente de novo.",
+        )
+    } else {
+        (
+            "Protected link",
+            "This link is password-protected.",
+            "Password",
+            "Unlock",
+            "Wrong password. Try again.",
+        )
+    };
+    let error_block = if error {
+        format!(r#"<p class="err" role="alert">{err_msg}</p>"#)
+    } else {
+        String::new()
+    };
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="{lang}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{title}</title>
+<style>
+:root {{ color-scheme: light dark; }}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; min-height: 100vh; display: grid; place-items: center;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #0a0b0f; color: #e8eaf2; padding: 1.5rem; }}
+.card {{ width: 100%; max-width: 22rem; background: #14161f; border: 1px solid #262a3a;
+  border-radius: 14px; padding: 2rem 1.75rem; box-shadow: 0 10px 40px rgba(0,0,0,.4); }}
+h1 {{ font-size: 1.15rem; margin: 0 0 .35rem; }}
+p {{ margin: 0 0 1.15rem; color: #9aa0b4; font-size: .92rem; line-height: 1.45; }}
+.err {{ color: #ff7a90; }}
+label {{ display: block; font-size: .8rem; margin-bottom: .4rem; color: #c3c8db; }}
+input {{ width: 100%; padding: .7rem .8rem; border-radius: 9px; border: 1px solid #2c3145;
+  background: #0f111a; color: #e8eaf2; font-size: 1rem; }}
+input:focus {{ outline: 2px solid #c6f94e; outline-offset: 1px; }}
+button {{ width: 100%; margin-top: 1rem; padding: .72rem; border: 0; border-radius: 9px;
+  background: #c6f94e; color: #0a0b0f; font-weight: 600; font-size: .98rem; cursor: pointer; }}
+button:hover {{ filter: brightness(1.05); }}
+</style>
+</head>
+<body>
+<main class="card">
+<h1>{title}</h1>
+<p>{prompt}</p>
+{error_block}
+<form method="post" action="/{code}">
+<label for="pw">{placeholder}</label>
+<input id="pw" name="password" type="password" autocomplete="current-password" autofocus required>
+<button type="submit">{button}</button>
+</form>
+</main>
+</body>
+</html>"#,
+        lang = if pt { "pt-BR" } else { "en" },
+    )
+}
+
+/// Builds the `200 text/html` interstitial response (never cached).
+fn interstitial_response(code: &str, headers: &HeaderMap, error: bool) -> Response {
+    let pt = headers
+        .get(header::ACCEPT_LANGUAGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_ascii_lowercase().contains("pt"))
+        .unwrap_or(false);
+    (
+        StatusCode::OK,
+        [
+            (header::CACHE_CONTROL, "no-store".to_string()),
+            (
+                header::CONTENT_TYPE,
+                "text/html; charset=utf-8".to_string(),
+            ),
+        ],
+        interstitial_html(code, pt, error),
+    )
+        .into_response()
+}
+
+/// `POST /:code`: unlock a password-protected link. Rate-limited. On the correct
+/// password, sets a signed unlock cookie and redirects (303) back to `GET /:code`
+/// so the canonical redirect path does destination resolution, the visit bump,
+/// and click recording exactly once. A wrong password re-renders the interstitial
+/// with an error and sets no cookie. An unprotected code just bounces to its GET.
+async fn unlock(
+    State(st): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    conn: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let ip = client_ip(&headers, &st.real_ip_header, conn.as_ref());
+    if !st.ratelimiter.check(&ip, now()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+    }
+    let id = match resolve_code(&st, &code).await {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                [(header::CACHE_CONTROL, "no-store".to_string())],
+            )
+                .into_response()
+        }
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let rec = match st.cache.get(id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                [(header::CACHE_CONTROL, "no-store".to_string())],
+            )
+                .into_response()
+        }
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let Some(hash) = rec.password_hash.as_deref() else {
+        // Not protected: nothing to unlock, send them to the normal GET.
+        return (
+            StatusCode::SEE_OTHER,
+            [(header::LOCATION, format!("/{code}"))],
+        )
+            .into_response();
+    };
+    let submitted = form_field(&body, "password").unwrap_or_default();
+    if !crate::password::verify_password(&submitted, hash) {
+        return interstitial_response(&code, &headers, true);
+    }
+    let (token, _expiry) = crate::password::unlock_token(st.key, &code, now());
+    let secure = if request_is_https(&headers) { "; Secure" } else { "" };
+    let cookie = format!(
+        "qk_pw_{code}={token}; Max-Age={}; Path=/{code}; HttpOnly; SameSite=Lax{secure}",
+        crate::password::UNLOCK_TTL_SECS,
+    );
+    (
+        StatusCode::SEE_OTHER,
+        [
+            (header::LOCATION, format!("/{code}")),
+            (header::SET_COOKIE, cookie),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+    )
+        .into_response()
+}
+
 async fn redirect(
     State(st): State<Arc<AppState>>,
     Path(code): Path<String>,
@@ -816,6 +1034,13 @@ async fn redirect(
                     }
                     return expired_response(rec.fallback_url.as_deref());
                 }
+            }
+            // Password gate: a protected link without a valid unlock cookie shows
+            // the interstitial. Placed BEFORE the visit bump so merely viewing the
+            // form never consumes a visit; placed AFTER the expiry check so an
+            // expired link stays expired regardless of the password.
+            if rec.password_hash.is_some() && !is_unlocked(&headers, st.key, &code, now) {
+                return interstitial_response(&code, &headers, false);
             }
             if let Some(max) = rec.max_visits {
                 let n = match st.store.bump_visits(id).await {
@@ -1068,6 +1293,8 @@ struct LinkRow {
     folder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fallback_url: Option<String>,
+    /// Whether the link is password-protected. The hash itself is never exposed.
+    has_password: bool,
 }
 
 async fn admin_links_list(
@@ -1136,6 +1363,7 @@ async fn admin_links_list(
             app_android: rec.app_android,
             folder: rec.folder,
             fallback_url: rec.fallback_url,
+            has_password: rec.password_hash.is_some(),
         });
     }
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
@@ -1374,6 +1602,26 @@ async fn admin_link_patch(
             }
         } else {
             return (StatusCode::BAD_REQUEST, "invalid fallback url").into_response();
+        }
+    }
+    if let Some(v) = patch.get("password") {
+        if v.is_null() {
+            rec.password_hash = None;
+        } else if let Some(s) = v.as_str() {
+            let s = s.trim();
+            if s.is_empty() {
+                rec.password_hash = None;
+            } else {
+                match crate::password::hash_password(s) {
+                    Ok(h) => rec.password_hash = Some(h),
+                    Err(_) => {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, "could not hash password")
+                            .into_response()
+                    }
+                }
+            }
+        } else {
+            return (StatusCode::BAD_REQUEST, "invalid password").into_response();
         }
     }
     let canonical_code = codec::to_base62(permute::encode(id, st.key));
@@ -2054,7 +2302,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
     let app = Router::new()
         .route("/", post(create))
         .route("/health", get(health))
-        .route("/:code", get(redirect))
+        .route("/:code", get(redirect).post(unlock))
         .route("/:code/stats", get(stats))
         .route("/admin/links", get(admin_links_list))
         .route("/admin/import", post(admin_import))
@@ -2157,6 +2405,7 @@ mod tests {
             app_android: app_android.map(str::to_string),
             folder: None,
             fallback_url: None,
+            password_hash: None,
         }
     }
 

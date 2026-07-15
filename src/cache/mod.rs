@@ -230,6 +230,7 @@ mod tests {
             app_android: None,
             folder: None,
             fallback_url: None,
+            password_hash: None,
         }
     }
 
@@ -353,7 +354,8 @@ mod tests {
                     app_ios: None,
                     app_android: None,
                     folder: None,
-                    fallback_url: None
+                    fallback_url: None,
+                    password_hash: None
                 },
                 now,
                 3600
@@ -373,7 +375,8 @@ mod tests {
                     app_ios: None,
                     app_android: None,
                     folder: None,
-                    fallback_url: None
+                    fallback_url: None,
+                    password_hash: None
                 },
                 now,
                 3600
@@ -393,7 +396,8 @@ mod tests {
                     app_ios: None,
                     app_android: None,
                     folder: None,
-                    fallback_url: None
+                    fallback_url: None,
+                    password_hash: None
                 },
                 now,
                 3600
@@ -413,7 +417,8 @@ mod tests {
                     app_ios: None,
                     app_android: None,
                     folder: None,
-                    fallback_url: None
+                    fallback_url: None,
+                    password_hash: None
                 },
                 now,
                 3600
