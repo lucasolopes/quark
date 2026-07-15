@@ -233,6 +233,42 @@ async fn main() {
         None => eprintln!("cross-node invalidation: disabled (no QUARK_VALKEY_URL)"),
     }
 
+    // Broken-link monitoring (opt-in). Runs only when QUARK_HEALTH_CHECK_SECS is
+    // set, and — to avoid duplicate sweeps in a multi-node deployment — only on
+    // the designated node (QUARK_NODE_ID unset or 0).
+    match std::env::var("QUARK_HEALTH_CHECK_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        Some(secs) => {
+            let designated = std::env::var("QUARK_NODE_ID")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(|n| n == 0)
+                .unwrap_or(true);
+            if designated {
+                let period =
+                    std::time::Duration::from_secs(secs.max(quark::health::MIN_CHECK_SECS));
+                let _checker = quark::health::spawn_link_checker(
+                    state.store.clone(),
+                    state.webhooks.clone(),
+                    quark::health::build_client(),
+                    period,
+                    state.key,
+                );
+                eprintln!(
+                    "link health checker: sweeping every {}s",
+                    period.as_secs()
+                );
+            } else {
+                eprintln!(
+                    "link health checker: disabled on this node (QUARK_NODE_ID != 0 is not the designated checker)"
+                );
+            }
+        }
+        None => eprintln!("link health checker: disabled (set QUARK_HEALTH_CHECK_SECS to enable)"),
+    }
+
     let app = router(state);
 
     let addr = std::env::var("QUARK_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());

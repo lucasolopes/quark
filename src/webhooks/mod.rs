@@ -28,6 +28,10 @@ pub enum EventType {
     LinkExpired,
     #[serde(rename = "link.clicked")]
     LinkClicked,
+    #[serde(rename = "link.broken")]
+    LinkBroken,
+    #[serde(rename = "link.recovered")]
+    LinkRecovered,
 }
 
 impl EventType {
@@ -39,6 +43,8 @@ impl EventType {
             EventType::LinkDeleted => "link.deleted",
             EventType::LinkExpired => "link.expired",
             EventType::LinkClicked => "link.clicked",
+            EventType::LinkBroken => "link.broken",
+            EventType::LinkRecovered => "link.recovered",
         }
     }
 
@@ -53,6 +59,8 @@ impl EventType {
             "link.deleted" => Some(EventType::LinkDeleted),
             "link.expired" => Some(EventType::LinkExpired),
             "link.clicked" => Some(EventType::LinkClicked),
+            "link.broken" => Some(EventType::LinkBroken),
+            "link.recovered" => Some(EventType::LinkRecovered),
             _ => None,
         }
     }
@@ -219,6 +227,8 @@ pub fn format_message(event_type: EventType, body: &str) -> String {
         EventType::LinkUpdated => format!("Short link updated: {code} -> {url}"),
         EventType::LinkDeleted => format!("Short link deleted: {code}"),
         EventType::LinkExpired => format!("Short link expired: {code}"),
+        EventType::LinkBroken => format!("Short link broken: {code} -> {url}"),
+        EventType::LinkRecovered => format!("Short link recovered: {code} -> {url}"),
         EventType::LinkClicked => {
             let mut msg = format!("Click on {code} -> {url}");
             if let Some(country) = parsed["data"]["country"].as_str() {
@@ -253,6 +263,20 @@ mod tests {
             serde_json::to_string(&EventType::LinkClicked).unwrap(),
             "\"link.clicked\""
         );
+    }
+
+    #[test]
+    fn health_event_types_round_trip() {
+        for (ev, wire) in [
+            (EventType::LinkBroken, "link.broken"),
+            (EventType::LinkRecovered, "link.recovered"),
+        ] {
+            assert_eq!(ev.as_str(), wire);
+            assert_eq!(EventType::from_wire(wire), Some(ev));
+            // serde rename matches the wire string.
+            assert_eq!(serde_json::to_string(&ev).unwrap(), format!("\"{wire}\""));
+        }
+        assert_eq!(EventType::from_wire("link.nonsense"), None);
     }
 
     /// Standard Webhooks symmetric test vector (from the Svix/Standard Webhooks
