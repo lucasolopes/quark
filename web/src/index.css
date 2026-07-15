@@ -65,6 +65,10 @@ body {
  * (accent-dim) for contrast over white.
  */
 :root {
+  /* Native controls (the <select> option popup, date pickers, scrollbars) follow
+     the theme. Without this, the dark theme's white text lands on the browser's
+     default light popup, so <select> options read white-on-white. */
+  color-scheme: light;
   --radius: 0.875rem; /* 14px — cards 14, md ≈ 11, sm ≈ 8 (Quark scale) */
 
   --background: #eef0f4;
@@ -112,6 +116,7 @@ body {
  * metric numerals, focus-ring, glow).
  */
 .dark {
+  color-scheme: dark; /* native <select> popup, pickers, scrollbars render dark */
   --background: #0a0b0f; /* ink */
   --foreground: #e8eaf2; /* text */
   --card: #131521; /* panel */
