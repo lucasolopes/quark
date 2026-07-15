@@ -7,7 +7,7 @@ import type {
   ImportSummary, TagsResponse, FoldersResponse,
   ListTokensResponse, CreateTokenRequest, CreateTokenResponse,
   ListPixelsResponse, CreatePixelRequest, Pixel,
-  WellknownName,
+  WellknownName, MeResponse,
 } from "./types";
 
 /**
@@ -34,10 +34,14 @@ async function req(path: string, opts: RequestInit = {}): Promise<Response> {
   const token = getToken();
   if (token) headers.set("x-admin-token", token);
   if (opts.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-  const res = await fetch(BASE + path, { ...opts, headers });
+  // `include` so the OIDC session cookie is sent (also on a cross-origin panel).
+  const res = await fetch(BASE + path, { ...opts, headers, credentials: "include" });
   if (res.status === 401) { onUnauthorized(); throw new ApiError(401, "unauthorized"); }
   return res;
 }
+
+/** Absolute URL to start the OIDC login (a full navigation, not fetch). */
+export function oidcLoginUrl(): string { return `${BASE}/admin/login`; }
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
@@ -45,6 +49,14 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
 }
 
 export const api = {
+  /** Current principal + whether OIDC is configured (for the login screen). */
+  async me(): Promise<MeResponse> {
+    return jsonOrThrow(await req("/admin/me"));
+  },
+  /** Revokes the current OIDC session server-side and clears its cookie. */
+  async logout(): Promise<void> {
+    await req("/admin/logout", { method: "POST" });
+  },
   async createLink(body: CreateLinkRequest): Promise<CreateLinkResponse> {
     return jsonOrThrow(await req("/", { method: "POST", body: JSON.stringify(body) }));
   },

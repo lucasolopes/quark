@@ -23,7 +23,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 
 pub struct AppState {
     pub cache: Cache,
@@ -2656,7 +2656,14 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
                 Method::PATCH,
                 Method::DELETE,
             ])
-            .allow_headers(Any);
+            // Specific headers (not `Any`) because credentials are allowed, and
+            // `*` is invalid with credentials. Allow credentials so the OIDC
+            // session cookie is accepted on a cross-origin panel.
+            .allow_headers([
+                header::CONTENT_TYPE,
+                axum::http::HeaderName::from_static("x-admin-token"),
+            ])
+            .allow_credentials(true);
         app.layer(cors)
     };
 

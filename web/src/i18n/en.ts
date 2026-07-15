@@ -18,6 +18,8 @@ export const en = {
     tokenLabel: "Admin token",
     submit: "Sign in",
     sessionStarted: "Signed in.",
+    or: "or",
+    oidcButton: "Sign in with provider",
     invalidToken: "Invalid token. Check it and try again.",
     connectionError: "Could not connect. Try again.",
   },
