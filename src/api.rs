@@ -542,7 +542,12 @@ async fn create(
     }
     // Hash a non-empty password; the plaintext is never stored or logged. argon2
     // is memory-hard, so hash off the async worker.
-    let password_hash = match req.password.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let password_hash = match req
+        .password
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(pw) => {
             let pw = pw.to_string();
             match tokio::task::spawn_blocking(move || crate::password::hash_password(&pw)).await {
@@ -930,10 +935,7 @@ fn interstitial_response(
         StatusCode::OK,
         [
             (header::CACHE_CONTROL, "no-store".to_string()),
-            (
-                header::CONTENT_TYPE,
-                "text/html; charset=utf-8".to_string(),
-            ),
+            (header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
         ],
         interstitial_html(code, query, pt, error),
     )
@@ -1009,7 +1011,11 @@ async fn unlock(
     // bound to the current password hash, so rotating the password kills it.
     let canonical = codec::to_base62(permute::encode(id, st.key));
     let (token, _expiry) = crate::password::unlock_token(&st.signing_key, &canonical, &hash, now());
-    let secure = if request_is_https(&headers) { "; Secure" } else { "" };
+    let secure = if request_is_https(&headers) {
+        "; Secure"
+    } else {
+        ""
+    };
     let cookie = format!(
         "qk_pw_{canonical}={token}; Max-Age={}; Path=/; HttpOnly; SameSite=Lax{secure}",
         crate::password::UNLOCK_TTL_SECS,
@@ -1386,7 +1392,11 @@ async fn oidc_login(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Resp
     let (verifier, challenge) = crate::oidc::pkce_pair();
     let url = oidc.authorize_url(&state, &nonce, &challenge);
     let value = crate::oidc::sign_login_state(&st.signing_key, &state, &verifier, &nonce);
-    let secure = if request_is_https(&headers) { "; Secure" } else { "" };
+    let secure = if request_is_https(&headers) {
+        "; Secure"
+    } else {
+        ""
+    };
     // Path=/ (not /admin) so the cookie is sent to the callback regardless of the
     // configured QUARK_OIDC_REDIRECT_URL path.
     let cookie =
@@ -1621,7 +1631,10 @@ async fn admin_links_list(
         };
         let mut picked: Vec<(u64, Record)> = Vec::new();
         let mut last: Option<u64> = None;
-        for id in ids.into_iter().filter(|&id| p.after.map_or(true, |a| id > a)) {
+        for id in ids
+            .into_iter()
+            .filter(|&id| p.after.is_none_or(|a| id > a))
+        {
             let rec = match st.store.get_link(id).await {
                 Ok(Some(r)) => r,
                 Ok(None) => continue,
@@ -1633,7 +1646,11 @@ async fn admin_links_list(
                 }
             }
             if let Some(f) = folder {
-                if !rec.folder.as_deref().map_or(false, |x| x.eq_ignore_ascii_case(f)) {
+                if !rec
+                    .folder
+                    .as_deref()
+                    .is_some_and(|x| x.eq_ignore_ascii_case(f))
+                {
                     continue;
                 }
             }
@@ -1647,7 +1664,11 @@ async fn admin_links_list(
         (picked, next)
     } else {
         let links = match q {
-            Some(term) => match st.store.search_links(term, p.after, limit, tag, folder).await {
+            Some(term) => match st
+                .store
+                .search_links(term, p.after, limit, tag, folder)
+                .await
+            {
                 Ok(l) => l,
                 Err(StoreError::Unsupported) => return StatusCode::NOT_IMPLEMENTED.into_response(),
                 Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),

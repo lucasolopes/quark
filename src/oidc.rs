@@ -34,7 +34,9 @@ pub struct OidcConfig {
 
 impl OidcConfig {
     pub fn from_env() -> Option<OidcConfig> {
-        let issuer = std::env::var("QUARK_OIDC_ISSUER").ok().filter(|s| !s.is_empty())?;
+        let issuer = std::env::var("QUARK_OIDC_ISSUER")
+            .ok()
+            .filter(|s| !s.is_empty())?;
         Some(OidcConfig {
             issuer: issuer.trim_end_matches('/').to_string(),
             client_id: std::env::var("QUARK_OIDC_CLIENT_ID").unwrap_or_default(),
@@ -42,9 +44,12 @@ impl OidcConfig {
             redirect_url: std::env::var("QUARK_OIDC_REDIRECT_URL").unwrap_or_default(),
             scopes: std::env::var("QUARK_OIDC_SCOPES")
                 .unwrap_or_else(|_| "openid profile email".to_string()),
-            admin_claim: std::env::var("QUARK_OIDC_ADMIN_CLAIM").unwrap_or_else(|_| "groups".into()),
+            admin_claim: std::env::var("QUARK_OIDC_ADMIN_CLAIM")
+                .unwrap_or_else(|_| "groups".into()),
             admin_value: std::env::var("QUARK_OIDC_ADMIN_VALUE").unwrap_or_default(),
-            readonly_value: std::env::var("QUARK_OIDC_READONLY_VALUE").ok().filter(|s| !s.is_empty()),
+            readonly_value: std::env::var("QUARK_OIDC_READONLY_VALUE")
+                .ok()
+                .filter(|s| !s.is_empty()),
             post_login_url: std::env::var("QUARK_OIDC_POST_LOGIN_URL")
                 .ok()
                 .filter(|s| !s.is_empty())
@@ -63,7 +68,10 @@ pub struct Discovery {
 
 /// Fetches the IdP discovery document.
 pub async fn discover(client: &reqwest::Client, issuer: &str) -> Result<Discovery, String> {
-    let url = format!("{}/.well-known/openid-configuration", issuer.trim_end_matches('/'));
+    let url = format!(
+        "{}/.well-known/openid-configuration",
+        issuer.trim_end_matches('/')
+    );
     let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("discovery HTTP {}", resp.status()));
@@ -86,7 +94,11 @@ pub struct Jwks {
 
 /// Fetches the IdP JWKS (RSA signing keys).
 pub async fn fetch_jwks(client: &reqwest::Client, jwks_uri: &str) -> Result<Jwks, String> {
-    let resp = client.get(jwks_uri).send().await.map_err(|e| e.to_string())?;
+    let resp = client
+        .get(jwks_uri)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("jwks HTTP {}", resp.status()));
     }
@@ -145,7 +157,11 @@ pub fn authorize_url(
         .append_pair("code_challenge", challenge)
         .append_pair("code_challenge_method", "S256")
         .finish();
-    let sep = if disco.authorization_endpoint.contains('?') { '&' } else { '?' };
+    let sep = if disco.authorization_endpoint.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
     format!("{}{}{}", disco.authorization_endpoint, sep, q)
 }
 
@@ -180,7 +196,8 @@ pub async fn exchange_code(
         return Err(format!("token endpoint HTTP {}", resp.status()));
     }
     let body = resp.json::<TokenResp>().await.map_err(|e| e.to_string())?;
-    body.id_token.ok_or_else(|| "token response missing id_token".to_string())
+    body.id_token
+        .ok_or_else(|| "token response missing id_token".to_string())
 }
 
 /// The claims quark reads out of a verified id_token.
@@ -243,7 +260,9 @@ pub fn verify_id_token(
     // for a different client that merely lists us in `aud`.
     match claims.get("azp").and_then(|v| v.as_str()) {
         Some(azp) if azp != client_id => {
-            return Err(VerifyError::Rejected("azp does not match client id".to_string()));
+            return Err(VerifyError::Rejected(
+                "azp does not match client id".to_string(),
+            ));
         }
         None => {
             if matches!(claims.get("aud"), Some(serde_json::Value::Array(a)) if a.len() > 1) {
@@ -269,7 +288,11 @@ pub fn verify_id_token(
         .or_else(|| claims.get("preferred_username").and_then(|v| v.as_str()))
         .unwrap_or(&subject)
         .to_string();
-    Ok(Claims { subject, display, raw: claims })
+    Ok(Claims {
+        subject,
+        display,
+        raw: claims,
+    })
 }
 
 /// Maps verified claims to granted scopes, default-closed: only the configured
@@ -280,9 +303,7 @@ pub fn map_scopes(claims: &serde_json::Value, cfg: &OidcConfig) -> Vec<Scope> {
     let has = |needle: &str| -> bool {
         match claim {
             Some(serde_json::Value::String(s)) => s == needle,
-            Some(serde_json::Value::Array(arr)) => {
-                arr.iter().any(|v| v.as_str() == Some(needle))
-            }
+            Some(serde_json::Value::Array(arr)) => arr.iter().any(|v| v.as_str() == Some(needle)),
             _ => false,
         }
     };
@@ -472,7 +493,10 @@ mod tests {
         assert_eq!(map_scopes(&admin, &c), vec![Scope::Full]);
         // read-only group -> read scopes
         let ro = serde_json::json!({ "groups": ["quark-viewers"] });
-        assert_eq!(map_scopes(&ro, &c), vec![Scope::LinksRead, Scope::Analytics]);
+        assert_eq!(
+            map_scopes(&ro, &c),
+            vec![Scope::LinksRead, Scope::Analytics]
+        );
         // string claim form
         let admin_str = serde_json::json!({ "groups": "quark-admins" });
         assert_eq!(map_scopes(&admin_str, &c), vec![Scope::Full]);

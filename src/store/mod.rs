@@ -549,7 +549,10 @@ mod tests {
         };
         let json = serde_json::to_string(&rec).unwrap();
         let back: Record = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.fallback_url.as_deref(), Some("https://example.com/ended"));
+        assert_eq!(
+            back.fallback_url.as_deref(),
+            Some("https://example.com/ended")
+        );
     }
 
     #[test]

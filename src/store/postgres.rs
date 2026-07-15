@@ -41,10 +41,8 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let app_ios: Option<String> = r.try_get("app_ios").map_err(StoreError::backend)?;
     let app_android: Option<String> = r.try_get("app_android").map_err(StoreError::backend)?;
     let folder: Option<String> = r.try_get("folder").map_err(StoreError::backend)?;
-    let fallback_url: Option<String> =
-        r.try_get("fallback_url").map_err(StoreError::backend)?;
-    let password_hash: Option<String> =
-        r.try_get("password_hash").map_err(StoreError::backend)?;
+    let fallback_url: Option<String> = r.try_get("fallback_url").map_err(StoreError::backend)?;
+    let password_hash: Option<String> = r.try_get("password_hash").map_err(StoreError::backend)?;
     Ok((
         id as u64,
         Record {

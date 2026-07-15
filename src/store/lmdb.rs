@@ -1094,22 +1094,38 @@ mod tests {
         s.put_session(&sess).await.unwrap();
         // Valid before expiry.
         assert_eq!(
-            s.get_session_by_hash("abc", 50).await.unwrap().unwrap().subject,
+            s.get_session_by_hash("abc", 50)
+                .await
+                .unwrap()
+                .unwrap()
+                .subject,
             "sub-1"
         );
         // Expired: not returned even though the row still exists.
         assert!(s.get_session_by_hash("abc", 100).await.unwrap().is_none());
-        assert!(s.get_session_by_hash("missing", 50).await.unwrap().is_none());
+        assert!(s
+            .get_session_by_hash("missing", 50)
+            .await
+            .unwrap()
+            .is_none());
         // Delete (logout).
         s.delete_session("abc").await.unwrap();
         assert!(s.get_session_by_hash("abc", 50).await.unwrap().is_none());
         // gc removes expired rows.
-        s.put_session(&crate::auth::Session { token_hash: "old".into(), expires: 5, ..sess.clone() })
-            .await
-            .unwrap();
-        s.put_session(&crate::auth::Session { token_hash: "new".into(), expires: 999, ..sess.clone() })
-            .await
-            .unwrap();
+        s.put_session(&crate::auth::Session {
+            token_hash: "old".into(),
+            expires: 5,
+            ..sess.clone()
+        })
+        .await
+        .unwrap();
+        s.put_session(&crate::auth::Session {
+            token_hash: "new".into(),
+            expires: 999,
+            ..sess.clone()
+        })
+        .await
+        .unwrap();
         s.gc_sessions(50).await.unwrap();
         assert!(s.get_session_by_hash("old", 4).await.unwrap().is_none());
         assert!(s.get_session_by_hash("new", 50).await.unwrap().is_some());
@@ -1123,13 +1139,21 @@ mod tests {
 
         s.put_link_health(
             1,
-            &crate::store::LinkHealth { checked_at: 100, status: Some(200), healthy: true },
+            &crate::store::LinkHealth {
+                checked_at: 100,
+                status: Some(200),
+                healthy: true,
+            },
         )
         .await
         .unwrap();
         s.put_link_health(
             2,
-            &crate::store::LinkHealth { checked_at: 100, status: Some(404), healthy: false },
+            &crate::store::LinkHealth {
+                checked_at: 100,
+                status: Some(404),
+                healthy: false,
+            },
         )
         .await
         .unwrap();
@@ -1139,14 +1163,25 @@ mod tests {
         // Overwrite id 1 (recovered -> broken).
         s.put_link_health(
             1,
-            &crate::store::LinkHealth { checked_at: 200, status: None, healthy: false },
+            &crate::store::LinkHealth {
+                checked_at: 200,
+                status: None,
+                healthy: false,
+            },
         )
         .await
         .unwrap();
         let map: std::collections::HashMap<u64, crate::store::LinkHealth> =
             s.list_link_health().await.unwrap().into_iter().collect();
         assert_eq!(map.len(), 2);
-        assert_eq!(map[&1], crate::store::LinkHealth { checked_at: 200, status: None, healthy: false });
+        assert_eq!(
+            map[&1],
+            crate::store::LinkHealth {
+                checked_at: 200,
+                status: None,
+                healthy: false
+            }
+        );
         assert!(!map[&2].healthy);
     }
 

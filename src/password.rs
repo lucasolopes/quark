@@ -170,6 +170,12 @@ mod tests {
     fn tampered_unlock_token_is_rejected() {
         let (tok, _) = unlock_token(KEY, "abc123", H, 1000);
         assert!(!unlock_token_valid("garbage", KEY, "abc123", H, 1000));
-        assert!(!unlock_token_valid(&format!("{tok}x"), KEY, "abc123", H, 1000));
+        assert!(!unlock_token_valid(
+            &format!("{tok}x"),
+            KEY,
+            "abc123",
+            H,
+            1000
+        ));
     }
 }

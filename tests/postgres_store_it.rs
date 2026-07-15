@@ -610,20 +610,32 @@ async fn link_health_round_trip_pg() {
 
     s.put_link_health(
         1,
-        &quark::store::LinkHealth { checked_at: 100, status: Some(200), healthy: true },
+        &quark::store::LinkHealth {
+            checked_at: 100,
+            status: Some(200),
+            healthy: true,
+        },
     )
     .await
     .unwrap();
     s.put_link_health(
         2,
-        &quark::store::LinkHealth { checked_at: 100, status: None, healthy: false },
+        &quark::store::LinkHealth {
+            checked_at: 100,
+            status: None,
+            healthy: false,
+        },
     )
     .await
     .unwrap();
     // Overwrite id 1: healthy -> broken.
     s.put_link_health(
         1,
-        &quark::store::LinkHealth { checked_at: 200, status: Some(500), healthy: false },
+        &quark::store::LinkHealth {
+            checked_at: 200,
+            status: Some(500),
+            healthy: false,
+        },
     )
     .await
     .unwrap();
@@ -633,7 +645,11 @@ async fn link_health_round_trip_pg() {
     assert_eq!(map.len(), 2);
     assert_eq!(
         map[&1],
-        quark::store::LinkHealth { checked_at: 200, status: Some(500), healthy: false }
+        quark::store::LinkHealth {
+            checked_at: 200,
+            status: Some(500),
+            healthy: false
+        }
     );
     assert_eq!(map[&2].status, None);
     assert!(!map[&2].healthy);
@@ -654,9 +670,36 @@ async fn health_lease_single_holder_and_renew_pg() {
 #[serial]
 async fn list_broken_link_ids_pg() {
     let Some(s) = fresh().await else { return };
-    s.put_link_health(3, &quark::store::LinkHealth { checked_at: 1, status: Some(200), healthy: true }).await.unwrap();
-    s.put_link_health(1, &quark::store::LinkHealth { checked_at: 1, status: Some(404), healthy: false }).await.unwrap();
-    s.put_link_health(2, &quark::store::LinkHealth { checked_at: 1, status: None, healthy: false }).await.unwrap();
+    s.put_link_health(
+        3,
+        &quark::store::LinkHealth {
+            checked_at: 1,
+            status: Some(200),
+            healthy: true,
+        },
+    )
+    .await
+    .unwrap();
+    s.put_link_health(
+        1,
+        &quark::store::LinkHealth {
+            checked_at: 1,
+            status: Some(404),
+            healthy: false,
+        },
+    )
+    .await
+    .unwrap();
+    s.put_link_health(
+        2,
+        &quark::store::LinkHealth {
+            checked_at: 1,
+            status: None,
+            healthy: false,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(s.list_broken_link_ids().await.unwrap(), vec![1, 2]);
 }
 
@@ -675,11 +718,20 @@ async fn session_round_trip_and_gc_pg() {
     s.put_session(&sess).await.unwrap();
     let got = s.get_session_by_hash("h1", 50).await.unwrap().unwrap();
     assert_eq!(got.subject, "sub-1");
-    assert_eq!(got.scopes, vec![quark::auth::Scope::LinksRead, quark::auth::Scope::Analytics]);
+    assert_eq!(
+        got.scopes,
+        vec![quark::auth::Scope::LinksRead, quark::auth::Scope::Analytics]
+    );
     // Expired is not returned.
     assert!(s.get_session_by_hash("h1", 100).await.unwrap().is_none());
     // gc drops expired rows only.
-    s.put_session(&quark::auth::Session { token_hash: "old".into(), expires: 5, ..sess.clone() }).await.unwrap();
+    s.put_session(&quark::auth::Session {
+        token_hash: "old".into(),
+        expires: 5,
+        ..sess.clone()
+    })
+    .await
+    .unwrap();
     s.gc_sessions(50).await.unwrap();
     assert!(s.get_session_by_hash("old", 4).await.unwrap().is_none());
     assert!(s.get_session_by_hash("h1", 50).await.unwrap().is_some());

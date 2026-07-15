@@ -916,7 +916,9 @@ mod tests {
         ) -> Result<(), StoreError> {
             unimplemented!()
         }
-        async fn list_link_health(&self) -> Result<Vec<(u64, crate::store::LinkHealth)>, StoreError> {
+        async fn list_link_health(
+            &self,
+        ) -> Result<Vec<(u64, crate::store::LinkHealth)>, StoreError> {
             unimplemented!()
         }
         async fn link_health_for(

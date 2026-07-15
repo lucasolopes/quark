@@ -543,7 +543,9 @@ async fn create_protected(app: &axum::Router, url: &str, password: &str) -> Stri
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     v["code"].as_str().unwrap().to_string()
 }
@@ -554,13 +556,22 @@ async fn protected_link_get_serves_interstitial() {
     let code = create_protected(&app, "https://secret.example.com", "hunter2").await;
 
     let resp = app
-        .oneshot(Request::get(format!("/{code}")).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
+    assert!(resp.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/html"));
     assert_eq!(resp.headers()["cache-control"], "no-store");
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let html = String::from_utf8(bytes.to_vec()).unwrap();
     assert!(html.contains(&format!(r#"action="/{code}""#)));
     assert!(html.contains(r#"name="password""#));
@@ -624,7 +635,10 @@ async fn protected_unlock_preserves_query_string() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    assert_eq!(resp.headers()["location"], format!("/{code}?fbclid=abc123&x=1"));
+    assert_eq!(
+        resp.headers()["location"],
+        format!("/{code}?fbclid=abc123&x=1")
+    );
 }
 
 #[tokio::test]
@@ -671,7 +685,10 @@ async fn rotating_password_invalidates_existing_unlock_cookie() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
+    assert!(resp.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/html"));
 }
 
 #[tokio::test]
@@ -690,7 +707,9 @@ async fn protected_link_wrong_password_reprompts_without_cookie() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(resp.headers().get("set-cookie").is_none());
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let html = String::from_utf8(bytes.to_vec()).unwrap();
     assert!(html.contains(r#"name="password""#));
 }
@@ -710,11 +729,16 @@ async fn admin_row_reports_has_password_without_leaking_hash() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let row = &v["links"][0];
     assert_eq!(row["has_password"], true);
-    assert!(row.get("password_hash").is_none(), "the hash must never be serialized");
+    assert!(
+        row.get("password_hash").is_none(),
+        "the hash must never be serialized"
+    );
     // The plaintext/hash must not appear anywhere in the response.
     let raw = String::from_utf8(bytes.to_vec()).unwrap();
     assert!(!raw.contains("hunter2") && !raw.contains("argon2"));
@@ -740,7 +764,11 @@ async fn patch_clears_password_reopening_the_link() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     let resp = app
-        .oneshot(Request::get(format!("/{code}")).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FOUND);
@@ -780,7 +808,10 @@ async fn unlock_post_is_rate_limited() {
             .unwrap()
     };
     // First POST is allowed (re-prompts), second is over the per-minute cap.
-    assert_eq!(app.clone().oneshot(mk()).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        app.clone().oneshot(mk()).await.unwrap().status(),
+        StatusCode::OK
+    );
     assert_eq!(
         app.oneshot(mk()).await.unwrap().status(),
         StatusCode::TOO_MANY_REQUESTS
@@ -2450,8 +2481,14 @@ async fn admin_links_reports_health_and_broken_filter() {
             .body(Body::from(format!(r#"{{"url":"{url}"}}"#)))
             .unwrap()
     };
-    app.clone().oneshot(mk("https://ok.example.com")).await.unwrap();
-    app.clone().oneshot(mk("https://dead.example.com")).await.unwrap();
+    app.clone()
+        .oneshot(mk("https://ok.example.com"))
+        .await
+        .unwrap();
+    app.clone()
+        .oneshot(mk("https://dead.example.com"))
+        .await
+        .unwrap();
 
     // Read back the two ids assigned by the store.
     let list = |q: &str| {
@@ -2461,16 +2498,16 @@ async fn admin_links_reports_health_and_broken_filter() {
             .unwrap()
     };
     let resp = app.clone().oneshot(list("")).await.unwrap();
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let rows = v["links"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
     // No health recorded yet: the field is omitted.
     assert!(rows.iter().all(|r| r.get("health").is_none()));
     let id_by_url = |url: &str| -> u64 {
-        rows.iter()
-            .find(|r| r["url"] == url)
-            .unwrap()["id"]
+        rows.iter().find(|r| r["url"] == url).unwrap()["id"]
             .as_u64()
             .unwrap()
     };
@@ -2478,27 +2515,46 @@ async fn admin_links_reports_health_and_broken_filter() {
     let dead_id = id_by_url("https://dead.example.com");
 
     store
-        .put_link_health(ok_id, &quark::store::LinkHealth { checked_at: 10, status: Some(200), healthy: true })
+        .put_link_health(
+            ok_id,
+            &quark::store::LinkHealth {
+                checked_at: 10,
+                status: Some(200),
+                healthy: true,
+            },
+        )
         .await
         .unwrap();
     store
-        .put_link_health(dead_id, &quark::store::LinkHealth { checked_at: 10, status: Some(404), healthy: false })
+        .put_link_health(
+            dead_id,
+            &quark::store::LinkHealth {
+                checked_at: 10,
+                status: Some(404),
+                healthy: false,
+            },
+        )
         .await
         .unwrap();
 
     // Unfiltered list now carries health on both rows.
     let resp = app.clone().oneshot(list("")).await.unwrap();
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let rows = v["links"].as_array().unwrap();
-    let health_of = |id: u64| rows.iter().find(|r| r["id"].as_u64() == Some(id)).unwrap()["health"].clone();
+    let health_of =
+        |id: u64| rows.iter().find(|r| r["id"].as_u64() == Some(id)).unwrap()["health"].clone();
     assert_eq!(health_of(ok_id)["healthy"], true);
     assert_eq!(health_of(dead_id)["healthy"], false);
     assert_eq!(health_of(dead_id)["status"], 404);
 
     // ?health=broken narrows to the dead link only.
     let resp = app.oneshot(list("?health=broken")).await.unwrap();
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let rows = v["links"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
@@ -2551,11 +2607,28 @@ async fn session_cookie_authorizes_admin_by_scope() {
         req.body(Body::empty()).unwrap()
     };
     // Valid reader cookie -> 200.
-    assert_eq!(app.clone().oneshot(get(Some("reader-token"))).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        app.clone()
+            .oneshot(get(Some("reader-token")))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
     // No cookie, no token -> 401 (admin enabled, unauthenticated).
-    assert_eq!(app.clone().oneshot(get(None)).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        app.clone().oneshot(get(None)).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
     // Unknown cookie -> 401.
-    assert_eq!(app.clone().oneshot(get(Some("nope"))).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        app.clone()
+            .oneshot(get(Some("nope")))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
 
     // A webhooks-only session cannot write links (PATCH needs links_write) -> 403.
     store
@@ -2595,7 +2668,11 @@ async fn session_cookie_authorizes_admin_by_scope() {
         .await
         .unwrap();
     assert_eq!(
-        app.clone().oneshot(get(Some("stale-token"))).await.unwrap().status(),
+        app.clone()
+            .oneshot(get(Some("stale-token")))
+            .await
+            .unwrap()
+            .status(),
         StatusCode::UNAUTHORIZED
     );
 }
@@ -2626,8 +2703,14 @@ async fn admin_me_reports_session_and_oidc_state() {
     let app = router(state);
 
     // No session -> authenticated:false, oidc_enabled:false.
-    let resp = app.clone().oneshot(Request::get("/admin/me").body(Body::empty()).unwrap()).await.unwrap();
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let resp = app
+        .clone()
+        .oneshot(Request::get("/admin/me").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["authenticated"], false);
     assert_eq!(v["oidc_enabled"], false);
@@ -2644,10 +2727,17 @@ async fn admin_me_reports_session_and_oidc_state() {
         .await
         .unwrap();
     let resp = app
-        .oneshot(Request::get("/admin/me").header("cookie", "qk_session=tok").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::get("/admin/me")
+                .header("cookie", "qk_session=tok")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["authenticated"], true);
     assert_eq!(v["display"], "me@example.com");
@@ -2656,7 +2746,10 @@ async fn admin_me_reports_session_and_oidc_state() {
 #[tokio::test]
 async fn login_route_404_when_oidc_disabled() {
     let app = app_admin("secret").await;
-    let resp = app.oneshot(Request::get("/admin/login").body(Body::empty()).unwrap()).await.unwrap();
+    let resp = app
+        .oneshot(Request::get("/admin/login").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
@@ -2710,7 +2803,11 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "OIDC session should authorize create");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "OIDC session should authorize create"
+    );
 
     // A low-scope API token in x-admin-token must NOT block a sufficiently-scoped
     // session: send both, expect the session to authorize a links_read GET.
@@ -2801,7 +2898,11 @@ async fn logout_requires_csrf_header_and_revokes_session() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    assert!(store.get_session_by_hash(&hash_token("sess"), 2).await.unwrap().is_some());
+    assert!(store
+        .get_session_by_hash(&hash_token("sess"), 2)
+        .await
+        .unwrap()
+        .is_some());
 
     // With the header (the panel's request) -> 204, session revoked.
     let resp = app
@@ -2815,7 +2916,11 @@ async fn logout_requires_csrf_header_and_revokes_session() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    assert!(store.get_session_by_hash(&hash_token("sess"), 2).await.unwrap().is_none());
+    assert!(store
+        .get_session_by_hash(&hash_token("sess"), 2)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]

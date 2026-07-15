@@ -45,7 +45,11 @@ async fn main() {
     // set QUARK_SIGNING_KEY.
     let signing_key: [u8; 32] = std::env::var("QUARK_SIGNING_KEY")
         .ok()
-        .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s.trim()).ok())
+        .and_then(|s| {
+            base64::engine::general_purpose::STANDARD
+                .decode(s.trim())
+                .ok()
+        })
         .filter(|b| b.len() >= 32)
         .map(|b| {
             let mut k = [0u8; 32];
@@ -292,7 +296,10 @@ async fn main() {
             loop {
                 ticker.tick().await;
                 if let Err(e) = store.gc_sessions(quark::now()).await {
-                    eprintln!("{}", serde_json::json!({ "session_gc_error": e.to_string() }));
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({ "session_gc_error": e.to_string() })
+                    );
                 }
             }
         });

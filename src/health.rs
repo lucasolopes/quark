@@ -50,7 +50,12 @@ pub fn build_client() -> reqwest::Client {
 /// about the same as a HEAD while avoiding the many servers/CDNs that reject or
 /// misreport HEAD). Classifies the resulting status.
 pub async fn probe(client: &reqwest::Client, url: &str, now: u64) -> LinkHealth {
-    let status = client.get(url).send().await.ok().map(|r| r.status().as_u16());
+    let status = client
+        .get(url)
+        .send()
+        .await
+        .ok()
+        .map(|r| r.status().as_u16());
     LinkHealth {
         checked_at: now,
         status,
@@ -132,8 +137,14 @@ fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
 /// the lifecycle events use (`{id, type, timestamp, data:{code, url, status}}`).
 fn transition_body(event_type: EventType, code: &str, url: &str, status: Option<u16>) -> String {
     let mut data = serde_json::Map::new();
-    data.insert("code".to_string(), serde_json::Value::String(code.to_string()));
-    data.insert("url".to_string(), serde_json::Value::String(url.to_string()));
+    data.insert(
+        "code".to_string(),
+        serde_json::Value::String(code.to_string()),
+    );
+    data.insert(
+        "url".to_string(),
+        serde_json::Value::String(url.to_string()),
+    );
     if let Some(s) = status {
         data.insert("status".to_string(), serde_json::Value::from(s));
     }
@@ -205,7 +216,7 @@ where
                 return Ok((checked, true));
             }
             first_chunk = false;
-            let results: Vec<(u64, String, Option<LinkHealth>)> = stream::iter(chunk.into_iter())
+            let results: Vec<(u64, String, Option<LinkHealth>)> = stream::iter(chunk)
                 .map(|(id, rec)| {
                     let prober = &prober;
                     async move {
@@ -267,7 +278,10 @@ pub fn spawn_link_checker(
         // and only the holder sweeps in a given round (multi-node coordination).
         let mut hb = [0u8; 8];
         let _ = getrandom::fill(&mut hb);
-        let holder: String = format!("chk_{}", hb.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        let holder: String = format!(
+            "chk_{}",
+            hb.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
         // Lease lasts longer than one interval so the holder keeps it across a
         // slow sweep; if the holder dies, another node takes over within the TTL.
         let ttl = period.as_secs().saturating_mul(2).max(MIN_CHECK_SECS);
@@ -279,7 +293,10 @@ pub fn spawn_link_checker(
                 // Another instance holds the lease this round.
                 Ok(false) => continue,
                 Err(e) => {
-                    eprintln!("{}", serde_json::json!({ "health_lease_error": e.to_string() }));
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({ "health_lease_error": e.to_string() })
+                    );
                     continue;
                 }
             }
@@ -299,7 +316,12 @@ pub fn spawn_link_checker(
             // transient store error assume we still hold it (unwrap_or(true)) so
             // a DB blip does not abort the sweep; only a definitive Ok(false)
             // (another node took over) stops it.
-            let renew = || async { store.try_acquire_health_lease(&holder, ttl).await.unwrap_or(true) };
+            let renew = || async {
+                store
+                    .try_acquire_health_lease(&holder, ttl)
+                    .await
+                    .unwrap_or(true)
+            };
             match sweep(&store, &webhooks, key, renew, prober).await {
                 Ok((n, false)) => eprintln!("{}", serde_json::json!({ "health_sweep_checked": n })),
                 Ok((n, true)) => {
@@ -338,17 +360,23 @@ mod tests {
             "169.254.169.254", // cloud metadata (link-local)
             "0.0.0.0",
             "::1",
-            "fc00::1",         // unique-local
-            "fe80::1",         // link-local
-            "::ffff:127.0.0.1", // IPv4-mapped loopback
+            "fc00::1",                // unique-local
+            "fe80::1",                // link-local
+            "::ffff:127.0.0.1",       // IPv4-mapped loopback
             "::ffff:169.254.169.254", // IPv4-mapped metadata
-            "::7f00:1",        // IPv4-compatible 127.0.0.1 (deprecated)
-            "::a9fe:a9fe",     // IPv4-compatible 169.254.169.254
+            "::7f00:1",               // IPv4-compatible 127.0.0.1 (deprecated)
+            "::a9fe:a9fe",            // IPv4-compatible 169.254.169.254
         ] {
-            assert!(super::is_internal_ip(&s.parse::<IpAddr>().unwrap()), "{s} must be internal");
+            assert!(
+                super::is_internal_ip(&s.parse::<IpAddr>().unwrap()),
+                "{s} must be internal"
+            );
         }
         for s in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
-            assert!(!super::is_internal_ip(&s.parse::<IpAddr>().unwrap()), "{s} must be public");
+            assert!(
+                !super::is_internal_ip(&s.parse::<IpAddr>().unwrap()),
+                "{s} must be public"
+            );
         }
     }
 
@@ -356,7 +384,8 @@ mod tests {
     async fn safe_to_probe_rejects_internal_and_bad_urls() {
         assert!(!safe_to_probe("http://127.0.0.1/x").await); // internal literal
         assert!(!safe_to_probe("not a url").await); // no host
-        assert!(!safe_to_probe("http://this-host-should-not-resolve.invalid/").await); // unresolvable
+        assert!(!safe_to_probe("http://this-host-should-not-resolve.invalid/").await);
+        // unresolvable
     }
 
     fn rec(url: &str) -> Record {
@@ -387,7 +416,14 @@ mod tests {
         // id 2: external, was BROKEN, will probe HEALTHY -> recovered.
         store.put_link(2, &rec("http://b.example/")).await.unwrap();
         store
-            .put_link_health(2, &LinkHealth { checked_at: 1, status: Some(500), healthy: false })
+            .put_link_health(
+                2,
+                &LinkHealth {
+                    checked_at: 1,
+                    status: Some(500),
+                    healthy: false,
+                },
+            )
             .await
             .unwrap();
         // id 3: internal host, must be SKIPPED (never probed, no health written).
@@ -416,13 +452,19 @@ mod tests {
             })
         };
         let renew = || async { true };
-        let (checked, lost) = sweep(&store, &dispatcher, 0x1234, renew, prober).await.unwrap();
+        let (checked, lost) = sweep(&store, &dispatcher, 0x1234, renew, prober)
+            .await
+            .unwrap();
         assert_eq!(checked, 2, "internal link 3 is skipped");
         assert!(!lost, "lease was never lost");
 
         // Health persisted for 1 and 2 only.
-        let health: HashMap<u64, LinkHealth> =
-            store.list_link_health().await.unwrap().into_iter().collect();
+        let health: HashMap<u64, LinkHealth> = store
+            .list_link_health()
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
         assert_eq!(health.len(), 2);
         assert!(!health[&1].healthy);
         assert!(health[&2].healthy);
