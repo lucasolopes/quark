@@ -57,6 +57,7 @@ Request body (`application/json`):
 | `app_android` | string, optional | Android deep-link destination. |
 | `folder` | string, optional | One folder this link belongs to. Trimmed, capped at 48 chars, case preserved; empty means none. |
 | `fallback_url` | string, optional | Where to send visitors once the link has expired (by TTL or `max_visits`) instead of `410`. `http`/`https`, non-internal; empty means none. |
+| `password` | string, optional | Protect the link with a password. Stored as an argon2id hash; the plaintext is never persisted or returned. Empty/absent means no password. |
 
 Success: `200` with `{"code": "...", "url": "..."}`.
 
@@ -89,6 +90,7 @@ Responses:
 | `302 Found` | Link resolved and live. | `Location`, TTL-aware `Cache-Control`. |
 | `302 Found` | Expired (TTL or `max_visits`) and a `fallback_url` is set. | `Location: <fallback_url>`, `Cache-Control: no-store`. |
 | `410 Gone` | Expired (TTL or `max_visits`) with no `fallback_url`. | `Cache-Control: no-store`. |
+| `200 OK` | Link is password-protected and the request has no valid unlock cookie. | `text/html` interstitial, `Cache-Control: no-store`. |
 | `404 Not Found` | No such code or alias. | `Cache-Control: no-store`. |
 | `503 Service Unavailable` | Backend error. | |
 
@@ -96,6 +98,24 @@ Destination resolution composes three targeting mechanisms in priority order:
 a device-aware app deep-link wins first, then a matching geo/device rule, then a
 weighted A/B variant, and a link with none of these redirects to its `url`. See
 [ARCHITECTURE](ARCHITECTURE.md#redirect-flow).
+
+### `POST /:code`
+
+Unlock a password-protected link. Public, rate-limited (per client IP, shared
+with create). Body is `application/x-www-form-urlencoded` with a `password`
+field.
+
+| Status | When | Headers |
+|---|---|---|
+| `303 See Other` | Correct password. | `Location: /<code>`, `Set-Cookie: qk_pw_<code>=…` (signed, `HttpOnly`, `SameSite=Lax`, 12h), `Cache-Control: no-store`. |
+| `200 OK` | Wrong password. | `text/html` interstitial with an error, no cookie. |
+| `429 Too Many Requests` | Over the rate limit. | |
+
+On success quark redirects back to `GET /:code`; the follow-up request carries
+the unlock cookie, so destination resolution, the visit bump, and click
+recording all happen once on the canonical redirect path. The cookie lets repeat
+visits within 12 hours skip the interstitial. The password itself is verified
+against an argon2id hash; the plaintext is never stored.
 
 ### Well-known files (deep linking)
 
@@ -133,8 +153,9 @@ Query parameters: `after` (id cursor), `limit` (default 50, clamped to 500),
 
 Success: `200` with `{"links": [...], "next_after": <id or null>}`. Each link
 row carries `id`, `code`, optional `alias`, `url`, `expiry`, `created`, `tags`,
-optional `max_visits`, `visits`, `rules`, `variants`, and an optional `folder`
-(omitted when the link has none).
+optional `max_visits`, `visits`, `rules`, `variants`, an optional `folder`
+(omitted when the link has none), an optional `fallback_url`, and
+`has_password` (a bool; the password hash itself is never returned).
 
 `501 Not Implemented` is returned when `q` is used on the LMDB backend (search
 is Postgres-only; the panel falls back to client-side filtering).
@@ -156,12 +177,13 @@ folder are not counted.
 ### `PATCH /admin/links/:code`
 
 Edit a link. Scope: `links_write`. The body is a partial JSON object; only the
-keys present are changed. Sending `null` (or, for `fallback_url`, an empty
-string) for `ttl`, `max_visits`, `app_ios`, `app_android`, `folder`, or
-`fallback_url` clears that field.
+keys present are changed. Sending `null` (or, for `fallback_url`/`password`, an
+empty string) for `ttl`, `max_visits`, `app_ios`, `app_android`, `folder`,
+`fallback_url`, or `password` clears that field. A non-empty `password` sets a
+new hash.
 
 Accepted keys: `url`, `ttl`, `tags`, `max_visits`, `rules`, `variants`,
-`app_ios`, `app_android`, `folder`, `fallback_url`. Each is validated the same way as on create
+`app_ios`, `app_android`, `folder`, `fallback_url`, `password`. Each is validated the same way as on create
 (URL scheme, SSRF guard, rule and variant caps; the folder name is trimmed and
 capped). `200` on success, `404` if the code does not resolve, `400`/`403` on a
 rejected field.
