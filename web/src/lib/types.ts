@@ -22,6 +22,7 @@ export interface Link {
   app_ios?: string;
   app_android?: string;
   folder?: string;
+  fallback_url?: string;
   expiry: number | null;
   created: number;
   tags: string[];
@@ -31,7 +32,7 @@ export interface Link {
   variants: Variant[];
 }
 export interface ListLinksResponse { links: Link[]; next_after: number | null; }
-export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; max_visits?: number; rules?: Rule[]; variants?: Variant[]; app_ios?: string; app_android?: string; folder?: string; }
+export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; max_visits?: number; rules?: Rule[]; variants?: Variant[]; app_ios?: string; app_android?: string; folder?: string; fallback_url?: string; }
 export interface CreateLinkResponse { code: string; url: string; }
 /** A tag in use by at least one link, with how many links carry it. */
 export interface Tag { name: string; count: number; }
@@ -59,7 +60,7 @@ export interface Aggregates {
   per_variant: Record<string, number>;
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
-export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; variants?: Variant[]; app_ios?: string | null; app_android?: string | null; folder?: string | null; }
+export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; variants?: Variant[]; app_ios?: string | null; app_android?: string | null; folder?: string | null; fallback_url?: string | null; }
 
 /** The 5 link lifecycle events a webhook subscription can be notified about. */
 export const WEBHOOK_EVENTS = [

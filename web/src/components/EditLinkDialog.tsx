@@ -44,6 +44,7 @@ interface FormErrors {
   rules?: string;
   appIos?: string;
   appAndroid?: string;
+  fallbackUrl?: string;
   form?: string;
   variants?: string;
 }
@@ -74,6 +75,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
   const [variantRows, setVariantRows] = useState<VariantRow[]>(() => toVariantRows(link.variants));
   const [appIos, setAppIos] = useState(link.app_ios ?? "");
   const [appAndroid, setAppAndroid] = useState(link.app_android ?? "");
+  const [fallbackUrl, setFallbackUrl] = useState(link.fallback_url ?? "");
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
 
@@ -145,6 +147,9 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
     if (appAndroid.trim() && !isHttpUrl(appAndroid)) {
       next.appAndroid = t("dialogs.edit.appDestInvalid");
     }
+    if (fallbackUrl.trim() && !isHttpUrl(fallbackUrl)) {
+      next.fallbackUrl = t("dialogs.edit.fallbackUrlInvalid");
+    }
     return next;
   }
 
@@ -181,6 +186,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
           ...(appIos.trim() ? { app_ios: appIos.trim() } : link.app_ios?.trim() ? { app_ios: null } : {}),
           ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : link.app_android?.trim() ? { app_android: null } : {}),
           ...(folder.trim() ? { folder: folder.trim() } : link.folder?.trim() ? { folder: null } : {}),
+          ...(fallbackUrl.trim() ? { fallback_url: fallbackUrl.trim() } : link.fallback_url?.trim() ? { fallback_url: null } : {}),
         },
       });
       toast.success(t("dialogs.edit.successToast"));
@@ -309,6 +315,26 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
               {errors.maxVisits && (
                 <p className="text-sm text-destructive" role="alert">
                   {errors.maxVisits}
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="edit-link-fallback-url" className="text-sm font-medium">
+                {t("dialogs.edit.fallbackUrlLabel")} <span className="text-muted-foreground">{t("dialogs.edit.fallbackUrlOptional")}</span>
+              </label>
+              <p className="text-sm text-muted-foreground">{t("dialogs.edit.fallbackUrlNote")}</p>
+              <Input
+                id="edit-link-fallback-url"
+                type="text"
+                placeholder={t("dialogs.edit.fallbackUrlPlaceholder")}
+                value={fallbackUrl}
+                onChange={(e) => setFallbackUrl(e.target.value)}
+                aria-invalid={errors.fallbackUrl != null}
+              />
+              {errors.fallbackUrl && (
+                <p className="text-sm text-destructive" role="alert">
+                  {errors.fallbackUrl}
                 </p>
               )}
             </div>
