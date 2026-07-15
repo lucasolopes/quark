@@ -281,6 +281,20 @@ async fn main() {
         None => eprintln!("link health checker: disabled (set QUARK_HEALTH_CHECK_SECS to enable)"),
     }
 
+    // Garbage-collect expired OIDC login sessions hourly (only when OIDC is on).
+    if state.oidc.is_some() {
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                ticker.tick().await;
+                if let Err(e) = store.gc_sessions(quark::now()).await {
+                    eprintln!("{}", serde_json::json!({ "session_gc_error": e.to_string() }));
+                }
+            }
+        });
+    }
+
     let app = router(state);
 
     let addr = std::env::var("QUARK_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());

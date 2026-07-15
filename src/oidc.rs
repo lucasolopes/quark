@@ -27,6 +27,9 @@ pub struct OidcConfig {
     pub admin_claim: String,
     pub admin_value: String,
     pub readonly_value: Option<String>,
+    /// Where to send the browser after a successful login. Default `/` (panel
+    /// same-origin); set to the panel URL for a split-origin deployment.
+    pub post_login_url: String,
 }
 
 impl OidcConfig {
@@ -42,6 +45,10 @@ impl OidcConfig {
             admin_claim: std::env::var("QUARK_OIDC_ADMIN_CLAIM").unwrap_or_else(|_| "groups".into()),
             admin_value: std::env::var("QUARK_OIDC_ADMIN_VALUE").unwrap_or_default(),
             readonly_value: std::env::var("QUARK_OIDC_READONLY_VALUE").ok().filter(|s| !s.is_empty()),
+            post_login_url: std::env::var("QUARK_OIDC_POST_LOGIN_URL")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "/".to_string()),
         })
     }
 }
@@ -200,6 +207,14 @@ pub fn verify_id_token(
     val.validate_exp = true;
     let data = decode::<serde_json::Value>(id_token, key, &val).map_err(|e| e.to_string())?;
     let claims = data.claims;
+    // Multi-audience id_tokens (OIDC): when `aud` has more than one value, the
+    // `azp` (authorized party) MUST be our client id, else a token minted for a
+    // different client that merely lists us in `aud` would be accepted.
+    if let Some(serde_json::Value::Array(auds)) = claims.get("aud") {
+        if auds.len() > 1 && claims.get("azp").and_then(|v| v.as_str()) != Some(client_id) {
+            return Err("multi-audience token without matching azp".to_string());
+        }
+    }
     if claims.get("nonce").and_then(|v| v.as_str()) != Some(nonce) {
         return Err("nonce mismatch".to_string());
     }
@@ -349,6 +364,7 @@ mod tests {
             admin_claim: "groups".into(),
             admin_value: "quark-admins".into(),
             readonly_value: Some("quark-viewers".into()),
+            post_login_url: "/".into(),
         }
     }
 

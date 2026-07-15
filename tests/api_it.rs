@@ -2650,3 +2650,95 @@ async fn login_route_404_when_oidc_disabled() {
     let resp = app.oneshot(Request::get("/admin/login").body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
+    use quark::auth::{hash_token, ApiToken, Scope, Session};
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        cache,
+        store: store.clone(),
+        key: 0x1234,
+        signing_key: [0u8; 32],
+        analytics_tx: tx,
+        sink,
+        admin_token: Some("secret".to_string()),
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+    });
+    let app = router(state);
+    let now = 1_000_000u64;
+
+    // A Full session created via OIDC can create a link (POST /) with only the
+    // session cookie (no x-admin-token) — the previous bug bounced it with 401.
+    store
+        .put_session(&Session {
+            token_hash: hash_token("full-sess"),
+            subject: "admin".into(),
+            display: "admin@example.com".into(),
+            scopes: vec![Scope::Full],
+            created: now,
+            expires: now + 100_000_000_000,
+        })
+        .await
+        .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("cookie", "qk_session=full-sess")
+                .body(Body::from(r#"{"url":"https://ok.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "OIDC session should authorize create");
+
+    // A low-scope API token in x-admin-token must NOT block a sufficiently-scoped
+    // session: send both, expect the session to authorize a links_read GET.
+    store
+        .put_api_token(&ApiToken {
+            id: 1,
+            name: "readonly".into(),
+            token_hash: hash_token("weak-token"),
+            scopes: vec![Scope::Webhooks],
+            rate_limit_per_min: None,
+            created: now,
+        })
+        .await
+        .unwrap();
+    store
+        .put_session(&Session {
+            token_hash: hash_token("reader-sess"),
+            subject: "reader".into(),
+            display: "r@example.com".into(),
+            scopes: vec![Scope::LinksRead],
+            created: now,
+            expires: now + 100_000_000_000,
+        })
+        .await
+        .unwrap();
+    let resp = app
+        .oneshot(
+            Request::get("/admin/links")
+                .header("x-admin-token", "weak-token")
+                .header("cookie", "qk_session=reader-sess")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "insufficient token must not block a sufficient session"
+    );
+}

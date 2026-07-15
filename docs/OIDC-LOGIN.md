@@ -49,6 +49,7 @@ Set these on every instance that serves the panel API. OIDC turns on when
 | `QUARK_OIDC_ADMIN_CLAIM` | Claim inspected for authorization (default `groups`). |
 | `QUARK_OIDC_ADMIN_VALUE` | Value in that claim granting full access (e.g. `quark-admins`). |
 | `QUARK_OIDC_READONLY_VALUE` | Optional value granting read-only (links-read + analytics). |
+| `QUARK_OIDC_POST_LOGIN_URL` | Where to send the browser after login (default `/`). Set to the panel URL when the panel is on a different origin than the API. |
 
 The session cookie is signed with `QUARK_SIGNING_KEY` (the same secret used for
 link-password cookies); set it and share it across replicas for a stable

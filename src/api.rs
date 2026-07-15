@@ -310,40 +310,14 @@ fn cache_control_for(expiry: Option<u64>, now: u64) -> String {
 /// Requires the admin token to create — but only when a token is configured.
 /// Without QUARK_ADMIN_TOKEN, create remains public (open shortener).
 async fn require_admin_for_create(st: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
-    // Open shortener: with no admin token configured, create stays public.
-    let Some(expected) = st.admin_token.as_deref() else {
-        return Ok(());
-    };
-    let provided = headers
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    // The env admin token grants full access.
-    if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+    // Open shortener: create stays public ONLY when no auth mechanism is
+    // configured. When either a token or OIDC is set, create requires a
+    // credential covering LinksWrite (env token / API token / OIDC session),
+    // reusing the same authorization as every other write.
+    if st.admin_token.is_none() && st.oidc.is_none() {
         return Ok(());
     }
-    if provided.is_empty() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    // Otherwise accept a scoped API token that covers LinksWrite, matching how
-    // `POST /admin/import` authorizes (both are link writes).
-    let hash = hash_token(provided);
-    match st.store.get_api_token_by_hash(&hash).await {
-        Ok(Some(token)) => {
-            if !token.scopes.iter().any(|s| s.covers(Scope::LinksWrite)) {
-                return Err(StatusCode::FORBIDDEN);
-            }
-            if let Some(limit) = token.rate_limit_per_min {
-                let key = format!("tok:{}", token.id);
-                if !st.ratelimiter.check_with_limit(&key, now(), limit).await {
-                    return Err(StatusCode::TOO_MANY_REQUESTS);
-                }
-            }
-            Ok(())
-        }
-        Ok(None) => Err(StatusCode::UNAUTHORIZED),
-        Err(_) => Err(StatusCode::SERVICE_UNAVAILABLE),
-    }
+    admin_guard(st, headers, Scope::LinksWrite).await
 }
 
 /// Reasons `create_link_core` can fail. The `create` handler and the
@@ -1299,21 +1273,27 @@ async fn admin_guard(
         StatusCode::NOT_FOUND
     };
 
+    // Try every presented credential; any one that covers `required` authorizes.
+    // A valid-but-insufficient credential (found token/session that lacks the
+    // scope) yields 403 only if nothing else covers — so a low-scope API token
+    // in localStorage never blocks a sufficiently-scoped OIDC session.
+    let mut saw_insufficient = false;
+
     // 2) Scoped API token in x-admin-token.
     if !provided.is_empty() {
         let hash = hash_token(provided);
         match st.store.get_api_token_by_hash(&hash).await {
             Ok(Some(token)) => {
-                if !token.scopes.iter().any(|s| s.covers(required)) {
-                    return Err(StatusCode::FORBIDDEN);
-                }
-                if let Some(limit) = token.rate_limit_per_min {
-                    let key = format!("tok:{}", token.id);
-                    if !st.ratelimiter.check_with_limit(&key, now(), limit).await {
-                        return Err(StatusCode::TOO_MANY_REQUESTS);
+                if token.scopes.iter().any(|s| s.covers(required)) {
+                    if let Some(limit) = token.rate_limit_per_min {
+                        let key = format!("tok:{}", token.id);
+                        if !st.ratelimiter.check_with_limit(&key, now(), limit).await {
+                            return Err(StatusCode::TOO_MANY_REQUESTS);
+                        }
                     }
+                    return Ok(());
                 }
-                return Ok(());
+                saw_insufficient = true;
             }
             Ok(None) => {}
             Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
@@ -1328,13 +1308,16 @@ async fn admin_guard(
                 if session.scopes.iter().any(|s| s.covers(required)) {
                     return Ok(());
                 }
-                return Err(StatusCode::FORBIDDEN);
+                saw_insufficient = true;
             }
             Ok(None) => {}
             Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
         }
     }
 
+    if saw_insufficient {
+        return Err(StatusCode::FORBIDDEN);
+    }
     Err(not_found_status)
 }
 
@@ -1431,15 +1414,24 @@ async fn oidc_callback(
     if st.store.put_session(&session).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    let secure = if request_is_https(&headers) { "; Secure" } else { "" };
+    // Over HTTPS use SameSite=None; Secure so the cookie is sent on cross-origin
+    // panel->API fetches (the documented split-origin deployment). On plain HTTP
+    // (local dev, same-origin) SameSite=None is invalid without Secure, so fall
+    // back to Lax.
+    let same_site = if request_is_https(&headers) {
+        "None; Secure"
+    } else {
+        "Lax"
+    };
     let cookie = format!(
-        "{SESSION_COOKIE}={raw}; Max-Age={SESSION_TTL_SECS}; Path=/; HttpOnly; SameSite=Lax{secure}"
+        "{SESSION_COOKIE}={raw}; Max-Age={SESSION_TTL_SECS}; Path=/; HttpOnly; SameSite={same_site}"
     );
-    // Redirect to the panel root. The short-lived login cookie is left to expire.
+    // Redirect to the configured post-login URL (the panel), default "/".
+    let dest = oidc.config.post_login_url.clone();
     (
         StatusCode::SEE_OTHER,
         [
-            (header::LOCATION, "/".to_string()),
+            (header::LOCATION, dest),
             (header::SET_COOKIE, cookie),
             (header::CACHE_CONTROL, "no-store".to_string()),
         ],

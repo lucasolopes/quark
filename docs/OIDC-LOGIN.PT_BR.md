@@ -49,6 +49,7 @@ Set essas variáveis em toda instância que serve a API do painel. OIDC liga qua
 | `QUARK_OIDC_ADMIN_CLAIM` | Claim inspecionado pra autorização (default `groups`). |
 | `QUARK_OIDC_ADMIN_VALUE` | Valor nesse claim que concede acesso total (ex. `quark-admins`). |
 | `QUARK_OIDC_READONLY_VALUE` | Valor opcional que concede somente-leitura (leitura de links + analytics). |
+| `QUARK_OIDC_POST_LOGIN_URL` | Pra onde mandar o navegador depois do login (default `/`). Set com a URL do painel quando ele fica numa origem diferente da API. |
 
 O cookie de sessão é assinado com `QUARK_SIGNING_KEY` (o mesmo segredo dos cookies
 de senha de link); set e compartilhe entre réplicas pra um deploy multi-instância
