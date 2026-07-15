@@ -167,3 +167,22 @@ OIDC flow (stage 1): authorization-code with PKCE. quark redirects to the issuer
 - https://clerk.com/
 - https://supabase.com/
 - https://blog.vibecoder.me/clerk-vs-authjs-vs-supabase-auth
+
+## Decisões do dono (2026-07-14)
+
+- **Direção: token compartilhado + login com provedor (OIDC), em estágios.** O token
+  segue como default zero-config (estágio 0); o OIDC opt-in "bring your own IdP"
+  (estágio 1) vem em seguida, dando contas reais, nomeadas e revogáveis sem o quark
+  guardar senha. O estágio 2 (usuário/senha embutido) fica FORA por ora: só se
+  aparecer demanda real de quem se recusa a rodar qualquer provedor.
+- **Token de admin como break-glass permanente: SIM.** Mesmo com OIDC ligado, o
+  `QUARK_ADMIN_TOKEN` continua válido como chave de emergência, pro caso do provedor
+  cair ou ser mal configurado.
+- **Guias de setup de primeira classe:** Authelia, Google, GitHub e Keycloak. Outros
+  provedores funcionam igual pelo OIDC padrão, só sem guia dedicado.
+- **Decisões finas (resolver no spec, defaults planejados):** mapeamento claim→escopo
+  default-closed (um grupo/claim admin concede `full`, o resto começa sem nada), a
+  config do mapeamento no ambiente/arquivo; sessão opaca server-side em cookie
+  HttpOnly (revogável), atrás do `Store` (LMDB e Postgres); um role a mais de
+  leitura (`links_read`+`analytics`) é desejável; auditoria por-principal fica pra
+  quando as contas existirem.

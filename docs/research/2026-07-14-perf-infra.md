@@ -439,3 +439,18 @@ is bought with placement (a copy of the answer near the clicker) and by removing
 hops (the VPN goes, a CDN and private DB networking take its place). Tier 1 gets
 most of it cheaply; Tier 2 gets the rest without forking the code; Tier 3 is the
 edge-latency ceiling at the cost of a second codebase.
+
+## Decisão do dono (2026-07-14)
+
+Prioridade declarada: **menor latência e máxima disponibilidade** (custo e "começar
+barato" não são a trava). Isso aponta para o **Tier 2 (multi-região no Fly.io
+rodando o binário real)** como alvo, porque é o único que entrega os dois ao mesmo
+tempo: réplicas regionais colocam uma cópia perto de cada clicador (latência
+mínima) e a redundância entre regiões dá disponibilidade máxima, tudo sem reescrever
+o read-path. Os blocos do Tier 1 (tirar a VPN, DB privado, CDN na frente cacheando
+os 302 quentes) são adotados no caminho, não como destino final. O Tier 3
+(reescrita edge-runtime) fica fora a menos que apareça um SLA global de sub-50ms
+obrigatório, pelo custo de um segundo código do read-path. Ponto de atenção para a
+disponibilidade: a camada de dados sob multi-região (seção 4) precisa acompanhar
+(réplicas de leitura regionais / Postgres com failover), senão o banco vira o ponto
+único que derruba a meta.
