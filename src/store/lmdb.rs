@@ -347,6 +347,29 @@ impl Store for LmdbStore {
         Ok(out)
     }
 
+    async fn list_broken_link_ids(&self) -> Result<Vec<u64>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        for item in self.health.iter(&rtxn)? {
+            let (id, bytes) = item?;
+            let h: LinkHealth = serde_json::from_slice(bytes)?;
+            if !h.healthy {
+                out.push(id);
+            }
+        }
+        out.sort_unstable();
+        Ok(out)
+    }
+
+    async fn try_acquire_health_lease(
+        &self,
+        _holder: &str,
+        _ttl_secs: u64,
+    ) -> Result<bool, StoreError> {
+        // LMDB is single-node: there is only ever one checker.
+        Ok(true)
+    }
+
     async fn list_tags(&self) -> Result<Vec<(String, u64)>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut counts: BTreeMap<String, u64> = BTreeMap::new();

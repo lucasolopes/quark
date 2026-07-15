@@ -209,9 +209,26 @@ pub fn spawn_link_checker(
     key: u64,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        // Per-process holder id for the sweep lease; any instance may hold it,
+        // and only the holder sweeps in a given round (multi-node coordination).
+        let mut hb = [0u8; 8];
+        let _ = getrandom::fill(&mut hb);
+        let holder: String = format!("chk_{}", hb.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        // Lease lasts longer than one interval so the holder keeps it across a
+        // slow sweep; if the holder dies, another node takes over within the TTL.
+        let ttl = period.as_secs().saturating_mul(2).max(MIN_CHECK_SECS);
         let mut ticker = tokio::time::interval(period);
         loop {
             ticker.tick().await;
+            match store.try_acquire_health_lease(&holder, ttl).await {
+                Ok(true) => {}
+                // Another instance holds the lease this round.
+                Ok(false) => continue,
+                Err(e) => {
+                    eprintln!("{}", serde_json::json!({ "health_lease_error": e.to_string() }));
+                    continue;
+                }
+            }
             let now = crate::now();
             let client = &client;
             let prober = move |url: String| {

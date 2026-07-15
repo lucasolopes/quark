@@ -382,6 +382,18 @@ pub trait Store: Send + Sync + 'static {
     /// absent from the result). Used by the admin list so a page load reads only
     /// the current page's health, not the whole table.
     async fn link_health_for(&self, ids: &[u64]) -> Result<Vec<(u64, LinkHealth)>, StoreError>;
+    /// Ids of all links whose last probe was broken, ascending. Drives the
+    /// panel's "broken only" filter without scanning the whole link table.
+    async fn list_broken_link_ids(&self) -> Result<Vec<u64>, StoreError>;
+    /// Tries to acquire (or renew) the single broken-link-checker lease for
+    /// `ttl_secs`, identified by `holder`. Returns `true` if this caller now
+    /// holds it. Lets any replica run the checker while ensuring only one sweeps
+    /// at a time; the single-node LMDB backend always returns `true`.
+    async fn try_acquire_health_lease(
+        &self,
+        holder: &str,
+        ttl_secs: u64,
+    ) -> Result<bool, StoreError>;
     async fn next_pixel_id(&self) -> Result<u64, StoreError>;
     async fn get_pixel(&self, id: u64) -> Result<Option<PixelConfig>, StoreError>;
     async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError>;

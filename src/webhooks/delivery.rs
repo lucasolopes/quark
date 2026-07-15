@@ -925,6 +925,16 @@ mod tests {
         ) -> Result<Vec<(u64, crate::store::LinkHealth)>, StoreError> {
             unimplemented!()
         }
+        async fn list_broken_link_ids(&self) -> Result<Vec<u64>, StoreError> {
+            unimplemented!()
+        }
+        async fn try_acquire_health_lease(
+            &self,
+            _holder: &str,
+            _ttl_secs: u64,
+        ) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
         async fn next_pixel_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }
