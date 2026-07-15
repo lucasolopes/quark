@@ -211,6 +211,28 @@ async fn main() {
         Arc::new(dispatcher)
     };
 
+    // OIDC login (opt-in via QUARK_OIDC_ISSUER). A failed init disables login but
+    // never blocks startup: the break-glass admin token still works.
+    let oidc = match quark::oidc::OidcConfig::from_env() {
+        Some(cfg) => {
+            let issuer = cfg.issuer.clone();
+            match quark::oidc::OidcRuntime::init(cfg).await {
+                Ok(rt) => {
+                    eprintln!("oidc login: enabled (issuer {issuer})");
+                    Some(Arc::new(rt))
+                }
+                Err(e) => {
+                    eprintln!("WARNING: OIDC configured but init failed ({e}); login disabled, admin token still works");
+                    None
+                }
+            }
+        }
+        None => {
+            eprintln!("oidc login: disabled (set QUARK_OIDC_ISSUER to enable)");
+            None
+        }
+    };
+
     let state = Arc::new(AppState {
         cache,
         store,
@@ -224,6 +246,7 @@ async fn main() {
         public_host,
         real_ip_header,
         webhooks,
+        oidc,
     });
     match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {

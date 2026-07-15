@@ -5,9 +5,12 @@
 
 use crate::auth::Scope;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as b64url, Engine as _};
+use hmac::{Hmac, KeyInit, Mac};
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// OIDC settings read once from the environment. `from_env` returns `None` when
 /// `QUARK_OIDC_ISSUER` is unset, which keeps OIDC fully off by default.
@@ -240,6 +243,98 @@ pub fn map_scopes(claims: &serde_json::Value, cfg: &OidcConfig) -> Vec<Scope> {
     Vec::new()
 }
 
+/// Live OIDC state held in `AppState`: the config, an HTTP client, the resolved
+/// discovery document, and a refreshable JWKS.
+pub struct OidcRuntime {
+    pub config: OidcConfig,
+    client: reqwest::Client,
+    discovery: Discovery,
+    jwks: tokio::sync::RwLock<Jwks>,
+}
+
+impl OidcRuntime {
+    /// Resolves discovery and the initial JWKS for `config`.
+    pub async fn init(config: OidcConfig) -> Result<OidcRuntime, String> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let discovery = discover(&client, &config.issuer).await?;
+        let jwks = fetch_jwks(&client, &discovery.jwks_uri).await?;
+        Ok(OidcRuntime {
+            config,
+            client,
+            discovery,
+            jwks: tokio::sync::RwLock::new(jwks),
+        })
+    }
+
+    /// The authorize URL for a fresh login attempt.
+    pub fn authorize_url(&self, state: &str, nonce: &str, challenge: &str) -> String {
+        authorize_url(&self.config, &self.discovery, state, nonce, challenge)
+    }
+
+    /// Exchanges a callback code for the id_token.
+    pub async fn exchange_code(&self, code: &str, verifier: &str) -> Result<String, String> {
+        exchange_code(&self.client, &self.config, &self.discovery, code, verifier).await
+    }
+
+    /// Verifies an id_token, refreshing the JWKS once if the token's key id is
+    /// not in the cached set (handles IdP key rotation without a restart).
+    pub async fn verify(&self, id_token: &str, nonce: &str) -> Result<Claims, String> {
+        let kid = token_kid(id_token);
+        {
+            let jwks = self.jwks.read().await;
+            if let Ok(key) = select_key(&jwks, kid.as_deref()) {
+                return verify_id_token(
+                    id_token,
+                    &key,
+                    &self.config.issuer,
+                    &self.config.client_id,
+                    nonce,
+                );
+            }
+        }
+        let fresh = fetch_jwks(&self.client, &self.discovery.jwks_uri).await?;
+        let key = select_key(&fresh, kid.as_deref())?;
+        let claims = verify_id_token(
+            id_token,
+            &key,
+            &self.config.issuer,
+            &self.config.client_id,
+            nonce,
+        )?;
+        *self.jwks.write().await = fresh;
+        Ok(claims)
+    }
+}
+
+/// Signs the login-attempt state (`state.verifier.nonce`, all base64url so they
+/// contain no `.`) with an HMAC, for the short-lived cookie that carries it from
+/// `/admin/login` to `/admin/callback`. Value: `"state.verifier.nonce.mac"`.
+pub fn sign_login_state(key: &[u8], state: &str, verifier: &str, nonce: &str) -> String {
+    let payload = format!("{state}.{verifier}.{nonce}");
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(payload.as_bytes());
+    format!("{payload}.{}", b64url.encode(mac.finalize().into_bytes()))
+}
+
+/// Verifies and unpacks a login-state cookie, returning `(state, verifier,
+/// nonce)` when the HMAC checks out.
+pub fn verify_login_state(key: &[u8], cookie: &str) -> Option<(String, String, String)> {
+    let parts: Vec<&str> = cookie.split('.').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    let (state, verifier, nonce, mac_b64) = (parts[0], parts[1], parts[2], parts[3]);
+    let provided = b64url.decode(mac_b64).ok()?;
+    let payload = format!("{state}.{verifier}.{nonce}");
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(payload.as_bytes());
+    mac.verify_slice(&provided).ok()?;
+    Some((state.to_string(), verifier.to_string(), nonce.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +380,23 @@ mod tests {
             assert!(u.contains(needle), "missing {needle} in {u}");
         }
         assert!(u.starts_with("https://idp.example/authorize?"));
+    }
+
+    #[test]
+    fn login_state_cookie_round_trip_and_tamper() {
+        let key = b"login-state-signing-key-0123456789";
+        let cookie = sign_login_state(key, "st8", "verif", "nnc");
+        assert_eq!(
+            verify_login_state(key, &cookie),
+            Some(("st8".into(), "verif".into(), "nnc".into()))
+        );
+        // Wrong key rejected.
+        assert!(verify_login_state(b"another-key-abcdefghijklmnopqrstuv", &cookie).is_none());
+        // Tampered state rejected.
+        let tampered = cookie.replacen("st8", "st9", 1);
+        assert!(verify_login_state(key, &tampered).is_none());
+        // Malformed rejected.
+        assert!(verify_login_state(key, "garbage").is_none());
     }
 
     #[test]

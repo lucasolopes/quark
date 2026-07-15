@@ -31,6 +31,7 @@ async fn app_admin_with_dispatcher(
         Arc::new(AtomicBool::new(false)),
     ));
     let state = Arc::new(AppState {
+        oidc: None,
         cache,
         store,
         key: 0x1234,
@@ -68,6 +69,7 @@ async fn app_admin_with_dispatcher_clicked_subscribed(
         Arc::new(AtomicBool::new(false)),
     ));
     let state = Arc::new(AppState {
+        oidc: None,
         cache,
         store,
         key: 0x1234,

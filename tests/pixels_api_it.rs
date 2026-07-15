@@ -23,6 +23,7 @@ async fn app_with_token(admin_token: Option<&str>) -> axum::Router {
     let cache = Cache::new(store.clone(), 1000, None);
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
+        oidc: None,
         cache,
         store,
         key: 0x1234,

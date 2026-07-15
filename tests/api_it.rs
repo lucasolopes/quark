@@ -13,6 +13,7 @@ async fn app() -> axum::Router {
     let cache = Cache::new(store.clone(), 1000, None);
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
+        oidc: None,
         cache,
         store,
         key: 0x1234,
@@ -752,6 +753,7 @@ async fn unlock_post_is_rate_limited() {
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
+        oidc: None,
         cache,
         store,
         key: 0x1234,
@@ -845,6 +847,7 @@ async fn rate_limit_429_after_exceeding() {
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
+        oidc: None,
         cache,
         store,
         key: 0x1234,
@@ -969,6 +972,7 @@ async fn app_admin(token: &str) -> axum::Router {
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
+        oidc: None,
         cache,
         store,
         key: 0x1234,
@@ -1397,6 +1401,7 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
     let cache = Cache::new(store.clone(), 1000, None);
     let (analytics_tx, rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
+        oidc: None,
         cache,
         store,
         key: 0x1234,
@@ -2089,6 +2094,7 @@ async fn cors_header_present_when_configured() {
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
+        oidc: None,
         cache,
         store,
         key: 0x1234,
@@ -2414,6 +2420,7 @@ async fn admin_links_reports_health_and_broken_filter() {
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
+        oidc: None,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -2490,4 +2497,156 @@ async fn admin_links_reports_health_and_broken_filter() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["id"].as_u64(), Some(dead_id));
     assert_eq!(rows[0]["health"]["healthy"], false);
+}
+
+#[tokio::test]
+async fn session_cookie_authorizes_admin_by_scope() {
+    use quark::auth::{hash_token, Scope, Session};
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        cache,
+        store: store.clone(),
+        key: 0x1234,
+        signing_key: [0u8; 32],
+        analytics_tx: tx,
+        sink,
+        admin_token: Some("secret".to_string()),
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+    });
+    let app = router(state);
+    let now = 1_000_000u64;
+    // A reader session (links_read + analytics) can list links.
+    store
+        .put_session(&Session {
+            token_hash: hash_token("reader-token"),
+            subject: "s1".into(),
+            display: "reader@example.com".into(),
+            scopes: vec![Scope::LinksRead, Scope::Analytics],
+            created: now,
+            expires: now + 100_000_000_000,
+        })
+        .await
+        .unwrap();
+    let get = |cookie: Option<&str>| {
+        let mut req = Request::get("/admin/links");
+        if let Some(c) = cookie {
+            req = req.header("cookie", format!("qk_session={c}"));
+        }
+        req.body(Body::empty()).unwrap()
+    };
+    // Valid reader cookie -> 200.
+    assert_eq!(app.clone().oneshot(get(Some("reader-token"))).await.unwrap().status(), StatusCode::OK);
+    // No cookie, no token -> 401 (admin enabled, unauthenticated).
+    assert_eq!(app.clone().oneshot(get(None)).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    // Unknown cookie -> 401.
+    assert_eq!(app.clone().oneshot(get(Some("nope"))).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+
+    // A webhooks-only session cannot write links (PATCH needs links_write) -> 403.
+    store
+        .put_session(&Session {
+            token_hash: hash_token("hooks-token"),
+            subject: "s2".into(),
+            display: "hooks@example.com".into(),
+            scopes: vec![Scope::Webhooks],
+            created: now,
+            expires: now + 100_000_000_000,
+        })
+        .await
+        .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::patch("/admin/links/whatever")
+                .header("cookie", "qk_session=hooks-token")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"https://x.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // An expired session does not authenticate -> 401.
+    store
+        .put_session(&Session {
+            token_hash: hash_token("stale-token"),
+            subject: "s3".into(),
+            display: "stale@example.com".into(),
+            scopes: vec![Scope::Full],
+            created: 1,
+            expires: 2,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(get(Some("stale-token"))).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn admin_me_reports_session_and_oidc_state() {
+    use quark::auth::{hash_token, Scope, Session};
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        cache,
+        store: store.clone(),
+        key: 0x1234,
+        signing_key: [0u8; 32],
+        analytics_tx: tx,
+        sink,
+        admin_token: Some("secret".to_string()),
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+    });
+    let app = router(state);
+
+    // No session -> authenticated:false, oidc_enabled:false.
+    let resp = app.clone().oneshot(Request::get("/admin/me").body(Body::empty()).unwrap()).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["authenticated"], false);
+    assert_eq!(v["oidc_enabled"], false);
+
+    store
+        .put_session(&Session {
+            token_hash: hash_token("tok"),
+            subject: "s1".into(),
+            display: "me@example.com".into(),
+            scopes: vec![Scope::Full],
+            created: 1,
+            expires: 100_000_000_000,
+        })
+        .await
+        .unwrap();
+    let resp = app
+        .oneshot(Request::get("/admin/me").header("cookie", "qk_session=tok").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["authenticated"], true);
+    assert_eq!(v["display"], "me@example.com");
+}
+
+#[tokio::test]
+async fn login_route_404_when_oidc_disabled() {
+    let app = app_admin("secret").await;
+    let resp = app.oneshot(Request::get("/admin/login").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }

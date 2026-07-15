@@ -41,6 +41,8 @@ pub struct AppState {
     pub public_host: Option<String>,
     pub real_ip_header: String,
     pub webhooks: Arc<WebhookDispatcher>,
+    /// OIDC login runtime, present only when `QUARK_OIDC_ISSUER` is configured.
+    pub oidc: Option<Arc<crate::oidc::OidcRuntime>>,
 }
 
 #[derive(Deserialize)]
@@ -1282,41 +1284,203 @@ async fn admin_guard(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
+    // 1) Break-glass env admin token (always Full).
     if let Some(expected) = st.admin_token.as_deref() {
         if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
             return Ok(());
         }
     }
 
-    let not_found_status = if st.admin_token.is_some() {
+    // Admin surface is "disabled" (404) only when neither a token nor OIDC is
+    // configured; otherwise a missing/wrong credential is 401.
+    let not_found_status = if st.admin_token.is_some() || st.oidc.is_some() {
         StatusCode::UNAUTHORIZED
     } else {
         StatusCode::NOT_FOUND
     };
 
-    if provided.is_empty() {
-        return Err(not_found_status);
-    }
-
-    let hash = hash_token(provided);
-    let token = match st.store.get_api_token_by_hash(&hash).await {
-        Ok(Some(t)) => t,
-        Ok(None) => return Err(not_found_status),
-        Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
-    };
-
-    if !token.scopes.iter().any(|s| s.covers(required)) {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    if let Some(limit) = token.rate_limit_per_min {
-        let key = format!("tok:{}", token.id);
-        if !st.ratelimiter.check_with_limit(&key, now(), limit).await {
-            return Err(StatusCode::TOO_MANY_REQUESTS);
+    // 2) Scoped API token in x-admin-token.
+    if !provided.is_empty() {
+        let hash = hash_token(provided);
+        match st.store.get_api_token_by_hash(&hash).await {
+            Ok(Some(token)) => {
+                if !token.scopes.iter().any(|s| s.covers(required)) {
+                    return Err(StatusCode::FORBIDDEN);
+                }
+                if let Some(limit) = token.rate_limit_per_min {
+                    let key = format!("tok:{}", token.id);
+                    if !st.ratelimiter.check_with_limit(&key, now(), limit).await {
+                        return Err(StatusCode::TOO_MANY_REQUESTS);
+                    }
+                }
+                return Ok(());
+            }
+            Ok(None) => {}
+            Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
         }
     }
 
-    Ok(())
+    // 3) OIDC login session cookie.
+    if let Some(raw) = cookie_value(headers, SESSION_COOKIE) {
+        let hash = hash_token(raw);
+        match st.store.get_session_by_hash(&hash, now()).await {
+            Ok(Some(session)) => {
+                if session.scopes.iter().any(|s| s.covers(required)) {
+                    return Ok(());
+                }
+                return Err(StatusCode::FORBIDDEN);
+            }
+            Ok(None) => {}
+            Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
+        }
+    }
+
+    Err(not_found_status)
+}
+
+/// Name of the session cookie set after a successful OIDC login.
+const SESSION_COOKIE: &str = "qk_session";
+/// Name of the short-lived cookie carrying the login-attempt state (PKCE
+/// verifier + state + nonce) from `/admin/login` to `/admin/callback`.
+const LOGIN_COOKIE: &str = "qk_login";
+/// How long a login session lasts.
+const SESSION_TTL_SECS: u64 = 12 * 3600;
+
+/// `GET /admin/login`: start the OIDC Authorization Code + PKCE flow, stashing
+/// the state/verifier/nonce in a short-lived signed cookie and redirecting to
+/// the IdP.
+async fn oidc_login(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let Some(oidc) = st.oidc.as_ref() else {
+        return (StatusCode::NOT_FOUND, "oidc not configured").into_response();
+    };
+    let state = crate::oidc::random_token();
+    let nonce = crate::oidc::random_token();
+    let (verifier, challenge) = crate::oidc::pkce_pair();
+    let url = oidc.authorize_url(&state, &nonce, &challenge);
+    let value = crate::oidc::sign_login_state(&st.signing_key, &state, &verifier, &nonce);
+    let secure = if request_is_https(&headers) { "; Secure" } else { "" };
+    let cookie =
+        format!("{LOGIN_COOKIE}={value}; Max-Age=600; Path=/admin; HttpOnly; SameSite=Lax{secure}");
+    (
+        StatusCode::SEE_OTHER,
+        [
+            (header::LOCATION, url),
+            (header::SET_COOKIE, cookie),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct CallbackParams {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+/// `GET /admin/callback`: verify the login-state cookie and `state`, exchange
+/// the code (with the PKCE verifier), verify the id_token, map claims to scopes
+/// (default-closed), and create a session. A valid IdP user with no granted
+/// scope gets `403` (authenticated but unauthorized).
+async fn oidc_callback(
+    State(st): State<Arc<AppState>>,
+    Query(params): Query<CallbackParams>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(oidc) = st.oidc.as_ref() else {
+        return (StatusCode::NOT_FOUND, "oidc not configured").into_response();
+    };
+    if params.error.is_some() {
+        return (StatusCode::UNAUTHORIZED, "login was denied at the provider").into_response();
+    }
+    let login = cookie_value(&headers, LOGIN_COOKIE)
+        .and_then(|c| crate::oidc::verify_login_state(&st.signing_key, c));
+    let Some((state, verifier, nonce)) = login else {
+        return (StatusCode::BAD_REQUEST, "missing or invalid login state").into_response();
+    };
+    // CSRF: the state echoed by the IdP must match the one we signed.
+    if params.state.as_deref() != Some(state.as_str()) {
+        return (StatusCode::BAD_REQUEST, "state mismatch").into_response();
+    }
+    let Some(code) = params.code else {
+        return (StatusCode::BAD_REQUEST, "missing code").into_response();
+    };
+    let id_token = match oidc.exchange_code(&code, &verifier).await {
+        Ok(t) => t,
+        Err(_) => return (StatusCode::BAD_GATEWAY, "token exchange failed").into_response(),
+    };
+    let claims = match oidc.verify(&id_token, &nonce).await {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::UNAUTHORIZED, "invalid id_token").into_response(),
+    };
+    let scopes = crate::oidc::map_scopes(&claims.raw, &oidc.config);
+    if scopes.is_empty() {
+        return (StatusCode::FORBIDDEN, "your account has no quark access").into_response();
+    }
+    let raw = generate_token();
+    let now = now();
+    let session = crate::auth::Session {
+        token_hash: hash_token(&raw),
+        subject: claims.subject,
+        display: claims.display,
+        scopes,
+        created: now,
+        expires: now + SESSION_TTL_SECS,
+    };
+    if st.store.put_session(&session).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    let secure = if request_is_https(&headers) { "; Secure" } else { "" };
+    let cookie = format!(
+        "{SESSION_COOKIE}={raw}; Max-Age={SESSION_TTL_SECS}; Path=/; HttpOnly; SameSite=Lax{secure}"
+    );
+    // Redirect to the panel root. The short-lived login cookie is left to expire.
+    (
+        StatusCode::SEE_OTHER,
+        [
+            (header::LOCATION, "/".to_string()),
+            (header::SET_COOKIE, cookie),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+    )
+        .into_response()
+}
+
+/// `POST /admin/logout`: revoke the current session and clear the cookie.
+async fn oidc_logout(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Some(raw) = cookie_value(&headers, SESSION_COOKIE) {
+        let _ = st.store.delete_session(&hash_token(raw)).await;
+    }
+    let clear = format!("{SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
+    (
+        StatusCode::NO_CONTENT,
+        [
+            (header::SET_COOKIE, clear),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+    )
+        .into_response()
+}
+
+/// `GET /admin/me`: the current principal (from the session cookie) plus whether
+/// OIDC is configured, so the panel can render the login button and signed-in
+/// state. Never guarded: it reports `authenticated: false` instead of erroring.
+async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let oidc_enabled = st.oidc.is_some();
+    if let Some(raw) = cookie_value(&headers, SESSION_COOKIE) {
+        if let Ok(Some(session)) = st.store.get_session_by_hash(&hash_token(raw), now()).await {
+            return Json(serde_json::json!({
+                "authenticated": true,
+                "display": session.display,
+                "scopes": session.scopes,
+                "oidc_enabled": oidc_enabled,
+            }))
+            .into_response();
+        }
+    }
+    Json(serde_json::json!({ "authenticated": false, "oidc_enabled": oidc_enabled }))
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -2442,6 +2606,10 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             axum::routing::patch(admin_webhooks_patch).delete(admin_webhooks_delete),
         )
         .route("/admin/webhooks/:id/test", post(admin_webhooks_test))
+        .route("/admin/login", get(oidc_login))
+        .route("/admin/callback", get(oidc_callback))
+        .route("/admin/logout", post(oidc_logout))
+        .route("/admin/me", get(admin_me))
         .route("/admin/tags", get(admin_tags_list))
         .route("/admin/folders", get(admin_folders_list))
         .route(

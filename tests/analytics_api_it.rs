@@ -18,6 +18,7 @@ async fn app_with(
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, rx) = tokio::sync::mpsc::channel(chan_cap);
     let state = Arc::new(AppState {
+        oidc: None,
         cache,
         store,
         key: 0x1234,
