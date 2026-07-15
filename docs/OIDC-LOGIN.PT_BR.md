@@ -31,8 +31,11 @@ A autorização é **default-closed**: um usuário válido do provedor só tem a
 se um grupo/claim configurado casar. O grupo admin concede acesso total; um grupo
 somente-leitura opcional concede leitura de links + analytics; o resto é negado.
 
-A sessão é um cookie opaco, server-side, revogável (`HttpOnly`, `SameSite=Lax`,
-`Secure` em HTTPS), válido por 12 horas. O logout revoga.
+A sessão é um cookie opaco, server-side, revogável (`HttpOnly`, `Secure` em
+HTTPS), válido por 12 horas. O logout revoga. É `SameSite=Lax` na mesma origem e
+`SameSite=None` em HTTPS pra um painel split-origin poder enviá-lo; as requisições
+de escrita do painel ainda carregam um header customizado `x-quark-csrf` que o
+servidor exige, o que bloqueia a forja cross-site dessas requisições.
 
 ## Configuração
 
@@ -55,10 +58,18 @@ O cookie de sessão é assinado com `QUARK_SIGNING_KEY` (o mesmo segredo dos coo
 de senha de link); set e compartilhe entre réplicas pra um deploy multi-instância
 estável.
 
-O painel e a API devem ser mesma-origem (ou atrás de um proxy que roteie
-`/admin/*` pro quark) pra o cookie de sessão ser enviado. Quando ficam em origens
-diferentes, set `QUARK_CORS_ORIGINS` com a origem do painel (o quark então
-permite CORS com credenciais).
+Faça o deploy do painel e da API na **mesma origem** (um proxy que serve o painel
+e roteia `/admin/*` pro quark). É o setup recomendado: o cookie de sessão é
+first-party, sempre enviado, e o `QUARK_OIDC_POST_LOGIN_URL` pode ficar `/`.
+
+Um painel split-origin de verdade (painel e API em hosts diferentes) é frágil: o
+cookie de sessão vira um cookie third-party, que os navegadores atuais bloqueiam
+por padrão (Safari ITP, Firefox, phase-out do Chrome), então o login entra em loop
+silencioso mesmo com a sessão válida no servidor. Se precisar mesmo do split-origin,
+set `QUARK_CORS_ORIGINS` com a origem do painel (o quark então permite CORS com
+credenciais) e `QUARK_OIDC_POST_LOGIN_URL` com a URL do painel, e conte que usuários
+que bloqueiam cookies third-party não vão conseguir manter o login. Prefira o proxy
+de mesma origem.
 
 ## Setup por provedor
 

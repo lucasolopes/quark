@@ -606,6 +606,11 @@ async fn admin_import(
     if let Err(status) = admin_guard(&st, &headers, Scope::LinksWrite).await {
         return status.into_response();
     }
+    // Content-type-sniffed body: a cross-site text/plain POST would parse, so
+    // guard it like the other cookie-authable simple-POST endpoints.
+    if let Err(status) = csrf_guard(&headers) {
+        return status.into_response();
+    }
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok());
@@ -1285,6 +1290,9 @@ async fn admin_guard(
     // rate-limited API token in localStorage never blocks a sufficient session.
     let mut saw_insufficient = false;
     let mut saw_rate_limited = false;
+    // A store error on one credential's lookup must not deny a user who also
+    // presents a covering one: record it and 503 only if nothing else authorizes.
+    let mut saw_store_error = false;
 
     // 2) Scoped API token in x-admin-token.
     if !provided.is_empty() {
@@ -1307,25 +1315,32 @@ async fn admin_guard(
                 }
             }
             Ok(None) => {}
-            Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
+            Err(_) => saw_store_error = true,
         }
     }
 
-    // 3) OIDC login session cookie.
-    if let Some(raw) = cookie_value(headers, SESSION_COOKIE) {
-        let hash = hash_token(raw);
-        match st.store.get_session_by_hash(&hash, now()).await {
-            Ok(Some(session)) => {
-                if session.scopes.iter().any(|s| s.covers(required)) {
-                    return Ok(());
+    // 3) OIDC login session cookie. Only honored when OIDC is configured, so
+    // disabling OIDC immediately stops leftover session cookies from
+    // authorizing (the session GC only runs while OIDC is on).
+    if st.oidc_configured {
+        if let Some(raw) = cookie_value(headers, SESSION_COOKIE) {
+            let hash = hash_token(raw);
+            match st.store.get_session_by_hash(&hash, now()).await {
+                Ok(Some(session)) => {
+                    if session.scopes.iter().any(|s| s.covers(required)) {
+                        return Ok(());
+                    }
+                    saw_insufficient = true;
                 }
-                saw_insufficient = true;
+                Ok(None) => {}
+                Err(_) => saw_store_error = true,
             }
-            Ok(None) => {}
-            Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
         }
     }
 
+    if saw_store_error {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
     if saw_rate_limited {
         return Err(StatusCode::TOO_MANY_REQUESTS);
     }
@@ -1333,6 +1348,22 @@ async fn admin_guard(
         return Err(StatusCode::FORBIDDEN);
     }
     Err(not_found_status)
+}
+
+/// Cookie-authenticated state-changing requests must carry a custom header the
+/// browser cannot attach to a cross-site "simple" request. A request bearing
+/// `x-admin-token` or `x-quark-csrf` is either token-authenticated (not
+/// cookie-borne, so not CSRF-able) or was preflighted (custom header forces
+/// preflight, gated by the CORS allowlist); either proves it is not a forgeable
+/// simple POST riding the SameSite=None session cookie. Call after `admin_guard`
+/// on simple-POST endpoints (no JSON body / content-type-sniffed body) that
+/// would otherwise be reachable cross-site.
+fn csrf_guard(headers: &HeaderMap) -> Result<(), StatusCode> {
+    if headers.contains_key("x-admin-token") || headers.contains_key("x-quark-csrf") {
+        Ok(())
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
 }
 
 /// Name of the session cookie set after a successful OIDC login.
@@ -2446,6 +2477,11 @@ async fn admin_webhooks_test(
     headers: HeaderMap,
 ) -> Response {
     if let Err(status) = admin_guard(&st, &headers, Scope::Webhooks).await {
+        return status.into_response();
+    }
+    // Bare POST (no body) is a cross-site "simple" request; require the custom
+    // header so the SameSite=None session cookie can't be used to fire tests.
+    if let Err(status) = csrf_guard(&headers) {
         return status.into_response();
     }
     let sub = match st.store.get_webhook(id).await {

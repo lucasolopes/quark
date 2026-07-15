@@ -194,40 +194,73 @@ pub struct Claims {
 /// Verifies an id_token against `key`: RS256 signature, issuer, audience
 /// (client id), expiry (via the JWT `exp`), and the `nonce` bound at login.
 /// Returns the extracted claims on success.
+/// Outcome of a failed id_token verification, distinguishing the one case a
+/// JWKS refetch can fix (a signature that didn't verify, i.e. likely key
+/// rotation) from definitive rejections (expiry, wrong issuer/audience,
+/// azp/nonce/claims) where refetching would only hammer the IdP's jwks_uri.
+pub enum VerifyError {
+    /// Signature did not verify with this key; retry once with a fresh JWKS.
+    BadSignature(String),
+    /// Token is invalid for a non-key reason; do not refetch.
+    Rejected(String),
+}
+
+impl VerifyError {
+    pub fn message(&self) -> &str {
+        match self {
+            VerifyError::BadSignature(m) | VerifyError::Rejected(m) => m,
+        }
+    }
+    fn retryable(&self) -> bool {
+        matches!(self, VerifyError::BadSignature(_))
+    }
+}
+
 pub fn verify_id_token(
     id_token: &str,
     key: &DecodingKey,
     issuer: &str,
     client_id: &str,
     nonce: &str,
-) -> Result<Claims, String> {
+) -> Result<Claims, VerifyError> {
     let mut val = Validation::new(Algorithm::RS256);
     val.set_issuer(&[issuer]);
     val.set_audience(&[client_id]);
     val.validate_exp = true;
-    let data = decode::<serde_json::Value>(id_token, key, &val).map_err(|e| e.to_string())?;
+    let data = decode::<serde_json::Value>(id_token, key, &val).map_err(|e| {
+        // Only a signature mismatch is worth a JWKS refetch; expiry/issuer/
+        // audience are definitive for this token regardless of the key set.
+        match e.kind() {
+            jsonwebtoken::errors::ErrorKind::InvalidSignature => {
+                VerifyError::BadSignature(e.to_string())
+            }
+            _ => VerifyError::Rejected(e.to_string()),
+        }
+    })?;
     let claims = data.claims;
     // OIDC azp (authorized party): whenever it is present it MUST be our client
     // id, and a multi-audience token MUST carry it. This rejects a token minted
     // for a different client that merely lists us in `aud`.
     match claims.get("azp").and_then(|v| v.as_str()) {
         Some(azp) if azp != client_id => {
-            return Err("azp does not match client id".to_string());
+            return Err(VerifyError::Rejected("azp does not match client id".to_string()));
         }
         None => {
             if matches!(claims.get("aud"), Some(serde_json::Value::Array(a)) if a.len() > 1) {
-                return Err("multi-audience token without azp".to_string());
+                return Err(VerifyError::Rejected(
+                    "multi-audience token without azp".to_string(),
+                ));
             }
         }
         _ => {}
     }
     if claims.get("nonce").and_then(|v| v.as_str()) != Some(nonce) {
-        return Err("nonce mismatch".to_string());
+        return Err(VerifyError::Rejected("nonce mismatch".to_string()));
     }
     let subject = claims
         .get("sub")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "id_token missing sub".to_string())?
+        .ok_or_else(|| VerifyError::Rejected("id_token missing sub".to_string()))?
         .to_string();
     let display = claims
         .get("email")
@@ -300,23 +333,28 @@ impl OidcRuntime {
         exchange_code(&self.client, &self.config, &self.discovery, code, verifier).await
     }
 
-    /// Verifies an id_token, refreshing the JWKS once if the token's key id is
-    /// not in the cached set (handles IdP key rotation without a restart).
+    /// Verifies an id_token, refreshing the JWKS once only when it might help:
+    /// the token's key id is absent from the cached set, or the signature did
+    /// not verify (both signal IdP key rotation). Definitive rejections
+    /// (expiry, issuer/audience, azp/nonce/claims) return immediately without a
+    /// refetch, so a burst of bad logins can't hammer the provider's jwks_uri.
     pub async fn verify(&self, id_token: &str, nonce: &str) -> Result<Claims, String> {
         let kid = token_kid(id_token);
-        // Try the cached JWKS first. Any failure here (key not found OR signature
-        // verification) may be a key rotation, so retry once with a fresh JWKS.
         {
             let jwks = self.jwks.read().await;
             if let Ok(key) = select_key(&jwks, kid.as_deref()) {
-                if let Ok(claims) = verify_id_token(
+                match verify_id_token(
                     id_token,
                     &key,
                     &self.config.issuer,
                     &self.config.client_id,
                     nonce,
                 ) {
-                    return Ok(claims);
+                    Ok(claims) => return Ok(claims),
+                    // Definitive: a fresh key set cannot change the outcome.
+                    Err(e) if !e.retryable() => return Err(e.message().to_string()),
+                    // Signature mismatch: fall through to refetch and retry.
+                    Err(_) => {}
                 }
             }
         }
@@ -328,7 +366,8 @@ impl OidcRuntime {
             &self.config.issuer,
             &self.config.client_id,
             nonce,
-        )?;
+        )
+        .map_err(|e| e.message().to_string())?;
         *self.jwks.write().await = fresh;
         Ok(claims)
     }

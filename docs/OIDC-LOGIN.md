@@ -31,8 +31,11 @@ Authorization is **default-closed**: a valid provider user gets access only if a
 configured group/claim matches. The admin group grants full access; an optional
 read-only group grants links-read plus analytics; anyone else is denied.
 
-The session is an opaque, server-side, revocable cookie (`HttpOnly`,
-`SameSite=Lax`, `Secure` over HTTPS), valid for 12 hours. Logout revokes it.
+The session is an opaque, server-side, revocable cookie (`HttpOnly`, `Secure`
+over HTTPS), valid for 12 hours. Logout revokes it. It is `SameSite=Lax`
+same-origin and `SameSite=None` over HTTPS so a split-origin panel can send it;
+state-changing panel requests also carry a custom `x-quark-csrf` header the
+server requires, which blocks cross-site forgery of those requests.
 
 ## Configuration
 
@@ -55,13 +58,17 @@ The session cookie is signed with `QUARK_SIGNING_KEY` (the same secret used for
 link-password cookies); set it and share it across replicas for a stable
 multi-instance deployment.
 
-The panel and the API should be same-origin (or behind one proxy that routes
-`/admin/*` to quark) so the session cookie is sent. When they are on different
-origins, set `QUARK_CORS_ORIGINS` to the panel origin (quark then allows
-credentialed CORS) and set `QUARK_OIDC_POST_LOGIN_URL` to the panel URL. With the
-default `/`, the panel must be served at the API host root (a proxy or same-origin
-deployment); a bare single-binary quark serves no page at `/`, so set
-`QUARK_OIDC_POST_LOGIN_URL` there.
+Deploy the panel and the API **same-origin** (one proxy that serves the panel and
+routes `/admin/*` to quark). This is the recommended setup: the session cookie is
+first-party, always sent, and `QUARK_OIDC_POST_LOGIN_URL` can stay `/`.
+
+A true split-origin panel (panel and API on different hostnames) is fragile: the
+session cookie is then a third-party cookie, which current browsers block by
+default (Safari ITP, Firefox, Chrome's phase-out), so login silently loops even
+though the server session is valid. If you must run split-origin, set
+`QUARK_CORS_ORIGINS` to the panel origin (quark then allows credentialed CORS) and
+`QUARK_OIDC_POST_LOGIN_URL` to the panel URL, and expect users who block
+third-party cookies to be unable to stay logged in. Prefer the same-origin proxy.
 
 ## Provider setup
 

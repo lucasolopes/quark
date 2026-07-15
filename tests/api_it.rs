@@ -2515,7 +2515,7 @@ async fn session_cookie_authorizes_admin_by_scope() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
-        oidc_configured: false,
+        oidc_configured: true,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -2669,7 +2669,7 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
-        oidc_configured: false,
+        oidc_configured: true,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -2762,7 +2762,7 @@ async fn logout_requires_csrf_header_and_revokes_session() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
-        oidc_configured: false,
+        oidc_configured: true,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -2816,4 +2816,68 @@ async fn logout_requires_csrf_header_and_revokes_session() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     assert!(store.get_session_by_hash(&hash_token("sess"), 2).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn session_cookie_is_ignored_when_oidc_not_configured() {
+    use quark::auth::{hash_token, Scope, Session};
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        // OIDC turned off (e.g. QUARK_OIDC_ISSUER unset) while a token stays set.
+        oidc_configured: false,
+        cache,
+        store: store.clone(),
+        key: 0x1234,
+        signing_key: [0u8; 32],
+        analytics_tx: tx,
+        sink,
+        admin_token: Some("secret".to_string()),
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+    });
+    let app = router(state);
+    // A previously issued, still-unexpired full-scope session.
+    store
+        .put_session(&Session {
+            token_hash: hash_token("leftover"),
+            subject: "s".into(),
+            display: "s@example.com".into(),
+            scopes: vec![Scope::Full],
+            created: 1,
+            expires: 100_000_000_000,
+        })
+        .await
+        .unwrap();
+
+    // The leftover session must NOT authorize now that OIDC is off -> 401.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/links")
+                .header("cookie", "qk_session=leftover")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // The break-glass token still works.
+    let resp = app
+        .oneshot(
+            Request::get("/admin/links")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }
