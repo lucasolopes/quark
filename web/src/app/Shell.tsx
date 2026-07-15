@@ -1,4 +1,4 @@
-import { KeyRound, Link2, LogOut, Moon, Radio, Smartphone, Sun, Upload, Webhook } from "lucide-react";
+import { Blocks, KeyRound, Link2, LogOut, Moon, Radio, Smartphone, Sun, Upload, Webhook } from "lucide-react";
 import { useTheme } from "next-themes";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { QuarkMark } from "@/components/brand/QuarkMark";
@@ -29,7 +29,10 @@ export function Shell() {
     },
     {
       label: t("shell.navGroupAuto"),
-      items: [{ to: "/webhooks", label: t("shell.navWebhooks"), icon: Webhook }],
+      items: [
+        { to: "/webhooks", label: t("shell.navWebhooks"), icon: Webhook },
+        { to: "/extensions", label: t("shell.navExtensions"), icon: Blocks },
+      ],
     },
     {
       label: t("shell.navGroupDev"),

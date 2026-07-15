@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppLinks } from "@/routes/AppLinks";
+import { Extensions } from "@/routes/Extensions";
 import { Import } from "@/routes/Import";
 import { LinkStats } from "@/routes/LinkStats";
 import { Links } from "@/routes/Links";
@@ -24,6 +25,7 @@ export const router = createBrowserRouter([
       { path: "links", element: <Links /> },
       { path: "links/:code", element: <LinkStats /> },
       { path: "webhooks", element: <Webhooks /> },
+      { path: "extensions", element: <Extensions /> },
       { path: "import", element: <Import /> },
       { path: "tokens", element: <Tokens /> },
       { path: "pixels", element: <Pixels /> },
