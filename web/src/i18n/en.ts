@@ -32,6 +32,7 @@ export const en = {
     navGroupData: "Analytics",
     navGroupAuto: "Automation",
     navGroupDev: "Developer",
+    connected: "connected",
     themeToLight: "Switch to light theme",
     themeToDark: "Switch to dark theme",
     logout: "Log out",

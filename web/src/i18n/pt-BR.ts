@@ -34,6 +34,7 @@ export const ptBR: Messages = {
     navGroupData: "Analytics",
     navGroupAuto: "Automação",
     navGroupDev: "Desenvolvedor",
+    connected: "conectado",
     themeToLight: "Usar tema claro",
     themeToDark: "Usar tema escuro",
     logout: "Sair",

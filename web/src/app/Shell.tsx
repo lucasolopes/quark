@@ -45,6 +45,12 @@ export function Shell() {
     navigate("/login", { replace: true });
   }
 
+  const apiHost = (
+    (import.meta.env.VITE_API_BASE_URL as string | undefined) || window.location.origin
+  )
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
+
   return (
     <div className="flex min-h-svh">
       <aside className="flex w-16 shrink-0 flex-col border-r border-sidebar-border bg-sidebar sm:w-56">
@@ -79,6 +85,15 @@ export function Shell() {
             </div>
           ))}
         </nav>
+        <div
+          className="mt-auto hidden items-center gap-2 px-3 py-3 font-mono text-[11px] text-sidebar-foreground/45 sm:flex"
+          title={apiHost}
+        >
+          <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden="true" />
+          <span className="truncate">
+            {t("shell.connected")} · {apiHost}
+          </span>
+        </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-end gap-2 border-b border-border px-4">
