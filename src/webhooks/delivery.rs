@@ -896,6 +896,16 @@ mod tests {
         async fn visits(&self, _id: u64) -> Result<u64, StoreError> {
             unimplemented!()
         }
+        async fn put_link_health(
+            &self,
+            _id: u64,
+            _health: &crate::store::LinkHealth,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn list_link_health(&self) -> Result<Vec<(u64, crate::store::LinkHealth)>, StoreError> {
+            unimplemented!()
+        }
         async fn next_pixel_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }

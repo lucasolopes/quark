@@ -265,6 +265,18 @@ impl From<serde_json::Error> for StoreError {
     }
 }
 
+/// Health of a link's destination, recorded by the background checker
+/// (broken-link monitoring). Kept off `Record` so a probe every sweep does not
+/// rewrite the whole link record.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinkHealth {
+    /// Unix seconds of the last probe.
+    pub checked_at: u64,
+    /// HTTP status observed, or `None` on a connection error / timeout.
+    pub status: Option<u16>,
+    pub healthy: bool,
+}
+
 /// Persistence interface. The hot path is always served from the L1 cache;
 /// the async methods accommodate network backends (Postgres/Valkey) without a
 /// blocking workaround.
@@ -360,6 +372,12 @@ pub trait Store: Send + Sync + 'static {
     async fn bump_visits(&self, id: u64) -> Result<u64, StoreError>;
     /// Reads the current visit count for `id` (0 if never bumped), for display.
     async fn visits(&self, id: u64) -> Result<u64, StoreError>;
+    /// Records the latest health probe result for a link (broken-link
+    /// monitoring). Upserts by id; a link is probed at most once per sweep.
+    async fn put_link_health(&self, id: u64, health: &LinkHealth) -> Result<(), StoreError>;
+    /// All recorded link-health entries. Used by the checker to detect
+    /// healthy<->broken transitions and by the panel to show each link's status.
+    async fn list_link_health(&self) -> Result<Vec<(u64, LinkHealth)>, StoreError>;
     async fn next_pixel_id(&self) -> Result<u64, StoreError>;
     async fn get_pixel(&self, id: u64) -> Result<Option<PixelConfig>, StoreError>;
     async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError>;

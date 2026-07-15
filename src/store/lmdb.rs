@@ -1,7 +1,7 @@
 use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::auth::ApiToken;
 use crate::pixel::PixelConfig;
-use crate::store::{OutboxDelivery, OutboxRow, Record, Store, StoreError};
+use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError};
 use crate::webhooks::WebhookSubscription;
 use heed::byteorder::BigEndian;
 use heed::types::{Bytes, Str, U64};
@@ -19,7 +19,7 @@ const LOCAL_BITS: u32 = 40 - NODE_BITS;
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1;
 
 /// Number of named LMDB sub-databases opened in the environment.
-const MAX_DBS: u32 = 10;
+const MAX_DBS: u32 = 11;
 /// Virtual address space (mmap) reserved for the LMDB environment.
 const MAP_SIZE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 
@@ -62,6 +62,7 @@ pub struct LmdbStore {
     visits: Database<BeU64, BeU64>,
     pixels: Database<BeU64, Bytes>,
     wellknown: Database<Str, Str>,
+    health: Database<BeU64, Bytes>,
     node_id: Option<u8>,
 }
 
@@ -92,6 +93,7 @@ impl LmdbStore {
         let visits = env.create_database(&mut wtxn, Some("visits"))?;
         let pixels = env.create_database(&mut wtxn, Some("pixels"))?;
         let wellknown = env.create_database(&mut wtxn, Some("wellknown"))?;
+        let health = env.create_database(&mut wtxn, Some("health"))?;
         wtxn.commit()?;
         Ok(LmdbStore {
             env,
@@ -105,6 +107,7 @@ impl LmdbStore {
             visits,
             pixels,
             wellknown,
+            health,
             node_id,
         })
     }
@@ -310,6 +313,24 @@ impl Store for LmdbStore {
         self.visits.put(&mut wtxn, &id, &next)?;
         wtxn.commit()?;
         Ok(next)
+    }
+
+    async fn put_link_health(&self, id: u64, health: &LinkHealth) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec(health)?;
+        let mut wtxn = self.env.write_txn()?;
+        self.health.put(&mut wtxn, &id, &bytes)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn list_link_health(&self) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        for item in self.health.iter(&rtxn)? {
+            let (id, bytes) = item?;
+            out.push((id, serde_json::from_slice(bytes)?));
+        }
+        Ok(out)
     }
 
     async fn list_tags(&self) -> Result<Vec<(String, u64)>, StoreError> {
@@ -964,6 +985,41 @@ mod tests {
         let got = s.get_link(1).await.unwrap().unwrap();
         assert_eq!(got.app_ios.as_deref(), Some("https://apps.apple.com/x"));
         assert_eq!(got.app_android, None);
+    }
+
+    #[tokio::test]
+    async fn link_health_round_trip_and_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        assert!(s.list_link_health().await.unwrap().is_empty());
+
+        s.put_link_health(
+            1,
+            &crate::store::LinkHealth { checked_at: 100, status: Some(200), healthy: true },
+        )
+        .await
+        .unwrap();
+        s.put_link_health(
+            2,
+            &crate::store::LinkHealth { checked_at: 100, status: Some(404), healthy: false },
+        )
+        .await
+        .unwrap();
+        let all = s.list_link_health().await.unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Overwrite id 1 (recovered -> broken).
+        s.put_link_health(
+            1,
+            &crate::store::LinkHealth { checked_at: 200, status: None, healthy: false },
+        )
+        .await
+        .unwrap();
+        let map: std::collections::HashMap<u64, crate::store::LinkHealth> =
+            s.list_link_health().await.unwrap().into_iter().collect();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map[&1], crate::store::LinkHealth { checked_at: 200, status: None, healthy: false });
+        assert!(!map[&2].healthy);
     }
 
     #[test]

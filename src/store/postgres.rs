@@ -1,7 +1,7 @@
 use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::auth::ApiToken;
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
-use crate::store::{OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant};
+use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant};
 use crate::webhooks::{SubscriptionKind, WebhookSubscription};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{PgPool, Row};
@@ -262,6 +262,7 @@ impl PostgresStore {
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS fallback_url TEXT",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS password_hash TEXT",
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS link_health (id BIGINT PRIMARY KEY, checked_at BIGINT NOT NULL, status INT, healthy BOOLEAN NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS webhooks (id BIGINT PRIMARY KEY, url TEXT NOT NULL, events JSONB NOT NULL, secret TEXT NOT NULL, active BOOLEAN NOT NULL, created BIGINT NOT NULL, kind TEXT NOT NULL DEFAULT 'generic')",
@@ -319,7 +320,7 @@ impl PostgresStore {
     /// Used in tests: resets all state.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries RESTART IDENTITY",
+            "TRUNCATE links, aliases, link_health, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
@@ -770,6 +771,44 @@ impl Store for PostgresStore {
             }
             None => Ok(0),
         }
+    }
+
+    async fn put_link_health(&self, id: u64, health: &LinkHealth) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO link_health (id, checked_at, status, healthy) VALUES ($1,$2,$3,$4) \
+             ON CONFLICT (id) DO UPDATE SET checked_at=$2, status=$3, healthy=$4",
+        )
+        .bind(id as i64)
+        .bind(health.checked_at as i64)
+        .bind(health.status.map(|s| s as i32))
+        .bind(health.healthy)
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn list_link_health(&self) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
+        let rows = sqlx::query("SELECT id, checked_at, status, healthy FROM link_health")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+            let checked_at: i64 = r.try_get("checked_at").map_err(StoreError::backend)?;
+            let status: Option<i32> = r.try_get("status").map_err(StoreError::backend)?;
+            let healthy: bool = r.try_get("healthy").map_err(StoreError::backend)?;
+            out.push((
+                id as u64,
+                LinkHealth {
+                    checked_at: checked_at as u64,
+                    status: status.map(|s| s as u16),
+                    healthy,
+                },
+            ));
+        }
+        Ok(out)
     }
 
     async fn next_pixel_id(&self) -> Result<u64, StoreError> {

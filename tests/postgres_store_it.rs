@@ -601,3 +601,40 @@ async fn put_link_tx_on_conflict_upserts_link_and_keeps_one_delivery() {
         "duplicate delivery_key inserts one row"
     );
 }
+
+#[tokio::test]
+#[serial]
+async fn link_health_round_trip_pg() {
+    let Some(s) = fresh().await else { return };
+    assert!(s.list_link_health().await.unwrap().is_empty());
+
+    s.put_link_health(
+        1,
+        &quark::store::LinkHealth { checked_at: 100, status: Some(200), healthy: true },
+    )
+    .await
+    .unwrap();
+    s.put_link_health(
+        2,
+        &quark::store::LinkHealth { checked_at: 100, status: None, healthy: false },
+    )
+    .await
+    .unwrap();
+    // Overwrite id 1: healthy -> broken.
+    s.put_link_health(
+        1,
+        &quark::store::LinkHealth { checked_at: 200, status: Some(500), healthy: false },
+    )
+    .await
+    .unwrap();
+
+    let map: std::collections::HashMap<u64, quark::store::LinkHealth> =
+        s.list_link_health().await.unwrap().into_iter().collect();
+    assert_eq!(map.len(), 2);
+    assert_eq!(
+        map[&1],
+        quark::store::LinkHealth { checked_at: 200, status: Some(500), healthy: false }
+    );
+    assert_eq!(map[&2].status, None);
+    assert!(!map[&2].healthy);
+}
