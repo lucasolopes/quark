@@ -56,6 +56,7 @@ Corpo da requisição (`application/json`):
 | `app_ios` | string, opcional | Destino deep-link iOS. Veja [DEEP-LINKING](DEEP-LINKING.PT_BR.md). |
 | `app_android` | string, opcional | Destino deep-link Android. |
 | `folder` | string, opcional | Uma pasta a que o link pertence. Trim, teto de 48 chars, case preservado; vazio vira nenhuma. |
+| `fallback_url` | string, opcional | Para onde mandar o visitante quando o link já expirou (por TTL ou `max_visits`) em vez de `410`. `http`/`https`, não-interna; vazio vira nenhuma. |
 
 Sucesso: `200` com `{"code": "...", "url": "..."}`.
 
@@ -86,7 +87,8 @@ Respostas:
 | Status | Quando | Headers |
 |---|---|---|
 | `302 Found` | Link resolvido e vivo. | `Location`, `Cache-Control` ciente do TTL. |
-| `410 Gone` | Passou do TTL, ou acima de `max_visits`. | `Cache-Control: no-store`. |
+| `302 Found` | Expirado (TTL ou `max_visits`) e há um `fallback_url`. | `Location: <fallback_url>`, `Cache-Control: no-store`. |
+| `410 Gone` | Expirado (TTL ou `max_visits`) sem `fallback_url`. | `Cache-Control: no-store`. |
 | `404 Not Found` | Sem tal código ou alias. | `Cache-Control: no-store`. |
 | `503 Service Unavailable` | Erro de backend. | |
 
@@ -157,11 +159,12 @@ pasta não entram na contagem.
 ### `PATCH /admin/links/:code`
 
 Edita um link. Escopo: `links_write`. O corpo é um objeto JSON parcial; só as
-chaves presentes mudam. Mandar `null` para `ttl`, `max_visits`, `app_ios`,
-`app_android` ou `folder` limpa o campo.
+chaves presentes mudam. Mandar `null` (ou, para `fallback_url`, string vazia)
+para `ttl`, `max_visits`, `app_ios`, `app_android`, `folder` ou `fallback_url`
+limpa o campo.
 
 Chaves aceitas: `url`, `ttl`, `tags`, `max_visits`, `rules`, `variants`,
-`app_ios`, `app_android`, `folder`. Cada uma é validada como na criação (esquema
+`app_ios`, `app_android`, `folder`, `fallback_url`. Cada uma é validada como na criação (esquema
 de URL, guard SSRF, tetos de regra e variante; o nome da pasta é aparado e
 limitado). `200` no sucesso, `404` se o código não resolve, `400`/`403` num
 campo rejeitado.
