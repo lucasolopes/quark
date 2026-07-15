@@ -48,6 +48,12 @@ pub struct Record {
     /// absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
+    /// Optional URL to redirect to when the link has expired (by time or by
+    /// visit count) instead of returning `410 Gone`. `#[serde(default,
+    /// skip_serializing_if)]` so old blobs/rows without this field deserialize
+    /// to `None` and the field is omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_url: Option<String>,
 }
 
 /// Maximum number of tags kept per link (extra tags beyond this are dropped).
@@ -466,6 +472,33 @@ mod tests {
     }
 
     #[test]
+    fn record_without_fallback_url_field_deserializes_to_none() {
+        let old_blob = r#"{"url":"https://example.com","expiry":null,"created":1}"#;
+        let rec: Record = serde_json::from_str(old_blob).unwrap();
+        assert_eq!(rec.fallback_url, None);
+    }
+
+    #[test]
+    fn record_round_trips_fallback_url() {
+        let rec = Record {
+            url: "https://example.com".into(),
+            expiry: Some(10),
+            created: 1,
+            tags: vec![],
+            max_visits: None,
+            rules: vec![],
+            variants: vec![],
+            app_ios: None,
+            app_android: None,
+            folder: None,
+            fallback_url: Some("https://example.com/ended".into()),
+        };
+        let json = serde_json::to_string(&rec).unwrap();
+        let back: Record = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.fallback_url.as_deref(), Some("https://example.com/ended"));
+    }
+
+    #[test]
     fn normalize_tags_trims_lowercases_and_drops_empties() {
         assert_eq!(
             normalize_tags(vec![" Rust ".into(), "".into(), "  ".into(), "WEB".into()]),
@@ -540,6 +573,7 @@ mod rules_tests {
             app_ios: None,
             app_android: None,
             folder: None,
+            fallback_url: None,
         }
     }
 

@@ -48,6 +48,7 @@ interface FormErrors {
   rules?: string;
   appIos?: string;
   appAndroid?: string;
+  fallbackUrl?: string;
   form?: string;
   variants?: string;
 }
@@ -84,6 +85,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
   const [variantRows, setVariantRows] = useState<VariantRow[]>([]);
   const [appIos, setAppIos] = useState("");
   const [appAndroid, setAppAndroid] = useState("");
+  const [fallbackUrl, setFallbackUrl] = useState("");
   const [errors, setErrors] = useState<FormErrors>({});
   const [utmOpen, setUtmOpen] = useState(false);
   const [utm, setUtm] = useState<UtmParams>(EMPTY_UTM);
@@ -104,6 +106,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
     setVariantRows([]);
     setAppIos("");
     setAppAndroid("");
+    setFallbackUrl("");
     setErrors({});
     setUtmOpen(false);
     setUtm(EMPTY_UTM);
@@ -205,6 +208,9 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
     if (appAndroid.trim() && !isHttpUrl(appAndroid)) {
       next.appAndroid = t("dialogs.create.appDestInvalid");
     }
+    if (fallbackUrl.trim() && !isHttpUrl(fallbackUrl)) {
+      next.fallbackUrl = t("dialogs.create.fallbackUrlInvalid");
+    }
     return next;
   }
 
@@ -240,6 +246,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
         ...(appIos.trim() ? { app_ios: appIos.trim() } : {}),
         ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : {}),
         ...(folder.trim() ? { folder: folder.trim() } : {}),
+        ...(fallbackUrl.trim() ? { fallback_url: fallbackUrl.trim() } : {}),
       });
       toast.success(t("dialogs.create.successToast"));
       reset();
@@ -615,6 +622,26 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
               {errors.maxVisits && (
                 <p className="text-sm text-destructive" role="alert">
                   {errors.maxVisits}
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="create-link-fallback-url" className="text-sm font-medium">
+                {t("dialogs.create.fallbackUrlLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
+              </label>
+              <p className="text-sm text-muted-foreground">{t("dialogs.create.fallbackUrlNote")}</p>
+              <Input
+                id="create-link-fallback-url"
+                type="text"
+                placeholder={t("dialogs.create.fallbackUrlPlaceholder")}
+                value={fallbackUrl}
+                onChange={(e) => setFallbackUrl(e.target.value)}
+                aria-invalid={errors.fallbackUrl != null}
+              />
+              {errors.fallbackUrl && (
+                <p className="text-sm text-destructive" role="alert">
+                  {errors.fallbackUrl}
                 </p>
               )}
             </div>

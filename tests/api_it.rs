@@ -406,6 +406,126 @@ async fn expired_link_410() {
 }
 
 #[tokio::test]
+async fn expired_link_with_fallback_redirects_302() {
+    let app = app().await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://a.com","ttl":0,"fallback_url":"https://ended.example.com"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    let resp = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    assert_eq!(resp.headers()["location"], "https://ended.example.com");
+    assert_eq!(resp.headers()["cache-control"], "no-store");
+}
+
+#[tokio::test]
+async fn visit_exhausted_link_with_fallback_redirects_302() {
+    let app = app_admin("secret").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(
+                    r#"{"url":"https://example.com","max_visits":1,"fallback_url":"https://ended.example.com"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    // First visit consumes the single allowed visit and redirects normally.
+    let r = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FOUND);
+    assert_eq!(r.headers()["location"], "https://example.com");
+
+    // Second visit is over the limit: 302 to the fallback, not 410.
+    let r = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FOUND);
+    assert_eq!(r.headers()["location"], "https://ended.example.com");
+    assert_eq!(r.headers()["cache-control"], "no-store");
+}
+
+#[tokio::test]
+async fn create_with_internal_fallback_url_rejected() {
+    let app = app().await;
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://a.com","fallback_url":"http://127.0.0.1/x"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Internal/self target is a policy denial: 403, same as the main URL guard.
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn create_with_malformed_fallback_url_rejected() {
+    let app = app().await;
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://a.com","fallback_url":"javascript:alert(1)"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn alias_redirects() {
     let app = app().await;
     let resp = app

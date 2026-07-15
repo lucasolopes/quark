@@ -19,6 +19,7 @@ async fn put_get_link() {
         app_ios: None,
         app_android: None,
         folder: None,
+        fallback_url: None,
     };
     store.put_link(7, &rec).await.unwrap();
     let got = store.get_link(7).await.unwrap().unwrap();
@@ -53,6 +54,7 @@ async fn put_alias_and_link_is_atomic() {
         app_ios: None,
         app_android: None,
         folder: None,
+        fallback_url: None,
     };
     let rec2 = Record {
         url: "https://other.com".into(),
@@ -65,6 +67,7 @@ async fn put_alias_and_link_is_atomic() {
         app_ios: None,
         app_android: None,
         folder: None,
+        fallback_url: None,
     };
 
     assert!(store.put_alias_and_link("promo", 5, &rec).await.unwrap());

@@ -56,6 +56,7 @@ Request body (`application/json`):
 | `app_ios` | string, optional | iOS deep-link destination. See [DEEP-LINKING](DEEP-LINKING.md). |
 | `app_android` | string, optional | Android deep-link destination. |
 | `folder` | string, optional | One folder this link belongs to. Trimmed, capped at 48 chars, case preserved; empty means none. |
+| `fallback_url` | string, optional | Where to send visitors once the link has expired (by TTL or `max_visits`) instead of `410`. `http`/`https`, non-internal; empty means none. |
 
 Success: `200` with `{"code": "...", "url": "..."}`.
 
@@ -86,7 +87,8 @@ Responses:
 | Status | When | Headers |
 |---|---|---|
 | `302 Found` | Link resolved and live. | `Location`, TTL-aware `Cache-Control`. |
-| `410 Gone` | Past its TTL, or over `max_visits`. | `Cache-Control: no-store`. |
+| `302 Found` | Expired (TTL or `max_visits`) and a `fallback_url` is set. | `Location: <fallback_url>`, `Cache-Control: no-store`. |
+| `410 Gone` | Expired (TTL or `max_visits`) with no `fallback_url`. | `Cache-Control: no-store`. |
 | `404 Not Found` | No such code or alias. | `Cache-Control: no-store`. |
 | `503 Service Unavailable` | Backend error. | |
 
@@ -154,11 +156,12 @@ folder are not counted.
 ### `PATCH /admin/links/:code`
 
 Edit a link. Scope: `links_write`. The body is a partial JSON object; only the
-keys present are changed. Sending `null` for `ttl`, `max_visits`, `app_ios`,
-`app_android`, or `folder` clears that field.
+keys present are changed. Sending `null` (or, for `fallback_url`, an empty
+string) for `ttl`, `max_visits`, `app_ios`, `app_android`, `folder`, or
+`fallback_url` clears that field.
 
 Accepted keys: `url`, `ttl`, `tags`, `max_visits`, `rules`, `variants`,
-`app_ios`, `app_android`, `folder`. Each is validated the same way as on create
+`app_ios`, `app_android`, `folder`, `fallback_url`. Each is validated the same way as on create
 (URL scheme, SSRF guard, rule and variant caps; the folder name is trimmed and
 capped). `200` on success, `404` if the code does not resolve, `400`/`403` on a
 rejected field.

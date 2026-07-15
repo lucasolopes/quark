@@ -41,6 +41,8 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let app_ios: Option<String> = r.try_get("app_ios").map_err(StoreError::backend)?;
     let app_android: Option<String> = r.try_get("app_android").map_err(StoreError::backend)?;
     let folder: Option<String> = r.try_get("folder").map_err(StoreError::backend)?;
+    let fallback_url: Option<String> =
+        r.try_get("fallback_url").map_err(StoreError::backend)?;
     Ok((
         id as u64,
         Record {
@@ -54,6 +56,7 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
             app_ios,
             app_android,
             folder,
+            fallback_url,
         },
     ))
 }
@@ -165,8 +168,8 @@ async fn upsert_link_in_tx(
     let rules = serde_json::to_value(&rec.rules)?;
     let variants = serde_json::to_value(&rec.variants)?;
     sqlx::query(
-        "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
-         ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10, folder=$11",
+        "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
+         ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10, folder=$11, fallback_url=$12",
     )
     .bind(id as i64)
     .bind(&rec.url)
@@ -179,6 +182,7 @@ async fn upsert_link_in_tx(
     .bind(&rec.app_ios)
     .bind(&rec.app_android)
     .bind(&rec.folder)
+    .bind(&rec.fallback_url)
     .execute(&mut **tx)
     .await
     .map_err(StoreError::backend)?;
@@ -251,6 +255,7 @@ impl PostgresStore {
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS app_ios TEXT",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS app_android TEXT",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS folder TEXT",
+                "ALTER TABLE links ADD COLUMN IF NOT EXISTS fallback_url TEXT",
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
@@ -337,7 +342,7 @@ impl Store for PostgresStore {
 
     async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError> {
         let row = sqlx::query(
-            "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder FROM links WHERE id = $1",
+            "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url FROM links WHERE id = $1",
         )
         .bind(id as i64)
         .fetch_optional(&self.pool)
@@ -354,8 +359,8 @@ impl Store for PostgresStore {
         let rules = serde_json::to_value(&rec.rules)?;
         let variants = serde_json::to_value(&rec.variants)?;
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10, folder=$11",
+            "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10, folder=$11, fallback_url=$12",
         )
         .bind(id as i64)
         .bind(&rec.url)
@@ -368,6 +373,7 @@ impl Store for PostgresStore {
         .bind(&rec.app_ios)
         .bind(&rec.app_android)
         .bind(&rec.folder)
+        .bind(&rec.fallback_url)
         .execute(&self.pool)
         .await
         .map_err(StoreError::backend)?;
@@ -411,8 +417,8 @@ impl Store for PostgresStore {
         let rules = serde_json::to_value(&rec.rules)?;
         let variants = serde_json::to_value(&rec.variants)?;
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10, folder=$11",
+            "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10, folder=$11, fallback_url=$12",
         )
         .bind(id as i64)
         .bind(&rec.url)
@@ -425,6 +431,7 @@ impl Store for PostgresStore {
         .bind(&rec.app_ios)
         .bind(&rec.app_android)
         .bind(&rec.folder)
+        .bind(&rec.fallback_url)
         .execute(&mut *tx)
         .await
         .map_err(StoreError::backend)?;
@@ -491,7 +498,7 @@ impl Store for PostgresStore {
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = sqlx::query(
-            "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder FROM links \
+            "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url FROM links \
              WHERE ($1::bigint IS NULL OR id > $1) \
                AND ($2::jsonb IS NULL OR tags @> $2) \
                AND ($4::text IS NULL OR lower(folder) = lower($4)) \
@@ -518,7 +525,7 @@ impl Store for PostgresStore {
         let pattern = format!("%{}%", like_escape(q));
         let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = sqlx::query(
-            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits, l.rules, l.variants, l.app_ios, l.app_android, l.folder \
+            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits, l.rules, l.variants, l.app_ios, l.app_android, l.folder, l.fallback_url \
              FROM links l LEFT JOIN aliases a ON a.id = l.id \
              WHERE ($1::bigint IS NULL OR l.id > $1) \
                AND (l.url ILIKE $2 OR a.alias ILIKE $2) \
