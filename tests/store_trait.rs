@@ -17,6 +17,7 @@ async fn round_trip_via_trait_object() {
         variants: Vec::new(),
         app_ios: None,
         app_android: None,
+        folder: None,
     };
     store.put_link(id, &rec).await.unwrap();
 

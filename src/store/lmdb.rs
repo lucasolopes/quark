@@ -195,6 +195,7 @@ impl Store for LmdbStore {
         after: Option<u64>,
         limit: usize,
         tag: Option<&str>,
+        folder: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let start = match after {
@@ -211,6 +212,12 @@ impl Store for LmdbStore {
                     continue;
                 }
             }
+            if let Some(f) = folder {
+                match &rec.folder {
+                    Some(rf) if rf.to_lowercase() == f.to_lowercase() => {}
+                    _ => continue,
+                }
+            }
             out.push((id, rec));
             if out.len() >= limit {
                 break;
@@ -225,6 +232,7 @@ impl Store for LmdbStore {
         _after: Option<u64>,
         _limit: usize,
         _tag: Option<&str>,
+        _folder: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         Err(StoreError::Unsupported)
     }
@@ -315,6 +323,19 @@ impl Store for LmdbStore {
             }
         }
         Ok(set.into_iter().collect())
+    }
+
+    async fn list_folders(&self) -> Result<Vec<(String, u64)>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+        for item in self.links.iter(&rtxn)? {
+            let (_, bytes) = item?;
+            let rec: Record = serde_json::from_slice(bytes)?;
+            if let Some(f) = rec.folder {
+                *counts.entry(f).or_insert(0) += 1;
+            }
+        }
+        Ok(counts.into_iter().collect())
     }
 
     async fn list_api_tokens(&self) -> Result<Vec<ApiToken>, StoreError> {
@@ -661,7 +682,7 @@ mod tests {
     async fn search_links_is_unsupported_on_lmdb() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        let r = store.search_links("anything", None, 10, None).await;
+        let r = store.search_links("anything", None, 10, None, None).await;
         assert!(matches!(r, Err(StoreError::Unsupported)));
     }
 
@@ -679,6 +700,7 @@ mod tests {
             variants: Vec::new(),
             app_ios: None,
             app_android: None,
+            folder: None,
         };
         for id in 1..=5u64 {
             s.put_link(id, &rec(&format!("https://e{id}.com")))
@@ -689,12 +711,12 @@ mod tests {
             .await
             .unwrap();
 
-        let p1 = s.list_links(None, 3, None).await.unwrap();
+        let p1 = s.list_links(None, 3, None, None).await.unwrap();
         assert_eq!(
             p1.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![1, 2, 3]
         );
-        let p2 = s.list_links(Some(3), 3, None).await.unwrap();
+        let p2 = s.list_links(Some(3), 3, None, None).await.unwrap();
         assert_eq!(
             p2.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![4, 5, 10]
@@ -747,6 +769,7 @@ mod tests {
             variants: Vec::new(),
             app_ios: None,
             app_android: None,
+            folder: None,
         };
         s.put_link(1, &rec("https://a.com", &["rust", "web"]))
             .await
@@ -759,7 +782,7 @@ mod tests {
         let got = s.get_link(1).await.unwrap().unwrap();
         assert_eq!(got.tags, vec!["rust".to_string(), "web".to_string()]);
 
-        let filtered = s.list_links(None, 50, Some("rust")).await.unwrap();
+        let filtered = s.list_links(None, 50, Some("rust"), None).await.unwrap();
         assert_eq!(
             filtered.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![1]
@@ -768,6 +791,52 @@ mod tests {
         let mut tags = s.list_tags().await.unwrap();
         tags.sort();
         assert_eq!(tags, vec!["rust".to_string(), "web".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn folder_round_trip_filter_and_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let rec = |u: &str, folder: Option<&str>| Record {
+            url: u.into(),
+            expiry: None,
+            created: 0,
+            tags: Vec::new(),
+            max_visits: None,
+            rules: Vec::new(),
+            variants: Vec::new(),
+            app_ios: None,
+            app_android: None,
+            folder: folder.map(str::to_string),
+        };
+        s.put_link(1, &rec("https://a.com", Some("Marketing")))
+            .await
+            .unwrap();
+        s.put_link(2, &rec("https://b.com", Some("Marketing")))
+            .await
+            .unwrap();
+        s.put_link(3, &rec("https://c.com", Some("Docs")))
+            .await
+            .unwrap();
+        s.put_link(4, &rec("https://d.com", None)).await.unwrap();
+
+        let got = s.get_link(1).await.unwrap().unwrap();
+        assert_eq!(got.folder.as_deref(), Some("Marketing"));
+
+        let filtered = s
+            .list_links(None, 50, None, Some("marketing"))
+            .await
+            .unwrap();
+        assert_eq!(
+            filtered.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        let folders = s.list_folders().await.unwrap();
+        assert_eq!(
+            folders,
+            vec![("Docs".to_string(), 1u64), ("Marketing".to_string(), 2u64)]
+        );
     }
 
     fn sample_token(id: u64, hash: String) -> ApiToken {
@@ -879,6 +948,7 @@ mod tests {
             variants: Vec::new(),
             app_ios: Some("https://apps.apple.com/x".into()),
             app_android: None,
+            folder: None,
         };
         s.put_link(1, &rec).await.unwrap();
         let got = s.get_link(1).await.unwrap().unwrap();

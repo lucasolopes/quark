@@ -55,6 +55,7 @@ Corpo da requisição (`application/json`):
 | `variants` | array, opcional | Variantes A/B com peso, até 10. Veja [AB-TESTING](AB-TESTING.PT_BR.md). |
 | `app_ios` | string, opcional | Destino deep-link iOS. Veja [DEEP-LINKING](DEEP-LINKING.PT_BR.md). |
 | `app_android` | string, opcional | Destino deep-link Android. |
+| `folder` | string, opcional | Uma pasta a que o link pertence. Trim, teto de 48 chars, case preservado; vazio vira nenhuma. |
 
 Sucesso: `200` com `{"code": "...", "url": "..."}`.
 
@@ -128,11 +129,13 @@ sem cliques retorna agregados vazios e lista vazia. Veja
 Lista links, paginado por keyset. Escopo: `links_read`.
 
 Parâmetros de query: `after` (cursor de id), `limit` (default 50, teto 500),
-`q` (busca em url e alias, só Postgres), `tag` (filtra por uma tag).
+`q` (busca em url e alias, só Postgres), `tag` (filtra por uma tag),
+`folder` (filtra por nome de pasta, sem diferenciar maiúsculas).
 
 Sucesso: `200` com `{"links": [...], "next_after": <id ou null>}`. Cada linha
 traz `id`, `code`, `alias` opcional, `url`, `expiry`, `created`, `tags`,
-`max_visits` opcional, `visits`, `rules`, `variants`.
+`max_visits` opcional, `visits`, `rules`, `variants`, e um `folder` opcional
+(omitido quando o link não tem pasta).
 
 `501 Not Implemented` volta quando `q` é usado no backend LMDB (busca é só
 Postgres; o painel cai para filtro client-side).
@@ -142,16 +145,24 @@ Postgres; o painel cai para filtro client-side).
 O conjunto distinto de tags entre todos os links, para o filtro do painel.
 Escopo: `links_read`. Retorna `{"tags": [...]}`.
 
+### `GET /admin/folders`
+
+Os nomes de pasta distintos com a contagem de links, para o seletor e o filtro
+de pasta do painel. Escopo: `links_read`. Retorna
+`{"folders": [{"name": "...", "count": N}, ...]}`, ordenado por nome. Links sem
+pasta não entram na contagem.
+
 ### `PATCH /admin/links/:code`
 
 Edita um link. Escopo: `links_write`. O corpo é um objeto JSON parcial; só as
-chaves presentes mudam. Mandar `null` para `ttl`, `max_visits`, `app_ios` ou
-`app_android` limpa o campo.
+chaves presentes mudam. Mandar `null` para `ttl`, `max_visits`, `app_ios`,
+`app_android` ou `folder` limpa o campo.
 
 Chaves aceitas: `url`, `ttl`, `tags`, `max_visits`, `rules`, `variants`,
-`app_ios`, `app_android`. Cada uma é validada como na criação (esquema de URL,
-guard SSRF, tetos de regra e variante). `200` no sucesso, `404` se o
-código não resolve, `400`/`403` num campo rejeitado.
+`app_ios`, `app_android`, `folder`. Cada uma é validada como na criação (esquema
+de URL, guard SSRF, tetos de regra e variante; o nome da pasta é aparado e
+limitado). `200` no sucesso, `404` se o código não resolve, `400`/`403` num
+campo rejeitado.
 
 ### `DELETE /admin/links/:code`
 

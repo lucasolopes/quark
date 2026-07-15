@@ -158,6 +158,186 @@ async fn list_omits_absent_app_destinations() {
 }
 
 #[tokio::test]
+async fn create_with_folder_lists_row_and_folders() {
+    let app = app_admin("secret").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(
+                    r#"{"url":"https://example.com","folder":"Marketing"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/links?limit=10")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["links"][0]["folder"], "Marketing");
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/folders")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["folders"][0]["name"], "Marketing");
+    assert_eq!(v["folders"][0]["count"], 1);
+}
+
+#[tokio::test]
+async fn list_omits_absent_folder() {
+    let app = app_admin("secret").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(r#"{"url":"https://example.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/links?limit=10")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let row = v["links"][0].as_object().unwrap();
+    assert!(!row.contains_key("folder"), "absent folder must be omitted");
+}
+
+#[tokio::test]
+async fn folder_filter_narrows_the_list() {
+    let app = app_admin("secret").await;
+    for url in [
+        r#"{"url":"https://a.com","folder":"Marketing"}"#,
+        r#"{"url":"https://b.com","folder":"Docs"}"#,
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/")
+                    .header("content-type", "application/json")
+                    .header("x-admin-token", "secret")
+                    .body(Body::from(url))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/links?limit=10&folder=marketing")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let links = v["links"].as_array().unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0]["folder"], "Marketing");
+    assert_eq!(links[0]["url"], "https://a.com");
+}
+
+#[tokio::test]
+async fn patch_folder_null_clears_it() {
+    let app = app_admin("secret").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(
+                    r#"{"url":"https://example.com","folder":"Marketing"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(r#"{"folder":null}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/links?limit=10")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let row = v["links"][0].as_object().unwrap();
+    assert!(
+        !row.contains_key("folder"),
+        "cleared folder must be omitted"
+    );
+}
+
+#[tokio::test]
 async fn nonexistent_code_404() {
     let app = app().await;
     let resp = app

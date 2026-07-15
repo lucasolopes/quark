@@ -55,6 +55,7 @@ Request body (`application/json`):
 | `variants` | array, optional | Weighted A/B variants, up to 10. See [AB-TESTING](AB-TESTING.md). |
 | `app_ios` | string, optional | iOS deep-link destination. See [DEEP-LINKING](DEEP-LINKING.md). |
 | `app_android` | string, optional | Android deep-link destination. |
+| `folder` | string, optional | One folder this link belongs to. Trimmed, capped at 48 chars, case preserved; empty means none. |
 
 Success: `200` with `{"code": "...", "url": "..."}`.
 
@@ -125,11 +126,13 @@ returns empty aggregates and an empty list. See [ANALYTICS](ANALYTICS.md).
 List links, keyset-paginated. Scope: `links_read`.
 
 Query parameters: `after` (id cursor), `limit` (default 50, clamped to 500),
-`q` (search over url and alias, Postgres only), `tag` (filter by one tag).
+`q` (search over url and alias, Postgres only), `tag` (filter by one tag),
+`folder` (filter by folder name, case-insensitive).
 
 Success: `200` with `{"links": [...], "next_after": <id or null>}`. Each link
 row carries `id`, `code`, optional `alias`, `url`, `expiry`, `created`, `tags`,
-optional `max_visits`, `visits`, `rules`, `variants`.
+optional `max_visits`, `visits`, `rules`, `variants`, and an optional `folder`
+(omitted when the link has none).
 
 `501 Not Implemented` is returned when `q` is used on the LMDB backend (search
 is Postgres-only; the panel falls back to client-side filtering).
@@ -139,16 +142,24 @@ is Postgres-only; the panel falls back to client-side filtering).
 The distinct set of tags across all links, for the panel's filter. Scope:
 `links_read`. Returns `{"tags": [...]}`.
 
+### `GET /admin/folders`
+
+The distinct folder names with their link counts, for the panel's folder
+selector and filter. Scope: `links_read`. Returns
+`{"folders": [{"name": "...", "count": N}, ...]}`, sorted by name. Links with no
+folder are not counted.
+
 ### `PATCH /admin/links/:code`
 
 Edit a link. Scope: `links_write`. The body is a partial JSON object; only the
-keys present are changed. Sending `null` for `ttl`, `max_visits`, `app_ios`, or
-`app_android` clears that field.
+keys present are changed. Sending `null` for `ttl`, `max_visits`, `app_ios`,
+`app_android`, or `folder` clears that field.
 
 Accepted keys: `url`, `ttl`, `tags`, `max_visits`, `rules`, `variants`,
-`app_ios`, `app_android`. Each is validated the same way as on create (URL
-scheme, SSRF guard, rule and variant caps). `200` on success, `404`
-if the code does not resolve, `400`/`403` on a rejected field.
+`app_ios`, `app_android`, `folder`. Each is validated the same way as on create
+(URL scheme, SSRF guard, rule and variant caps; the folder name is trimmed and
+capped). `200` on success, `404` if the code does not resolve, `400`/`403` on a
+rejected field.
 
 ### `DELETE /admin/links/:code`
 

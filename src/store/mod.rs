@@ -41,12 +41,34 @@ pub struct Record {
     pub app_ios: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_android: Option<String>,
+    /// Optional single folder this link belongs to (roadmap: folders). A link
+    /// lives in at most one folder, an exclusive counterpart to the free-form
+    /// `tags`. `#[serde(default, skip_serializing_if)]` so old blobs/rows
+    /// without this field deserialize to `None` and the field is omitted when
+    /// absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 /// Maximum number of tags kept per link (extra tags beyond this are dropped).
 const MAX_TAGS: usize = 20;
 /// Maximum length (in chars) kept per tag (longer tags are truncated).
 const MAX_TAG_CHARS: usize = 40;
+/// Maximum length (in chars) kept for a folder name (longer names are truncated).
+const MAX_FOLDER_CHARS: usize = 48;
+
+/// Normalizes a raw folder name into the canonical stored form: trimmed and
+/// truncated to `MAX_FOLDER_CHARS` chars, with the display case preserved (so
+/// names like "Marketing" round-trip); an empty or whitespace-only name becomes
+/// `None`. Unlike tags, the case is kept for display; the folder filter compares
+/// case-insensitively.
+pub fn normalize_folder(raw: Option<String>) -> Option<String> {
+    let trimmed = raw?.trim().to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(MAX_FOLDER_CHARS).collect())
+}
 
 /// Normalizes a raw list of tags into the canonical stored form: each tag is
 /// trimmed, lowercased, and truncated to `MAX_TAG_CHARS` chars; empty tags are
@@ -278,27 +300,34 @@ pub trait Store: Send + Sync + 'static {
     /// delegates to `delete_link`.
     async fn delete_link_tx(&self, id: u64, deliveries: &[OutboxRow]) -> Result<(), StoreError>;
     /// `tag`, when present, restricts the results to links whose `tags`
-    /// contain it (exact match, post-normalization).
+    /// contain it (exact match, post-normalization). `folder`, when present,
+    /// restricts the results to links whose `folder` matches it
+    /// case-insensitively.
     async fn list_links(
         &self,
         after: Option<u64>,
         limit: usize,
         tag: Option<&str>,
+        folder: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError>;
     /// Paginated server-side search (keyset by id). Matches `url`/`alias`,
     /// case-insensitive, literal term. Backends without search return
-    /// `Err(StoreError::Unsupported)`. `tag` narrows the results as in
-    /// `list_links`.
+    /// `Err(StoreError::Unsupported)`. `tag` and `folder` narrow the results as
+    /// in `list_links`.
     async fn search_links(
         &self,
         q: &str,
         after: Option<u64>,
         limit: usize,
         tag: Option<&str>,
+        folder: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError>;
     async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError>;
     /// Distinct set of tags across all links, sorted.
     async fn list_tags(&self) -> Result<Vec<String>, StoreError>;
+    /// Distinct folder names across all links with their link counts, sorted by
+    /// name. Links with no folder are ignored.
+    async fn list_folders(&self) -> Result<Vec<(String, u64)>, StoreError>;
     async fn delete_link(&self, id: u64) -> Result<(), StoreError>;
     async fn delete_alias(&self, alias: &str) -> Result<(), StoreError>;
     async fn list_webhooks(&self) -> Result<Vec<WebhookSubscription>, StoreError>;
@@ -403,7 +432,36 @@ pub async fn open_backends(data_path: &Path) -> Result<Backends, StoreError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_tags, Record};
+    use super::{normalize_folder, normalize_tags, Record};
+
+    #[test]
+    fn normalize_folder_trims_and_preserves_case() {
+        assert_eq!(
+            normalize_folder(Some("  Marketing  ".into())),
+            Some("Marketing".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_folder_empty_becomes_none() {
+        assert_eq!(normalize_folder(Some("   ".into())), None);
+        assert_eq!(normalize_folder(Some(String::new())), None);
+        assert_eq!(normalize_folder(None), None);
+    }
+
+    #[test]
+    fn normalize_folder_caps_length_at_48_chars() {
+        let long = "a".repeat(60);
+        let out = normalize_folder(Some(long)).unwrap();
+        assert_eq!(out.chars().count(), 48);
+    }
+
+    #[test]
+    fn record_without_folder_field_deserializes_to_none() {
+        let old_blob = r#"{"url":"https://example.com","expiry":null,"created":1}"#;
+        let rec: Record = serde_json::from_str(old_blob).unwrap();
+        assert_eq!(rec.folder, None);
+    }
 
     #[test]
     fn normalize_tags_trims_lowercases_and_drops_empties() {
@@ -479,6 +537,7 @@ mod rules_tests {
             variants: Vec::new(),
             app_ios: None,
             app_android: None,
+            folder: None,
         }
     }
 

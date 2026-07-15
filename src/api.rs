@@ -4,8 +4,8 @@ use crate::auth::{generate_token, hash_token, ApiToken, Scope};
 use crate::cache::Cache;
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::store::{
-    matched_rule_index, normalize_tags, pick_variant, Record, Rule, RuleField, Store, StoreError,
-    Variant,
+    matched_rule_index, normalize_folder, normalize_tags, pick_variant, Record, Rule, RuleField,
+    Store, StoreError, Variant,
 };
 use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{self, EventType, SubscriptionKind, WebhookEvent, WebhookSubscription};
@@ -50,6 +50,7 @@ pub struct CreateReq {
     variants: Option<Vec<Variant>>,
     app_ios: Option<String>,
     app_android: Option<String>,
+    folder: Option<String>,
 }
 
 /// Normalizes the `max_visits` request field into the persisted representation:
@@ -375,6 +376,7 @@ pub async fn create_link_core(
     variants: Vec<Variant>,
     app_ios: Option<String>,
     app_android: Option<String>,
+    folder: Option<String>,
     headers: &HeaderMap,
 ) -> Result<String, CreateError> {
     if !is_valid_url(url) {
@@ -404,6 +406,7 @@ pub async fn create_link_core(
         variants,
         app_ios,
         app_android,
+        folder,
     };
 
     if let Some(alias) = alias {
@@ -545,6 +548,7 @@ async fn create(
         variants,
         req.app_ios.clone(),
         req.app_android.clone(),
+        normalize_folder(req.folder.clone()),
         &headers,
     )
     .await
@@ -606,6 +610,7 @@ async fn admin_import(
             None,
             Vec::new(),
             Vec::new(),
+            None,
             None,
             None,
             &headers,
@@ -1006,6 +1011,7 @@ struct ListParams {
     limit: Option<usize>,
     q: Option<String>,
     tag: Option<String>,
+    folder: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1027,6 +1033,8 @@ struct LinkRow {
     app_ios: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     app_android: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
 }
 
 async fn admin_links_list(
@@ -1048,13 +1056,18 @@ async fn admin_links_list(
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
     let tag = tag.as_deref();
+    let folder = p.folder.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let links = match q {
-        Some(term) => match st.store.search_links(term, p.after, limit, tag).await {
+        Some(term) => match st
+            .store
+            .search_links(term, p.after, limit, tag, folder)
+            .await
+        {
             Ok(l) => l,
             Err(StoreError::Unsupported) => return StatusCode::NOT_IMPLEMENTED.into_response(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
-        None => match st.store.list_links(p.after, limit, tag).await {
+        None => match st.store.list_links(p.after, limit, tag, folder).await {
             Ok(l) => l,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
@@ -1088,6 +1101,7 @@ async fn admin_links_list(
             variants: rec.variants,
             app_ios: rec.app_ios,
             app_android: rec.app_android,
+            folder: rec.folder,
         });
     }
     Json(serde_json::json!({ "links": rows, "next_after": next_after })).into_response()
@@ -1101,6 +1115,24 @@ async fn admin_tags_list(State(st): State<Arc<AppState>>, headers: HeaderMap) ->
     }
     match st.store.list_tags().await {
         Ok(tags) => Json(serde_json::json!({ "tags": tags })).into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// `GET /admin/folders`: the distinct folder names with their link counts, for
+/// the panel's folder selector and filter control.
+async fn admin_folders_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(status) = admin_guard(&st, &headers, Scope::LinksRead).await {
+        return status.into_response();
+    }
+    match st.store.list_folders().await {
+        Ok(folders) => {
+            let rows: Vec<serde_json::Value> = folders
+                .into_iter()
+                .map(|(name, count)| serde_json::json!({ "name": name, "count": count }))
+                .collect();
+            Json(serde_json::json!({ "folders": rows })).into_response()
+        }
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
@@ -1277,6 +1309,15 @@ async fn admin_link_patch(
             rec.app_android = Some(s.to_string());
         } else {
             return (StatusCode::BAD_REQUEST, "invalid app destination").into_response();
+        }
+    }
+    if let Some(v) = patch.get("folder") {
+        if v.is_null() {
+            rec.folder = None;
+        } else if let Some(s) = v.as_str() {
+            rec.folder = normalize_folder(Some(s.to_string()));
+        } else {
+            return (StatusCode::BAD_REQUEST, "invalid folder").into_response();
         }
     }
     let canonical_code = codec::to_base62(permute::encode(id, st.key));
@@ -1975,6 +2016,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         )
         .route("/admin/webhooks/:id/test", post(admin_webhooks_test))
         .route("/admin/tags", get(admin_tags_list))
+        .route("/admin/folders", get(admin_folders_list))
         .route(
             "/admin/tokens",
             get(admin_tokens_list).post(admin_tokens_create),
@@ -2057,6 +2099,7 @@ mod tests {
             variants: Vec::new(),
             app_ios: app_ios.map(str::to_string),
             app_android: app_android.map(str::to_string),
+            folder: None,
         }
     }
 
