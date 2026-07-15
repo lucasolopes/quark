@@ -1,5 +1,5 @@
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { BarChart3, Check, Copy, MoreHorizontal, Pencil, QrCode, Trash2 } from "lucide-react";
+import { BarChart3, Check, Copy, Folder, MoreHorizontal, Pencil, QrCode, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -96,6 +96,20 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
       accessorKey: "alias",
       header: t("linkTable.columnAlias"),
       cell: ({ row }) => row.original.alias || <span className="text-muted-foreground">—</span>,
+    },
+    {
+      id: "folder",
+      header: t("linkTable.columnFolder"),
+      cell: ({ row }) => {
+        const folder = row.original.folder;
+        if (!folder) return <span className="text-muted-foreground">—</span>;
+        return (
+          <Badge variant="outline" className="gap-1 font-normal">
+            <Folder className="size-3" aria-hidden="true" />
+            {folder}
+          </Badge>
+        );
+      },
     },
     {
       id: "tags",

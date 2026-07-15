@@ -24,6 +24,7 @@ async fn seed_links(s: &PostgresStore, links: &[(&str, Option<&str>)]) -> Vec<u6
             variants: Vec::new(),
             app_ios: None,
             app_android: None,
+            folder: None,
         };
         match alias {
             Some(a) => {
@@ -54,7 +55,10 @@ async fn search_matches_url_and_alias() {
         ],
     )
     .await;
-    let hits = store.search_links("rust", None, 50, None).await.unwrap();
+    let hits = store
+        .search_links("rust", None, 50, None, None)
+        .await
+        .unwrap();
     let urls: Vec<&str> = hits.iter().map(|(_, r)| r.url.as_str()).collect();
     assert!(
         urls.iter().any(|u| u.contains("github.com/rust-lang")),
@@ -84,7 +88,10 @@ async fn search_escapes_wildcards() {
         ],
     )
     .await;
-    let hits = store.search_links("50%", None, 50, None).await.unwrap();
+    let hits = store
+        .search_links("50%", None, 50, None, None)
+        .await
+        .unwrap();
     let urls: Vec<&str> = hits.iter().map(|(_, r)| r.url.as_str()).collect();
     assert!(
         urls.iter().any(|u| u.contains("50%off")),
@@ -110,7 +117,10 @@ async fn search_is_case_insensitive() {
         ],
     )
     .await;
-    let hits = store.search_links("RUST", None, 50, None).await.unwrap();
+    let hits = store
+        .search_links("RUST", None, 50, None, None)
+        .await
+        .unwrap();
     assert!(
         hits.iter()
             .any(|(_, r)| r.url.contains("github.com/rust-lang")),
@@ -137,11 +147,14 @@ async fn search_keyset_pagination() {
         ],
     )
     .await;
-    let page1 = store.search_links("alfa", None, 2, None).await.unwrap();
+    let page1 = store
+        .search_links("alfa", None, 2, None, None)
+        .await
+        .unwrap();
     assert_eq!(page1.len(), 2);
     let after = page1.last().unwrap().0;
     let page2 = store
-        .search_links("alfa", Some(after), 2, None)
+        .search_links("alfa", Some(after), 2, None, None)
         .await
         .unwrap();
     assert!(

@@ -93,6 +93,54 @@ describe("EditLinkDialog — max visits", () => {
   });
 });
 
+describe("EditLinkDialog — folder", () => {
+  beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
+
+  it("pre-populates the folder field from the link's folder", () => {
+    const l = makeLink({ folder: "Marketing" });
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+    expect(screen.getByLabelText(/folder/i)).toHaveValue("Marketing");
+  });
+
+  it("sends folder: null when a pre-filled folder is cleared", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const l = makeLink({ folder: "Marketing" });
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.clear(screen.getByLabelText(/folder/i));
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const body = patchBody(fetchMock);
+    expect(body).toHaveProperty("folder", null);
+  });
+
+  it("omits folder when it was empty and stays empty", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const body = patchBody(fetchMock);
+    expect(body).not.toHaveProperty("folder");
+  });
+
+  it("sends the trimmed folder when set", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.type(screen.getByLabelText(/folder/i), "Docs");
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const body = patchBody(fetchMock);
+    expect(body).toHaveProperty("folder", "Docs");
+  });
+});
+
 describe("EditLinkDialog — app destinations", () => {
   beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
 

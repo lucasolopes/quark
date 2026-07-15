@@ -21,6 +21,7 @@ export interface Link {
   url: string;
   app_ios?: string;
   app_android?: string;
+  folder?: string;
   expiry: number | null;
   created: number;
   tags: string[];
@@ -30,9 +31,13 @@ export interface Link {
   variants: Variant[];
 }
 export interface ListLinksResponse { links: Link[]; next_after: number | null; }
-export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; max_visits?: number; rules?: Rule[]; variants?: Variant[]; app_ios?: string; app_android?: string; }
+export interface CreateLinkRequest { url: string; alias?: string; ttl?: number; tags?: string[]; max_visits?: number; rules?: Rule[]; variants?: Variant[]; app_ios?: string; app_android?: string; folder?: string; }
 export interface CreateLinkResponse { code: string; url: string; }
 export interface TagsResponse { tags: string[]; }
+
+/** A folder in use by at least one link, with how many links carry it. */
+export interface Folder { name: string; count: number; }
+export interface FoldersResponse { folders: Folder[]; }
 export interface ClickEvent {
   id: number; ts: number;
   referer?: string | null; country?: string | null; user_agent?: string | null; city?: string | null;
@@ -52,7 +57,7 @@ export interface Aggregates {
   per_variant: Record<string, number>;
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
-export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; variants?: Variant[]; app_ios?: string | null; app_android?: string | null; }
+export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; variants?: Variant[]; app_ios?: string | null; app_android?: string | null; folder?: string | null; }
 
 /** The 5 link lifecycle events a webhook subscription can be notified about. */
 export const WEBHOOK_EVENTS = [

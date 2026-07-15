@@ -828,6 +828,7 @@ mod tests {
             _after: Option<u64>,
             _limit: usize,
             _tag: Option<&str>,
+            _folder: Option<&str>,
         ) -> Result<Vec<(u64, Record)>, StoreError> {
             unimplemented!()
         }
@@ -837,10 +838,14 @@ mod tests {
             _after: Option<u64>,
             _limit: usize,
             _tag: Option<&str>,
+            _folder: Option<&str>,
         ) -> Result<Vec<(u64, Record)>, StoreError> {
             unimplemented!()
         }
         async fn list_tags(&self) -> Result<Vec<String>, StoreError> {
+            unimplemented!()
+        }
+        async fn list_folders(&self) -> Result<Vec<(String, u64)>, StoreError> {
             unimplemented!()
         }
         async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError> {

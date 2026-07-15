@@ -77,6 +77,7 @@ Every link is one `Record` (`src/store/mod.rs`), stored as JSON in LMDB or acros
 | `variants` | `Vec<Variant>` | Weighted A/B destinations. |
 | `app_ios` | `Option<String>` | iOS deep-link destination. |
 | `app_android` | `Option<String>` | Android deep-link destination. |
+| `folder` | `Option<String>` | One folder the link belongs to (trimmed, capped at 48 chars, case preserved). An exclusive counterpart to the free-form `tags`. |
 
 `Rule` is `{field: country|device, values: [...], to: url}`; `Variant` is `{url, weight}`. Every field after `created` is `#[serde(default)]`, so an old record deserializes forward without a migration. The visit counter is stored separately from the `Record` (its own key in LMDB, a column in Postgres) so a click bumps a counter without rewriting the whole record.
 

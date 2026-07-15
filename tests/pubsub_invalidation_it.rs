@@ -23,6 +23,7 @@ fn rec(url: &str) -> Record {
         variants: Vec::new(),
         app_ios: None,
         app_android: None,
+        folder: None,
     }
 }
 

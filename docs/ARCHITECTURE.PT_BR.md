@@ -77,6 +77,7 @@ Cada link é um `Record` (`src/store/mod.rs`), gravado como JSON no LMDB ou em c
 | `variants` | `Vec<Variant>` | Destinos A/B por peso. |
 | `app_ios` | `Option<String>` | Destino deep-link iOS. |
 | `app_android` | `Option<String>` | Destino deep-link Android. |
+| `folder` | `Option<String>` | Uma pasta a que o link pertence (trim, teto de 48 chars, case preservado). Contraparte exclusiva das `tags` livres. |
 
 `Rule` é `{field: country|device, values: [...], to: url}`; `Variant` é `{url, weight}`. Todo campo depois de `created` é `#[serde(default)]`, então um registro antigo desserializa para frente sem migração. O contador de visitas fica separado do `Record` (chave própria no LMDB, coluna no Postgres) para um clique incrementar um contador sem reescrever o registro todo.
 

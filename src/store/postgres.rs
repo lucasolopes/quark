@@ -40,6 +40,7 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let variants: Vec<Variant> = serde_json::from_value(variants)?;
     let app_ios: Option<String> = r.try_get("app_ios").map_err(StoreError::backend)?;
     let app_android: Option<String> = r.try_get("app_android").map_err(StoreError::backend)?;
+    let folder: Option<String> = r.try_get("folder").map_err(StoreError::backend)?;
     Ok((
         id as u64,
         Record {
@@ -52,6 +53,7 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
             variants,
             app_ios,
             app_android,
+            folder,
         },
     ))
 }
@@ -163,8 +165,8 @@ async fn upsert_link_in_tx(
     let rules = serde_json::to_value(&rec.rules)?;
     let variants = serde_json::to_value(&rec.variants)?;
     sqlx::query(
-        "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) \
-         ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10",
+        "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
+         ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10, folder=$11",
     )
     .bind(id as i64)
     .bind(&rec.url)
@@ -176,6 +178,7 @@ async fn upsert_link_in_tx(
     .bind(&variants)
     .bind(&rec.app_ios)
     .bind(&rec.app_android)
+    .bind(&rec.folder)
     .execute(&mut **tx)
     .await
     .map_err(StoreError::backend)?;
@@ -247,6 +250,7 @@ impl PostgresStore {
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS rules JSONB NOT NULL DEFAULT '[]'",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS app_ios TEXT",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS app_android TEXT",
+                "ALTER TABLE links ADD COLUMN IF NOT EXISTS folder TEXT",
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
@@ -333,7 +337,7 @@ impl Store for PostgresStore {
 
     async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError> {
         let row = sqlx::query(
-            "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android FROM links WHERE id = $1",
+            "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder FROM links WHERE id = $1",
         )
         .bind(id as i64)
         .fetch_optional(&self.pool)
@@ -350,8 +354,8 @@ impl Store for PostgresStore {
         let rules = serde_json::to_value(&rec.rules)?;
         let variants = serde_json::to_value(&rec.variants)?;
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10",
+            "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10, folder=$11",
         )
         .bind(id as i64)
         .bind(&rec.url)
@@ -363,6 +367,7 @@ impl Store for PostgresStore {
         .bind(&variants)
         .bind(&rec.app_ios)
         .bind(&rec.app_android)
+        .bind(&rec.folder)
         .execute(&self.pool)
         .await
         .map_err(StoreError::backend)?;
@@ -406,8 +411,8 @@ impl Store for PostgresStore {
         let rules = serde_json::to_value(&rec.rules)?;
         let variants = serde_json::to_value(&rec.variants)?;
         sqlx::query(
-            "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10",
+            "INSERT INTO links (id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
+             ON CONFLICT (id) DO UPDATE SET url=$2, expiry=$3, created=$4, tags=$5, max_visits=$6, rules=$7, variants=$8, app_ios=$9, app_android=$10, folder=$11",
         )
         .bind(id as i64)
         .bind(&rec.url)
@@ -419,6 +424,7 @@ impl Store for PostgresStore {
         .bind(&variants)
         .bind(&rec.app_ios)
         .bind(&rec.app_android)
+        .bind(&rec.folder)
         .execute(&mut *tx)
         .await
         .map_err(StoreError::backend)?;
@@ -481,17 +487,20 @@ impl Store for PostgresStore {
         after: Option<u64>,
         limit: usize,
         tag: Option<&str>,
+        folder: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = sqlx::query(
-            "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android FROM links \
+            "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder FROM links \
              WHERE ($1::bigint IS NULL OR id > $1) \
                AND ($2::jsonb IS NULL OR tags @> $2) \
+               AND ($4::text IS NULL OR lower(folder) = lower($4)) \
              ORDER BY id LIMIT $3",
         )
         .bind(after.map(|a| a as i64))
         .bind(&tag_json)
         .bind(limit as i64)
+        .bind(folder)
         .fetch_all(&self.pool)
         .await
         .map_err(StoreError::backend)?;
@@ -504,21 +513,24 @@ impl Store for PostgresStore {
         after: Option<u64>,
         limit: usize,
         tag: Option<&str>,
+        folder: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let pattern = format!("%{}%", like_escape(q));
         let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = sqlx::query(
-            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits, l.rules, l.variants, l.app_ios, l.app_android \
+            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits, l.rules, l.variants, l.app_ios, l.app_android, l.folder \
              FROM links l LEFT JOIN aliases a ON a.id = l.id \
              WHERE ($1::bigint IS NULL OR l.id > $1) \
                AND (l.url ILIKE $2 OR a.alias ILIKE $2) \
                AND ($3::jsonb IS NULL OR l.tags @> $3) \
+               AND ($5::text IS NULL OR lower(l.folder) = lower($5)) \
              ORDER BY l.id LIMIT $4",
         )
         .bind(after.map(|a| a as i64))
         .bind(&pattern)
         .bind(&tag_json)
         .bind(limit as i64)
+        .bind(folder)
         .fetch_all(&self.pool)
         .await
         .map_err(StoreError::backend)?;
@@ -627,6 +639,22 @@ impl Store for PostgresStore {
         .map_err(StoreError::backend)?;
         rows.iter()
             .map(|r| r.try_get::<String, _>("tag").map_err(StoreError::backend))
+            .collect()
+    }
+
+    async fn list_folders(&self) -> Result<Vec<(String, u64)>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT folder, count(*) AS n FROM links WHERE folder IS NOT NULL GROUP BY folder ORDER BY folder",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        rows.iter()
+            .map(|r| {
+                let name: String = r.try_get("folder").map_err(StoreError::backend)?;
+                let n: i64 = r.try_get("n").map_err(StoreError::backend)?;
+                Ok((name, n as u64))
+            })
             .collect()
     }
 

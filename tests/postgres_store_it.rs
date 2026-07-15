@@ -36,6 +36,7 @@ fn plain_rec(url: &str) -> Record {
         variants: Vec::new(),
         app_ios: None,
         app_android: None,
+        folder: None,
     }
 }
 
@@ -92,6 +93,7 @@ async fn put_get_link_pg() {
         variants: Vec::new(),
         app_ios: Some("https://apps.apple.com/x".into()),
         app_android: None,
+        folder: None,
     };
     s.put_link(7, &rec).await.unwrap();
     let got = s.get_link(7).await.unwrap().unwrap();
@@ -129,6 +131,7 @@ async fn rules_round_trip_pg() {
         variants: Vec::new(),
         app_ios: None,
         app_android: None,
+        folder: None,
     };
     s.put_link(42, &rec).await.unwrap();
     let got = s.get_link(42).await.unwrap().unwrap();
@@ -152,6 +155,7 @@ async fn link_without_rules_round_trips_to_empty_vec_pg() {
         variants: Vec::new(),
         app_ios: None,
         app_android: None,
+        folder: None,
     };
     s.put_link(43, &rec).await.unwrap();
     let got = s.get_link(43).await.unwrap().unwrap();
@@ -185,6 +189,7 @@ async fn alias_is_atomic_no_orphan_pg() {
         variants: Vec::new(),
         app_ios: None,
         app_android: None,
+        folder: None,
     };
     assert!(s.put_alias_and_link("promo", 5, &rec).await.unwrap());
     assert!(!s.put_alias_and_link("promo", 9, &rec).await.unwrap());
@@ -208,6 +213,7 @@ async fn tags_round_trip_filter_and_distinct_pg() {
         variants: Vec::new(),
         app_ios: None,
         app_android: None,
+        folder: None,
     };
     s.put_link(1, &rec("https://a.com", &["rust", "web"]))
         .await
@@ -220,13 +226,13 @@ async fn tags_round_trip_filter_and_distinct_pg() {
     let got = s.get_link(1).await.unwrap().unwrap();
     assert_eq!(got.tags, vec!["rust".to_string(), "web".to_string()]);
 
-    let filtered = s.list_links(None, 50, Some("rust")).await.unwrap();
+    let filtered = s.list_links(None, 50, Some("rust"), None).await.unwrap();
     assert_eq!(
         filtered.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
         vec![1]
     );
 
-    let both_web = s.list_links(None, 50, Some("web")).await.unwrap();
+    let both_web = s.list_links(None, 50, Some("web"), None).await.unwrap();
     let mut ids: Vec<u64> = both_web.iter().map(|(id, _)| *id).collect();
     ids.sort();
     assert_eq!(ids, vec![1, 2]);
@@ -234,6 +240,53 @@ async fn tags_round_trip_filter_and_distinct_pg() {
     let mut tags = s.list_tags().await.unwrap();
     tags.sort();
     assert_eq!(tags, vec!["rust".to_string(), "web".to_string()]);
+}
+
+#[tokio::test]
+#[serial(pg)]
+async fn folder_round_trip_filter_and_list_pg() {
+    let Some(s) = fresh().await else {
+        return;
+    };
+    let rec = |u: &str, folder: Option<&str>| Record {
+        url: u.into(),
+        expiry: None,
+        created: 0,
+        tags: Vec::new(),
+        max_visits: None,
+        rules: Vec::new(),
+        variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
+        folder: folder.map(str::to_string),
+    };
+    s.put_link(1, &rec("https://a.com", Some("Marketing")))
+        .await
+        .unwrap();
+    s.put_link(2, &rec("https://b.com", Some("Marketing")))
+        .await
+        .unwrap();
+    s.put_link(3, &rec("https://c.com", Some("Docs")))
+        .await
+        .unwrap();
+    s.put_link(4, &rec("https://d.com", None)).await.unwrap();
+
+    let got = s.get_link(1).await.unwrap().unwrap();
+    assert_eq!(got.folder.as_deref(), Some("Marketing"));
+
+    let filtered = s
+        .list_links(None, 50, None, Some("marketing"))
+        .await
+        .unwrap();
+    let mut ids: Vec<u64> = filtered.iter().map(|(id, _)| *id).collect();
+    ids.sort();
+    assert_eq!(ids, vec![1, 2]);
+
+    let folders = s.list_folders().await.unwrap();
+    assert_eq!(
+        folders,
+        vec![("Docs".to_string(), 1u64), ("Marketing".to_string(), 2u64)]
+    );
 }
 
 #[tokio::test]
@@ -253,6 +306,7 @@ async fn visits_round_trip_pg() {
         variants: Vec::new(),
         app_ios: None,
         app_android: None,
+        folder: None,
     };
     s.put_link(11, &rec).await.unwrap();
     assert_eq!(s.visits(11).await.unwrap(), 0);
@@ -276,6 +330,7 @@ async fn bump_visits_is_atomic_and_increments_pg() {
         variants: Vec::new(),
         app_ios: None,
         app_android: None,
+        folder: None,
     };
     s.put_link(12, &rec).await.unwrap();
     assert_eq!(s.bump_visits(12).await.unwrap(), 1);
@@ -325,6 +380,7 @@ async fn variants_round_trip_pg() {
         ],
         app_ios: None,
         app_android: None,
+        folder: None,
     };
     s.put_link(11, &rec).await.unwrap();
     let got = s.get_link(11).await.unwrap().unwrap();
@@ -346,6 +402,7 @@ async fn variants_round_trip_pg() {
         variants: Vec::new(),
         app_ios: None,
         app_android: None,
+        folder: None,
     };
     s.put_link(12, &plain).await.unwrap();
     assert!(s.get_link(12).await.unwrap().unwrap().variants.is_empty());
