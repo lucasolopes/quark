@@ -454,3 +454,29 @@ lines:
    cloud-edition differentiator?
 6. Retargeting pixels (2.10): worth trading a clean redirect for, or leave
    audience-building to the server-side CAPI forwarding quark already has?
+
+## 5. Decisões do dono (2026-07-14)
+
+As perguntas da seção 4 foram resolvidas assim:
+
+- **Links com senha (2.3): SIM.** Constrói o mecanismo de interstitial opt-in (uma
+  página HTML pequena, atrás de um gate cacheado) só para os links marcados; o
+  redirect comum segue 302 puro sem pagar nada.
+- **Expira-com-fallback (2.5): SIM.** Ao expirar, em vez de 410, faz 302 para o
+  destino de fallback. É redirect puro, não usa o interstitial.
+- **Cloaking (2.4): NÃO.** Recusado por princípio: esconder o destino final encaixa
+  mal com a postura anti-abuso do quark.
+- **Pixel de retargeting no browser (2.10): NÃO.** O encaminhamento server-side por
+  CAPI (GA4/Meta) que o quark já tem cobre a necessidade sem quebrar o 302.
+- **Google Sheets (2.1): NATIVO com OAuth.** Sync ao vivo dentro do quark (linha
+  nova vira link novo), com os tokens OAuth guardados. Opt-in e desligado por
+  padrão, como os outros backends de rede.
+- **Domínios customizados (2.2): ESPAÇO DE CÓDIGO GLOBAL.** Um único espaço de
+  códigos para todos os domínios, preservando a suposição do codec e o hot path.
+- **Atribuição de receita (2.11): FORA.** Não entra no quark por ora, nem OSS nem
+  como prioridade; se um dia existir, é diferencial da edição cloud.
+
+Backlog resultante, do mais barato ao mais estrutural: expira-com-fallback (S) →
+links com senha + o mecanismo de interstitial (S-M) → monitoramento de link
+quebrado (2.6, M, sem decisão pendente) → domínios customizados globais (2.2, M) →
+Google Sheets nativo com OAuth (2.1, L).
