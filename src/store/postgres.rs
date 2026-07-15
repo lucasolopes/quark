@@ -492,6 +492,11 @@ impl Store for PostgresStore {
             .execute(&mut *tx)
             .await
             .map_err(StoreError::backend)?;
+        sqlx::query("DELETE FROM link_health WHERE id = $1")
+            .bind(id as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(StoreError::backend)?;
         enqueue_in_tx(&mut tx, deliveries).await?;
         tx.commit().await.map_err(StoreError::backend)?;
         Ok(())
@@ -568,6 +573,11 @@ impl Store for PostgresStore {
 
     async fn delete_link(&self, id: u64) -> Result<(), StoreError> {
         sqlx::query("DELETE FROM links WHERE id = $1")
+            .bind(id as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        sqlx::query("DELETE FROM link_health WHERE id = $1")
             .bind(id as i64)
             .execute(&self.pool)
             .await
@@ -793,6 +803,36 @@ impl Store for PostgresStore {
             .fetch_all(&self.pool)
             .await
             .map_err(StoreError::backend)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+            let checked_at: i64 = r.try_get("checked_at").map_err(StoreError::backend)?;
+            let status: Option<i32> = r.try_get("status").map_err(StoreError::backend)?;
+            let healthy: bool = r.try_get("healthy").map_err(StoreError::backend)?;
+            out.push((
+                id as u64,
+                LinkHealth {
+                    checked_at: checked_at as u64,
+                    status: status.map(|s| s as u16),
+                    healthy,
+                },
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn link_health_for(&self, ids: &[u64]) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let id_list: Vec<i64> = ids.iter().map(|&i| i as i64).collect();
+        let rows = sqlx::query(
+            "SELECT id, checked_at, status, healthy FROM link_health WHERE id = ANY($1)",
+        )
+        .bind(&id_list)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
         let mut out = Vec::with_capacity(rows.len());
         for r in &rows {
             let id: i64 = r.try_get("id").map_err(StoreError::backend)?;

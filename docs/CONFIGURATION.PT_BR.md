@@ -18,7 +18,7 @@ roda como um binário único sem dependências em `0.0.0.0:8080` com store LMDB.
 |---|---|---|
 | `QUARK_KEY` | fallback de dev `11400714819323198485` (aviso alto) | A chave da permutação, lida como `u64` **decimal**. É o que torna o espaço de códigos imprevisível por instância. Use um valor aleatório em produção e mantenha fora do controle de versão. Uma string hex não parseia e cai silenciosamente na chave de dev. |
 | `QUARK_SIGNING_KEY` | aleatória por processo (aviso alto) | Segredo base64 (>= 32 bytes) que assina os cookies de unlock de senha, separado do `QUARK_KEY`. Sem setar, gera uma chave aleatória a cada start, então os cookies de unlock não sobrevivem a um restart nem são compartilhados entre nós. Set (e compartilhe entre réplicas) para deploys multi-nó ou persistentes. Só importa se você usa links com senha. |
-| `QUARK_HEALTH_CHECK_SECS` | sem setar (desligado) | Liga o monitoramento de link quebrado: segundos entre varreduras de saúde do destino (elevado pra 60 no mínimo). Só o nó designado (`QUARK_NODE_ID` 0/unset) varre. Veja [LINK-HEALTH](LINK-HEALTH.PT_BR.md). |
+| `QUARK_HEALTH_CHECK_SECS` | sem setar (desligado) | Liga o monitoramento de link quebrado: segundos entre varreduras de saúde do destino (elevado pra 60 no mínimo). Ainda sem coordenação entre nós, então set em exatamente uma instância. Veja [LINK-HEALTH](LINK-HEALTH.PT_BR.md). |
 | `QUARK_ADDR` | `0.0.0.0:8080` | Endereço de bind HTTP. |
 | `QUARK_DATA` | `./data` (imagem: `/data`) | Diretório de dados do LMDB, criado se faltar. Só usado quando o store é LMDB (sem `QUARK_DATABASE_URL`). |
 

@@ -54,9 +54,11 @@ flowchart TD
 |---|---|
 | `QUARK_HEALTH_CHECK_SECS` | Segundos entre varreduras. Sem setar, desliga o checker. Valores abaixo de 60 são elevados pra 60. |
 
-Num deploy multi-nó a varredura roda só no nó designado (aquele cujo
-`QUARK_NODE_ID` é `0` ou não setado), pra um destino não ser sondado uma vez por
-nó. Set `QUARK_HEALTH_CHECK_SECS` nesse nó.
+Num deploy com várias instâncias o checker ainda não tem coordenação entre nós,
+então set `QUARK_HEALTH_CHECK_SECS` em **exatamente uma** instância. Se todas as
+réplicas tivessem, cada uma sondaria todo destino e uma única quebra dispararia o
+webhook uma vez por réplica. Um sweeper com lease compartilhado (que deixa toda
+instância manter a env) fica pra um refinamento futuro.
 
 ## Limites
 
@@ -64,5 +66,11 @@ nó. Set `QUARK_HEALTH_CHECK_SECS` nesse nó.
   quebrado e a próxima varredura recupera (as duas transições emitem seu evento).
 - A cadência é global; não há intervalo por link nem opt-out.
 - Eventos de saúde são best-effort in-memory, como `link.clicked`/`link.expired`.
-- O checker é single-node por design; distribuir a varredura entre nós fica pra
+- O checker roda numa instância (veja Configuração); um lease entre nós fica pra
   um refinamento futuro.
+- A sonda resolve o host do destino e se recusa a contatar endereços internos,
+  de loopback ou link-local, então um nome público apontando pra um IP interno
+  não é sondado (guard de SSRF).
+- O filtro "só quebrados" é aplicado por página. Numa conta com muitos links
+  onde os quebrados são raros, "Carregar mais" pode buscar páginas sem nenhum
+  link quebrado antes de chegar neles; siga carregando pra paginar.

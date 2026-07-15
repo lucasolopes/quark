@@ -54,9 +54,11 @@ flowchart TD
 |---|---|
 | `QUARK_HEALTH_CHECK_SECS` | Seconds between sweeps. Unset disables the checker. Values below 60 are clamped up to 60. |
 
-In a multi-node deployment the sweep runs only on the designated node (the one
-whose `QUARK_NODE_ID` is `0` or unset), so a destination is not probed once per
-node. Set `QUARK_HEALTH_CHECK_SECS` on that node.
+In a multi-instance deployment the checker has no cross-node coordination yet,
+so set `QUARK_HEALTH_CHECK_SECS` on **exactly one** instance. If every replica
+had it set, each would probe every destination and a single break could fire the
+webhook once per replica. A shared-lease sweeper that lets every node keep the
+env is a planned refinement.
 
 ## Limits
 
@@ -64,5 +66,11 @@ node. Set `QUARK_HEALTH_CHECK_SECS` on that node.
   the next sweep recovers it (both transitions emit their event).
 - The cadence is global; there is no per-link interval or opt-out.
 - Health events are best-effort in-memory, like `link.clicked`/`link.expired`.
-- The checker is single-node by design; sharding the sweep across nodes is a
+- The checker runs on one instance (see Configuration); a cross-node lease is a
   later refinement.
+- The probe resolves the destination host and refuses to contact internal,
+  loopback, or link-local addresses, so a public name pointing at an internal IP
+  is not probed (SSRF guard).
+- The "broken only" filter is applied per page. On an account with many links
+  where broken ones are rare, "Load more" may fetch pages that contain no broken
+  links yet before reaching them; keep loading to page through.

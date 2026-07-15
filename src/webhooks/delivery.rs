@@ -79,11 +79,24 @@ impl WebhookDispatcher {
     /// backed up and the channel is full (or closed), the event is dropped
     /// and a line is logged. Never applies backpressure to the caller.
     pub fn emit(&self, ev: WebhookEvent) {
-        if let Err(e) = self.tx.try_send(ev) {
-            eprintln!(
-                "{}",
-                serde_json::json!({"webhook_event_dropped": e.to_string()})
-            );
+        let _ = self.try_emit(ev);
+    }
+
+    /// Like [`emit`] but reports whether the event was enqueued (`true`) or
+    /// dropped because the best-effort channel was full (`false`). The link
+    /// health checker uses the result to avoid recording a transition it could
+    /// not enqueue, so a dropped `link.broken`/`link.recovered` is retried on
+    /// the next sweep instead of being lost to one-shot suppression.
+    pub fn try_emit(&self, ev: WebhookEvent) -> bool {
+        match self.tx.try_send(ev) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({"webhook_event_dropped": e.to_string()})
+                );
+                false
+            }
         }
     }
 
@@ -904,6 +917,12 @@ mod tests {
             unimplemented!()
         }
         async fn list_link_health(&self) -> Result<Vec<(u64, crate::store::LinkHealth)>, StoreError> {
+            unimplemented!()
+        }
+        async fn link_health_for(
+            &self,
+            _ids: &[u64],
+        ) -> Result<Vec<(u64, crate::store::LinkHealth)>, StoreError> {
             unimplemented!()
         }
         async fn next_pixel_id(&self) -> Result<u64, StoreError> {

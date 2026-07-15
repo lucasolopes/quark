@@ -253,6 +253,9 @@ impl Store for LmdbStore {
     async fn delete_link(&self, id: u64) -> Result<(), StoreError> {
         let mut wtxn = self.env.write_txn()?;
         self.links.delete(&mut wtxn, &id)?;
+        // Drop the link's health entry too, so deleted links don't leave orphan
+        // rows that grow unbounded and slow the admin list / sweep.
+        self.health.delete(&mut wtxn, &id)?;
         wtxn.commit()?;
         Ok(())
     }
@@ -329,6 +332,17 @@ impl Store for LmdbStore {
         for item in self.health.iter(&rtxn)? {
             let (id, bytes) = item?;
             out.push((id, serde_json::from_slice(bytes)?));
+        }
+        Ok(out)
+    }
+
+    async fn link_health_for(&self, ids: &[u64]) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::with_capacity(ids.len());
+        for &id in ids {
+            if let Some(bytes) = self.health.get(&rtxn, &id)? {
+                out.push((id, serde_json::from_slice(bytes)?));
+            }
         }
         Ok(out)
     }

@@ -1409,8 +1409,10 @@ async fn admin_links_list(
         Ok(pairs) => pairs.into_iter().map(|(a, id)| (id, a)).collect(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
+    // Fetch health for just this page's ids (not the whole table).
+    let page_ids: Vec<u64> = links.iter().map(|(id, _)| *id).collect();
     let health_map: std::collections::HashMap<u64, LinkHealth> =
-        match st.store.list_link_health().await {
+        match st.store.link_health_for(&page_ids).await {
             Ok(v) => v.into_iter().collect(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };

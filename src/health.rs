@@ -41,10 +41,11 @@ pub fn build_client() -> reqwest::Client {
         .expect("reqwest client builds")
 }
 
-/// Probes one URL: a `HEAD`, falling back to `GET` when the server rejects HEAD
-/// (405/501) or the HEAD transport fails. Classifies the resulting status.
+/// Probes one URL with a `GET` (the response body is never read, so this costs
+/// about the same as a HEAD while avoiding the many servers/CDNs that reject or
+/// misreport HEAD). Classifies the resulting status.
 pub async fn probe(client: &reqwest::Client, url: &str, now: u64) -> LinkHealth {
-    let status = status_of(client, url).await;
+    let status = client.get(url).send().await.ok().map(|r| r.status().as_u16());
     LinkHealth {
         checked_at: now,
         status,
@@ -52,27 +53,55 @@ pub async fn probe(client: &reqwest::Client, url: &str, now: u64) -> LinkHealth 
     }
 }
 
-async fn status_of(client: &reqwest::Client, url: &str) -> Option<u16> {
-    match client.head(url).send().await {
-        Ok(r) => {
-            let s = r.status().as_u16();
-            if s == 405 || s == 501 {
-                client
-                    .get(url)
-                    .send()
-                    .await
-                    .ok()
-                    .map(|r| r.status().as_u16())
-            } else {
-                Some(s)
-            }
+/// Whether a host is safe to probe: it must not be an internal hostname and it
+/// must not resolve to any internal/loopback/link-local IP. The DNS resolution
+/// closes the SSRF gap that a hostname-only check leaves open (a public name
+/// pointing at `169.254.169.254` or an RFC1918 address).
+pub async fn safe_to_probe(url: &str) -> bool {
+    let Some(host) = extract_host(url) else {
+        return false;
+    };
+    if is_internal_host(&host) {
+        return false;
+    }
+    // Resolve and reject if ANY resolved address is internal. Port is
+    // irrelevant to the address classification; use 80 for the lookup.
+    let resolved = tokio::net::lookup_host((host.as_str(), 80u16)).await;
+    let Ok(addrs) = resolved else {
+        return false;
+    };
+    let mut any = false;
+    for a in addrs {
+        any = true;
+        if is_internal_ip(&a.ip()) {
+            return false;
         }
-        Err(_) => client
-            .get(url)
-            .send()
-            .await
-            .ok()
-            .map(|r| r.status().as_u16()),
+    }
+    // No addresses resolved -> cannot verify -> do not probe.
+    any
+}
+
+/// Whether an IP address is in a range the server must never be pointed at by a
+/// stored destination (loopback, private, link-local, unspecified, and IPv6
+/// unique-local `fc00::/7`).
+fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                // unique-local fc00::/7
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                // link-local fe80::/10
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
     }
 }
 
@@ -113,7 +142,7 @@ pub async fn sweep<P, F>(
 ) -> Result<usize, String>
 where
     P: Fn(String) -> F,
-    F: Future<Output = LinkHealth>,
+    F: Future<Output = Option<LinkHealth>>,
 {
     let prev: HashMap<u64, LinkHealth> = store
         .list_link_health()
@@ -134,18 +163,11 @@ where
         }
         after = page.last().map(|(id, _)| *id);
         for (id, rec) in page {
-            // Never probe internal/loopback destinations; leave them unchecked.
-            let internal = extract_host(&rec.url)
-                .map(|h| is_internal_host(&h))
-                .unwrap_or(true);
-            if internal {
+            // The prober returns None to skip a link (internal/unresolvable
+            // destination); such links are left unchecked, never probed.
+            let Some(health) = prober(rec.url.clone()).await else {
                 continue;
-            }
-            let health = prober(rec.url.clone()).await;
-            store
-                .put_link_health(id, &health)
-                .await
-                .map_err(|e| e.to_string())?;
+            };
             checked += 1;
             let was_healthy = prev.get(&id).map(|p| p.healthy).unwrap_or(true);
             if was_healthy != health.healthy {
@@ -155,11 +177,20 @@ where
                     EventType::LinkBroken
                 };
                 let code = codec::to_base62(permute::encode(id, key));
-                webhooks.emit(WebhookEvent {
+                // Persist the new state only once the transition event is
+                // enqueued; if the best-effort channel is full, leave the old
+                // state so the next sweep retries (no permanently-lost alert).
+                if !webhooks.try_emit(WebhookEvent {
                     event_type: et,
                     body: transition_body(et, &code, &rec.url, health.status),
-                });
+                }) {
+                    continue;
+                }
             }
+            store
+                .put_link_health(id, &health)
+                .await
+                .map_err(|e| e.to_string())?;
         }
         if n < LIST_PAGE {
             break;
@@ -185,7 +216,13 @@ pub fn spawn_link_checker(
             let client = &client;
             let prober = move |url: String| {
                 let client = client.clone();
-                async move { probe(&client, &url, now).await }
+                async move {
+                    if safe_to_probe(&url).await {
+                        Some(probe(&client, &url, now).await)
+                    } else {
+                        None
+                    }
+                }
             };
             match sweep(&store, &webhooks, key, prober).await {
                 Ok(n) => eprintln!("{}", serde_json::json!({ "health_sweep_checked": n })),
@@ -211,6 +248,33 @@ mod tests {
         assert!(!classify(Some(404)));
         assert!(!classify(Some(500)));
         assert!(!classify(None)); // connection error / timeout
+    }
+
+    #[test]
+    fn internal_ip_classification() {
+        use std::net::IpAddr;
+        for s in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "192.168.0.1",
+            "169.254.169.254", // cloud metadata (link-local)
+            "0.0.0.0",
+            "::1",
+            "fc00::1", // unique-local
+            "fe80::1", // link-local
+        ] {
+            assert!(super::is_internal_ip(&s.parse::<IpAddr>().unwrap()), "{s} must be internal");
+        }
+        for s in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
+            assert!(!super::is_internal_ip(&s.parse::<IpAddr>().unwrap()), "{s} must be public");
+        }
+    }
+
+    #[tokio::test]
+    async fn safe_to_probe_rejects_internal_and_bad_urls() {
+        assert!(!safe_to_probe("http://127.0.0.1/x").await); // internal literal
+        assert!(!safe_to_probe("not a url").await); // no host
+        assert!(!safe_to_probe("http://this-host-should-not-resolve.invalid/").await); // unresolvable
     }
 
     fn rec(url: &str) -> Record {
@@ -254,14 +318,20 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
 
-        // Canned prober: a.example broken, b.example healthy.
+        // Canned prober: skip internal hosts (None), a.example broken,
+        // b.example healthy. Mirrors how the production prober returns None for
+        // an unsafe destination.
         let prober = |url: String| async move {
+            let host = extract_host(&url).unwrap_or_default();
+            if is_internal_host(&host) {
+                return None;
+            }
             let healthy = url.contains("b.example");
-            LinkHealth {
+            Some(LinkHealth {
                 checked_at: 999,
                 status: Some(if healthy { 200 } else { 404 }),
                 healthy,
-            }
+            })
         };
         let checked = sweep(&store, &dispatcher, 0x1234, prober).await.unwrap();
         assert_eq!(checked, 2, "internal link 3 is skipped");

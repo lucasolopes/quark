@@ -376,8 +376,12 @@ pub trait Store: Send + Sync + 'static {
     /// monitoring). Upserts by id; a link is probed at most once per sweep.
     async fn put_link_health(&self, id: u64, health: &LinkHealth) -> Result<(), StoreError>;
     /// All recorded link-health entries. Used by the checker to detect
-    /// healthy<->broken transitions and by the panel to show each link's status.
+    /// healthy<->broken transitions across the whole link set.
     async fn list_link_health(&self) -> Result<Vec<(u64, LinkHealth)>, StoreError>;
+    /// Health entries for a specific set of link ids (missing ids are simply
+    /// absent from the result). Used by the admin list so a page load reads only
+    /// the current page's health, not the whole table.
+    async fn link_health_for(&self, ids: &[u64]) -> Result<Vec<(u64, LinkHealth)>, StoreError>;
     async fn next_pixel_id(&self) -> Result<u64, StoreError>;
     async fn get_pixel(&self, id: u64) -> Result<Option<PixelConfig>, StoreError>;
     async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError>;
