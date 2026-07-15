@@ -230,3 +230,42 @@ describe("EditLinkDialog — fallback url", () => {
     expect(body).not.toHaveProperty("fallback_url");
   });
 });
+
+describe("EditLinkDialog — password", () => {
+  beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
+
+  it("sends a new password when set", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.type(screen.getByLabelText(/^password$/i), "hunter2");
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(patchBody(fetchMock)).toHaveProperty("password", "hunter2");
+  });
+
+  it("sends password: null when the remove-protection box is checked", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const l = makeLink({ has_password: true });
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.click(screen.getByLabelText(/remove password/i));
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(patchBody(fetchMock)).toHaveProperty("password", null);
+  });
+
+  it("omits password when left untouched on an unprotected link", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(patchBody(fetchMock)).not.toHaveProperty("password");
+  });
+});

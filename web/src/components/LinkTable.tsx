@@ -1,5 +1,5 @@
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { BarChart3, Check, Copy, Folder, MoreHorizontal, Pencil, QrCode, Trash2 } from "lucide-react";
+import { BarChart3, Check, Copy, Folder, Lock, MoreHorizontal, Pencil, QrCode, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -89,6 +89,12 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
             <Badge variant="secondary" className="shrink-0">
               {t("linkTable.variantsBadge", { count: row.original.variants.length })}
             </Badge>
+          )}
+          {row.original.has_password && (
+            <Lock
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-label={t("linkTable.protectedAria")}
+            />
           )}
         </div>
       ),
