@@ -630,15 +630,23 @@ impl Store for PostgresStore {
         Ok(id as u64)
     }
 
-    async fn list_tags(&self) -> Result<Vec<String>, StoreError> {
+    async fn list_tags(&self) -> Result<Vec<(String, u64)>, StoreError> {
+        // Dedupe tags within a link (SELECT DISTINCT per id) before counting,
+        // so a link carrying the same tag twice still counts once.
         let rows = sqlx::query(
-            "SELECT DISTINCT jsonb_array_elements_text(tags) AS tag FROM links ORDER BY tag",
+            "SELECT tag, count(*) AS n FROM ( \
+               SELECT DISTINCT id, jsonb_array_elements_text(tags) AS tag FROM links \
+             ) t GROUP BY tag ORDER BY tag",
         )
         .fetch_all(&self.pool)
         .await
         .map_err(StoreError::backend)?;
         rows.iter()
-            .map(|r| r.try_get::<String, _>("tag").map_err(StoreError::backend))
+            .map(|r| {
+                let name: String = r.try_get("tag").map_err(StoreError::backend)?;
+                let n: i64 = r.try_get("n").map_err(StoreError::backend)?;
+                Ok((name, n as u64))
+            })
             .collect()
     }
 

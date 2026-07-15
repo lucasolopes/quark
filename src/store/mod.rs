@@ -323,8 +323,10 @@ pub trait Store: Send + Sync + 'static {
         folder: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError>;
     async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError>;
-    /// Distinct set of tags across all links, sorted.
-    async fn list_tags(&self) -> Result<Vec<String>, StoreError>;
+    /// Distinct tags across all links with their link counts, sorted by name.
+    /// A link's `tags` is a `Vec<String>`; each distinct tag on a link counts
+    /// that link once.
+    async fn list_tags(&self) -> Result<Vec<(String, u64)>, StoreError>;
     /// Distinct folder names across all links with their link counts, sorted by
     /// name. Links with no folder are ignored.
     async fn list_folders(&self) -> Result<Vec<(String, u64)>, StoreError>;

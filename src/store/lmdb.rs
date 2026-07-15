@@ -312,17 +312,20 @@ impl Store for LmdbStore {
         Ok(next)
     }
 
-    async fn list_tags(&self) -> Result<Vec<String>, StoreError> {
+    async fn list_tags(&self) -> Result<Vec<(String, u64)>, StoreError> {
         let rtxn = self.env.read_txn()?;
-        let mut set = std::collections::BTreeSet::new();
+        let mut counts: BTreeMap<String, u64> = BTreeMap::new();
         for item in self.links.iter(&rtxn)? {
             let (_, bytes) = item?;
             let rec: Record = serde_json::from_slice(bytes)?;
+            let mut seen = std::collections::BTreeSet::new();
             for t in rec.tags {
-                set.insert(t);
+                if seen.insert(t.clone()) {
+                    *counts.entry(t).or_insert(0) += 1;
+                }
             }
         }
-        Ok(set.into_iter().collect())
+        Ok(counts.into_iter().collect())
     }
 
     async fn list_folders(&self) -> Result<Vec<(String, u64)>, StoreError> {
@@ -788,9 +791,8 @@ mod tests {
             vec![1]
         );
 
-        let mut tags = s.list_tags().await.unwrap();
-        tags.sort();
-        assert_eq!(tags, vec!["rust".to_string(), "web".to_string()]);
+        let tags = s.list_tags().await.unwrap();
+        assert_eq!(tags, vec![("rust".to_string(), 1), ("web".to_string(), 2)]);
     }
 
     #[tokio::test]

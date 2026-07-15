@@ -142,8 +142,10 @@ Postgres; o painel cai para filtro client-side).
 
 ### `GET /admin/tags`
 
-O conjunto distinto de tags entre todos os links, para o filtro do painel.
-Escopo: `links_read`. Retorna `{"tags": [...]}`.
+As tags distintas entre todos os links com a contagem de links, para o filtro do
+painel. Escopo: `links_read`. Retorna
+`{"tags": [{"name": "...", "count": N}, ...]}`, ordenado por nome. Uma tag
+repetida no mesmo link conta esse link uma vez.
 
 ### `GET /admin/folders`
 

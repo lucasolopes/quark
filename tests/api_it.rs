@@ -747,7 +747,7 @@ async fn create_with_tags_then_filter_by_tag() {
 }
 
 #[tokio::test]
-async fn admin_tags_returns_distinct_set() {
+async fn admin_tags_returns_names_with_counts() {
     let app = app_admin("secret").await;
     for (u, tags) in [
         ("https://a.com", r#"["rust", "web"]"#),
@@ -778,17 +778,13 @@ async fn admin_tags_returns_distinct_set() {
         .await
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    let mut tags: Vec<String> = v["tags"]
-        .as_array()
-        .unwrap()
+    // Sorted by name: cli(1), rust(1), web(2).
+    let rows = v["tags"].as_array().unwrap();
+    let pairs: Vec<(&str, u64)> = rows
         .iter()
-        .map(|t| t.as_str().unwrap().to_string())
+        .map(|t| (t["name"].as_str().unwrap(), t["count"].as_u64().unwrap()))
         .collect();
-    tags.sort();
-    assert_eq!(
-        tags,
-        vec!["cli".to_string(), "rust".to_string(), "web".to_string()]
-    );
+    assert_eq!(pairs, vec![("cli", 1), ("rust", 1), ("web", 2)]);
 }
 
 #[tokio::test]

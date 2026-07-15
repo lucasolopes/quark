@@ -139,8 +139,10 @@ is Postgres-only; the panel falls back to client-side filtering).
 
 ### `GET /admin/tags`
 
-The distinct set of tags across all links, for the panel's filter. Scope:
-`links_read`. Returns `{"tags": [...]}`.
+The distinct tags across all links with their link counts, for the panel's
+filter. Scope: `links_read`. Returns
+`{"tags": [{"name": "...", "count": N}, ...]}`, sorted by name. A tag repeated
+on the same link counts that link once.
 
 ### `GET /admin/folders`
 

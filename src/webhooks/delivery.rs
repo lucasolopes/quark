@@ -842,7 +842,7 @@ mod tests {
         ) -> Result<Vec<(u64, Record)>, StoreError> {
             unimplemented!()
         }
-        async fn list_tags(&self) -> Result<Vec<String>, StoreError> {
+        async fn list_tags(&self) -> Result<Vec<(String, u64)>, StoreError> {
             unimplemented!()
         }
         async fn list_folders(&self) -> Result<Vec<(String, u64)>, StoreError> {

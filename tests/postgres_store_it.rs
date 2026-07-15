@@ -237,9 +237,8 @@ async fn tags_round_trip_filter_and_distinct_pg() {
     ids.sort();
     assert_eq!(ids, vec![1, 2]);
 
-    let mut tags = s.list_tags().await.unwrap();
-    tags.sort();
-    assert_eq!(tags, vec!["rust".to_string(), "web".to_string()]);
+    let tags = s.list_tags().await.unwrap();
+    assert_eq!(tags, vec![("rust".to_string(), 1), ("web".to_string(), 2)]);
 }
 
 #[tokio::test]

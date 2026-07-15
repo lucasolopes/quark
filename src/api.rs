@@ -1114,7 +1114,13 @@ async fn admin_tags_list(State(st): State<Arc<AppState>>, headers: HeaderMap) ->
         return status.into_response();
     }
     match st.store.list_tags().await {
-        Ok(tags) => Json(serde_json::json!({ "tags": tags })).into_response(),
+        Ok(tags) => {
+            let rows: Vec<serde_json::Value> = tags
+                .into_iter()
+                .map(|(name, count)| serde_json::json!({ "name": name, "count": count }))
+                .collect();
+            Json(serde_json::json!({ "tags": rows })).into_response()
+        }
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
