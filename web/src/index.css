@@ -168,6 +168,15 @@ body {
   .font-heading {
     font-feature-settings: "tnum";
   }
+  /* Native <select> option popups: color-scheme alone is not honored by the
+     Chrome/Windows native dropdown, so the theme's light option text landed on
+     the OS light popup (white on white in the dark theme). Give options an
+     explicit opaque background and text color so the popup is readable
+     regardless of the native chrome. */
+  option {
+    background-color: var(--popover);
+    color: var(--popover-foreground);
+  }
 }
 
 /* Lime glow — reserved for the brand and active accents (don't decorate freely). */
