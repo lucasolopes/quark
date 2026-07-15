@@ -46,6 +46,8 @@ fn bench(c: &mut Criterion) {
                     app_ios: None,
                     app_android: None,
                     folder: None,
+                    fallback_url: None,
+                    password_hash: None,
                 },
             )
             .await
@@ -64,6 +66,7 @@ fn bench(c: &mut Criterion) {
             cache,
             store: store.clone(),
             key,
+            signing_key: [0u8; 32],
             analytics_tx: tx.clone(),
             sink,
             admin_token: None,

@@ -18,29 +18,41 @@ type HmacSha256 = Hmac<Sha256>;
 /// How long a successful unlock is remembered by the signed cookie.
 pub const UNLOCK_TTL_SECS: u64 = 12 * 3600;
 
-/// HMAC-SHA256 over `"<code>.<expiry>"` keyed by the dedicated 32-byte signing
-/// key, base64url (no pad). Binds an unlock token to one code and one expiry, so
-/// a token cannot be replayed for a different link or after it lapses.
-fn sign_unlock(key: &[u8], code: &str, expiry: u64) -> Vec<u8> {
+/// HMAC-SHA256 over `"<code>.<expiry>.<password_hash>"` keyed by the dedicated
+/// 32-byte signing key, base64url (no pad). Binding the current password hash
+/// means rotating (or removing) the password changes the hash and instantly
+/// invalidates every outstanding unlock token; binding the code and expiry means
+/// a token cannot be replayed for another link or after it lapses.
+fn sign_unlock(key: &[u8], code: &str, expiry: u64, password_hash: &str) -> Vec<u8> {
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(code.as_bytes());
     mac.update(b".");
     mac.update(expiry.to_string().as_bytes());
+    mac.update(b".");
+    mac.update(password_hash.as_bytes());
     mac.finalize().into_bytes().to_vec()
 }
 
 /// Builds the unlock cookie *value* (`"<expiry>.<base64url(mac)>"`) for a code
 /// unlocked at `now`, plus the absolute `expiry` (for the cookie's `Max-Age`).
-/// The caller adds the cookie name/attributes.
-pub fn unlock_token(key: &[u8], code: &str, now: u64) -> (String, u64) {
+/// The caller adds the cookie name/attributes. `password_hash` is the link's
+/// current hash, bound into the token so it dies when the password changes.
+pub fn unlock_token(key: &[u8], code: &str, password_hash: &str, now: u64) -> (String, u64) {
     let expiry = now.saturating_add(UNLOCK_TTL_SECS);
-    let mac = b64.encode(sign_unlock(key, code, expiry));
+    let mac = b64.encode(sign_unlock(key, code, expiry, password_hash));
     (format!("{expiry}.{mac}"), expiry)
 }
 
-/// Whether an unlock cookie value is a valid, unexpired token for `code`.
-/// Constant-time MAC comparison via `verify_slice`.
-pub fn unlock_token_valid(token: &str, key: &[u8], code: &str, now: u64) -> bool {
+/// Whether an unlock cookie value is a valid, unexpired token for `code` under
+/// the link's current `password_hash`. Constant-time MAC comparison via
+/// `verify_slice`.
+pub fn unlock_token_valid(
+    token: &str,
+    key: &[u8],
+    code: &str,
+    password_hash: &str,
+    now: u64,
+) -> bool {
     let Some((exp_str, mac_b64)) = token.split_once('.') else {
         return false;
     };
@@ -57,6 +69,8 @@ pub fn unlock_token_valid(token: &str, key: &[u8], code: &str, now: u64) -> bool
     mac.update(code.as_bytes());
     mac.update(b".");
     mac.update(expiry.to_string().as_bytes());
+    mac.update(b".");
+    mac.update(password_hash.as_bytes());
     mac.verify_slice(&provided).is_ok()
 }
 
@@ -117,36 +131,45 @@ mod tests {
 
     const KEY: &[u8; 32] = b"unit-test-signing-key-0123456789";
     const KEY2: &[u8; 32] = b"another-signing-key-abcdefghijkl";
+    const H: &str = "$argon2id$v=19$m=19456,t=2,p=1$aaaa$bbbb";
+    const H2: &str = "$argon2id$v=19$m=19456,t=2,p=1$cccc$dddd";
 
     #[test]
     fn fresh_unlock_token_is_valid() {
-        let (tok, _exp) = unlock_token(KEY, "abc123", 1000);
-        assert!(unlock_token_valid(&tok, KEY, "abc123", 1000));
+        let (tok, _exp) = unlock_token(KEY, "abc123", H, 1000);
+        assert!(unlock_token_valid(&tok, KEY, "abc123", H, 1000));
     }
 
     #[test]
     fn unlock_token_for_another_code_is_rejected() {
-        let (tok, _) = unlock_token(KEY, "abc123", 1000);
-        assert!(!unlock_token_valid(&tok, KEY, "other", 1000));
+        let (tok, _) = unlock_token(KEY, "abc123", H, 1000);
+        assert!(!unlock_token_valid(&tok, KEY, "other", H, 1000));
     }
 
     #[test]
     fn unlock_token_with_wrong_key_is_rejected() {
-        let (tok, _) = unlock_token(KEY, "abc123", 1000);
-        assert!(!unlock_token_valid(&tok, KEY2, "abc123", 1000));
+        let (tok, _) = unlock_token(KEY, "abc123", H, 1000);
+        assert!(!unlock_token_valid(&tok, KEY2, "abc123", H, 1000));
+    }
+
+    #[test]
+    fn unlock_token_after_password_rotation_is_rejected() {
+        // Rotating the password changes the hash, which must invalidate the token.
+        let (tok, _) = unlock_token(KEY, "abc123", H, 1000);
+        assert!(!unlock_token_valid(&tok, KEY, "abc123", H2, 1000));
     }
 
     #[test]
     fn expired_unlock_token_is_rejected() {
-        let (tok, exp) = unlock_token(KEY, "abc123", 1000);
-        assert!(!unlock_token_valid(&tok, KEY, "abc123", exp));
-        assert!(!unlock_token_valid(&tok, KEY, "abc123", exp + 1));
+        let (tok, exp) = unlock_token(KEY, "abc123", H, 1000);
+        assert!(!unlock_token_valid(&tok, KEY, "abc123", H, exp));
+        assert!(!unlock_token_valid(&tok, KEY, "abc123", H, exp + 1));
     }
 
     #[test]
     fn tampered_unlock_token_is_rejected() {
-        let (tok, _) = unlock_token(KEY, "abc123", 1000);
-        assert!(!unlock_token_valid("garbage", KEY, "abc123", 1000));
-        assert!(!unlock_token_valid(&format!("{tok}x"), KEY, "abc123", 1000));
+        let (tok, _) = unlock_token(KEY, "abc123", H, 1000);
+        assert!(!unlock_token_valid("garbage", KEY, "abc123", H, 1000));
+        assert!(!unlock_token_valid(&format!("{tok}x"), KEY, "abc123", H, 1000));
     }
 }

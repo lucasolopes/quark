@@ -811,10 +811,11 @@ fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 /// Whether the request carries a valid, unexpired unlock cookie for `code`
-/// (the link's canonical code). `key` is the dedicated 32-byte signing secret.
-fn is_unlocked(headers: &HeaderMap, key: &[u8], code: &str, now: u64) -> bool {
+/// (the link's canonical code) under its current `password_hash`. `key` is the
+/// dedicated 32-byte signing secret.
+fn is_unlocked(headers: &HeaderMap, key: &[u8], code: &str, password_hash: &str, now: u64) -> bool {
     match cookie_value(headers, &format!("qk_pw_{code}")) {
-        Some(v) => crate::password::unlock_token_valid(v, key, code, now),
+        Some(v) => crate::password::unlock_token_valid(v, key, code, password_hash, now),
         None => false,
     }
 }
@@ -826,7 +827,10 @@ fn request_is_https(headers: &HeaderMap) -> bool {
     headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.eq_ignore_ascii_case("https"))
+        // Chained proxies produce a comma-list like "https, http"; the original
+        // client scheme is the first entry.
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().eq_ignore_ascii_case("https"))
         .unwrap_or(false)
 }
 
@@ -1003,18 +1007,23 @@ async fn unlock(
     };
     let submitted = form_field(&body, "password").unwrap_or_default();
     // argon2 is memory-hard; verify off the async worker so it never stalls the
-    // runtime that serves redirects.
-    let ok = tokio::task::spawn_blocking(move || crate::password::verify_password(&submitted, &hash))
-        .await
-        .unwrap_or(false);
+    // runtime that serves redirects. Clone the hash into the task and keep the
+    // original to bind into the unlock token below.
+    let hash_for_verify = hash.clone();
+    let ok = tokio::task::spawn_blocking(move || {
+        crate::password::verify_password(&submitted, &hash_for_verify)
+    })
+    .await
+    .unwrap_or(false);
     if !ok {
         return interstitial_response(&code, raw_query.as_deref(), &headers, true);
     }
     // Key the unlock cookie to the canonical code (not the path string) with
     // Path=/, so it is honored whether the visitor returns via the alias or the
-    // code, and the cookie name is always a safe base62 string.
+    // code, and the cookie name is always a safe base62 string. The token is also
+    // bound to the current password hash, so rotating the password kills it.
     let canonical = codec::to_base62(permute::encode(id, st.key));
-    let (token, _expiry) = crate::password::unlock_token(&st.signing_key, &canonical, now());
+    let (token, _expiry) = crate::password::unlock_token(&st.signing_key, &canonical, &hash, now());
     let secure = if request_is_https(&headers) { "; Secure" } else { "" };
     let cookie = format!(
         "qk_pw_{canonical}={token}; Max-Age={}; Path=/; HttpOnly; SameSite=Lax{secure}",
@@ -1077,11 +1086,12 @@ async fn redirect(
             // expired link stays expired regardless of the password. The unlock
             // cookie is keyed to the link's canonical code (not the path string),
             // so it works whether the visitor arrived via the alias or the code.
-            let canonical = codec::to_base62(permute::encode(id, st.key));
-            if rec.password_hash.is_some()
-                && !is_unlocked(&headers, &st.signing_key, &canonical, now)
-            {
-                return interstitial_response(&code, raw_query.as_deref(), &headers, false);
+            // `canonical` is computed only here, never on the unprotected hot path.
+            if let Some(hash) = rec.password_hash.as_deref() {
+                let canonical = codec::to_base62(permute::encode(id, st.key));
+                if !is_unlocked(&headers, &st.signing_key, &canonical, hash, now) {
+                    return interstitial_response(&code, raw_query.as_deref(), &headers, false);
+                }
             }
             if let Some(max) = rec.max_visits {
                 let n = match st.store.bump_visits(id).await {

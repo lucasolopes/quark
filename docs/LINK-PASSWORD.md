@@ -76,3 +76,8 @@ The API never returns the hash. Link rows expose only `has_password: true|false`
   behind a TLS-terminating proxy).
 - A password is checked only for the direct redirect. If a link has both a
   password and an expiry, expiry wins: an expired link never shows the prompt.
+- Protect a link before you share it. If a link was public and a shared CDN
+  already cached its redirect, adding a password later cannot evict that cached
+  entry, so the CDN may keep serving the destination until the cache lapses.
+- Rotating or removing the password immediately invalidates every existing
+  unlock cookie, so anyone who unlocked with the old password must re-enter it.

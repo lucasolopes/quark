@@ -626,6 +626,53 @@ async fn protected_unlock_preserves_query_string() {
 }
 
 #[tokio::test]
+async fn rotating_password_invalidates_existing_unlock_cookie() {
+    let app = app_admin("secret").await;
+    let code = create_protected(&app, "https://secret.example.com", "hunter2").await;
+
+    // Unlock and capture the cookie.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/{code}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("password=hunter2"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let set_cookie = resp.headers()["set-cookie"].to_str().unwrap().to_string();
+    let cookie = set_cookie.split(';').next().unwrap().to_string();
+
+    // Rotate the password.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/admin/links/{code}"))
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(r#"{"password":"newpass"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // The old cookie must no longer unlock: the interstitial is shown again.
+    let resp = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
+}
+
+#[tokio::test]
 async fn protected_link_wrong_password_reprompts_without_cookie() {
     let app = app_admin("secret").await;
     let code = create_protected(&app, "https://secret.example.com", "hunter2").await;

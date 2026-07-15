@@ -75,3 +75,8 @@ A API nunca devolve o hash. As linhas de link expõem só `has_password: true|fa
   de um proxy que termina o TLS).
 - A senha só é checada no redirect direto. Se um link tem senha e expiração, a
   expiração ganha: um link expirado nunca mostra o prompt.
+- Proteja o link antes de divulgar. Se o link era público e um CDN compartilhado
+  já cacheou o redirect, adicionar senha depois não desaloja essa entrada
+  cacheada, então o CDN pode seguir servindo o destino até o cache expirar.
+- Trocar ou remover a senha invalida na hora todos os cookies de unlock
+  existentes, então quem desbloqueou com a senha antiga precisa digitar de novo.
