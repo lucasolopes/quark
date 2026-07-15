@@ -26,6 +26,7 @@ async fn app_with_token(admin_token: Option<&str>) -> axum::Router {
         cache,
         store,
         key: 0x1234,
+        signing_key: [0u8; 32],
         analytics_tx,
         sink,
         admin_token: admin_token.map(|s| s.to_string()),

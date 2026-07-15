@@ -18,6 +18,7 @@ store.
 | Variable | Default | Purpose |
 |---|---|---|
 | `QUARK_KEY` | dev fallback `11400714819323198485` (loud warning) | The permutation key, parsed as a **decimal** `u64`. It is what makes the code space unpredictable per instance. Set a random value in production and keep it out of source control. A hex string will not parse and silently falls back to the dev key. |
+| `QUARK_SIGNING_KEY` | random per process (loud warning) | Base64 secret (>= 32 bytes) that signs link-password unlock cookies, kept separate from `QUARK_KEY`. Unset means a fresh random key each start, so unlock cookies do not survive a restart and are not shared across nodes. Set it (and share it across replicas) for multi-node or persistent deployments. Only relevant if you use password-protected links. |
 | `QUARK_ADDR` | `0.0.0.0:8080` | HTTP bind address. |
 | `QUARK_DATA` | `./data` (container image: `/data`) | LMDB data directory, created if missing. Only used when the store is LMDB (unset `QUARK_DATABASE_URL`). |
 

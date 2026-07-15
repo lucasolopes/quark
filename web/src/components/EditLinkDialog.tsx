@@ -76,6 +76,8 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
   const [appIos, setAppIos] = useState(link.app_ios ?? "");
   const [appAndroid, setAppAndroid] = useState(link.app_android ?? "");
   const [fallbackUrl, setFallbackUrl] = useState(link.fallback_url ?? "");
+  const [password, setPassword] = useState("");
+  const [removePassword, setRemovePassword] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
 
@@ -187,6 +189,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
           ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : link.app_android?.trim() ? { app_android: null } : {}),
           ...(folder.trim() ? { folder: folder.trim() } : link.folder?.trim() ? { folder: null } : {}),
           ...(fallbackUrl.trim() ? { fallback_url: fallbackUrl.trim() } : link.fallback_url?.trim() ? { fallback_url: null } : {}),
+          ...(removePassword ? { password: null } : password.trim() ? { password: password.trim() } : {}),
         },
       });
       toast.success(t("dialogs.edit.successToast"));
@@ -336,6 +339,42 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
                 <p className="text-sm text-destructive" role="alert">
                   {errors.fallbackUrl}
                 </p>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="edit-link-password" className="text-sm font-medium">
+                {t("dialogs.edit.passwordLabel")}
+              </label>
+              <p className="text-sm text-muted-foreground">
+                {link.has_password ? t("dialogs.edit.passwordNoteProtected") : t("dialogs.edit.passwordNote")}
+              </p>
+              <Input
+                id="edit-link-password"
+                type="password"
+                autoComplete="new-password"
+                placeholder={
+                  link.has_password
+                    ? t("dialogs.edit.passwordPlaceholderProtected")
+                    : t("dialogs.edit.passwordPlaceholder")
+                }
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={removePassword}
+              />
+              {link.has_password && (
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="size-4 rounded border-input accent-primary"
+                    checked={removePassword}
+                    onChange={(e) => {
+                      setRemovePassword(e.target.checked);
+                      if (e.target.checked) setPassword("");
+                    }}
+                  />
+                  {t("dialogs.edit.removePasswordLabel")}
+                </label>
               )}
             </div>
 

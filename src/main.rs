@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use quark::analytics::spawn_worker;
 use quark::api::{router, AppState};
 use quark::cache::valkey::ValkeyTier;
@@ -34,8 +35,32 @@ async fn main() {
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or_else(|| {
-            eprintln!("WARNING: QUARK_KEY not set — using dev key. DO NOT use in production.");
+            eprintln!("WARNING: QUARK_KEY not set. Using dev key. DO NOT use in production.");
             0x9E3779B97F4A7C15
+        });
+    // Dedicated secret for signing link-password unlock cookies, separate from
+    // QUARK_KEY. From QUARK_SIGNING_KEY (base64, >= 32 bytes) when set; otherwise
+    // a random per-process key. A random key means unlock cookies do not survive
+    // a restart and are NOT shared across nodes, so multi-node deployments must
+    // set QUARK_SIGNING_KEY.
+    let signing_key: [u8; 32] = std::env::var("QUARK_SIGNING_KEY")
+        .ok()
+        .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s.trim()).ok())
+        .filter(|b| b.len() >= 32)
+        .map(|b| {
+            let mut k = [0u8; 32];
+            k.copy_from_slice(&b[..32]);
+            k
+        })
+        .unwrap_or_else(|| {
+            eprintln!(
+                "WARNING: QUARK_SIGNING_KEY not set (or < 32 bytes). Using a random per-process \
+                 key; link-password unlock cookies will not survive a restart and are not shared \
+                 across nodes. Set QUARK_SIGNING_KEY for multi-node or persistent deployments."
+            );
+            let mut k = [0u8; 32];
+            getrandom::fill(&mut k).expect("system RNG must be available");
+            k
         });
     let (store, sink) = open_backends(std::path::Path::new(&path))
         .await
@@ -190,6 +215,7 @@ async fn main() {
         cache,
         store,
         key,
+        signing_key,
         analytics_tx,
         sink,
         admin_token,

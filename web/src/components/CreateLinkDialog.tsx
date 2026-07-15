@@ -86,6 +86,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
   const [appIos, setAppIos] = useState("");
   const [appAndroid, setAppAndroid] = useState("");
   const [fallbackUrl, setFallbackUrl] = useState("");
+  const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<FormErrors>({});
   const [utmOpen, setUtmOpen] = useState(false);
   const [utm, setUtm] = useState<UtmParams>(EMPTY_UTM);
@@ -107,6 +108,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
     setAppIos("");
     setAppAndroid("");
     setFallbackUrl("");
+    setPassword("");
     setErrors({});
     setUtmOpen(false);
     setUtm(EMPTY_UTM);
@@ -247,6 +249,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
         ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : {}),
         ...(folder.trim() ? { folder: folder.trim() } : {}),
         ...(fallbackUrl.trim() ? { fallback_url: fallbackUrl.trim() } : {}),
+        ...(password.trim() ? { password: password.trim() } : {}),
       });
       toast.success(t("dialogs.create.successToast"));
       reset();
@@ -644,6 +647,21 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
                   {errors.fallbackUrl}
                 </p>
               )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="create-link-password" className="text-sm font-medium">
+                {t("dialogs.create.passwordLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
+              </label>
+              <p className="text-sm text-muted-foreground">{t("dialogs.create.passwordNote")}</p>
+              <Input
+                id="create-link-password"
+                type="password"
+                autoComplete="new-password"
+                placeholder={t("dialogs.create.passwordPlaceholder")}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
             </div>
 
             <div className="flex flex-col gap-1.5">

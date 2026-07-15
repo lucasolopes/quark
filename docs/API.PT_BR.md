@@ -57,6 +57,7 @@ Corpo da requisição (`application/json`):
 | `app_android` | string, opcional | Destino deep-link Android. |
 | `folder` | string, opcional | Uma pasta a que o link pertence. Trim, teto de 48 chars, case preservado; vazio vira nenhuma. |
 | `fallback_url` | string, opcional | Para onde mandar o visitante quando o link já expirou (por TTL ou `max_visits`) em vez de `410`. `http`/`https`, não-interna; vazio vira nenhuma. |
+| `password` | string, opcional | Protege o link com senha. Guardada como hash argon2id; o texto puro nunca é persistido nem devolvido. Vazia/ausente = sem senha. |
 
 Sucesso: `200` com `{"code": "...", "url": "..."}`.
 
@@ -89,6 +90,7 @@ Respostas:
 | `302 Found` | Link resolvido e vivo. | `Location`, `Cache-Control` ciente do TTL. |
 | `302 Found` | Expirado (TTL ou `max_visits`) e há um `fallback_url`. | `Location: <fallback_url>`, `Cache-Control: no-store`. |
 | `410 Gone` | Expirado (TTL ou `max_visits`) sem `fallback_url`. | `Cache-Control: no-store`. |
+| `200 OK` | Link protegido por senha e a requisição não tem cookie de unlock válido. | interstitial `text/html`, `Cache-Control: no-store`. |
 | `404 Not Found` | Sem tal código ou alias. | `Cache-Control: no-store`. |
 | `503 Service Unavailable` | Erro de backend. | |
 
@@ -97,6 +99,24 @@ prioridade: um deep-link de app por dispositivo ganha primeiro, depois uma regra
 geo/dispositivo que casa, depois uma variante A/B por peso, e um link sem nada
 disso redireciona para o `url`. Veja
 [ARCHITECTURE](ARCHITECTURE.PT_BR.md#fluxo-de-redirect).
+
+### `POST /:code`
+
+Desbloqueia um link protegido por senha. Público, rate-limited (por IP do
+cliente, compartilhado com o create). Corpo `application/x-www-form-urlencoded`
+com um campo `password`.
+
+| Status | Quando | Headers |
+|---|---|---|
+| `303 See Other` | Senha correta. | `Location: /<code>`, `Set-Cookie: qk_pw_<code>=…` (assinado, `HttpOnly`, `SameSite=Lax`, 12h), `Cache-Control: no-store`. |
+| `200 OK` | Senha errada. | interstitial `text/html` com erro, sem cookie. |
+| `429 Too Many Requests` | Acima do limite. | |
+
+No sucesso o quark redireciona de volta pro `GET /:code`; a requisição seguinte
+leva o cookie de unlock, então a resolução de destino, o incremento de visitas e
+o registro do clique acontecem uma vez só no caminho canônico. O cookie deixa
+visitas repetidas em 12h pularem o interstitial. A senha é verificada contra um
+hash argon2id; o texto puro nunca é armazenado.
 
 ### Arquivos well-known (deep linking)
 
@@ -136,8 +156,9 @@ Parâmetros de query: `after` (cursor de id), `limit` (default 50, teto 500),
 
 Sucesso: `200` com `{"links": [...], "next_after": <id ou null>}`. Cada linha
 traz `id`, `code`, `alias` opcional, `url`, `expiry`, `created`, `tags`,
-`max_visits` opcional, `visits`, `rules`, `variants`, e um `folder` opcional
-(omitido quando o link não tem pasta).
+`max_visits` opcional, `visits`, `rules`, `variants`, um `folder` opcional
+(omitido quando o link não tem pasta), um `fallback_url` opcional, e
+`has_password` (um bool; o hash da senha nunca é devolvido).
 
 `501 Not Implemented` volta quando `q` é usado no backend LMDB (busca é só
 Postgres; o painel cai para filtro client-side).
@@ -159,12 +180,13 @@ pasta não entram na contagem.
 ### `PATCH /admin/links/:code`
 
 Edita um link. Escopo: `links_write`. O corpo é um objeto JSON parcial; só as
-chaves presentes mudam. Mandar `null` (ou, para `fallback_url`, string vazia)
-para `ttl`, `max_visits`, `app_ios`, `app_android`, `folder` ou `fallback_url`
-limpa o campo.
+chaves presentes mudam. Mandar `null` (ou, para `fallback_url`/`password`,
+string vazia) para `ttl`, `max_visits`, `app_ios`, `app_android`, `folder`,
+`fallback_url` ou `password` limpa o campo. Um `password` não-vazio define um
+novo hash.
 
 Chaves aceitas: `url`, `ttl`, `tags`, `max_visits`, `rules`, `variants`,
-`app_ios`, `app_android`, `folder`, `fallback_url`. Cada uma é validada como na criação (esquema
+`app_ios`, `app_android`, `folder`, `fallback_url`, `password`. Cada uma é validada como na criação (esquema
 de URL, guard SSRF, tetos de regra e variante; o nome da pasta é aparado e
 limitado). `200` no sucesso, `404` se o código não resolve, `400`/`403` num
 campo rejeitado.

@@ -86,6 +86,20 @@ describe("CreateLinkDialog", () => {
     expect(body.fallback_url).toBe("https://ended.com");
   });
 
+  it("sends password when the field is set", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
+    );
+    render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
+    await userEvent.type(screen.getByLabelText(/password/i), "hunter2");
+    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(String(init?.body));
+    expect(body.password).toBe("hunter2");
+  });
+
   it("filling in UTM fields sends the utm-tagged url on submit", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),

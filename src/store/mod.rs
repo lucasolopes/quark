@@ -54,6 +54,12 @@ pub struct Record {
     /// to `None` and the field is omitted when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_url: Option<String>,
+    /// Optional argon2 PHC hash of a per-link password. When set, a visitor must
+    /// pass an interstitial before the redirect. The plaintext is never stored.
+    /// `#[serde(default, skip_serializing_if)]` so old blobs/rows without this
+    /// field deserialize to `None` and the field is omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_hash: Option<String>,
 }
 
 /// Maximum number of tags kept per link (extra tags beyond this are dropped).
@@ -492,6 +498,7 @@ mod tests {
             app_android: None,
             folder: None,
             fallback_url: Some("https://example.com/ended".into()),
+            password_hash: None,
         };
         let json = serde_json::to_string(&rec).unwrap();
         let back: Record = serde_json::from_str(&json).unwrap();
@@ -574,6 +581,7 @@ mod rules_tests {
             app_android: None,
             folder: None,
             fallback_url: None,
+            password_hash: None,
         }
     }
 

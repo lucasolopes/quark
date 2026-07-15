@@ -19,6 +19,7 @@ async fn round_trip_via_trait_object() {
         app_android: None,
         folder: None,
         fallback_url: None,
+        password_hash: None,
     };
     store.put_link(id, &rec).await.unwrap();
 
