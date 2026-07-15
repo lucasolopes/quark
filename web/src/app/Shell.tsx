@@ -5,6 +5,7 @@ import { QuarkMark } from "@/components/brand/QuarkMark";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
+import { api } from "@/lib/api";
 import { clearToken } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +46,8 @@ export function Shell() {
 
   function handleLogout() {
     clearToken();
+    // Revoke the OIDC session server-side too (no-op if it was a token login).
+    void api.logout().catch(() => {});
     navigate("/login", { replace: true });
   }
 

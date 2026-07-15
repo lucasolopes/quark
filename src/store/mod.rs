@@ -366,6 +366,19 @@ pub trait Store: Send + Sync + 'static {
     async fn put_api_token(&self, token: &ApiToken) -> Result<(), StoreError>;
     async fn delete_api_token(&self, id: u64) -> Result<bool, StoreError>;
     async fn next_api_token_id(&self) -> Result<u64, StoreError>;
+    /// Persists an OIDC login session (keyed by its token hash).
+    async fn put_session(&self, session: &crate::auth::Session) -> Result<(), StoreError>;
+    /// Looks up a session by its token hash. Returns `None` when absent OR
+    /// expired (`expires <= now`), so an expired cookie never authenticates.
+    async fn get_session_by_hash(
+        &self,
+        token_hash: &str,
+        now: u64,
+    ) -> Result<Option<crate::auth::Session>, StoreError>;
+    /// Deletes a session (logout / revoke); a missing session is not an error.
+    async fn delete_session(&self, token_hash: &str) -> Result<(), StoreError>;
+    /// Removes all sessions that expired at or before `now`.
+    async fn gc_sessions(&self, now: u64) -> Result<(), StoreError>;
     /// Atomically increments the visit counter for `id` and returns the new
     /// total. Separate from `Record` so that a hit doesn't require rewriting
     /// the whole record. Only called for links that opted into `max_visits`.

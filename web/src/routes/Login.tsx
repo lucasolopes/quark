@@ -9,18 +9,33 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n";
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api, oidcLoginUrl } from "@/lib/api";
 import { clearToken, setToken } from "@/lib/auth";
 
 export function Login() {
   const t = useT();
   const [value, setValue] = useState("");
+  const [oidcEnabled, setOidcEnabled] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     inputRef.current?.focus();
-  }, []);
+    // Detect an existing session (e.g. right after the OIDC callback redirect)
+    // and whether the provider button should be shown.
+    let alive = true;
+    api
+      .me()
+      .then((me) => {
+        if (!alive) return;
+        if (me.authenticated) navigate("/links", { replace: true });
+        else setOidcEnabled(me.oidc_enabled);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [navigate]);
 
   const mutation = useMutation({
     mutationFn: async (token: string) => {
@@ -93,6 +108,25 @@ export function Login() {
               {t("login.submit")}
             </Button>
           </form>
+          {oidcEnabled && (
+            <>
+              <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="h-px flex-1 bg-border" />
+                {t("login.or")}
+                <span className="h-px flex-1 bg-border" />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  window.location.href = oidcLoginUrl();
+                }}
+              >
+                {t("login.oidcButton")}
+              </Button>
+            </>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -19,7 +19,7 @@ const LOCAL_BITS: u32 = 40 - NODE_BITS;
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1;
 
 /// Number of named LMDB sub-databases opened in the environment.
-const MAX_DBS: u32 = 11;
+const MAX_DBS: u32 = 12;
 /// Virtual address space (mmap) reserved for the LMDB environment.
 const MAP_SIZE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 
@@ -63,6 +63,7 @@ pub struct LmdbStore {
     pixels: Database<BeU64, Bytes>,
     wellknown: Database<Str, Str>,
     health: Database<BeU64, Bytes>,
+    sessions: Database<Str, Bytes>,
     node_id: Option<u8>,
 }
 
@@ -94,6 +95,7 @@ impl LmdbStore {
         let pixels = env.create_database(&mut wtxn, Some("pixels"))?;
         let wellknown = env.create_database(&mut wtxn, Some("wellknown"))?;
         let health = env.create_database(&mut wtxn, Some("health"))?;
+        let sessions = env.create_database(&mut wtxn, Some("sessions"))?;
         wtxn.commit()?;
         Ok(LmdbStore {
             env,
@@ -108,6 +110,7 @@ impl LmdbStore {
             pixels,
             wellknown,
             health,
+            sessions,
             node_id,
         })
     }
@@ -368,6 +371,58 @@ impl Store for LmdbStore {
     ) -> Result<bool, StoreError> {
         // LMDB is single-node: there is only ever one checker.
         Ok(true)
+    }
+
+    async fn put_session(&self, session: &crate::auth::Session) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec(session)?;
+        let mut wtxn = self.env.write_txn()?;
+        self.sessions.put(&mut wtxn, &session.token_hash, &bytes)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn get_session_by_hash(
+        &self,
+        token_hash: &str,
+        now: u64,
+    ) -> Result<Option<crate::auth::Session>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        match self.sessions.get(&rtxn, token_hash)? {
+            Some(bytes) => {
+                let s: crate::auth::Session = serde_json::from_slice(bytes)?;
+                Ok(if s.expires <= now { None } else { Some(s) })
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_session(&self, token_hash: &str) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        self.sessions.delete(&mut wtxn, token_hash)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn gc_sessions(&self, now: u64) -> Result<(), StoreError> {
+        let mut expired: Vec<String> = Vec::new();
+        {
+            let rtxn = self.env.read_txn()?;
+            for item in self.sessions.iter(&rtxn)? {
+                let (hash, bytes) = item?;
+                let s: crate::auth::Session = serde_json::from_slice(bytes)?;
+                if s.expires <= now {
+                    expired.push(hash.to_string());
+                }
+            }
+        }
+        if !expired.is_empty() {
+            let mut wtxn = self.env.write_txn()?;
+            for hash in &expired {
+                self.sessions.delete(&mut wtxn, hash)?;
+            }
+            wtxn.commit()?;
+        }
+        Ok(())
     }
 
     async fn list_tags(&self) -> Result<Vec<(String, u64)>, StoreError> {
@@ -1022,6 +1077,42 @@ mod tests {
         let got = s.get_link(1).await.unwrap().unwrap();
         assert_eq!(got.app_ios.as_deref(), Some("https://apps.apple.com/x"));
         assert_eq!(got.app_android, None);
+    }
+
+    #[tokio::test]
+    async fn session_round_trip_expiry_and_gc() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let sess = crate::auth::Session {
+            token_hash: "abc".into(),
+            subject: "sub-1".into(),
+            display: "a@example.com".into(),
+            scopes: vec![crate::auth::Scope::Full],
+            created: 10,
+            expires: 100,
+        };
+        s.put_session(&sess).await.unwrap();
+        // Valid before expiry.
+        assert_eq!(
+            s.get_session_by_hash("abc", 50).await.unwrap().unwrap().subject,
+            "sub-1"
+        );
+        // Expired: not returned even though the row still exists.
+        assert!(s.get_session_by_hash("abc", 100).await.unwrap().is_none());
+        assert!(s.get_session_by_hash("missing", 50).await.unwrap().is_none());
+        // Delete (logout).
+        s.delete_session("abc").await.unwrap();
+        assert!(s.get_session_by_hash("abc", 50).await.unwrap().is_none());
+        // gc removes expired rows.
+        s.put_session(&crate::auth::Session { token_hash: "old".into(), expires: 5, ..sess.clone() })
+            .await
+            .unwrap();
+        s.put_session(&crate::auth::Session { token_hash: "new".into(), expires: 999, ..sess.clone() })
+            .await
+            .unwrap();
+        s.gc_sessions(50).await.unwrap();
+        assert!(s.get_session_by_hash("old", 4).await.unwrap().is_none());
+        assert!(s.get_session_by_hash("new", 50).await.unwrap().is_some());
     }
 
     #[tokio::test]

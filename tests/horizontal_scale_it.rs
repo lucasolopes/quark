@@ -25,6 +25,8 @@ async fn pg_replica(url: &str) -> axum::Router {
     let cache = Cache::new(store.clone(), 1000, None);
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
+        oidc: None,
+        oidc_configured: false,
         cache,
         store,
         key: 0x1234,

@@ -8,6 +8,7 @@ pub mod codec;
 pub mod health;
 pub mod import;
 pub mod invalidate;
+pub mod oidc;
 pub mod password;
 pub mod permute;
 pub mod pixel;

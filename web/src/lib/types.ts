@@ -64,6 +64,8 @@ export interface Aggregates {
   per_variant: Record<string, number>;
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
+/** Response of `GET /admin/me`: current principal + whether OIDC is configured. */
+export interface MeResponse { authenticated: boolean; oidc_enabled: boolean; display?: string; scopes?: string[]; }
 export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; variants?: Variant[]; app_ios?: string | null; app_android?: string | null; folder?: string | null; fallback_url?: string | null; password?: string | null; }
 
 /** The 5 link lifecycle events a webhook subscription can be notified about. */

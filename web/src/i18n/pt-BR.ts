@@ -20,6 +20,8 @@ export const ptBR: Messages = {
     tokenLabel: "Token de admin",
     submit: "Entrar",
     sessionStarted: "Sessão iniciada.",
+    or: "ou",
+    oidcButton: "Entrar com provedor",
     invalidToken: "Token inválido. Verifique e tente novamente.",
     connectionError: "Não foi possível conectar. Tente novamente.",
   },

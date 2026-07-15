@@ -264,6 +264,7 @@ impl PostgresStore {
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS link_health (id BIGINT PRIMARY KEY, checked_at BIGINT NOT NULL, status INT, healthy BOOLEAN NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS health_lease (id INT PRIMARY KEY, holder TEXT NOT NULL, expires_at BIGINT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, subject TEXT NOT NULL, display TEXT NOT NULL, scopes JSONB NOT NULL, created BIGINT NOT NULL, expires BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS stats (id BIGINT PRIMARY KEY, agg JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS events (id BIGINT PRIMARY KEY, recent JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS webhooks (id BIGINT PRIMARY KEY, url TEXT NOT NULL, events JSONB NOT NULL, secret TEXT NOT NULL, active BOOLEAN NOT NULL, created BIGINT NOT NULL, kind TEXT NOT NULL DEFAULT 'generic')",
@@ -321,7 +322,7 @@ impl PostgresStore {
     /// Used in tests: resets all state.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, link_health, health_lease, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries RESTART IDENTITY",
+            "TRUNCATE links, aliases, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
@@ -820,6 +821,76 @@ impl Store for PostgresStore {
             ));
         }
         Ok(out)
+    }
+
+    async fn put_session(&self, session: &crate::auth::Session) -> Result<(), StoreError> {
+        let scopes = serde_json::to_value(&session.scopes)?;
+        sqlx::query(
+            "INSERT INTO sessions (token_hash, subject, display, scopes, created, expires) \
+             VALUES ($1,$2,$3,$4,$5,$6) \
+             ON CONFLICT (token_hash) DO UPDATE \
+               SET subject=$2, display=$3, scopes=$4, created=$5, expires=$6",
+        )
+        .bind(&session.token_hash)
+        .bind(&session.subject)
+        .bind(&session.display)
+        .bind(&scopes)
+        .bind(session.created as i64)
+        .bind(session.expires as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn get_session_by_hash(
+        &self,
+        token_hash: &str,
+        now: u64,
+    ) -> Result<Option<crate::auth::Session>, StoreError> {
+        let row = sqlx::query(
+            "SELECT token_hash, subject, display, scopes, created, expires FROM sessions \
+             WHERE token_hash = $1 AND expires > $2",
+        )
+        .bind(token_hash)
+        .bind(now as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => {
+                let scopes: serde_json::Value = r.try_get("scopes").map_err(StoreError::backend)?;
+                let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+                let expires: i64 = r.try_get("expires").map_err(StoreError::backend)?;
+                Ok(Some(crate::auth::Session {
+                    token_hash: r.try_get("token_hash").map_err(StoreError::backend)?,
+                    subject: r.try_get("subject").map_err(StoreError::backend)?,
+                    display: r.try_get("display").map_err(StoreError::backend)?,
+                    scopes: serde_json::from_value(scopes)?,
+                    created: created as u64,
+                    expires: expires as u64,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_session(&self, token_hash: &str) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn gc_sessions(&self, now: u64) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM sessions WHERE expires <= $1")
+            .bind(now as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
     }
 
     async fn list_broken_link_ids(&self) -> Result<Vec<u64>, StoreError> {

@@ -211,6 +211,30 @@ async fn main() {
         Arc::new(dispatcher)
     };
 
+    // OIDC login (opt-in via QUARK_OIDC_ISSUER). A failed init disables login but
+    // never blocks startup: the break-glass admin token still works.
+    let oidc_config = quark::oidc::OidcConfig::from_env();
+    let oidc_configured = oidc_config.is_some();
+    let oidc = match oidc_config {
+        Some(cfg) => {
+            let issuer = cfg.issuer.clone();
+            match quark::oidc::OidcRuntime::init(cfg).await {
+                Ok(rt) => {
+                    eprintln!("oidc login: enabled (issuer {issuer})");
+                    Some(Arc::new(rt))
+                }
+                Err(e) => {
+                    eprintln!("WARNING: OIDC configured but init failed ({e}); login disabled, admin token still works");
+                    None
+                }
+            }
+        }
+        None => {
+            eprintln!("oidc login: disabled (set QUARK_OIDC_ISSUER to enable)");
+            None
+        }
+    };
+
     let state = Arc::new(AppState {
         cache,
         store,
@@ -224,6 +248,8 @@ async fn main() {
         public_host,
         real_ip_header,
         webhooks,
+        oidc,
+        oidc_configured,
     });
     match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {
@@ -256,6 +282,20 @@ async fn main() {
             );
         }
         None => eprintln!("link health checker: disabled (set QUARK_HEALTH_CHECK_SECS to enable)"),
+    }
+
+    // Garbage-collect expired OIDC login sessions hourly (only when OIDC is on).
+    if state.oidc.is_some() {
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                ticker.tick().await;
+                if let Err(e) = store.gc_sessions(quark::now()).await {
+                    eprintln!("{}", serde_json::json!({ "session_gc_error": e.to_string() }));
+                }
+            }
+        });
     }
 
     let app = router(state);

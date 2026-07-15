@@ -23,7 +23,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 
 pub struct AppState {
     pub cache: Cache,
@@ -41,6 +41,12 @@ pub struct AppState {
     pub public_host: Option<String>,
     pub real_ip_header: String,
     pub webhooks: Arc<WebhookDispatcher>,
+    /// OIDC login runtime, present only when OIDC is configured AND initialized.
+    pub oidc: Option<Arc<crate::oidc::OidcRuntime>>,
+    /// Whether OIDC was configured at all (`QUARK_OIDC_ISSUER` set), independent
+    /// of whether init succeeded. Gates the "public shortener" fallback so a
+    /// failed IdP init on an OIDC-only deploy fails closed, not open.
+    pub oidc_configured: bool,
 }
 
 #[derive(Deserialize)]
@@ -308,40 +314,14 @@ fn cache_control_for(expiry: Option<u64>, now: u64) -> String {
 /// Requires the admin token to create — but only when a token is configured.
 /// Without QUARK_ADMIN_TOKEN, create remains public (open shortener).
 async fn require_admin_for_create(st: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
-    // Open shortener: with no admin token configured, create stays public.
-    let Some(expected) = st.admin_token.as_deref() else {
-        return Ok(());
-    };
-    let provided = headers
-        .get("x-admin-token")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    // The env admin token grants full access.
-    if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+    // Open shortener: create stays public ONLY when no auth mechanism is
+    // configured. When either a token or OIDC is set, create requires a
+    // credential covering LinksWrite (env token / API token / OIDC session),
+    // reusing the same authorization as every other write.
+    if st.admin_token.is_none() && !st.oidc_configured {
         return Ok(());
     }
-    if provided.is_empty() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    // Otherwise accept a scoped API token that covers LinksWrite, matching how
-    // `POST /admin/import` authorizes (both are link writes).
-    let hash = hash_token(provided);
-    match st.store.get_api_token_by_hash(&hash).await {
-        Ok(Some(token)) => {
-            if !token.scopes.iter().any(|s| s.covers(Scope::LinksWrite)) {
-                return Err(StatusCode::FORBIDDEN);
-            }
-            if let Some(limit) = token.rate_limit_per_min {
-                let key = format!("tok:{}", token.id);
-                if !st.ratelimiter.check_with_limit(&key, now(), limit).await {
-                    return Err(StatusCode::TOO_MANY_REQUESTS);
-                }
-            }
-            Ok(())
-        }
-        Ok(None) => Err(StatusCode::UNAUTHORIZED),
-        Err(_) => Err(StatusCode::SERVICE_UNAVAILABLE),
-    }
+    admin_guard(st, headers, Scope::LinksWrite).await
 }
 
 /// Reasons `create_link_core` can fail. The `create` handler and the
@@ -624,6 +604,11 @@ async fn admin_import(
     body: Bytes,
 ) -> Response {
     if let Err(status) = admin_guard(&st, &headers, Scope::LinksWrite).await {
+        return status.into_response();
+    }
+    // Content-type-sniffed body: a cross-site text/plain POST would parse, so
+    // guard it like the other cookie-authable simple-POST endpoints.
+    if let Err(status) = csrf_guard(&headers) {
         return status.into_response();
     }
     let content_type = headers
@@ -1282,41 +1267,275 @@ async fn admin_guard(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
+    // 1) Break-glass env admin token (always Full).
     if let Some(expected) = st.admin_token.as_deref() {
         if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
             return Ok(());
         }
     }
 
-    let not_found_status = if st.admin_token.is_some() {
+    // Admin surface is "disabled" (404) only when neither a token nor OIDC is
+    // configured; otherwise a missing/wrong credential is 401. Keyed on whether
+    // OIDC was configured (not on init success) so a failed IdP init still keeps
+    // the surface locked.
+    let not_found_status = if st.admin_token.is_some() || st.oidc_configured {
         StatusCode::UNAUTHORIZED
     } else {
         StatusCode::NOT_FOUND
     };
 
-    if provided.is_empty() {
-        return Err(not_found_status);
-    }
+    // Try every presented credential; any one that covers `required` authorizes.
+    // A valid-but-insufficient credential yields 403, and a covering-but-throttled
+    // API token yields 429, but only if NOTHING else covers — so a low-scope or
+    // rate-limited API token in localStorage never blocks a sufficient session.
+    let mut saw_insufficient = false;
+    let mut saw_rate_limited = false;
+    // A store error on one credential's lookup must not deny a user who also
+    // presents a covering one: record it and 503 only if nothing else authorizes.
+    let mut saw_store_error = false;
 
-    let hash = hash_token(provided);
-    let token = match st.store.get_api_token_by_hash(&hash).await {
-        Ok(Some(t)) => t,
-        Ok(None) => return Err(not_found_status),
-        Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
-    };
-
-    if !token.scopes.iter().any(|s| s.covers(required)) {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    if let Some(limit) = token.rate_limit_per_min {
-        let key = format!("tok:{}", token.id);
-        if !st.ratelimiter.check_with_limit(&key, now(), limit).await {
-            return Err(StatusCode::TOO_MANY_REQUESTS);
+    // 2) Scoped API token in x-admin-token.
+    if !provided.is_empty() {
+        let hash = hash_token(provided);
+        match st.store.get_api_token_by_hash(&hash).await {
+            Ok(Some(token)) => {
+                if token.scopes.iter().any(|s| s.covers(required)) {
+                    match token.rate_limit_per_min {
+                        Some(limit) => {
+                            let key = format!("tok:{}", token.id);
+                            if st.ratelimiter.check_with_limit(&key, now(), limit).await {
+                                return Ok(());
+                            }
+                            saw_rate_limited = true;
+                        }
+                        None => return Ok(()),
+                    }
+                } else {
+                    saw_insufficient = true;
+                }
+            }
+            Ok(None) => {}
+            Err(_) => saw_store_error = true,
         }
     }
 
-    Ok(())
+    // 3) OIDC login session cookie. Only honored when OIDC is configured, so
+    // disabling OIDC immediately stops leftover session cookies from
+    // authorizing (the session GC only runs while OIDC is on).
+    if st.oidc_configured {
+        if let Some(raw) = cookie_value(headers, SESSION_COOKIE) {
+            let hash = hash_token(raw);
+            match st.store.get_session_by_hash(&hash, now()).await {
+                Ok(Some(session)) => {
+                    if session.scopes.iter().any(|s| s.covers(required)) {
+                        return Ok(());
+                    }
+                    saw_insufficient = true;
+                }
+                Ok(None) => {}
+                Err(_) => saw_store_error = true,
+            }
+        }
+    }
+
+    if saw_store_error {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    if saw_rate_limited {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+    if saw_insufficient {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Err(not_found_status)
+}
+
+/// Cookie-authenticated state-changing requests must carry a custom header the
+/// browser cannot attach to a cross-site "simple" request. A request bearing
+/// `x-admin-token` or `x-quark-csrf` is either token-authenticated (not
+/// cookie-borne, so not CSRF-able) or was preflighted (custom header forces
+/// preflight, gated by the CORS allowlist); either proves it is not a forgeable
+/// simple POST riding the SameSite=None session cookie. Call after `admin_guard`
+/// on simple-POST endpoints (no JSON body / content-type-sniffed body) that
+/// would otherwise be reachable cross-site.
+fn csrf_guard(headers: &HeaderMap) -> Result<(), StatusCode> {
+    if headers.contains_key("x-admin-token") || headers.contains_key("x-quark-csrf") {
+        Ok(())
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
+/// Name of the session cookie set after a successful OIDC login.
+const SESSION_COOKIE: &str = "qk_session";
+/// Name of the short-lived cookie carrying the login-attempt state (PKCE
+/// verifier + state + nonce) from `/admin/login` to `/admin/callback`.
+const LOGIN_COOKIE: &str = "qk_login";
+/// How long a login session lasts.
+const SESSION_TTL_SECS: u64 = 12 * 3600;
+
+/// `GET /admin/login`: start the OIDC Authorization Code + PKCE flow, stashing
+/// the state/verifier/nonce in a short-lived signed cookie and redirecting to
+/// the IdP.
+async fn oidc_login(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let Some(oidc) = st.oidc.as_ref() else {
+        return (StatusCode::NOT_FOUND, "oidc not configured").into_response();
+    };
+    let state = crate::oidc::random_token();
+    let nonce = crate::oidc::random_token();
+    let (verifier, challenge) = crate::oidc::pkce_pair();
+    let url = oidc.authorize_url(&state, &nonce, &challenge);
+    let value = crate::oidc::sign_login_state(&st.signing_key, &state, &verifier, &nonce);
+    let secure = if request_is_https(&headers) { "; Secure" } else { "" };
+    // Path=/ (not /admin) so the cookie is sent to the callback regardless of the
+    // configured QUARK_OIDC_REDIRECT_URL path.
+    let cookie =
+        format!("{LOGIN_COOKIE}={value}; Max-Age=600; Path=/; HttpOnly; SameSite=Lax{secure}");
+    (
+        StatusCode::SEE_OTHER,
+        [
+            (header::LOCATION, url),
+            (header::SET_COOKIE, cookie),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct CallbackParams {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+/// `GET /admin/callback`: verify the login-state cookie and `state`, exchange
+/// the code (with the PKCE verifier), verify the id_token, map claims to scopes
+/// (default-closed), and create a session. A valid IdP user with no granted
+/// scope gets `403` (authenticated but unauthorized).
+async fn oidc_callback(
+    State(st): State<Arc<AppState>>,
+    Query(params): Query<CallbackParams>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(oidc) = st.oidc.as_ref() else {
+        return (StatusCode::NOT_FOUND, "oidc not configured").into_response();
+    };
+    if params.error.is_some() {
+        return (StatusCode::UNAUTHORIZED, "login was denied at the provider").into_response();
+    }
+    let login = cookie_value(&headers, LOGIN_COOKIE)
+        .and_then(|c| crate::oidc::verify_login_state(&st.signing_key, c));
+    let Some((state, verifier, nonce)) = login else {
+        return (StatusCode::BAD_REQUEST, "missing or invalid login state").into_response();
+    };
+    // CSRF: the state echoed by the IdP must match the one we signed.
+    if params.state.as_deref() != Some(state.as_str()) {
+        return (StatusCode::BAD_REQUEST, "state mismatch").into_response();
+    }
+    let Some(code) = params.code else {
+        return (StatusCode::BAD_REQUEST, "missing code").into_response();
+    };
+    let id_token = match oidc.exchange_code(&code, &verifier).await {
+        Ok(t) => t,
+        Err(_) => return (StatusCode::BAD_GATEWAY, "token exchange failed").into_response(),
+    };
+    let claims = match oidc.verify(&id_token, &nonce).await {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::UNAUTHORIZED, "invalid id_token").into_response(),
+    };
+    let scopes = crate::oidc::map_scopes(&claims.raw, &oidc.config);
+    if scopes.is_empty() {
+        return (StatusCode::FORBIDDEN, "your account has no quark access").into_response();
+    }
+    let raw = generate_token();
+    let now = now();
+    let session = crate::auth::Session {
+        token_hash: hash_token(&raw),
+        subject: claims.subject,
+        display: claims.display,
+        scopes,
+        created: now,
+        expires: now + SESSION_TTL_SECS,
+    };
+    if st.store.put_session(&session).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    // Over HTTPS use SameSite=None; Secure so the cookie is sent on cross-origin
+    // panel->API fetches (the documented split-origin deployment). On plain HTTP
+    // (local dev, same-origin) SameSite=None is invalid without Secure, so fall
+    // back to Lax.
+    let same_site = if request_is_https(&headers) {
+        "None; Secure"
+    } else {
+        "Lax"
+    };
+    let cookie = format!(
+        "{SESSION_COOKIE}={raw}; Max-Age={SESSION_TTL_SECS}; Path=/; HttpOnly; SameSite={same_site}"
+    );
+    // Redirect to the configured post-login URL (the panel), default "/".
+    let dest = oidc.config.post_login_url.clone();
+    // Clear the now-consumed login-state cookie so it cannot be replayed.
+    let clear_login = format!("{LOGIN_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
+    let mut resp = (
+        StatusCode::SEE_OTHER,
+        [
+            (header::LOCATION, dest),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+    )
+        .into_response();
+    // Append both Set-Cookie headers (an array of tuples would overwrite one).
+    let h = resp.headers_mut();
+    if let Ok(v) = cookie.parse() {
+        h.append(header::SET_COOKIE, v);
+    }
+    if let Ok(v) = clear_login.parse() {
+        h.append(header::SET_COOKIE, v);
+    }
+    resp
+}
+
+/// `POST /admin/logout`: revoke the current session and clear the cookie.
+/// Requires the `x-quark-csrf` header the panel sends: without it a cross-site
+/// simple POST could force-logout via the SameSite=None cookie, and with it the
+/// request is preflighted so the CORS allowlist gates any cross-origin caller.
+async fn oidc_logout(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if headers.get("x-quark-csrf").is_none() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if let Some(raw) = cookie_value(&headers, SESSION_COOKIE) {
+        let _ = st.store.delete_session(&hash_token(raw)).await;
+    }
+    let clear = format!("{SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
+    (
+        StatusCode::NO_CONTENT,
+        [
+            (header::SET_COOKIE, clear),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+    )
+        .into_response()
+}
+
+/// `GET /admin/me`: the current principal (from the session cookie) plus whether
+/// OIDC is configured, so the panel can render the login button and signed-in
+/// state. Never guarded: it reports `authenticated: false` instead of erroring.
+async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let oidc_enabled = st.oidc.is_some();
+    if let Some(raw) = cookie_value(&headers, SESSION_COOKIE) {
+        if let Ok(Some(session)) = st.store.get_session_by_hash(&hash_token(raw), now()).await {
+            return Json(serde_json::json!({
+                "authenticated": true,
+                "display": session.display,
+                "scopes": session.scopes,
+                "oidc_enabled": oidc_enabled,
+            }))
+            .into_response();
+        }
+    }
+    Json(serde_json::json!({ "authenticated": false, "oidc_enabled": oidc_enabled }))
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -2260,6 +2479,11 @@ async fn admin_webhooks_test(
     if let Err(status) = admin_guard(&st, &headers, Scope::Webhooks).await {
         return status.into_response();
     }
+    // Bare POST (no body) is a cross-site "simple" request; require the custom
+    // header so the SameSite=None session cookie can't be used to fire tests.
+    if let Err(status) = csrf_guard(&headers) {
+        return status.into_response();
+    }
     let sub = match st.store.get_webhook(id).await {
         Ok(Some(s)) => s,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -2442,6 +2666,10 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             axum::routing::patch(admin_webhooks_patch).delete(admin_webhooks_delete),
         )
         .route("/admin/webhooks/:id/test", post(admin_webhooks_test))
+        .route("/admin/login", get(oidc_login))
+        .route("/admin/callback", get(oidc_callback))
+        .route("/admin/logout", post(oidc_logout))
+        .route("/admin/me", get(admin_me))
         .route("/admin/tags", get(admin_tags_list))
         .route("/admin/folders", get(admin_folders_list))
         .route(
@@ -2488,7 +2716,15 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
                 Method::PATCH,
                 Method::DELETE,
             ])
-            .allow_headers(Any);
+            // Specific headers (not `Any`) because credentials are allowed, and
+            // `*` is invalid with credentials. Allow credentials so the OIDC
+            // session cookie is accepted on a cross-origin panel.
+            .allow_headers([
+                header::CONTENT_TYPE,
+                axum::http::HeaderName::from_static("x-admin-token"),
+                axum::http::HeaderName::from_static("x-quark-csrf"),
+            ])
+            .allow_credentials(true);
         app.layer(cors)
     };
 
