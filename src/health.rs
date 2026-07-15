@@ -95,6 +95,11 @@ fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
                 || v4.is_documentation()
         }
         std::net::IpAddr::V6(v6) => {
+            // An IPv4-mapped address (`::ffff:a.b.c.d`) routes to the v4 target
+            // on a dual-stack host, so classify it by its embedded v4 address.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_internal_ip(&std::net::IpAddr::V4(v4));
+            }
             v6.is_loopback()
                 || v6.is_unspecified()
                 // unique-local fc00::/7

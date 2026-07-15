@@ -840,18 +840,19 @@ impl Store for PostgresStore {
         holder: &str,
         ttl_secs: u64,
     ) -> Result<bool, StoreError> {
-        let now = crate::now() as i64;
-        let exp = now + ttl_secs as i64;
-        // Claim if the lease is free/expired, or renew if we already hold it.
+        // Use the DATABASE clock for both the new expiry and the takeover
+        // comparison, so app-node clock skew cannot decide lease ownership.
         let row = sqlx::query(
-            "INSERT INTO health_lease (id, holder, expires_at) VALUES (1, $1, $2) \
-             ON CONFLICT (id) DO UPDATE SET holder = $1, expires_at = $2 \
-             WHERE health_lease.expires_at < $3 OR health_lease.holder = $1 \
+            "INSERT INTO health_lease (id, holder, expires_at) \
+             VALUES (1, $1, EXTRACT(EPOCH FROM now())::bigint + $2) \
+             ON CONFLICT (id) DO UPDATE \
+               SET holder = $1, expires_at = EXTRACT(EPOCH FROM now())::bigint + $2 \
+             WHERE health_lease.expires_at < EXTRACT(EPOCH FROM now())::bigint \
+                OR health_lease.holder = $1 \
              RETURNING holder",
         )
         .bind(holder)
-        .bind(exp)
-        .bind(now)
+        .bind(ttl_secs as i64)
         .fetch_optional(&self.pool)
         .await
         .map_err(StoreError::backend)?;
