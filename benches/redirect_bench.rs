@@ -63,6 +63,8 @@ fn bench(c: &mut Criterion) {
             quark::pixel::PixelBases::default(),
         );
         let state = Arc::new(AppState {
+            oidc: None,
+            oidc_configured: false,
             cache,
             store: store.clone(),
             key,
