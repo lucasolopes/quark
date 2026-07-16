@@ -372,7 +372,7 @@ impl PostgresStore {
                 // Idempotent migration for a `links` table created before variants
                 // existed (#17).
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS variants JSONB NOT NULL DEFAULT '[]'",
-                "CREATE TABLE IF NOT EXISTS wellknown_documents (name TEXT PRIMARY KEY, body TEXT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS wellknown_documents (name TEXT NOT NULL, body TEXT NOT NULL, tenant_id BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (tenant_id, name))",
                 // Atomic analytics (scale-audit #4): counters incremented with
                 // `ON CONFLICT DO UPDATE SET count = count + EXCLUDED.count`
                 // instead of the old whole-blob read-modify-write under an
@@ -425,34 +425,61 @@ impl PostgresStore {
             }
 
             // P1b Task 5: tenant-correct primary keys, reworked from the
-            // legacy single-tenant designs. Idempotent: `DROP CONSTRAINT IF
-            // EXISTS` is a no-op on a table that's already been migrated (or
-            // was created fresh with the new shape above), and the `DO $$ ...
-            // $$` guard skips the `ADD PRIMARY KEY` when it's already present
-            // (Postgres has no `ADD PRIMARY KEY IF NOT EXISTS`). Must run
-            // after the `tenant_id` column backfill above, since both PKs
-            // include `tenant_id`.
+            // legacy single-tenant designs. Each block below is a true no-op
+            // once the PK already covers the target column set: the `DO $$
+            // ... $$` guard checks the *current* PK's columns via the catalog
+            // (pg_index/pg_attribute) first, and only runs the drop/alter
+            // when they don't already match. That keeps a table that's
+            // already migrated (or was created fresh with the new shape
+            // above) from having its PK index dropped and rebuilt (ACCESS
+            // EXCLUSIVE lock) on every boot. Must run after the `tenant_id`
+            // column backfill above, since both target PKs include
+            // `tenant_id`.
             //
             // sheets_connection: drop the legacy `singleton` PK/column, key on
             // `tenant_id` alone. The old `sheets_connection_by_tenant` unique
             // index is now redundant with the PK and is dropped.
             for ddl in [
-                "ALTER TABLE sheets_connection DROP CONSTRAINT IF EXISTS sheets_connection_pkey",
-                "ALTER TABLE sheets_connection DROP COLUMN IF EXISTS singleton",
-                "DROP INDEX IF EXISTS sheets_connection_by_tenant",
-                "DO $$ BEGIN \
-                    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='sheets_connection_pkey') THEN \
-                        ALTER TABLE sheets_connection ADD PRIMARY KEY (tenant_id); \
-                    END IF; \
+                "DO $$ \
+                BEGIN \
+                  IF NOT EXISTS ( \
+                    SELECT 1 \
+                    FROM pg_index i \
+                    JOIN pg_class c ON c.oid = i.indrelid \
+                    WHERE c.relname = 'sheets_connection' AND i.indisprimary \
+                      AND ( \
+                        SELECT array_agg(a.attname ORDER BY a.attname) \
+                        FROM pg_attribute a \
+                        WHERE a.attrelid = c.oid AND a.attnum = ANY(i.indkey) \
+                      ) = ARRAY['tenant_id'] \
+                  ) THEN \
+                    ALTER TABLE sheets_connection DROP CONSTRAINT IF EXISTS sheets_connection_pkey; \
+                    ALTER TABLE sheets_connection DROP COLUMN IF EXISTS singleton; \
+                    ALTER TABLE sheets_connection ADD PRIMARY KEY (tenant_id); \
+                  END IF; \
                 END $$",
+                "DROP INDEX IF EXISTS sheets_connection_by_tenant",
                 // wellknown_documents: PK was `name` alone, which cannot hold
                 // two tenants' documents of the same name. Rework to
-                // `(tenant_id, name)`.
-                "ALTER TABLE wellknown_documents DROP CONSTRAINT IF EXISTS wellknown_documents_pkey",
-                "DO $$ BEGIN \
-                    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='wellknown_documents_pkey') THEN \
-                        ALTER TABLE wellknown_documents ADD PRIMARY KEY (tenant_id, name); \
-                    END IF; \
+                // `(tenant_id, name)`. `array_agg(... ORDER BY attname)`
+                // sorts alphabetically, so the target is `['name',
+                // 'tenant_id']`.
+                "DO $$ \
+                BEGIN \
+                  IF NOT EXISTS ( \
+                    SELECT 1 \
+                    FROM pg_index i \
+                    JOIN pg_class c ON c.oid = i.indrelid \
+                    WHERE c.relname = 'wellknown_documents' AND i.indisprimary \
+                      AND ( \
+                        SELECT array_agg(a.attname ORDER BY a.attname) \
+                        FROM pg_attribute a \
+                        WHERE a.attrelid = c.oid AND a.attnum = ANY(i.indkey) \
+                      ) = ARRAY['name', 'tenant_id'] \
+                  ) THEN \
+                    ALTER TABLE wellknown_documents DROP CONSTRAINT IF EXISTS wellknown_documents_pkey; \
+                    ALTER TABLE wellknown_documents ADD PRIMARY KEY (tenant_id, name); \
+                  END IF; \
                 END $$",
             ] {
                 sqlx::query(ddl)
