@@ -4,7 +4,7 @@ use quark::analytics::AnalyticsSink;
 use quark::api::{router, AppState};
 use quark::auth::{generate_token, hash_token, Session};
 use quark::cache::Cache;
-use quark::store::{postgres::PostgresStore, Store};
+use quark::store::{open_backends, postgres::PostgresStore, Store};
 use quark::tenant::{TenantId, User};
 use serial_test::serial;
 use std::sync::Arc;
@@ -315,6 +315,30 @@ async fn workspace_switch_checks_membership() {
         "a 403 must NOT mutate the session"
     );
 
+    // Re-read through the actual API contract (not just the store): a fresh
+    // GET /admin/me with the same cookie must still report the original
+    // current_tenant (A), proving the 403 is invisible to the session as
+    // observed by every other endpoint, not merely at the storage layer.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/me")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let me: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        me["current_tenant"], tenant_a,
+        "GET /admin/me after a rejected switch must still show the original workspace"
+    );
+
     // OSS mode (multi_tenant = false) -> 404.
     let oss_app = app_over(
         store.clone() as Arc<dyn Store>,
@@ -418,4 +442,125 @@ async fn me_memberships() {
     assert_eq!(memberships[0]["name"], "Acme");
     assert_eq!(memberships[0]["slug"], "me-memberships-acme");
     assert_eq!(memberships[0]["role"], "owner");
+}
+
+// --- OSS parity (multi_tenant = false) -------------------------------------
+//
+// These run over an LMDB-backed store, never gated on `QUARK_TEST_DATABASE_URL`:
+// the whole point is that OSS deployments (no Postgres, no cloud flag) keep
+// behaving exactly as before P2b, so this must always run, not just when a
+// test Postgres happens to be configured.
+
+/// `POST /admin/tenants` and `POST /admin/workspace/switch` are cloud-only
+/// surfaces: with `multi_tenant = false` both are 404, matching the
+/// pre-existing OSS contract (endpoint doesn't exist), and this holds even
+/// with no session/credential presented at all -- the flag check runs before
+/// authentication.
+#[tokio::test]
+async fn oss_workspace_endpoints_are_404() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    let app = app_over(store, sink, false);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/tenants")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"name":"Acme","slug":"acme-co"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let resp = app
+        .oneshot(
+            Request::post("/admin/workspace/switch")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"tenant_id":1}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// `GET /admin/me` shape is unchanged in OSS: the pre-P2b fields
+/// (`authenticated`, `display`, `scopes`, `oidc_enabled`) are exactly as
+/// before, and the P2b additions degrade to empty/null rather than leaking
+/// cloud concepts into a single-tenant deployment -- `memberships` is always
+/// `[]` and `current_tenant` is always `null`, even though the logged-in user
+/// really does hold a tenant-0 membership underneath (OSS just never surfaces
+/// it here).
+#[tokio::test]
+async fn oss_admin_me_shape_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+
+    let user_id = store.next_user_id().await.unwrap();
+    store
+        .put_user(&User {
+            id: user_id,
+            subject: "oss-me-subject".to_string(),
+            email: "oss-me-subject@example.com".to_string(),
+            display: "OSS Me".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    // The login path (`ensure_user_and_membership`) would create this in
+    // DEFAULT_TENANT for every OSS login; put it directly here to prove
+    // `/admin/me` still reports the OSS shape even though a real membership
+    // exists underneath.
+    store
+        .put_membership(&quark::tenant::Membership {
+            user_id,
+            tenant_id: TenantId(0),
+            role: quark::tenant::Role::Admin,
+            created: 0,
+        })
+        .await
+        .unwrap();
+    let raw = generate_token();
+    let session = Session {
+        token_hash: hash_token(&raw),
+        subject: "oss-me-subject".to_string(),
+        display: "OSS Me".to_string(),
+        scopes: vec![quark::auth::Scope::Full],
+        created: 0,
+        expires: quark::now() + 3600,
+        tenant_id: TenantId(0),
+        user_id,
+    };
+    store.put_session(TenantId(0), &session).await.unwrap();
+
+    let app = app_over(store.clone(), sink, false);
+    let resp = app
+        .oneshot(
+            Request::get("/admin/me")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let me: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(me["authenticated"], true);
+    assert_eq!(me["display"], "OSS Me");
+    assert_eq!(me["oidc_enabled"], false);
+    assert_eq!(
+        me["memberships"],
+        serde_json::json!([]),
+        "OSS must never surface tenant memberships, even though one exists in the store"
+    );
+    assert_eq!(
+        me["current_tenant"],
+        serde_json::Value::Null,
+        "OSS must never surface a current_tenant"
+    );
 }
