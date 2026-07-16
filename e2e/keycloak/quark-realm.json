@@ -1,0 +1,70 @@
+{
+  "realm": "quark",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "groups": [
+    { "name": "quark-admins" },
+    { "name": "quark-readers" }
+  ],
+  "clients": [
+    {
+      "clientId": "quark",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "secret": "quark-e2e-secret",
+      "redirectUris": [
+        "http://localhost:5173/admin/callback",
+        "http://localhost:8080/admin/callback"
+      ],
+      "webOrigins": ["http://localhost:5173", "http://localhost:8080"],
+      "attributes": { "post.logout.redirect.uris": "+" },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin@quark.test",
+      "email": "admin@quark.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Quark",
+      "lastName": "Admin",
+      "credentials": [
+        { "type": "password", "value": "password", "temporary": false }
+      ],
+      "groups": ["/quark-admins"]
+    },
+    {
+      "username": "reader@quark.test",
+      "email": "reader@quark.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Quark",
+      "lastName": "Reader",
+      "credentials": [
+        { "type": "password", "value": "password", "temporary": false }
+      ],
+      "groups": ["/quark-readers"]
+    }
+  ]
+}
