@@ -10,7 +10,7 @@ primary_region = "gru"
 [env]
   QUARK_ADDR = "0.0.0.0:8080"
   # Public host: makes short URLs and OAuth redirects use the real domain.
-  QUARK_PUBLIC_HOST = "app.quarkus.com.br"
+  QUARK_PUBLIC_HOST = "backend.quarkus.com.br"
 
 [http_service]
   internal_port = 8080
