@@ -1664,7 +1664,18 @@ impl Store for PostgresStore {
         .bind(t.created as i64)
         .execute(&self.write)
         .await
-        .map_err(StoreError::backend)?;
+        // `id` is a fresh sequence value (never conflicts), so the only
+        // constraint this insert can actually hit is the `slug` UNIQUE — a
+        // Postgres unique-violation (SQLSTATE 23505) surfaces distinctly so
+        // the caller can map it to 409 instead of 503.
+        .map_err(|e| {
+            if let sqlx::Error::Database(dbe) = &e {
+                if dbe.code().as_deref() == Some("23505") {
+                    return StoreError::UniqueViolation;
+                }
+            }
+            StoreError::backend(e)
+        })?;
         Ok(())
     }
 

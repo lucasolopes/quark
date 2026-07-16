@@ -1633,6 +1633,99 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
         .into_response()
 }
 
+/// Resolves the session cookie to its `user_id`, independent of scopes. Used
+/// by `/admin/tenants`: creating a first workspace must be reachable by ANY
+/// authenticated OIDC user, including one with zero memberships (so
+/// `admin_guard`'s scope check, which a 0-membership user could never pass,
+/// does not apply here).
+async fn session_user_id(st: &AppState, headers: &HeaderMap) -> Option<u64> {
+    let raw = cookie_value(headers, SESSION_COOKIE)?;
+    let session = st
+        .store
+        .get_session_by_hash(&hash_token(raw), now())
+        .await
+        .ok()
+        .flatten()?;
+    Some(session.user_id)
+}
+
+/// Re-points the current session at `tenant` (the workspace just created),
+/// so the next request the browser makes is already scoped to it. A missing
+/// or invalid session is a silent no-op: the caller already authenticated via
+/// `session_user_id` earlier in the same request.
+async fn set_session_tenant(st: &AppState, headers: &HeaderMap, tenant: crate::tenant::TenantId) {
+    let Some(raw) = cookie_value(headers, SESSION_COOKIE) else {
+        return;
+    };
+    let hash = hash_token(raw);
+    if let Ok(Some(mut session)) = st.store.get_session_by_hash(&hash, now()).await {
+        session.tenant_id = tenant;
+        let _ = st.store.put_session(tenant, &session).await;
+    }
+}
+
+/// Maps a `put_tenant` failure to its HTTP status: a duplicate `slug` (unique
+/// violation) is a client-fixable `409`, anything else is a `503` (backend
+/// unavailable).
+fn conflict_or_503(e: StoreError) -> StatusCode {
+    match e {
+        StoreError::UniqueViolation => StatusCode::CONFLICT,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateTenantReq {
+    name: String,
+    slug: String,
+}
+
+/// `POST /admin/tenants`: self-serve workspace creation (cloud only). Any
+/// authenticated OIDC user may create a workspace — not gated by
+/// `admin_guard`'s scope check, since a user with zero memberships must still
+/// be able to create their first one. Creates the `Tenant`, grants the
+/// caller `Owner` on it, and re-points their session at it.
+async fn admin_tenants_create(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateTenantReq>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(user_id) = session_user_id(&st, &headers).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let ip = client_ip(&headers, &st.real_ip_header, None);
+    if !st.ratelimiter.check(&ip, now()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+    }
+    let id = match st.store.next_tenant_id().await {
+        Ok(i) => i,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let tenant = crate::tenant::Tenant {
+        id: crate::tenant::TenantId(id),
+        name: req.name,
+        slug: req.slug,
+        created: now(),
+    };
+    if let Err(e) = st.store.put_tenant(&tenant).await {
+        return conflict_or_503(e).into_response();
+    }
+    st.store
+        .put_membership(&crate::tenant::Membership {
+            user_id,
+            tenant_id: crate::tenant::TenantId(id),
+            role: crate::tenant::Role::Owner,
+            created: now(),
+        })
+        .await
+        .ok();
+    set_session_tenant(&st, &headers, crate::tenant::TenantId(id)).await;
+    Json(tenant).into_response()
+}
+
 /// Name of the short-lived cookie holding the signed Sheets OAuth `state`,
 /// binding the connect flow to the browser that started it (anti login-CSRF).
 const SHEETS_STATE_COOKIE: &str = "qk_sheets_state";
@@ -3142,6 +3235,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route("/admin/callback", get(oidc_callback))
         .route("/admin/logout", post(oidc_logout))
         .route("/admin/me", get(admin_me))
+        .route("/admin/tenants", post(admin_tenants_create))
         .route("/admin/integrations/sheets/connect", get(sheets_connect))
         .route("/admin/integrations/sheets/callback", get(sheets_callback))
         .route("/admin/integrations/sheets/sync", post(sheets_sync))

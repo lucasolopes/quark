@@ -243,6 +243,10 @@ pub enum StoreError {
     IdSpaceExhausted,
     /// Operation not supported by this backend (e.g. server-side search on LMDB).
     Unsupported,
+    /// A unique-constraint violation (e.g. duplicate tenant `slug`). Kept
+    /// distinct from `Backend` so callers can map it to `409 Conflict`
+    /// instead of `503`.
+    UniqueViolation,
 }
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -252,6 +256,7 @@ impl std::fmt::Display for StoreError {
             StoreError::Backend(s) => write!(f, "backend: {s}"),
             StoreError::IdSpaceExhausted => write!(f, "id space exhausted"),
             StoreError::Unsupported => write!(f, "operation not supported by this backend"),
+            StoreError::UniqueViolation => write!(f, "unique constraint violated"),
         }
     }
 }
