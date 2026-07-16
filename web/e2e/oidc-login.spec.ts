@@ -41,6 +41,20 @@ test("admin group signs in and gets a full-scope session", async ({ page }) => {
     data: { url: "https://example.com/from-oidc-admin" },
   });
   expect(created.ok()).toBeTruthy();
+
+  // Cookie-authenticated simple POSTs require the custom CSRF header. Import is a
+  // content-type-sniffed POST: without the header a cross-site request could ride
+  // the session cookie, so the server rejects it (403); with it, it succeeds.
+  const noCsrf = await page.request.post(`${API}/admin/import`, {
+    headers: { "content-type": "text/csv" },
+    data: "url\nhttps://example.com/csv-a",
+  });
+  expect(noCsrf.status()).toBe(403);
+  const withCsrf = await page.request.post(`${API}/admin/import`, {
+    headers: { "content-type": "text/csv", "x-quark-csrf": "1" },
+    data: "url\nhttps://example.com/csv-b",
+  });
+  expect(withCsrf.ok()).toBeTruthy();
 });
 
 test("reader group gets a read-only session, not full", async ({ page }) => {
