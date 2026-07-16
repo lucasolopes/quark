@@ -7,3 +7,6 @@ node_modules/
 web/dist/
 web/node_modules/
 *.log
+
+# Wrangler local cache (account id, project cache) — nunca commitar
+.wrangler/
