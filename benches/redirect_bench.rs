@@ -34,6 +34,7 @@ fn bench(c: &mut Criterion) {
         let (store, sink) = open_backends(dir.path()).await.unwrap();
         store
             .put_link(
+                quark::tenant::DEFAULT_TENANT,
                 1,
                 &Record {
                     url: "https://example.com/destination".into(),
