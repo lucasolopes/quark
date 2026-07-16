@@ -102,6 +102,51 @@ Valkey pub/sub invalidation channel (`quark:invalidate`, in `src/invalidate.rs`)
 The subscriber applies each message to the local L1 only and never
 re-publishes, so there is no cross-node loop.
 
+## Multi-region reads: the read/write split
+
+A single Postgres primary works across regions, but every read then pays the
+round trip to wherever the primary lives. To keep redirects near the user in a
+multi-region deployment, quark can read from a local Postgres read replica while
+all writes still go to the single primary.
+
+- Set `QUARK_DATABASE_URL` to the primary (all writes go here) and
+  `QUARK_REPLICA_DATABASE_URL` to a local read replica. Reads then use the
+  replica; writes stay on the primary.
+- Leave `QUARK_REPLICA_DATABASE_URL` unset and behavior is identical to today:
+  both the read and the write path use the primary. The split is opt-in, and
+  single-region or LMDB deployments are unchanged.
+
+The replica gets its schema through Postgres streaming replication, so quark
+runs the schema init and every migration on the primary only, never on the
+replica.
+
+**Which reads stay on the primary.** Three low-volume, correctness-sensitive
+reads are forced to the primary so a lagging replica can never serve stale auth
+state:
+
+- session lookup by token hash (a user who just logged in must not be 401'd by
+  the panel right after),
+- API token lookup by hash (a freshly minted token must authenticate right
+  away),
+- the Sheets connection (read immediately after the OAuth callback writes it).
+
+Everything else reads the replica: the redirect hot path (link/alias lookup),
+the admin listings, and the analytics dashboards.
+
+**The consistency window.** Replication is asynchronous, usually sub-second, so
+a read on the replica can trail the primary by the replication lag:
+
+- A brand-new link may 404 in a distant region for the lag window until the row
+  replicates. The `create` response returns the computed code directly (it never
+  reads it back), so the API and the panel are not affected. Only an immediate
+  cross-region redirect races the lag, and it is bounded and closes on the same
+  order as the cache TTL.
+- Analytics counts can trail the primary by the lag. This already matches
+  quark's at-most-once, eventually-aggregated analytics model.
+
+A true streaming replica is exercised on Fly.io; CI has no replica, so the gated
+tests point both URLs at the same database and only prove the routing wiring.
+
 ## Analytics ingestion is at-most-once
 
 A click is handed to the analytics worker through a bounded in-process channel

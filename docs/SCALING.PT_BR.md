@@ -104,6 +104,52 @@ pub/sub de invalidação do Valkey (`quark:invalidate`, em `src/invalidate.rs`):
 O assinante aplica cada mensagem só ao L1 local e nunca republica,
 então não há loop cross-node.
 
+## Leituras multi-região: a divisão leitura/escrita
+
+Um único Postgres primário funciona entre regiões, mas aí toda leitura paga a ida
+e volta até onde o primário vive. Para manter os redirects perto do usuário num
+deploy multi-região, o quark pode ler de uma réplica de leitura local do Postgres
+enquanto todas as escritas continuam indo para o único primário.
+
+- Aponte `QUARK_DATABASE_URL` para o primário (toda escrita vai aqui) e
+  `QUARK_REPLICA_DATABASE_URL` para uma réplica de leitura local. As leituras
+  passam a usar a réplica; as escritas ficam no primário.
+- Deixe `QUARK_REPLICA_DATABASE_URL` sem setar e o comportamento é idêntico ao de
+  hoje: leitura e escrita usam o primário. A divisão é opt-in, e deploys de uma
+  região só ou em LMDB ficam inalterados.
+
+A réplica recebe o schema pela replicação em streaming do Postgres, então o quark
+roda o init de schema e toda migração só no primário, nunca na réplica.
+
+**Quais leituras ficam no primário.** Três leituras de baixo volume e sensíveis a
+correção são forçadas ao primário para que uma réplica atrasada nunca sirva estado
+de auth velho:
+
+- busca de sessão pelo hash do token (quem acabou de logar não pode tomar 401 do
+  painel logo em seguida),
+- busca de token de API pelo hash (um token recém-criado tem que autenticar na
+  hora),
+- a conexão do Sheets (lida logo depois de o callback do OAuth escrevê-la).
+
+Todo o resto lê da réplica: o caminho quente do redirect (busca de link/alias), as
+listagens do admin e os dashboards de analytics.
+
+**A janela de consistência.** A replicação é assíncrona, em geral abaixo de um
+segundo, então uma leitura na réplica pode ficar atrás do primário pelo lag de
+replicação:
+
+- Um link recém-criado pode dar 404 numa região distante durante a janela do lag
+  até a linha replicar. A resposta do `create` devolve o código calculado direto
+  (nunca faz releitura), então a API e o painel não são afetados. Só um redirect
+  cross-region imediato corre contra o lag, e isso é limitado e fecha na mesma
+  ordem de grandeza do TTL do cache.
+- As contagens de analytics podem ficar atrás do primário pelo lag. Isso já casa
+  com o modelo at-most-once e de agregação eventual do analytics do quark.
+
+Uma réplica de streaming real é exercitada no Fly.io; a CI não tem réplica, então
+os testes gated apontam as duas URLs para o mesmo banco e só provam a ligação do
+roteamento.
+
 ## A ingestão de analytics é at-most-once
 
 Um clique é entregue ao worker de analytics por um canal limitado em processo

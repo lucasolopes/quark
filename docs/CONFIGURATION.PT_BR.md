@@ -36,6 +36,7 @@ controle compartilhada seguem `QUARK_VALKEY_URL`.
 | Variável | Default | Função |
 |---|---|---|
 | `QUARK_DATABASE_URL` | sem setar (LMDB) | Usa Postgres como store, ex. `postgres://user:pass@host:5432/db`. É o store compartilhado, seguro para multi-nó, e também implementa o sink de analytics. Sem setar, cai no LMDB embutido. |
+| `QUARK_REPLICA_DATABASE_URL` | sem setar (leituras usam o primário) | Réplica de leitura local do Postgres, opcional, ex. `postgres://user:pass@replica:5432/db`. Setada, as leituras vão para a réplica e as escritas ficam no primário (`QUARK_DATABASE_URL`); as leituras de auth continuam no primário por frescor. Só faz sentido com `QUARK_DATABASE_URL` setada. Sem setar, as leituras usam o primário, idêntico a hoje. Veja [SCALING](SCALING.md). |
 | `QUARK_VALKEY_URL` | sem setar (só L1 + store) | Liga o cache L2 no Valkey, ex. `redis://host:6379`. A mesma conexão sustenta o rate limit global e o pub/sub de invalidação cross-node. |
 | `QUARK_CLICKHOUSE_URL` | sem setar (sink embutido do store) | Usa ClickHouse como sink de analytics, ex. `http://user:pass@host:8123/db`. É só analytics; nunca vira o store de links. |
 | `QUARK_NODE_ID` | sem setar (espaço de id de 40 bits cheio) | Particionamento de espaço de id, só no LMDB, `0`-`255`. Os 8 bits do topo viram o id do nó e os 32 de baixo um contador local. Ignorado no backend Postgres (a sequência compartilhada aloca) e o quark loga que foi ignorado. Um valor fora da faixa aborta o processo no startup. Veja [SCALING](SCALING.PT_BR.md). |

@@ -267,6 +267,7 @@ includes an optional UTM builder with locally saved templates (`localStorage`).
 ## More
 
 - Deploy on a VPS with Coolify (ships a `Dockerfile`): [`docs/DEPLOY.md`](docs/DEPLOY.md)
+- Multi-region deploy (near-user redirects, portable, Fly.io example): [`docs/DEPLOY-MULTIREGION.md`](docs/DEPLOY-MULTIREGION.md)
 - Edge/CDN caching guide: [`docs/EDGE.md`](docs/EDGE.md)
 - Signed outgoing webhooks (events, payload, signature verification): [`docs/WEBHOOKS.md`](docs/WEBHOOKS.md)
 - Click analytics and privacy posture (what's captured, what's never stored): [`docs/ANALYTICS.md`](docs/ANALYTICS.md)
