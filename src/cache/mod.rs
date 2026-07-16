@@ -162,7 +162,7 @@ impl Cache {
                 }
             }
         }
-        match self.store.get_link(id).await? {
+        match self.store.get_link(crate::tenant::DEFAULT_TENANT, id).await? {
             Some(rec) => {
                 if let Some(l2) = &self.l2 {
                     if !l2_failed_this_request && self.breaker.allow(n) {
@@ -272,7 +272,7 @@ mod tests {
     async fn hanging_l2_falls_back_to_store_via_timeout() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
-        store.put_link(9, &rec("hung")).await.unwrap();
+        store.put_link(crate::tenant::DEFAULT_TENANT, 9, &rec("hung")).await.unwrap();
         let c = Cache::with_l2(store, 1000, Arc::new(HangingTier), 60, 3600, None);
         let got = c.get(9).await.unwrap().unwrap();
         assert_eq!(got.url, "hung");
@@ -282,10 +282,10 @@ mod tests {
     async fn invalidate_removes_from_l1() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
-        store.put_link(1, &rec("u1")).await.unwrap();
+        store.put_link(crate::tenant::DEFAULT_TENANT, 1, &rec("u1")).await.unwrap();
         let c = Cache::new(store.clone(), 1000, None);
         assert_eq!(c.get(1).await.unwrap().unwrap().url, "u1");
-        store.delete_link(1).await.unwrap();
+        store.delete_link(crate::tenant::DEFAULT_TENANT, 1).await.unwrap();
         c.invalidate(1).await;
         assert!(c.get(1).await.unwrap().is_none());
     }
@@ -294,10 +294,10 @@ mod tests {
     async fn invalidate_local_removes_from_l1() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
-        store.put_link(2, &rec("u2")).await.unwrap();
+        store.put_link(crate::tenant::DEFAULT_TENANT, 2, &rec("u2")).await.unwrap();
         let c = Cache::new(store.clone(), 1000, None);
         assert_eq!(c.get(2).await.unwrap().unwrap().url, "u2");
-        store.delete_link(2).await.unwrap();
+        store.delete_link(crate::tenant::DEFAULT_TENANT, 2).await.unwrap();
         c.invalidate_local(2).await;
         assert!(c.get(2).await.unwrap().is_none());
     }
@@ -306,7 +306,7 @@ mod tests {
     async fn without_l2_behaves_as_today() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
-        store.put_link(3, &rec("u")).await.unwrap();
+        store.put_link(crate::tenant::DEFAULT_TENANT, 3, &rec("u")).await.unwrap();
         let c = Cache::new(store, 1000, None);
         assert_eq!(c.get(3).await.unwrap().unwrap().url, "u");
         assert!(c.get(404).await.unwrap().is_none());
@@ -316,7 +316,7 @@ mod tests {
     async fn l2_down_falls_back_to_store_and_opens_breaker() {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn Store> = Arc::new(LmdbStore::open(dir.path()).unwrap());
-        store.put_link(7, &rec("v")).await.unwrap();
+        store.put_link(crate::tenant::DEFAULT_TENANT, 7, &rec("v")).await.unwrap();
         let tier = Arc::new(FailingTier {
             calls: AtomicU32::new(0),
         });

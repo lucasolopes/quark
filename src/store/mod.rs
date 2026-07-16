@@ -4,6 +4,7 @@ pub mod postgres;
 use crate::analytics::AnalyticsSink;
 use crate::auth::ApiToken;
 use crate::pixel::PixelConfig;
+use crate::tenant::{Membership, Tenant, TenantId, User};
 use crate::webhooks::WebhookSubscription;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -282,12 +283,13 @@ pub struct LinkHealth {
 /// blocking workaround.
 #[async_trait::async_trait]
 pub trait Store: Send + Sync + 'static {
-    async fn next_id(&self) -> Result<u64, StoreError>;
-    async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError>;
-    async fn put_link(&self, id: u64, rec: &Record) -> Result<(), StoreError>;
-    async fn get_alias(&self, alias: &str) -> Result<Option<u64>, StoreError>;
+    async fn next_id(&self, tenant: TenantId) -> Result<u64, StoreError>;
+    async fn get_link(&self, tenant: TenantId, id: u64) -> Result<Option<Record>, StoreError>;
+    async fn put_link(&self, tenant: TenantId, id: u64, rec: &Record) -> Result<(), StoreError>;
+    async fn get_alias(&self, tenant: TenantId, alias: &str) -> Result<Option<u64>, StoreError>;
     async fn put_alias_and_link(
         &self,
+        tenant: TenantId,
         alias: &str,
         id: u64,
         rec: &Record,
@@ -302,6 +304,7 @@ pub trait Store: Send + Sync + 'static {
     /// `put_link`, ignoring it.
     async fn put_link_tx(
         &self,
+        tenant: TenantId,
         id: u64,
         rec: &Record,
         deliveries: &[OutboxRow],
@@ -314,6 +317,7 @@ pub trait Store: Send + Sync + 'static {
     /// is empty and this delegates to `put_alias_and_link`.
     async fn put_alias_and_link_tx(
         &self,
+        tenant: TenantId,
         alias: &str,
         id: u64,
         rec: &Record,
@@ -322,13 +326,19 @@ pub trait Store: Send + Sync + 'static {
     /// Transactional variant of `delete_link`: deletes the link AND enqueues
     /// `deliveries` in ONE transaction. On LMDB `deliveries` is empty and this
     /// delegates to `delete_link`.
-    async fn delete_link_tx(&self, id: u64, deliveries: &[OutboxRow]) -> Result<(), StoreError>;
+    async fn delete_link_tx(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        deliveries: &[OutboxRow],
+    ) -> Result<(), StoreError>;
     /// `tag`, when present, restricts the results to links whose `tags`
     /// contain it (exact match, post-normalization). `folder`, when present,
     /// restricts the results to links whose `folder` matches it
     /// case-insensitively.
     async fn list_links(
         &self,
+        tenant: TenantId,
         after: Option<u64>,
         limit: usize,
         tag: Option<&str>,
@@ -340,34 +350,51 @@ pub trait Store: Send + Sync + 'static {
     /// in `list_links`.
     async fn search_links(
         &self,
+        tenant: TenantId,
         q: &str,
         after: Option<u64>,
         limit: usize,
         tag: Option<&str>,
         folder: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError>;
-    async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError>;
+    async fn list_aliases(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError>;
     /// Distinct tags across all links with their link counts, sorted by name.
     /// A link's `tags` is a `Vec<String>`; each distinct tag on a link counts
     /// that link once.
-    async fn list_tags(&self) -> Result<Vec<(String, u64)>, StoreError>;
+    async fn list_tags(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError>;
     /// Distinct folder names across all links with their link counts, sorted by
     /// name. Links with no folder are ignored.
-    async fn list_folders(&self) -> Result<Vec<(String, u64)>, StoreError>;
-    async fn delete_link(&self, id: u64) -> Result<(), StoreError>;
-    async fn delete_alias(&self, alias: &str) -> Result<(), StoreError>;
-    async fn list_webhooks(&self) -> Result<Vec<WebhookSubscription>, StoreError>;
-    async fn get_webhook(&self, id: u64) -> Result<Option<WebhookSubscription>, StoreError>;
-    async fn put_webhook(&self, sub: &WebhookSubscription) -> Result<(), StoreError>;
-    async fn delete_webhook(&self, id: u64) -> Result<bool, StoreError>;
-    async fn next_webhook_id(&self) -> Result<u64, StoreError>;
-    async fn list_api_tokens(&self) -> Result<Vec<ApiToken>, StoreError>;
+    async fn list_folders(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError>;
+    async fn delete_link(&self, tenant: TenantId, id: u64) -> Result<(), StoreError>;
+    async fn delete_alias(&self, tenant: TenantId, alias: &str) -> Result<(), StoreError>;
+    async fn list_webhooks(&self, tenant: TenantId) -> Result<Vec<WebhookSubscription>, StoreError>;
+    async fn get_webhook(
+        &self,
+        tenant: TenantId,
+        id: u64,
+    ) -> Result<Option<WebhookSubscription>, StoreError>;
+    async fn put_webhook(
+        &self,
+        tenant: TenantId,
+        sub: &WebhookSubscription,
+    ) -> Result<(), StoreError>;
+    async fn delete_webhook(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError>;
+    async fn next_webhook_id(&self, tenant: TenantId) -> Result<u64, StoreError>;
+    async fn list_api_tokens(&self, tenant: TenantId) -> Result<Vec<ApiToken>, StoreError>;
+    /// Hash-lookup: tenant-less (the token hash is globally unique); the owning
+    /// tenant travels on the row/value.
     async fn get_api_token_by_hash(&self, hash: &str) -> Result<Option<ApiToken>, StoreError>;
-    async fn put_api_token(&self, token: &ApiToken) -> Result<(), StoreError>;
-    async fn delete_api_token(&self, id: u64) -> Result<bool, StoreError>;
-    async fn next_api_token_id(&self) -> Result<u64, StoreError>;
-    /// Persists an OIDC login session (keyed by its token hash).
-    async fn put_session(&self, session: &crate::auth::Session) -> Result<(), StoreError>;
+    async fn put_api_token(&self, tenant: TenantId, token: &ApiToken) -> Result<(), StoreError>;
+    async fn delete_api_token(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError>;
+    async fn next_api_token_id(&self, tenant: TenantId) -> Result<u64, StoreError>;
+    /// Persists an OIDC login session (keyed by its token hash). `tenant` is the
+    /// owning tenant, stored on the row/value; the hash-lookup remains
+    /// tenant-less.
+    async fn put_session(
+        &self,
+        tenant: TenantId,
+        session: &crate::auth::Session,
+    ) -> Result<(), StoreError>;
     /// Looks up a session by its token hash. Returns `None` when absent OR
     /// expired (`expires <= now`), so an expired cookie never authenticates.
     async fn get_session_by_hash(
@@ -382,22 +409,34 @@ pub trait Store: Send + Sync + 'static {
     /// Atomically increments the visit counter for `id` and returns the new
     /// total. Separate from `Record` so that a hit doesn't require rewriting
     /// the whole record. Only called for links that opted into `max_visits`.
-    async fn bump_visits(&self, id: u64) -> Result<u64, StoreError>;
+    async fn bump_visits(&self, tenant: TenantId, id: u64) -> Result<u64, StoreError>;
     /// Reads the current visit count for `id` (0 if never bumped), for display.
-    async fn visits(&self, id: u64) -> Result<u64, StoreError>;
+    async fn visits(&self, tenant: TenantId, id: u64) -> Result<u64, StoreError>;
     /// Records the latest health probe result for a link (broken-link
     /// monitoring). Upserts by id; a link is probed at most once per sweep.
-    async fn put_link_health(&self, id: u64, health: &LinkHealth) -> Result<(), StoreError>;
+    async fn put_link_health(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        health: &LinkHealth,
+    ) -> Result<(), StoreError>;
     /// All recorded link-health entries. Used by the checker to detect
     /// healthy<->broken transitions across the whole link set.
-    async fn list_link_health(&self) -> Result<Vec<(u64, LinkHealth)>, StoreError>;
+    async fn list_link_health(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<(u64, LinkHealth)>, StoreError>;
     /// Health entries for a specific set of link ids (missing ids are simply
     /// absent from the result). Used by the admin list so a page load reads only
     /// the current page's health, not the whole table.
-    async fn link_health_for(&self, ids: &[u64]) -> Result<Vec<(u64, LinkHealth)>, StoreError>;
+    async fn link_health_for(
+        &self,
+        tenant: TenantId,
+        ids: &[u64],
+    ) -> Result<Vec<(u64, LinkHealth)>, StoreError>;
     /// Ids of all links whose last probe was broken, ascending. Drives the
     /// panel's "broken only" filter without scanning the whole link table.
-    async fn list_broken_link_ids(&self) -> Result<Vec<u64>, StoreError>;
+    async fn list_broken_link_ids(&self, tenant: TenantId) -> Result<Vec<u64>, StoreError>;
     /// Tries to acquire (or renew) the single broken-link-checker lease for
     /// `ttl_secs`, identified by `holder`. Returns `true` if this caller now
     /// holds it. Lets any replica run the checker while ensuring only one sweeps
@@ -412,16 +451,18 @@ pub trait Store: Send + Sync + 'static {
     /// never surfaced in an API response.
     async fn put_sheets_connection(
         &self,
+        tenant: TenantId,
         c: &crate::sheets::SheetsConnection,
     ) -> Result<(), StoreError>;
     /// Reads the single Sheets connection, or `None` when the connector has
     /// never been connected (or was disconnected).
     async fn get_sheets_connection(
         &self,
+        tenant: TenantId,
     ) -> Result<Option<crate::sheets::SheetsConnection>, StoreError>;
     /// Removes the single Sheets connection (disconnect); a missing connection
     /// is not an error.
-    async fn delete_sheets_connection(&self) -> Result<(), StoreError>;
+    async fn delete_sheets_connection(&self, tenant: TenantId) -> Result<(), StoreError>;
     /// Tries to acquire (or renew) the single scheduled-sync lease for
     /// `ttl_secs`, identified by `holder`, mirroring `try_acquire_health_lease`:
     /// only one node runs the scheduled sync at a time; the single-node LMDB
@@ -431,18 +472,49 @@ pub trait Store: Send + Sync + 'static {
         holder: &str,
         ttl_secs: u64,
     ) -> Result<bool, StoreError>;
-    async fn next_pixel_id(&self) -> Result<u64, StoreError>;
-    async fn get_pixel(&self, id: u64) -> Result<Option<PixelConfig>, StoreError>;
-    async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError>;
-    async fn delete_pixel(&self, id: u64) -> Result<bool, StoreError>;
-    async fn list_pixels(&self) -> Result<Vec<PixelConfig>, StoreError>;
+    async fn next_pixel_id(&self, tenant: TenantId) -> Result<u64, StoreError>;
+    async fn get_pixel(&self, tenant: TenantId, id: u64) -> Result<Option<PixelConfig>, StoreError>;
+    async fn put_pixel(&self, tenant: TenantId, config: &PixelConfig) -> Result<(), StoreError>;
+    async fn delete_pixel(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError>;
+    async fn list_pixels(&self, tenant: TenantId) -> Result<Vec<PixelConfig>, StoreError>;
     /// Reads a well-known app-association document by name. The raw JSON is
     /// returned verbatim (no parsing here; validation lives at the HTTP layer).
-    async fn get_wellknown(&self, name: &str) -> Result<Option<String>, StoreError>;
+    async fn get_wellknown(&self, tenant: TenantId, name: &str)
+        -> Result<Option<String>, StoreError>;
     /// Stores a well-known document, replacing any existing body for `name`.
-    async fn put_wellknown(&self, name: &str, body: &str) -> Result<(), StoreError>;
+    async fn put_wellknown(
+        &self,
+        tenant: TenantId,
+        name: &str,
+        body: &str,
+    ) -> Result<(), StoreError>;
     /// Deletes a well-known document; a missing document is not an error.
-    async fn delete_wellknown(&self, name: &str) -> Result<(), StoreError>;
+    async fn delete_wellknown(&self, tenant: TenantId, name: &str) -> Result<(), StoreError>;
+
+    // --- Identity / tenancy (tenant-less; they manage tenancy itself) ---
+    /// Upserts a tenant row.
+    async fn put_tenant(&self, t: &Tenant) -> Result<(), StoreError>;
+    /// Reads a tenant by id.
+    async fn get_tenant(&self, id: TenantId) -> Result<Option<Tenant>, StoreError>;
+    /// Allocates the next global user id.
+    async fn next_user_id(&self) -> Result<u64, StoreError>;
+    /// Upserts a global user identity (keyed by immutable OIDC subject).
+    async fn put_user(&self, u: &User) -> Result<(), StoreError>;
+    /// Looks up a user by OIDC subject.
+    async fn get_user_by_subject(&self, subject: &str) -> Result<Option<User>, StoreError>;
+    /// Upserts a membership (user <-> tenant, with role).
+    async fn put_membership(&self, m: &Membership) -> Result<(), StoreError>;
+    /// Reads a single membership for `(user_id, tenant)`.
+    async fn get_membership(
+        &self,
+        user_id: u64,
+        tenant: TenantId,
+    ) -> Result<Option<Membership>, StoreError>;
+    /// All memberships for a user, across tenants.
+    async fn list_memberships_for_user(
+        &self,
+        user_id: u64,
+    ) -> Result<Vec<Membership>, StoreError>;
 
     /// Durable webhook outbox (scale-audit #3), Postgres-only. Inserts one
     /// delivery row per (event, subscription) with `ON CONFLICT (delivery_key)
@@ -480,9 +552,221 @@ pub trait Store: Send + Sync + 'static {
     async fn mark_dead(&self, id: i64, attempts: u32) -> Result<(), StoreError>;
 }
 
+/// A tenant-scoped view over a `Store`. Its methods mirror the tenant-owned
+/// `Store` methods but capture the tenant, so a call site cannot forget it.
+pub struct ScopedStore {
+    inner: Arc<dyn Store>,
+    tenant: TenantId,
+}
+
+impl dyn Store {
+    /// Returns a handle bound to `tenant`. All tenant-owned reads/writes go
+    /// through it.
+    pub fn for_tenant(self: Arc<Self>, tenant: TenantId) -> ScopedStore {
+        ScopedStore {
+            inner: self,
+            tenant,
+        }
+    }
+}
+
+impl ScopedStore {
+    /// The tenant this handle is bound to.
+    pub fn tenant(&self) -> TenantId {
+        self.tenant
+    }
+    /// The underlying store, for the tenant-less (global/infra/hash-lookup)
+    /// methods a handler may also need.
+    pub fn inner(&self) -> &Arc<dyn Store> {
+        &self.inner
+    }
+
+    pub async fn next_id(&self) -> Result<u64, StoreError> {
+        self.inner.next_id(self.tenant).await
+    }
+    pub async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError> {
+        self.inner.get_link(self.tenant, id).await
+    }
+    pub async fn put_link(&self, id: u64, rec: &Record) -> Result<(), StoreError> {
+        self.inner.put_link(self.tenant, id, rec).await
+    }
+    pub async fn get_alias(&self, alias: &str) -> Result<Option<u64>, StoreError> {
+        self.inner.get_alias(self.tenant, alias).await
+    }
+    pub async fn put_alias_and_link(
+        &self,
+        alias: &str,
+        id: u64,
+        rec: &Record,
+    ) -> Result<bool, StoreError> {
+        self.inner
+            .put_alias_and_link(self.tenant, alias, id, rec)
+            .await
+    }
+    pub async fn put_link_tx(
+        &self,
+        id: u64,
+        rec: &Record,
+        deliveries: &[OutboxRow],
+    ) -> Result<(), StoreError> {
+        self.inner
+            .put_link_tx(self.tenant, id, rec, deliveries)
+            .await
+    }
+    pub async fn put_alias_and_link_tx(
+        &self,
+        alias: &str,
+        id: u64,
+        rec: &Record,
+        deliveries: &[OutboxRow],
+    ) -> Result<bool, StoreError> {
+        self.inner
+            .put_alias_and_link_tx(self.tenant, alias, id, rec, deliveries)
+            .await
+    }
+    pub async fn delete_link_tx(
+        &self,
+        id: u64,
+        deliveries: &[OutboxRow],
+    ) -> Result<(), StoreError> {
+        self.inner.delete_link_tx(self.tenant, id, deliveries).await
+    }
+    pub async fn list_links(
+        &self,
+        after: Option<u64>,
+        limit: usize,
+        tag: Option<&str>,
+        folder: Option<&str>,
+    ) -> Result<Vec<(u64, Record)>, StoreError> {
+        self.inner
+            .list_links(self.tenant, after, limit, tag, folder)
+            .await
+    }
+    pub async fn search_links(
+        &self,
+        q: &str,
+        after: Option<u64>,
+        limit: usize,
+        tag: Option<&str>,
+        folder: Option<&str>,
+    ) -> Result<Vec<(u64, Record)>, StoreError> {
+        self.inner
+            .search_links(self.tenant, q, after, limit, tag, folder)
+            .await
+    }
+    pub async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError> {
+        self.inner.list_aliases(self.tenant).await
+    }
+    pub async fn list_tags(&self) -> Result<Vec<(String, u64)>, StoreError> {
+        self.inner.list_tags(self.tenant).await
+    }
+    pub async fn list_folders(&self) -> Result<Vec<(String, u64)>, StoreError> {
+        self.inner.list_folders(self.tenant).await
+    }
+    pub async fn delete_link(&self, id: u64) -> Result<(), StoreError> {
+        self.inner.delete_link(self.tenant, id).await
+    }
+    pub async fn delete_alias(&self, alias: &str) -> Result<(), StoreError> {
+        self.inner.delete_alias(self.tenant, alias).await
+    }
+    pub async fn list_webhooks(&self) -> Result<Vec<WebhookSubscription>, StoreError> {
+        self.inner.list_webhooks(self.tenant).await
+    }
+    pub async fn get_webhook(&self, id: u64) -> Result<Option<WebhookSubscription>, StoreError> {
+        self.inner.get_webhook(self.tenant, id).await
+    }
+    pub async fn put_webhook(&self, sub: &WebhookSubscription) -> Result<(), StoreError> {
+        self.inner.put_webhook(self.tenant, sub).await
+    }
+    pub async fn delete_webhook(&self, id: u64) -> Result<bool, StoreError> {
+        self.inner.delete_webhook(self.tenant, id).await
+    }
+    pub async fn next_webhook_id(&self) -> Result<u64, StoreError> {
+        self.inner.next_webhook_id(self.tenant).await
+    }
+    pub async fn list_api_tokens(&self) -> Result<Vec<ApiToken>, StoreError> {
+        self.inner.list_api_tokens(self.tenant).await
+    }
+    pub async fn put_api_token(&self, token: &ApiToken) -> Result<(), StoreError> {
+        self.inner.put_api_token(self.tenant, token).await
+    }
+    pub async fn delete_api_token(&self, id: u64) -> Result<bool, StoreError> {
+        self.inner.delete_api_token(self.tenant, id).await
+    }
+    pub async fn next_api_token_id(&self) -> Result<u64, StoreError> {
+        self.inner.next_api_token_id(self.tenant).await
+    }
+    pub async fn put_session(&self, session: &crate::auth::Session) -> Result<(), StoreError> {
+        self.inner.put_session(self.tenant, session).await
+    }
+    pub async fn bump_visits(&self, id: u64) -> Result<u64, StoreError> {
+        self.inner.bump_visits(self.tenant, id).await
+    }
+    pub async fn visits(&self, id: u64) -> Result<u64, StoreError> {
+        self.inner.visits(self.tenant, id).await
+    }
+    pub async fn put_link_health(&self, id: u64, health: &LinkHealth) -> Result<(), StoreError> {
+        self.inner.put_link_health(self.tenant, id, health).await
+    }
+    pub async fn list_link_health(&self) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
+        self.inner.list_link_health(self.tenant).await
+    }
+    pub async fn link_health_for(&self, ids: &[u64]) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
+        self.inner.link_health_for(self.tenant, ids).await
+    }
+    pub async fn list_broken_link_ids(&self) -> Result<Vec<u64>, StoreError> {
+        self.inner.list_broken_link_ids(self.tenant).await
+    }
+    pub async fn put_sheets_connection(
+        &self,
+        c: &crate::sheets::SheetsConnection,
+    ) -> Result<(), StoreError> {
+        self.inner.put_sheets_connection(self.tenant, c).await
+    }
+    pub async fn get_sheets_connection(
+        &self,
+    ) -> Result<Option<crate::sheets::SheetsConnection>, StoreError> {
+        self.inner.get_sheets_connection(self.tenant).await
+    }
+    pub async fn delete_sheets_connection(&self) -> Result<(), StoreError> {
+        self.inner.delete_sheets_connection(self.tenant).await
+    }
+    pub async fn next_pixel_id(&self) -> Result<u64, StoreError> {
+        self.inner.next_pixel_id(self.tenant).await
+    }
+    pub async fn get_pixel(&self, id: u64) -> Result<Option<PixelConfig>, StoreError> {
+        self.inner.get_pixel(self.tenant, id).await
+    }
+    pub async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError> {
+        self.inner.put_pixel(self.tenant, config).await
+    }
+    pub async fn delete_pixel(&self, id: u64) -> Result<bool, StoreError> {
+        self.inner.delete_pixel(self.tenant, id).await
+    }
+    pub async fn list_pixels(&self) -> Result<Vec<PixelConfig>, StoreError> {
+        self.inner.list_pixels(self.tenant).await
+    }
+    pub async fn get_wellknown(&self, name: &str) -> Result<Option<String>, StoreError> {
+        self.inner.get_wellknown(self.tenant, name).await
+    }
+    pub async fn put_wellknown(&self, name: &str, body: &str) -> Result<(), StoreError> {
+        self.inner.put_wellknown(self.tenant, name, body).await
+    }
+    pub async fn delete_wellknown(&self, name: &str) -> Result<(), StoreError> {
+        self.inner.delete_wellknown(self.tenant, name).await
+    }
+}
+
 /// Opens only the Store on LMDB (used by tests that don't need the AnalyticsSink).
 pub async fn open_store(path: &Path) -> Result<Arc<dyn Store>, StoreError> {
     Ok(Arc::new(lmdb::LmdbStore::open(path)?))
+}
+
+/// Opens a Postgres-backed store (runs the idempotent schema migration).
+/// Returns the concrete type so tests can reach `reset_for_tests`; cast to
+/// `Arc<dyn Store>` for the `for_tenant` scoping helper.
+pub async fn open_postgres(url: &str) -> Result<Arc<postgres::PostgresStore>, StoreError> {
+    Ok(Arc::new(postgres::PostgresStore::open(url).await?))
 }
 
 /// Pair of backends (Store + AnalyticsSink) sharing the same physical backend.
@@ -530,6 +814,44 @@ pub async fn open_backends(data_path: &Path) -> Result<Backends, StoreError> {
         Err(_) => embedded_sink,
     };
     Ok((store, sink))
+}
+
+#[cfg(test)]
+mod scoped_tests {
+    use super::*;
+    use crate::tenant::TenantId;
+
+    fn test_rec(url: &str) -> Record {
+        Record {
+            url: url.into(),
+            expiry: None,
+            created: 0,
+            tags: Vec::new(),
+            max_visits: None,
+            rules: Vec::new(),
+            variants: Vec::new(),
+            app_ios: None,
+            app_android: None,
+            folder: None,
+            fallback_url: None,
+            password_hash: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn scoped_store_isolates_links_by_tenant() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path()).await.unwrap();
+        let a = store.clone().for_tenant(TenantId(1));
+        let b = store.clone().for_tenant(TenantId(2));
+
+        let rec = test_rec("https://example.com");
+        a.put_link(100, &rec).await.unwrap();
+
+        assert!(a.get_link(100).await.unwrap().is_some());
+        // Tenant 2 must NOT see tenant 1's link at the same id.
+        assert!(b.get_link(100).await.unwrap().is_none());
+    }
 }
 
 #[cfg(test)]

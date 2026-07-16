@@ -346,7 +346,7 @@ async fn main() {
                     {
                         continue;
                     }
-                    let Ok(Some(mut conn)) = store.get_sheets_connection().await else {
+                    let Ok(Some(mut conn)) = store.get_sheets_connection(quark::tenant::DEFAULT_TENANT).await else {
                         continue;
                     };
                     let outcome = match quark::sheets::refresh_access_token(
@@ -376,7 +376,7 @@ async fn main() {
                     } else {
                         eprintln!("{}", serde_json::json!({ "sheets_sync": "ok" }));
                     }
-                    if let Err(e) = store.put_sheets_connection(&conn).await {
+                    if let Err(e) = store.put_sheets_connection(quark::tenant::DEFAULT_TENANT, &conn).await {
                         eprintln!(
                             "{}",
                             serde_json::json!({ "sheets_sync_persist_error": e.to_string() })

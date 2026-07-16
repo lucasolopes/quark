@@ -277,7 +277,7 @@ pub trait AnalyticsSink: Send + Sync + 'static {
 /// Batch size that triggers an immediate flush (in addition to the 5s timer).
 pub const BATCH: usize = 500;
 
-/// How long a pixel-snapshot refresh (`store.list_pixels()`) is allowed to
+/// How long a pixel-snapshot refresh (`store.list_pixels(crate::tenant::DEFAULT_TENANT)`) is allowed to
 /// run before it's abandoned in favor of the previous snapshot (fail-open:
 /// a wedged store must never stall the worker).
 const PIXEL_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -346,7 +346,7 @@ pub fn spawn_worker(
 /// logged — a wedged or erroring store never stalls the worker and never
 /// empties out a snapshot that was previously known-good.
 async fn refresh_pixel_snapshot(store: &Arc<dyn Store>, pixels: &mut Vec<PixelConfig>) {
-    match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, store.list_pixels()).await {
+    match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, store.list_pixels(crate::tenant::DEFAULT_TENANT)).await {
         Ok(Ok(configs)) => *pixels = configs,
         Ok(Err(e)) => {
             eprintln!("{}", serde_json::json!({"pixel_list_error": e.to_string()}));
