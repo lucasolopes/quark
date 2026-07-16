@@ -146,6 +146,7 @@ fn role_to_str(r: Role) -> &'static str {
         Role::Owner => "owner",
         Role::Admin => "admin",
         Role::Member => "member",
+        Role::Viewer => "viewer",
     }
 }
 fn role_from_str(s: &str) -> Result<Role, StoreError> {
