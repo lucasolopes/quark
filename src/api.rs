@@ -1388,14 +1388,43 @@ async fn admin_guard(
             let hash = hash_token(raw);
             match st.store.get_session_by_hash(&hash, now()).await {
                 Ok(Some(session)) => {
-                    if session.scopes.iter().any(|s| s.covers(required)) {
+                    // Where the session's authorization comes from differs by
+                    // deployment mode. OSS: the stored `session.scopes`, which
+                    // is the OIDC group->scope map computed at login. Cloud: the
+                    // caller's role in the CURRENT workspace (`session.tenant_id`),
+                    // so switching workspaces re-derives scopes from membership and
+                    // never trusts a scope set minted for a different tenant. A
+                    // cloud session whose user has no membership in the current
+                    // tenant is treated as insufficient (403), never authorized.
+                    let effective_scopes = if st.multi_tenant {
+                        match st
+                            .store
+                            .get_membership(session.user_id, session.tenant_id)
+                            .await
+                        {
+                            Ok(Some(m)) => crate::tenant::role_scopes(m.role).to_vec(),
+                            Ok(None) => {
+                                saw_insufficient = true;
+                                vec![]
+                            }
+                            Err(_) => {
+                                saw_store_error = true;
+                                vec![]
+                            }
+                        }
+                    } else {
+                        session.scopes.clone()
+                    };
+                    if effective_scopes.iter().any(|s| s.covers(required)) {
                         return Ok(Principal {
                             tenant: session.tenant_id,
                             user_id: Some(session.user_id),
-                            scopes: session.scopes.clone(),
+                            scopes: effective_scopes,
                         });
                     }
-                    saw_insufficient = true;
+                    if !effective_scopes.is_empty() {
+                        saw_insufficient = true;
+                    }
                 }
                 Ok(None) => {}
                 Err(_) => saw_store_error = true,
