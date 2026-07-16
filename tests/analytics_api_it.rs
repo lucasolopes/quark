@@ -14,7 +14,7 @@ async fn app_with(
     tokio::sync::mpsc::Receiver<quark::analytics::ClickEvent>,
 ) {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, rx) = tokio::sync::mpsc::channel(chan_cap);
     let state = Arc::new(AppState {
@@ -22,6 +22,7 @@ async fn app_with(
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store,
         key: 0x1234,

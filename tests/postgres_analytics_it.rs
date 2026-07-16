@@ -4,7 +4,7 @@ use serial_test::serial;
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
-    let s = PostgresStore::open(&url).await.unwrap();
+    let s = PostgresStore::open(&url, false).await.unwrap();
     s.reset_for_tests().await.unwrap();
     Some(s)
 }
@@ -174,10 +174,10 @@ async fn record_batch_concurrent_no_lost_updates() {
         Ok(u) => u,
         Err(_) => return,
     };
-    let s0 = PostgresStore::open(&url).await.unwrap();
+    let s0 = PostgresStore::open(&url, false).await.unwrap();
     s0.reset_for_tests().await.unwrap();
-    let s1 = std::sync::Arc::new(PostgresStore::open(&url).await.unwrap());
-    let s2 = std::sync::Arc::new(PostgresStore::open(&url).await.unwrap());
+    let s1 = std::sync::Arc::new(PostgresStore::open(&url, false).await.unwrap());
+    let s2 = std::sync::Arc::new(PostgresStore::open(&url, false).await.unwrap());
     let n = 50u64;
     let t1 = {
         let s = s1.clone();

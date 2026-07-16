@@ -6,7 +6,7 @@ use sqlx::{PgPool, Row};
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
-    let s = PostgresStore::open(&url).await.unwrap();
+    let s = PostgresStore::open(&url, false).await.unwrap();
     s.reset_for_tests().await.unwrap();
     Some(s)
 }
@@ -15,7 +15,7 @@ async fn fresh() -> Option<PostgresStore> {
 /// `Store` trait does not expose.
 async fn fresh_with_pool() -> Option<(PostgresStore, PgPool)> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
-    let s = PostgresStore::open(&url).await.unwrap();
+    let s = PostgresStore::open(&url, false).await.unwrap();
     s.reset_for_tests().await.unwrap();
     let pool = PgPoolOptions::new()
         .max_connections(4)
@@ -71,6 +71,7 @@ fn outbox_row(key: &str, sub_id: u64, at: u64) -> OutboxRow {
         payload: r#"{"id":"evt_test","type":"link.created"}"#.to_string(),
         created: at,
         next_attempt_at: at,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     }
 }
 
@@ -95,7 +96,9 @@ async fn open_with_replica_write_then_read_round_trips() {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
-    let s = PostgresStore::open_with_replica(&url, &url).await.unwrap();
+    let s = PostgresStore::open_with_replica(&url, &url, false)
+        .await
+        .unwrap();
     s.reset_for_tests().await.unwrap();
     let rec = plain_rec("https://replica-routed.example");
     s.put_link(quark::tenant::DEFAULT_TENANT, 101, &rec)
@@ -123,7 +126,7 @@ async fn open_and_open_with_replica_both_wire_working_pools() {
         return;
     };
     // Single URL: both pools are the same handle; the round-trip works.
-    let single = PostgresStore::open(&url).await.unwrap();
+    let single = PostgresStore::open(&url, false).await.unwrap();
     single.reset_for_tests().await.unwrap();
     single
         .put_link(
@@ -145,7 +148,9 @@ async fn open_and_open_with_replica_both_wire_working_pools() {
 
     // Distinct constructor: write pool and read pool built separately, both
     // against the same DB here; the round-trip still works.
-    let split = PostgresStore::open_with_replica(&url, &url).await.unwrap();
+    let split = PostgresStore::open_with_replica(&url, &url, false)
+        .await
+        .unwrap();
     split.reset_for_tests().await.unwrap();
     split
         .put_link(

@@ -23,7 +23,7 @@ const TEST_SECRET: &str = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
 /// skip cleanly.
 async fn setup() -> Option<(Arc<dyn Store>, PgPool)> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
-    let s = PostgresStore::open(&url).await.unwrap();
+    let s = PostgresStore::open(&url, false).await.unwrap();
     s.reset_for_tests().await.unwrap();
     let pool = PgPoolOptions::new()
         .max_connections(6)
@@ -136,6 +136,7 @@ fn row(delivery_key: &str, sub_id: u64, at: u64) -> OutboxRow {
         payload: payload("evt_test"),
         created: at,
         next_attempt_at: at,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     }
 }
 
@@ -378,4 +379,30 @@ async fn duplicate_enqueue_inserts_one_row() {
         .await
         .unwrap();
     assert_eq!(count_rows(&pool, &key).await, 1);
+}
+
+/// `claim_due_deliveries` must hand back the `tenant_id` a row was enqueued
+/// with (not always `DEFAULT_TENANT`): the relay's `deliver_claimed` resolves
+/// the subscription via `get_webhook(delivery.tenant_id, ...)`, so a wrong or
+/// dropped `tenant_id` here would make the relay look up the subscription in
+/// the wrong tenant once P2b creates real tenants.
+#[tokio::test]
+#[serial(pg)]
+async fn claim_due_deliveries_round_trips_tenant_id() {
+    let Some((store, _pool)) = setup().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let tenant = quark::tenant::TenantId(5);
+    let now = quark::now();
+    let mut r = row("evt_tenant_test.1", 1, now);
+    r.tenant_id = tenant;
+    store.enqueue_deliveries(&[r]).await.unwrap();
+
+    let claimed = store.claim_due_deliveries(now, 10).await.unwrap();
+    let d = claimed
+        .iter()
+        .find(|d| d.delivery_key == "evt_tenant_test.1")
+        .expect("the enqueued row must be claimable");
+    assert_eq!(d.tenant_id, tenant);
 }

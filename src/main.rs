@@ -66,7 +66,13 @@ async fn main() {
             getrandom::fill(&mut k).expect("system RNG must be available");
             k
         });
-    let (store, sink) = open_backends(std::path::Path::new(&path))
+    let multi_tenant = std::env::var("QUARK_MULTI_TENANT")
+        .map(|v| v != "0")
+        .unwrap_or(false);
+    if multi_tenant {
+        eprintln!("multi-tenant mode ENABLED (FORCE RLS + per-tenant tx on Postgres)");
+    }
+    let (store, sink) = open_backends(std::path::Path::new(&path), multi_tenant)
         .await
         .expect("open backends");
     eprintln!(
@@ -275,6 +281,7 @@ async fn main() {
         oidc_configured,
         sheets,
         sheets_api: Some(sheets_api),
+        multi_tenant,
     });
     match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {

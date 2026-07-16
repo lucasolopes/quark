@@ -79,7 +79,7 @@ fn ev(id: u64, ts: u64) -> ClickEvent {
 async fn worker_flush_forwards_batch_to_active_pixel_with_real_short_code() {
     let (mock_base, captured) = mock_server("/mp/collect").await;
     let dir = tempfile::tempdir().unwrap();
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     store
         .put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1))
         .await
@@ -119,7 +119,7 @@ async fn worker_flush_forwards_batch_to_active_pixel_with_real_short_code() {
 async fn worker_flush_skips_inactive_pixel_configs() {
     let (mock_base, captured) = mock_server("/mp/collect").await;
     let dir = tempfile::tempdir().unwrap();
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let mut inactive = ga4_config(1);
     inactive.active = false;
     store
@@ -153,7 +153,7 @@ async fn worker_flush_skips_inactive_pixel_configs() {
 #[tokio::test]
 async fn worker_flush_is_fail_open_when_provider_is_down() {
     let dir = tempfile::tempdir().unwrap();
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     store
         .put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1))
         .await
@@ -196,7 +196,7 @@ async fn worker_flush_is_fail_open_when_provider_returns_500() {
     });
 
     let dir = tempfile::tempdir().unwrap();
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     store
         .put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1))
         .await
@@ -234,7 +234,7 @@ async fn worker_flush_is_fail_open_when_provider_returns_500() {
 async fn worker_forwards_to_a_pixel_added_after_start_once_the_snapshot_refreshes() {
     let (mock_base, captured) = mock_server("/mp/collect").await;
     let dir = tempfile::tempdir().unwrap();
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     // Deliberately no pixel configured before the worker starts: the
     // initial snapshot load must come back empty.
 

@@ -7,6 +7,73 @@ use crate::webhooks::{SubscriptionKind, WebhookSubscription};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{PgPool, Row};
 
+/// Routes a tenant-owned READ (or write-pool read) query through the correct
+/// execution context. `$body` is an expression that uses the bound connection
+/// `$c: &mut sqlx::PgConnection` and returns `Result<_, sqlx::Error>`.
+///
+/// - Cloud mode (`multi_tenant == true`): runs `$body` inside a per-tenant
+///   transaction on the READ pool that first did `SET LOCAL app.tenant_id`
+///   (so `FORCE ROW LEVEL SECURITY` is satisfied), then commits.
+/// - OSS mode: runs `$body` directly on a pooled READ connection — no
+///   transaction, no extra round-trip, byte-for-byte the pre-P2a path.
+///
+/// The macro evaluates to the (sqlx-error-mapped, `?`-propagated) value of
+/// `$body`, so callers deserialize exactly as before.
+macro_rules! with_read {
+    ($self:expr, $tenant:expr, |$c:ident| $body:block) => {{
+        if $self.multi_tenant {
+            let mut tx = $self.begin_tenant_tx_read($tenant).await?;
+            // The body runs in an immediately-awaited `async` block so an
+            // intermediate `?` inside a multi-statement body propagates as
+            // `sqlx::Error` (to here), not as `StoreError` (to the outer fn).
+            let out = async {
+                let $c: &mut sqlx::PgConnection = &mut *tx;
+                $body
+            }
+            .await
+            .map_err(StoreError::backend)?;
+            tx.commit().await.map_err(StoreError::backend)?;
+            out
+        } else {
+            let mut conn = $self.read.acquire().await.map_err(StoreError::backend)?;
+            async {
+                let $c: &mut sqlx::PgConnection = &mut *conn;
+                $body
+            }
+            .await
+            .map_err(StoreError::backend)?
+        }
+    }};
+}
+
+/// Write-pool sibling of [`with_read!`]: same shape, but cloud mode uses the
+/// WRITE-pool per-tenant transaction (`begin_tenant_tx`) and OSS mode a pooled
+/// WRITE connection. Used for every tenant-owned mutation, plus the tenant reads
+/// that must stay on the primary (read-your-writes), e.g. `get_sheets_connection`.
+macro_rules! with_write {
+    ($self:expr, $tenant:expr, |$c:ident| $body:block) => {{
+        if $self.multi_tenant {
+            let mut tx = $self.begin_tenant_tx($tenant).await?;
+            let out = async {
+                let $c: &mut sqlx::PgConnection = &mut *tx;
+                $body
+            }
+            .await
+            .map_err(StoreError::backend)?;
+            tx.commit().await.map_err(StoreError::backend)?;
+            out
+        } else {
+            let mut conn = $self.write.acquire().await.map_err(StoreError::backend)?;
+            async {
+                let $c: &mut sqlx::PgConnection = &mut *conn;
+                $body
+            }
+            .await
+            .map_err(StoreError::backend)?
+        }
+    }};
+}
+
 /// Key of the pg_advisory_lock that serializes idempotent schema creation across instances.
 const QUARK_SCHEMA_LOCK_ID: i64 = 727271;
 
@@ -110,6 +177,7 @@ fn row_to_delivery(r: &PgRow) -> Result<OutboxDelivery, StoreError> {
     let event_type: String = r.try_get("event_type").map_err(StoreError::backend)?;
     let payload: String = r.try_get("payload").map_err(StoreError::backend)?;
     let attempts: i32 = r.try_get("attempts").map_err(StoreError::backend)?;
+    let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
     Ok(OutboxDelivery {
         id,
         delivery_key,
@@ -117,6 +185,7 @@ fn row_to_delivery(r: &PgRow) -> Result<OutboxDelivery, StoreError> {
         event_type,
         payload,
         attempts: attempts as u32,
+        tenant_id: TenantId(tenant_id as u64),
     })
 }
 
@@ -257,8 +326,8 @@ async fn enqueue_in_tx(
 ) -> Result<(), StoreError> {
     for row in rows {
         sqlx::query(
-            "INSERT INTO webhook_deliveries (delivery_key, subscription_id, event_type, payload, created, next_attempt_at) \
-             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (delivery_key) DO NOTHING",
+            "INSERT INTO webhook_deliveries (delivery_key, subscription_id, event_type, payload, created, next_attempt_at, tenant_id) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (delivery_key) DO NOTHING",
         )
         .bind(&row.delivery_key)
         .bind(row.subscription_id as i64)
@@ -266,6 +335,7 @@ async fn enqueue_in_tx(
         .bind(&row.payload)
         .bind(row.created as i64)
         .bind(row.next_attempt_at as i64)
+        .bind(row.tenant_id.0 as i64)
         .execute(&mut **tx)
         .await
         .map_err(StoreError::backend)?;
@@ -280,10 +350,16 @@ pub struct PostgresStore {
     /// Read pool: the local read replica when `open_with_replica` is used, or a
     /// clone of `write` (the same handle) under single-URL `open`.
     read: PgPool,
+    /// Whether this store was opened in multi-tenant (cloud) mode, from
+    /// `QUARK_MULTI_TENANT`. In cloud mode `init_schema` forces RLS on the
+    /// tenant-owned tables and every tenant-owned query runs inside a
+    /// `SET LOCAL app.tenant_id` transaction (via `with_read!`/`with_write!`).
+    /// In OSS mode this is false and queries run directly on the pool as before.
+    multi_tenant: bool,
 }
 
 impl PostgresStore {
-    pub async fn open(url: &str) -> Result<PostgresStore, StoreError> {
+    pub async fn open(url: &str, multi_tenant: bool) -> Result<PostgresStore, StoreError> {
         let pool = PgPoolOptions::new()
             .max_connections(10)
             .connect(url)
@@ -295,6 +371,7 @@ impl PostgresStore {
         let s = PostgresStore {
             read: pool.clone(),
             write: pool,
+            multi_tenant,
         };
         s.init_schema().await?;
         Ok(s)
@@ -307,6 +384,7 @@ impl PostgresStore {
     pub async fn open_with_replica(
         primary_url: &str,
         replica_url: &str,
+        multi_tenant: bool,
     ) -> Result<PostgresStore, StoreError> {
         let write = PgPoolOptions::new()
             .max_connections(10)
@@ -318,9 +396,19 @@ impl PostgresStore {
             .connect(replica_url)
             .await
             .map_err(StoreError::backend)?;
-        let s = PostgresStore { write, read };
+        let s = PostgresStore {
+            write,
+            read,
+            multi_tenant,
+        };
         s.init_schema().await?;
         Ok(s)
+    }
+
+    /// Whether this store is running in multi-tenant (cloud) mode. Plumbing
+    /// only for now — nothing reads this yet.
+    pub fn is_multi_tenant(&self) -> bool {
+        self.multi_tenant
     }
 
     /// Creates the schema idempotently. `CREATE TABLE/SEQUENCE IF NOT EXISTS`
@@ -536,6 +624,56 @@ impl PostgresStore {
                 .await
                 .map_err(StoreError::backend)?;
             }
+
+            // Cloud mode only: FORCE makes even the table owner (the role that
+            // runs migrations and serves requests) obey the policy, so tenant
+            // isolation no longer relies solely on the app-level `WHERE
+            // tenant_id` predicate. `ALTER ... FORCE` is idempotent and
+            // metadata-only (no table rewrite, no data lock beyond a brief
+            // catalog update).
+            //
+            // Excepted: `api_tokens`, `sessions` — their hot-path lookups are BY
+            // HASH (`get_api_token_by_hash`, `get_session_by_hash`), which must
+            // find the row BEFORE the tenant is known — those run on the bare
+            // pool with no `app.tenant_id` set, so FORCE would make them fail
+            // closed and break authentication.
+            //
+            // Also excepted: `click_counters`, `stats_meta`, `click_events`
+            // (analytics — `record_batch`/`stats`) and `webhook_deliveries`
+            // (the cluster-wide outbox relay — `enqueue_deliveries`/
+            // `claim_due_deliveries`/`mark_*`). Those accessors run on the bare
+            // pool too and never `SET LOCAL app.tenant_id`, so FORCE would fail
+            // their reads closed (0 rows) and their writes closed (WITH CHECK
+            // rejects a row whose `tenant_id` doesn't match a session GUC that
+            // was never set). Concretely: `put_link_tx`/`put_alias_and_link_tx`
+            // insert into `webhook_deliveries` from inside the per-tenant tx —
+            // that insert would see `app.tenant_id = N` but the delivery row
+            // itself carries the *subscription's* tenant, so a mismatched
+            // `WITH CHECK` would reject legitimate enqueues.
+            //
+            // RLS stays merely ENABLED (not FORCED) on all six; the app-level
+            // `WHERE tenant_id` predicate remains the isolation layer for their
+            // tenant-scoped methods (`list_api_tokens`, `put_session`, ...) and
+            // for the bare-pool accessors above.
+            const NOT_FORCED: [&str; 6] = [
+                "api_tokens",
+                "sessions",
+                "click_counters",
+                "stats_meta",
+                "click_events",
+                "webhook_deliveries",
+            ];
+            if self.multi_tenant {
+                for table in TENANT_OWNED_TABLES
+                    .iter()
+                    .filter(|t| !NOT_FORCED.contains(t))
+                {
+                    sqlx::query(&format!("ALTER TABLE {table} FORCE ROW LEVEL SECURITY"))
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(StoreError::backend)?;
+                }
+            }
             Ok(())
         }
         .await;
@@ -569,12 +707,12 @@ impl PostgresStore {
         Ok(())
     }
 
-    /// Cloud-mode transaction that sets `app.tenant_id` for RLS. `SET LOCAL`
-    /// (via `set_config(..., true)`) scopes it to the transaction so a pooled
-    /// connection never leaks the previous tenant. NOT called in P1a (RLS is
-    /// defined but not forced; the app-level `WHERE tenant_id` is the enforced
-    /// layer). Wired by P1b's mode flag.
-    #[allow(dead_code)]
+    /// Cloud-mode WRITE transaction that sets `app.tenant_id` for RLS.
+    /// `SET LOCAL` (via `set_config(..., true)`) scopes it to the transaction so
+    /// a pooled connection never leaks the previous tenant. In P2a this drives
+    /// `FORCE ROW LEVEL SECURITY`: every tenant-owned write runs inside one of
+    /// these (via `with_write!` / `begin_write_tx`), and the app-level
+    /// `WHERE tenant_id` predicate stays on as belt-and-suspenders.
     async fn begin_tenant_tx(
         &self,
         tenant: TenantId,
@@ -586,6 +724,38 @@ impl PostgresStore {
             .await
             .map_err(StoreError::backend)?;
         Ok(tx)
+    }
+
+    /// READ-pool mirror of [`begin_tenant_tx`]: a transaction on `self.read`
+    /// that first sets `app.tenant_id`. Used by `with_read!` so tenant-owned
+    /// reads/lists/aggregates run under RLS in cloud mode while still hitting
+    /// the read replica (when one is configured).
+    async fn begin_tenant_tx_read(
+        &self,
+        tenant: TenantId,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, StoreError> {
+        let mut tx = self.read.begin().await.map_err(StoreError::backend)?;
+        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+            .bind(tenant.0.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(tx)
+    }
+
+    /// Begins the WRITE transaction used by the multi-statement mutation methods
+    /// (`put_link`, `put_alias_and_link`, and the `*_tx` variants). In cloud
+    /// mode it is a per-tenant tx (`SET LOCAL app.tenant_id`, satisfying FORCE
+    /// RLS); in OSS mode it is a plain `write.begin()` — identical to pre-P2a.
+    async fn begin_write_tx(
+        &self,
+        tenant: TenantId,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, StoreError> {
+        if self.multi_tenant {
+            self.begin_tenant_tx(tenant).await
+        } else {
+            self.write.begin().await.map_err(StoreError::backend)
+        }
     }
 }
 
@@ -602,14 +772,15 @@ impl Store for PostgresStore {
     }
 
     async fn get_link(&self, tenant: TenantId, id: u64) -> Result<Option<Record>, StoreError> {
-        let row = sqlx::query(
-            "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash FROM links WHERE tenant_id = $1 AND id = $2",
-        )
-        .bind(tenant.0 as i64)
-        .bind(id as i64)
-        .fetch_optional(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let row = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash FROM links WHERE tenant_id = $1 AND id = $2",
+            )
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .fetch_optional(&mut *c)
+            .await
+        });
         match row {
             Some(r) => Ok(Some(row_to_link(&r)?.1)),
             None => Ok(None),
@@ -617,19 +788,20 @@ impl Store for PostgresStore {
     }
 
     async fn put_link(&self, tenant: TenantId, id: u64, rec: &Record) -> Result<(), StoreError> {
-        let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
+        let mut tx = self.begin_write_tx(tenant).await?;
         upsert_link_in_tx(&mut tx, tenant, id, rec).await?;
         tx.commit().await.map_err(StoreError::backend)?;
         Ok(())
     }
 
     async fn get_alias(&self, tenant: TenantId, alias: &str) -> Result<Option<u64>, StoreError> {
-        let row = sqlx::query("SELECT id FROM aliases WHERE tenant_id = $1 AND alias = $2")
-            .bind(tenant.0 as i64)
-            .bind(alias)
-            .fetch_optional(&self.read)
-            .await
-            .map_err(StoreError::backend)?;
+        let row = with_read!(self, tenant, |c| {
+            sqlx::query("SELECT id FROM aliases WHERE tenant_id = $1 AND alias = $2")
+                .bind(tenant.0 as i64)
+                .bind(alias)
+                .fetch_optional(&mut *c)
+                .await
+        });
         match row {
             Some(r) => {
                 let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
@@ -646,7 +818,7 @@ impl Store for PostgresStore {
         id: u64,
         rec: &Record,
     ) -> Result<bool, StoreError> {
-        let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
+        let mut tx = self.begin_write_tx(tenant).await?;
         let res = sqlx::query(
             "INSERT INTO aliases (alias, id, tenant_id) VALUES ($1,$2,$3) ON CONFLICT (alias) DO NOTHING",
         )
@@ -671,7 +843,7 @@ impl Store for PostgresStore {
         rec: &Record,
         deliveries: &[OutboxRow],
     ) -> Result<(), StoreError> {
-        let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
+        let mut tx = self.begin_write_tx(tenant).await?;
         upsert_link_in_tx(&mut tx, tenant, id, rec).await?;
         enqueue_in_tx(&mut tx, deliveries).await?;
         tx.commit().await.map_err(StoreError::backend)?;
@@ -686,7 +858,7 @@ impl Store for PostgresStore {
         rec: &Record,
         deliveries: &[OutboxRow],
     ) -> Result<bool, StoreError> {
-        let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
+        let mut tx = self.begin_write_tx(tenant).await?;
         let res = sqlx::query(
             "INSERT INTO aliases (alias, id, tenant_id) VALUES ($1,$2,$3) ON CONFLICT (alias) DO NOTHING",
         )
@@ -711,7 +883,7 @@ impl Store for PostgresStore {
         id: u64,
         deliveries: &[OutboxRow],
     ) -> Result<(), StoreError> {
-        let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
+        let mut tx = self.begin_write_tx(tenant).await?;
         sqlx::query("DELETE FROM links WHERE tenant_id = $1 AND id = $2")
             .bind(tenant.0 as i64)
             .bind(id as i64)
@@ -738,22 +910,23 @@ impl Store for PostgresStore {
         folder: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let tag_json = tag.map(|t| serde_json::json!([t]));
-        let rows = sqlx::query(
-            "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash FROM links \
-             WHERE tenant_id = $5 \
-               AND ($1::bigint IS NULL OR id > $1) \
-               AND ($2::jsonb IS NULL OR tags @> $2) \
-               AND ($4::text IS NULL OR lower(folder) = lower($4)) \
-             ORDER BY id LIMIT $3",
-        )
-        .bind(after.map(|a| a as i64))
-        .bind(&tag_json)
-        .bind(limit as i64)
-        .bind(folder)
-        .bind(tenant.0 as i64)
-        .fetch_all(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash FROM links \
+                 WHERE tenant_id = $5 \
+                   AND ($1::bigint IS NULL OR id > $1) \
+                   AND ($2::jsonb IS NULL OR tags @> $2) \
+                   AND ($4::text IS NULL OR lower(folder) = lower($4)) \
+                 ORDER BY id LIMIT $3",
+            )
+            .bind(after.map(|a| a as i64))
+            .bind(&tag_json)
+            .bind(limit as i64)
+            .bind(folder)
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
         rows.iter().map(row_to_link).collect()
     }
 
@@ -768,34 +941,36 @@ impl Store for PostgresStore {
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let pattern = format!("%{}%", like_escape(q));
         let tag_json = tag.map(|t| serde_json::json!([t]));
-        let rows = sqlx::query(
-            "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits, l.rules, l.variants, l.app_ios, l.app_android, l.folder, l.fallback_url, l.password_hash \
-             FROM links l LEFT JOIN aliases a ON a.id = l.id AND a.tenant_id = l.tenant_id \
-             WHERE l.tenant_id = $6 \
-               AND ($1::bigint IS NULL OR l.id > $1) \
-               AND (l.url ILIKE $2 OR a.alias ILIKE $2) \
-               AND ($3::jsonb IS NULL OR l.tags @> $3) \
-               AND ($5::text IS NULL OR lower(l.folder) = lower($5)) \
-             ORDER BY l.id LIMIT $4",
-        )
-        .bind(after.map(|a| a as i64))
-        .bind(&pattern)
-        .bind(&tag_json)
-        .bind(limit as i64)
-        .bind(folder)
-        .bind(tenant.0 as i64)
-        .fetch_all(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits, l.rules, l.variants, l.app_ios, l.app_android, l.folder, l.fallback_url, l.password_hash \
+                 FROM links l LEFT JOIN aliases a ON a.id = l.id AND a.tenant_id = l.tenant_id \
+                 WHERE l.tenant_id = $6 \
+                   AND ($1::bigint IS NULL OR l.id > $1) \
+                   AND (l.url ILIKE $2 OR a.alias ILIKE $2) \
+                   AND ($3::jsonb IS NULL OR l.tags @> $3) \
+                   AND ($5::text IS NULL OR lower(l.folder) = lower($5)) \
+                 ORDER BY l.id LIMIT $4",
+            )
+            .bind(after.map(|a| a as i64))
+            .bind(&pattern)
+            .bind(&tag_json)
+            .bind(limit as i64)
+            .bind(folder)
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
         rows.iter().map(row_to_link).collect()
     }
 
     async fn list_aliases(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError> {
-        let rows = sqlx::query("SELECT alias, id FROM aliases WHERE tenant_id = $1")
-            .bind(tenant.0 as i64)
-            .fetch_all(&self.read)
-            .await
-            .map_err(StoreError::backend)?;
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query("SELECT alias, id FROM aliases WHERE tenant_id = $1")
+                .bind(tenant.0 as i64)
+                .fetch_all(&mut *c)
+                .await
+        });
         let mut out = Vec::new();
         for r in rows {
             let alias: String = r.try_get("alias").map_err(StoreError::backend)?;
@@ -806,28 +981,29 @@ impl Store for PostgresStore {
     }
 
     async fn delete_link(&self, tenant: TenantId, id: u64) -> Result<(), StoreError> {
-        sqlx::query("DELETE FROM links WHERE tenant_id = $1 AND id = $2")
-            .bind(tenant.0 as i64)
-            .bind(id as i64)
-            .execute(&self.write)
-            .await
-            .map_err(StoreError::backend)?;
-        sqlx::query("DELETE FROM link_health WHERE tenant_id = $1 AND id = $2")
-            .bind(tenant.0 as i64)
-            .bind(id as i64)
-            .execute(&self.write)
-            .await
-            .map_err(StoreError::backend)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query("DELETE FROM links WHERE tenant_id = $1 AND id = $2")
+                .bind(tenant.0 as i64)
+                .bind(id as i64)
+                .execute(&mut *c)
+                .await?;
+            sqlx::query("DELETE FROM link_health WHERE tenant_id = $1 AND id = $2")
+                .bind(tenant.0 as i64)
+                .bind(id as i64)
+                .execute(&mut *c)
+                .await
+        });
         Ok(())
     }
 
     async fn delete_alias(&self, tenant: TenantId, alias: &str) -> Result<(), StoreError> {
-        sqlx::query("DELETE FROM aliases WHERE tenant_id = $1 AND alias = $2")
-            .bind(tenant.0 as i64)
-            .bind(alias)
-            .execute(&self.write)
-            .await
-            .map_err(StoreError::backend)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query("DELETE FROM aliases WHERE tenant_id = $1 AND alias = $2")
+                .bind(tenant.0 as i64)
+                .bind(alias)
+                .execute(&mut *c)
+                .await
+        });
         Ok(())
     }
 
@@ -835,13 +1011,14 @@ impl Store for PostgresStore {
         &self,
         tenant: TenantId,
     ) -> Result<Vec<WebhookSubscription>, StoreError> {
-        let rows = sqlx::query(
-            "SELECT id, url, events, secret, active, created, kind FROM webhooks WHERE tenant_id = $1 ORDER BY id",
-        )
-        .bind(tenant.0 as i64)
-        .fetch_all(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, url, events, secret, active, created, kind FROM webhooks WHERE tenant_id = $1 ORDER BY id",
+            )
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
         rows.iter().map(row_to_webhook).collect()
     }
 
@@ -850,14 +1027,15 @@ impl Store for PostgresStore {
         tenant: TenantId,
         id: u64,
     ) -> Result<Option<WebhookSubscription>, StoreError> {
-        let row = sqlx::query(
-            "SELECT id, url, events, secret, active, created, kind FROM webhooks WHERE tenant_id = $1 AND id = $2",
-        )
-        .bind(tenant.0 as i64)
-        .bind(id as i64)
-        .fetch_optional(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let row = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, url, events, secret, active, created, kind FROM webhooks WHERE tenant_id = $1 AND id = $2",
+            )
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .fetch_optional(&mut *c)
+            .await
+        });
         match row {
             Some(r) => Ok(Some(row_to_webhook(&r)?)),
             None => Ok(None),
@@ -870,31 +1048,33 @@ impl Store for PostgresStore {
         sub: &WebhookSubscription,
     ) -> Result<(), StoreError> {
         let events = serde_json::to_value(&sub.events)?;
-        sqlx::query(
-            "INSERT INTO webhooks (id, url, events, secret, active, created, kind, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) \
-             ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6, kind=$7, tenant_id=$8",
-        )
-        .bind(sub.id as i64)
-        .bind(&sub.url)
-        .bind(&events)
-        .bind(&sub.secret)
-        .bind(sub.active)
-        .bind(sub.created as i64)
-        .bind(sub.kind.as_str())
-        .bind(tenant.0 as i64)
-        .execute(&self.write)
-        .await
-        .map_err(StoreError::backend)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "INSERT INTO webhooks (id, url, events, secret, active, created, kind, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) \
+                 ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6, kind=$7, tenant_id=$8",
+            )
+            .bind(sub.id as i64)
+            .bind(&sub.url)
+            .bind(&events)
+            .bind(&sub.secret)
+            .bind(sub.active)
+            .bind(sub.created as i64)
+            .bind(sub.kind.as_str())
+            .bind(tenant.0 as i64)
+            .execute(&mut *c)
+            .await
+        });
         Ok(())
     }
 
     async fn delete_webhook(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError> {
-        let res = sqlx::query("DELETE FROM webhooks WHERE tenant_id = $1 AND id = $2")
-            .bind(tenant.0 as i64)
-            .bind(id as i64)
-            .execute(&self.write)
-            .await
-            .map_err(StoreError::backend)?;
+        let res = with_write!(self, tenant, |c| {
+            sqlx::query("DELETE FROM webhooks WHERE tenant_id = $1 AND id = $2")
+                .bind(tenant.0 as i64)
+                .bind(id as i64)
+                .execute(&mut *c)
+                .await
+        });
         Ok(res.rows_affected() > 0)
     }
 
@@ -911,15 +1091,16 @@ impl Store for PostgresStore {
     async fn list_tags(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError> {
         // Dedupe tags within a link (SELECT DISTINCT per id) before counting,
         // so a link carrying the same tag twice still counts once.
-        let rows = sqlx::query(
-            "SELECT tag, count(*) AS n FROM ( \
-               SELECT DISTINCT id, jsonb_array_elements_text(tags) AS tag FROM links WHERE tenant_id = $1 \
-             ) t GROUP BY tag ORDER BY tag",
-        )
-        .bind(tenant.0 as i64)
-        .fetch_all(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT tag, count(*) AS n FROM ( \
+                   SELECT DISTINCT id, jsonb_array_elements_text(tags) AS tag FROM links WHERE tenant_id = $1 \
+                 ) t GROUP BY tag ORDER BY tag",
+            )
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
         rows.iter()
             .map(|r| {
                 let name: String = r.try_get("tag").map_err(StoreError::backend)?;
@@ -930,13 +1111,14 @@ impl Store for PostgresStore {
     }
 
     async fn list_folders(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError> {
-        let rows = sqlx::query(
-            "SELECT folder, count(*) AS n FROM links WHERE tenant_id = $1 AND folder IS NOT NULL GROUP BY folder ORDER BY folder",
-        )
-        .bind(tenant.0 as i64)
-        .fetch_all(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT folder, count(*) AS n FROM links WHERE tenant_id = $1 AND folder IS NOT NULL GROUP BY folder ORDER BY folder",
+            )
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
         rows.iter()
             .map(|r| {
                 let name: String = r.try_get("folder").map_err(StoreError::backend)?;
@@ -947,14 +1129,15 @@ impl Store for PostgresStore {
     }
 
     async fn list_api_tokens(&self, tenant: TenantId) -> Result<Vec<ApiToken>, StoreError> {
-        let rows = sqlx::query(
-            "SELECT id, name, token_hash, scopes, rate_limit_per_min, created, tenant_id \
-             FROM api_tokens WHERE tenant_id = $1 ORDER BY id",
-        )
-        .bind(tenant.0 as i64)
-        .fetch_all(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, name, token_hash, scopes, rate_limit_per_min, created, tenant_id \
+                 FROM api_tokens WHERE tenant_id = $1 ORDER BY id",
+            )
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
         rows.iter().map(row_to_api_token).collect()
     }
 
@@ -977,32 +1160,34 @@ impl Store for PostgresStore {
 
     async fn put_api_token(&self, tenant: TenantId, token: &ApiToken) -> Result<(), StoreError> {
         let scopes = serde_json::to_value(&token.scopes)?;
-        sqlx::query(
-            "INSERT INTO api_tokens (id, name, token_hash, scopes, rate_limit_per_min, created, tenant_id) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7) \
-             ON CONFLICT (id) DO UPDATE SET \
-             name=$2, token_hash=$3, scopes=$4, rate_limit_per_min=$5, created=$6, tenant_id=$7",
-        )
-        .bind(token.id as i64)
-        .bind(&token.name)
-        .bind(&token.token_hash)
-        .bind(&scopes)
-        .bind(token.rate_limit_per_min.map(|v| v as i64))
-        .bind(token.created as i64)
-        .bind(tenant.0 as i64)
-        .execute(&self.write)
-        .await
-        .map_err(StoreError::backend)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "INSERT INTO api_tokens (id, name, token_hash, scopes, rate_limit_per_min, created, tenant_id) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7) \
+                 ON CONFLICT (id) DO UPDATE SET \
+                 name=$2, token_hash=$3, scopes=$4, rate_limit_per_min=$5, created=$6, tenant_id=$7",
+            )
+            .bind(token.id as i64)
+            .bind(&token.name)
+            .bind(&token.token_hash)
+            .bind(&scopes)
+            .bind(token.rate_limit_per_min.map(|v| v as i64))
+            .bind(token.created as i64)
+            .bind(tenant.0 as i64)
+            .execute(&mut *c)
+            .await
+        });
         Ok(())
     }
 
     async fn delete_api_token(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError> {
-        let res = sqlx::query("DELETE FROM api_tokens WHERE tenant_id = $1 AND id = $2")
-            .bind(tenant.0 as i64)
-            .bind(id as i64)
-            .execute(&self.write)
-            .await
-            .map_err(StoreError::backend)?;
+        let res = with_write!(self, tenant, |c| {
+            sqlx::query("DELETE FROM api_tokens WHERE tenant_id = $1 AND id = $2")
+                .bind(tenant.0 as i64)
+                .bind(id as i64)
+                .execute(&mut *c)
+                .await
+        });
         Ok(res.rows_affected() > 0)
     }
 
@@ -1017,25 +1202,27 @@ impl Store for PostgresStore {
     }
 
     async fn bump_visits(&self, tenant: TenantId, id: u64) -> Result<u64, StoreError> {
-        let row = sqlx::query(
-            "UPDATE links SET visits = visits + 1 WHERE tenant_id = $1 AND id = $2 RETURNING visits",
-        )
-        .bind(tenant.0 as i64)
-        .bind(id as i64)
-        .fetch_one(&self.write)
-        .await
-        .map_err(StoreError::backend)?;
+        let row = with_write!(self, tenant, |c| {
+            sqlx::query(
+                "UPDATE links SET visits = visits + 1 WHERE tenant_id = $1 AND id = $2 RETURNING visits",
+            )
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .fetch_one(&mut *c)
+            .await
+        });
         let visits: i64 = row.try_get("visits").map_err(StoreError::backend)?;
         Ok(visits as u64)
     }
 
     async fn visits(&self, tenant: TenantId, id: u64) -> Result<u64, StoreError> {
-        let row = sqlx::query("SELECT visits FROM links WHERE tenant_id = $1 AND id = $2")
-            .bind(tenant.0 as i64)
-            .bind(id as i64)
-            .fetch_optional(&self.read)
-            .await
-            .map_err(StoreError::backend)?;
+        let row = with_read!(self, tenant, |c| {
+            sqlx::query("SELECT visits FROM links WHERE tenant_id = $1 AND id = $2")
+                .bind(tenant.0 as i64)
+                .bind(id as i64)
+                .fetch_optional(&mut *c)
+                .await
+        });
         match row {
             Some(r) => {
                 let visits: i64 = r.try_get("visits").map_err(StoreError::backend)?;
@@ -1051,18 +1238,19 @@ impl Store for PostgresStore {
         id: u64,
         health: &LinkHealth,
     ) -> Result<(), StoreError> {
-        sqlx::query(
-            "INSERT INTO link_health (id, checked_at, status, healthy, tenant_id) VALUES ($1,$2,$3,$4,$5) \
-             ON CONFLICT (id) DO UPDATE SET checked_at=$2, status=$3, healthy=$4, tenant_id=$5",
-        )
-        .bind(id as i64)
-        .bind(health.checked_at as i64)
-        .bind(health.status.map(|s| s as i32))
-        .bind(health.healthy)
-        .bind(tenant.0 as i64)
-        .execute(&self.write)
-        .await
-        .map_err(StoreError::backend)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "INSERT INTO link_health (id, checked_at, status, healthy, tenant_id) VALUES ($1,$2,$3,$4,$5) \
+                 ON CONFLICT (id) DO UPDATE SET checked_at=$2, status=$3, healthy=$4, tenant_id=$5",
+            )
+            .bind(id as i64)
+            .bind(health.checked_at as i64)
+            .bind(health.status.map(|s| s as i32))
+            .bind(health.healthy)
+            .bind(tenant.0 as i64)
+            .execute(&mut *c)
+            .await
+        });
         Ok(())
     }
 
@@ -1070,13 +1258,14 @@ impl Store for PostgresStore {
         &self,
         tenant: TenantId,
     ) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
-        let rows = sqlx::query(
-            "SELECT id, checked_at, status, healthy FROM link_health WHERE tenant_id = $1",
-        )
-        .bind(tenant.0 as i64)
-        .fetch_all(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, checked_at, status, healthy FROM link_health WHERE tenant_id = $1",
+            )
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
         let mut out = Vec::with_capacity(rows.len());
         for r in &rows {
             let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
@@ -1101,23 +1290,28 @@ impl Store for PostgresStore {
         session: &crate::auth::Session,
     ) -> Result<(), StoreError> {
         let scopes = serde_json::to_value(&session.scopes)?;
-        sqlx::query(
-            "INSERT INTO sessions (token_hash, subject, display, scopes, created, expires, tenant_id, user_id) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) \
-             ON CONFLICT (token_hash) DO UPDATE \
-               SET subject=$2, display=$3, scopes=$4, created=$5, expires=$6, tenant_id=$7, user_id=$8",
-        )
-        .bind(&session.token_hash)
-        .bind(&session.subject)
-        .bind(&session.display)
-        .bind(&scopes)
-        .bind(session.created as i64)
-        .bind(session.expires as i64)
-        .bind(tenant.0 as i64)
-        .bind(session.user_id as i64)
-        .execute(&self.write)
-        .await
-        .map_err(StoreError::backend)?;
+        // `sessions` is intentionally NOT `FORCE`d (its by-hash lookup runs
+        // before the tenant is known), but this write still carries a tenant, so
+        // it routes through the tenant-tx in cloud mode for consistency; the
+        // `WHERE`/`tenant_id` column keeps isolation.
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "INSERT INTO sessions (token_hash, subject, display, scopes, created, expires, tenant_id, user_id) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) \
+                 ON CONFLICT (token_hash) DO UPDATE \
+                   SET subject=$2, display=$3, scopes=$4, created=$5, expires=$6, tenant_id=$7, user_id=$8",
+            )
+            .bind(&session.token_hash)
+            .bind(&session.subject)
+            .bind(&session.display)
+            .bind(&scopes)
+            .bind(session.created as i64)
+            .bind(session.expires as i64)
+            .bind(tenant.0 as i64)
+            .bind(session.user_id as i64)
+            .execute(&mut *c)
+            .await
+        });
         Ok(())
     }
 
@@ -1176,13 +1370,14 @@ impl Store for PostgresStore {
     }
 
     async fn list_broken_link_ids(&self, tenant: TenantId) -> Result<Vec<u64>, StoreError> {
-        let rows = sqlx::query(
-            "SELECT id FROM link_health WHERE tenant_id = $1 AND healthy = false ORDER BY id",
-        )
-        .bind(tenant.0 as i64)
-        .fetch_all(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id FROM link_health WHERE tenant_id = $1 AND healthy = false ORDER BY id",
+            )
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
         let mut out = Vec::with_capacity(rows.len());
         for r in &rows {
             let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
@@ -1223,15 +1418,16 @@ impl Store for PostgresStore {
         // The connection is keyed per tenant (P1b Task 5: `tenant_id` is now
         // the primary key; the legacy `singleton` column is gone).
         let blob = serde_json::to_value(c)?;
-        sqlx::query(
-            "INSERT INTO sheets_connection (tenant_id, blob) VALUES ($1, $2) \
-             ON CONFLICT (tenant_id) DO UPDATE SET blob = EXCLUDED.blob",
-        )
-        .bind(tenant.0 as i64)
-        .bind(&blob)
-        .execute(&self.write)
-        .await
-        .map_err(StoreError::backend)?;
+        with_write!(self, tenant, |conn| {
+            sqlx::query(
+                "INSERT INTO sheets_connection (tenant_id, blob) VALUES ($1, $2) \
+                 ON CONFLICT (tenant_id) DO UPDATE SET blob = EXCLUDED.blob",
+            )
+            .bind(tenant.0 as i64)
+            .bind(&blob)
+            .execute(&mut *conn)
+            .await
+        });
         Ok(())
     }
 
@@ -1239,11 +1435,16 @@ impl Store for PostgresStore {
         &self,
         tenant: TenantId,
     ) -> Result<Option<crate::sheets::SheetsConnection>, StoreError> {
-        let row = sqlx::query("SELECT blob FROM sheets_connection WHERE tenant_id = $1")
-            .bind(tenant.0 as i64)
-            .fetch_optional(&self.write)
-            .await
-            .map_err(StoreError::backend)?;
+        // Deliberately on the WRITE pool (via `with_write!`): the connector reads
+        // this immediately after an OAuth-callback write, so it must be
+        // read-your-writes (no replica lag). The tenant-tx still enforces RLS in
+        // cloud mode.
+        let row = with_write!(self, tenant, |conn| {
+            sqlx::query("SELECT blob FROM sheets_connection WHERE tenant_id = $1")
+                .bind(tenant.0 as i64)
+                .fetch_optional(&mut *conn)
+                .await
+        });
         match row {
             Some(r) => {
                 let blob: serde_json::Value = r.try_get("blob").map_err(StoreError::backend)?;
@@ -1254,11 +1455,12 @@ impl Store for PostgresStore {
     }
 
     async fn delete_sheets_connection(&self, tenant: TenantId) -> Result<(), StoreError> {
-        sqlx::query("DELETE FROM sheets_connection WHERE tenant_id = $1")
-            .bind(tenant.0 as i64)
-            .execute(&self.write)
-            .await
-            .map_err(StoreError::backend)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query("DELETE FROM sheets_connection WHERE tenant_id = $1")
+                .bind(tenant.0 as i64)
+                .execute(&mut *c)
+                .await
+        });
         Ok(())
     }
 
@@ -1296,14 +1498,15 @@ impl Store for PostgresStore {
             return Ok(Vec::new());
         }
         let id_list: Vec<i64> = ids.iter().map(|&i| i as i64).collect();
-        let rows = sqlx::query(
-            "SELECT id, checked_at, status, healthy FROM link_health WHERE tenant_id = $1 AND id = ANY($2)",
-        )
-        .bind(tenant.0 as i64)
-        .bind(&id_list)
-        .fetch_all(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, checked_at, status, healthy FROM link_health WHERE tenant_id = $1 AND id = ANY($2)",
+            )
+            .bind(tenant.0 as i64)
+            .bind(&id_list)
+            .fetch_all(&mut *c)
+            .await
+        });
         let mut out = Vec::with_capacity(rows.len());
         for r in &rows {
             let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
@@ -1337,14 +1540,15 @@ impl Store for PostgresStore {
         tenant: TenantId,
         id: u64,
     ) -> Result<Option<PixelConfig>, StoreError> {
-        let row = sqlx::query(
-            "SELECT id, provider, credentials, active, created FROM pixels WHERE tenant_id = $1 AND id = $2",
-        )
-        .bind(tenant.0 as i64)
-        .bind(id as i64)
-        .fetch_optional(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let row = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, provider, credentials, active, created FROM pixels WHERE tenant_id = $1 AND id = $2",
+            )
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .fetch_optional(&mut *c)
+            .await
+        });
         match row {
             Some(r) => Ok(Some(row_to_pixel(&r)?)),
             None => Ok(None),
@@ -1353,40 +1557,43 @@ impl Store for PostgresStore {
 
     async fn put_pixel(&self, tenant: TenantId, config: &PixelConfig) -> Result<(), StoreError> {
         let credentials = serde_json::to_value(&config.credentials)?;
-        sqlx::query(
-            "INSERT INTO pixels (id, provider, credentials, active, created, tenant_id) VALUES ($1,$2,$3,$4,$5,$6) \
-             ON CONFLICT (id) DO UPDATE SET provider=$2, credentials=$3, active=$4, created=$5, tenant_id=$6",
-        )
-        .bind(config.id as i64)
-        .bind(provider_to_str(config.provider))
-        .bind(&credentials)
-        .bind(config.active)
-        .bind(config.created as i64)
-        .bind(tenant.0 as i64)
-        .execute(&self.write)
-        .await
-        .map_err(StoreError::backend)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "INSERT INTO pixels (id, provider, credentials, active, created, tenant_id) VALUES ($1,$2,$3,$4,$5,$6) \
+                 ON CONFLICT (id) DO UPDATE SET provider=$2, credentials=$3, active=$4, created=$5, tenant_id=$6",
+            )
+            .bind(config.id as i64)
+            .bind(provider_to_str(config.provider))
+            .bind(&credentials)
+            .bind(config.active)
+            .bind(config.created as i64)
+            .bind(tenant.0 as i64)
+            .execute(&mut *c)
+            .await
+        });
         Ok(())
     }
 
     async fn delete_pixel(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError> {
-        let res = sqlx::query("DELETE FROM pixels WHERE tenant_id = $1 AND id = $2")
-            .bind(tenant.0 as i64)
-            .bind(id as i64)
-            .execute(&self.write)
-            .await
-            .map_err(StoreError::backend)?;
+        let res = with_write!(self, tenant, |c| {
+            sqlx::query("DELETE FROM pixels WHERE tenant_id = $1 AND id = $2")
+                .bind(tenant.0 as i64)
+                .bind(id as i64)
+                .execute(&mut *c)
+                .await
+        });
         Ok(res.rows_affected() > 0)
     }
 
     async fn list_pixels(&self, tenant: TenantId) -> Result<Vec<PixelConfig>, StoreError> {
-        let rows = sqlx::query(
-            "SELECT id, provider, credentials, active, created FROM pixels WHERE tenant_id = $1 ORDER BY id",
-        )
-        .bind(tenant.0 as i64)
-        .fetch_all(&self.read)
-        .await
-        .map_err(StoreError::backend)?;
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, provider, credentials, active, created FROM pixels WHERE tenant_id = $1 ORDER BY id",
+            )
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
         rows.iter().map(row_to_pixel).collect()
     }
 
@@ -1395,13 +1602,13 @@ impl Store for PostgresStore {
         tenant: TenantId,
         name: &str,
     ) -> Result<Option<String>, StoreError> {
-        let row =
+        let row = with_read!(self, tenant, |c| {
             sqlx::query("SELECT body FROM wellknown_documents WHERE tenant_id = $1 AND name = $2")
                 .bind(tenant.0 as i64)
                 .bind(name)
-                .fetch_optional(&self.read)
+                .fetch_optional(&mut *c)
                 .await
-                .map_err(StoreError::backend)?;
+        });
         match row {
             Some(r) => {
                 let body: String = r.try_get("body").map_err(StoreError::backend)?;
@@ -1417,26 +1624,28 @@ impl Store for PostgresStore {
         name: &str,
         body: &str,
     ) -> Result<(), StoreError> {
-        sqlx::query(
-            "INSERT INTO wellknown_documents (name, body, tenant_id) VALUES ($1,$2,$3) \
-             ON CONFLICT (tenant_id, name) DO UPDATE SET body = EXCLUDED.body",
-        )
-        .bind(name)
-        .bind(body)
-        .bind(tenant.0 as i64)
-        .execute(&self.write)
-        .await
-        .map_err(StoreError::backend)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "INSERT INTO wellknown_documents (name, body, tenant_id) VALUES ($1,$2,$3) \
+                 ON CONFLICT (tenant_id, name) DO UPDATE SET body = EXCLUDED.body",
+            )
+            .bind(name)
+            .bind(body)
+            .bind(tenant.0 as i64)
+            .execute(&mut *c)
+            .await
+        });
         Ok(())
     }
 
     async fn delete_wellknown(&self, tenant: TenantId, name: &str) -> Result<(), StoreError> {
-        sqlx::query("DELETE FROM wellknown_documents WHERE tenant_id = $1 AND name = $2")
-            .bind(tenant.0 as i64)
-            .bind(name)
-            .execute(&self.write)
-            .await
-            .map_err(StoreError::backend)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query("DELETE FROM wellknown_documents WHERE tenant_id = $1 AND name = $2")
+                .bind(tenant.0 as i64)
+                .bind(name)
+                .execute(&mut *c)
+                .await
+        });
         Ok(())
     }
 
@@ -1578,8 +1787,8 @@ impl Store for PostgresStore {
         let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
         for row in rows {
             sqlx::query(
-                "INSERT INTO webhook_deliveries (delivery_key, subscription_id, event_type, payload, created, next_attempt_at) \
-                 VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (delivery_key) DO NOTHING",
+                "INSERT INTO webhook_deliveries (delivery_key, subscription_id, event_type, payload, created, next_attempt_at, tenant_id) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (delivery_key) DO NOTHING",
             )
             .bind(&row.delivery_key)
             .bind(row.subscription_id as i64)
@@ -1587,6 +1796,7 @@ impl Store for PostgresStore {
             .bind(&row.payload)
             .bind(row.created as i64)
             .bind(row.next_attempt_at as i64)
+            .bind(row.tenant_id.0 as i64)
             .execute(&mut *tx)
             .await
             .map_err(StoreError::backend)?;
@@ -1610,7 +1820,7 @@ impl Store for PostgresStore {
                  FOR UPDATE SKIP LOCKED \
                  LIMIT $3 \
              ) \
-             RETURNING id, delivery_key, subscription_id, event_type, payload, attempts",
+             RETURNING id, delivery_key, subscription_id, event_type, payload, attempts, tenant_id",
         )
         .bind(lease_until as i64)
         .bind(now as i64)
@@ -1868,5 +2078,21 @@ mod tests {
         for r in [Role::Owner, Role::Admin, Role::Member, Role::Viewer] {
             assert_eq!(role_from_str(role_to_str(r)).unwrap(), r);
         }
+    }
+
+    // Pure constructor check: `PostgresStore` carries the `multi_tenant` flag
+    // set by its caller (no DB connection needed — we build the struct
+    // literal directly, mirroring what `open`/`open_with_replica` do).
+    #[tokio::test]
+    async fn multi_tenant_flag_defaults_false_and_is_settable() {
+        fn make(multi_tenant: bool) -> PostgresStore {
+            PostgresStore {
+                write: PgPool::connect_lazy("postgres://unused").unwrap(),
+                read: PgPool::connect_lazy("postgres://unused").unwrap(),
+                multi_tenant,
+            }
+        }
+        assert!(!make(false).is_multi_tenant());
+        assert!(make(true).is_multi_tenant());
     }
 }

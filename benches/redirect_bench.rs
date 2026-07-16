@@ -31,7 +31,7 @@ fn bench(c: &mut Criterion) {
     let dir = tempfile::tempdir().unwrap();
 
     let (state, code, tx, _worker) = rt.block_on(async {
-        let (store, sink) = open_backends(dir.path()).await.unwrap();
+        let (store, sink) = open_backends(dir.path(), false).await.unwrap();
         store
             .put_link(
                 quark::tenant::DEFAULT_TENANT,
@@ -68,6 +68,7 @@ fn bench(c: &mut Criterion) {
             sheets: None,
             sheets_api: None,
             oidc_configured: false,
+            multi_tenant: false,
             cache,
             store: store.clone(),
             key,
