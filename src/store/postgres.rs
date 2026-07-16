@@ -629,18 +629,41 @@ impl PostgresStore {
             // metadata-only (no table rewrite, no data lock beyond a brief
             // catalog update).
             //
-            // Excepted: `api_tokens` and `sessions`. Their hot-path lookups are
-            // BY HASH (`get_api_token_by_hash`, `get_session_by_hash`), which
-            // must find the row BEFORE the tenant is known — those run on the
-            // bare pool with no `app.tenant_id` set, so FORCE would make them
-            // fail closed and break authentication. RLS stays merely ENABLED
-            // (not FORCED) on these two; the app-level `WHERE tenant_id`
-            // predicate remains the isolation layer for their tenant-scoped
-            // methods (`list_api_tokens`, `put_session`, ...).
+            // Excepted: `api_tokens`, `sessions` — their hot-path lookups are BY
+            // HASH (`get_api_token_by_hash`, `get_session_by_hash`), which must
+            // find the row BEFORE the tenant is known — those run on the bare
+            // pool with no `app.tenant_id` set, so FORCE would make them fail
+            // closed and break authentication.
+            //
+            // Also excepted: `click_counters`, `stats_meta`, `click_events`
+            // (analytics — `record_batch`/`stats`) and `webhook_deliveries`
+            // (the cluster-wide outbox relay — `enqueue_deliveries`/
+            // `claim_due_deliveries`/`mark_*`). Those accessors run on the bare
+            // pool too and never `SET LOCAL app.tenant_id`, so FORCE would fail
+            // their reads closed (0 rows) and their writes closed (WITH CHECK
+            // rejects a row whose `tenant_id` doesn't match a session GUC that
+            // was never set). Concretely: `put_link_tx`/`put_alias_and_link_tx`
+            // insert into `webhook_deliveries` from inside the per-tenant tx —
+            // that insert would see `app.tenant_id = N` but the delivery row
+            // itself carries the *subscription's* tenant, so a mismatched
+            // `WITH CHECK` would reject legitimate enqueues.
+            //
+            // RLS stays merely ENABLED (not FORCED) on all six; the app-level
+            // `WHERE tenant_id` predicate remains the isolation layer for their
+            // tenant-scoped methods (`list_api_tokens`, `put_session`, ...) and
+            // for the bare-pool accessors above.
+            const NOT_FORCED: [&str; 6] = [
+                "api_tokens",
+                "sessions",
+                "click_counters",
+                "stats_meta",
+                "click_events",
+                "webhook_deliveries",
+            ];
             if self.multi_tenant {
                 for table in TENANT_OWNED_TABLES
                     .iter()
-                    .filter(|t| **t != "api_tokens" && **t != "sessions")
+                    .filter(|t| !NOT_FORCED.contains(t))
                 {
                     sqlx::query(&format!("ALTER TABLE {table} FORCE ROW LEVEL SECURITY"))
                         .execute(&mut *conn)
