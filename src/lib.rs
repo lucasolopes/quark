@@ -14,6 +14,7 @@ pub mod permute;
 pub mod pixel;
 pub mod sheets;
 pub mod store;
+pub mod tenant;
 pub mod webhooks;
 
 use std::time::{SystemTime, UNIX_EPOCH};
