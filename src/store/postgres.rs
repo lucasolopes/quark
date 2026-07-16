@@ -154,6 +154,7 @@ fn role_from_str(s: &str) -> Result<Role, StoreError> {
         "owner" => Ok(Role::Owner),
         "admin" => Ok(Role::Admin),
         "member" => Ok(Role::Member),
+        "viewer" => Ok(Role::Viewer),
         other => Err(StoreError::Backend(format!("unknown role: {other}"))),
     }
 }
@@ -1776,5 +1777,17 @@ impl AnalyticsSink for PostgresStore {
             aggregates: agg,
             recent,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_str_round_trips_all_variants() {
+        for r in [Role::Owner, Role::Admin, Role::Member, Role::Viewer] {
+            assert_eq!(role_from_str(role_to_str(r)).unwrap(), r);
+        }
     }
 }
