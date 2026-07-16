@@ -489,6 +489,8 @@ impl PostgresStore {
                 "INSERT INTO tenants (id, name, slug, created) VALUES (0, 'default', 'default', 0) ON CONFLICT (id) DO NOTHING",
                 "CREATE TABLE IF NOT EXISTS users (id BIGINT PRIMARY KEY, subject TEXT NOT NULL UNIQUE, email TEXT NOT NULL, display TEXT NOT NULL, created BIGINT NOT NULL)",
                 "CREATE SEQUENCE IF NOT EXISTS quark_user_id_seq",
+                // Starts at 1 so it never collides with the seeded default tenant (id 0).
+                "CREATE SEQUENCE IF NOT EXISTS quark_tenant_id_seq START WITH 1",
                 "CREATE TABLE IF NOT EXISTS memberships (user_id BIGINT NOT NULL, tenant_id BIGINT NOT NULL, role TEXT NOT NULL, created BIGINT NOT NULL, PRIMARY KEY (user_id, tenant_id))",
                 "CREATE INDEX IF NOT EXISTS memberships_by_tenant ON memberships (tenant_id)",
                 // --- Multi-tenancy (P1b): sessions carry the authenticated user ---
@@ -697,6 +699,7 @@ impl PostgresStore {
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_pixel_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_user_id_seq RESTART WITH 1",
+            "ALTER SEQUENCE quark_tenant_id_seq RESTART WITH 1",
             "INSERT INTO tenants (id, name, slug, created) VALUES (0, 'default', 'default', 0) ON CONFLICT (id) DO NOTHING",
         ] {
             sqlx::query(q)
@@ -1688,6 +1691,15 @@ impl Store for PostgresStore {
 
     async fn next_user_id(&self) -> Result<u64, StoreError> {
         let row = sqlx::query("SELECT nextval('quark_user_id_seq') AS id")
+            .fetch_one(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
+        Ok(id as u64)
+    }
+
+    async fn next_tenant_id(&self) -> Result<u64, StoreError> {
+        let row = sqlx::query("SELECT nextval('quark_tenant_id_seq') AS id")
             .fetch_one(&self.write)
             .await
             .map_err(StoreError::backend)?;

@@ -1162,6 +1162,9 @@ mod tests {
         async fn next_user_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }
+        async fn next_tenant_id(&self) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
         async fn put_user(&self, _u: &crate::tenant::User) -> Result<(), StoreError> {
             unimplemented!()
         }
