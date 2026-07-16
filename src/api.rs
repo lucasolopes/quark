@@ -1735,6 +1735,41 @@ async fn admin_tenants_create(
     Json(tenant).into_response()
 }
 
+#[derive(Deserialize)]
+struct SwitchReq {
+    tenant_id: u64,
+}
+
+/// `POST /admin/workspace/switch`: change the session's current workspace
+/// (cloud only). SECURITY: always validates membership before switching — a
+/// caller may only switch to a tenant they belong to. A missing membership
+/// leaves the session untouched and returns `403`, rather than mutating it
+/// and failing closed some other way.
+async fn admin_workspace_switch(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<SwitchReq>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(user_id) = session_user_id(&st, &headers).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match st
+        .store
+        .get_membership(user_id, crate::tenant::TenantId(req.tenant_id))
+        .await
+    {
+        Ok(Some(_)) => {
+            set_session_tenant(&st, &headers, crate::tenant::TenantId(req.tenant_id)).await;
+            StatusCode::OK.into_response()
+        }
+        Ok(None) => StatusCode::FORBIDDEN.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
 /// Name of the short-lived cookie holding the signed Sheets OAuth `state`,
 /// binding the connect flow to the browser that started it (anti login-CSRF).
 const SHEETS_STATE_COOKIE: &str = "qk_sheets_state";
@@ -3245,6 +3280,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route("/admin/logout", post(oidc_logout))
         .route("/admin/me", get(admin_me))
         .route("/admin/tenants", post(admin_tenants_create))
+        .route("/admin/workspace/switch", post(admin_workspace_switch))
         .route("/admin/integrations/sheets/connect", get(sheets_connect))
         .route("/admin/integrations/sheets/callback", get(sheets_callback))
         .route("/admin/integrations/sheets/sync", post(sheets_sync))

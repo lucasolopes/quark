@@ -217,3 +217,119 @@ async fn create_tenant_requires_session() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
+
+/// `POST /admin/workspace/switch` (cloud): switching to a tenant the caller
+/// IS a member of succeeds and re-points the session; switching to one they
+/// are NOT a member of is refused with 403 and — the security invariant —
+/// leaves the session's current tenant unchanged. Also checks OSS 404.
+#[tokio::test]
+#[serial]
+async fn workspace_switch_checks_membership() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (user_id, raw) = seed_session(&store, "switch-subject").await;
+
+    // Tenant A: caller is Owner.
+    let tenant_a = store.next_tenant_id().await.unwrap();
+    store
+        .put_tenant(&quark::tenant::Tenant {
+            id: TenantId(tenant_a),
+            name: "A".to_string(),
+            slug: "workspace-a".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    store
+        .put_membership(&quark::tenant::Membership {
+            user_id,
+            tenant_id: TenantId(tenant_a),
+            role: quark::tenant::Role::Owner,
+            created: 0,
+        })
+        .await
+        .unwrap();
+
+    // Tenant B: exists, but the caller has NO membership in it.
+    let tenant_b = store.next_tenant_id().await.unwrap();
+    store
+        .put_tenant(&quark::tenant::Tenant {
+            id: TenantId(tenant_b),
+            name: "B".to_string(),
+            slug: "workspace-b".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+
+    // Switch to A (member) -> 200, session now points at A.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/workspace/switch")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::from(format!(r#"{{"tenant_id":{tenant_a}}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let session = store
+        .get_session_by_hash(&hash_token(&raw), quark::now())
+        .await
+        .unwrap()
+        .expect("session must still exist");
+    assert_eq!(session.tenant_id, TenantId(tenant_a));
+
+    // Switch to B (NOT a member) -> 403, session's tenant UNCHANGED (still A).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/workspace/switch")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::from(format!(r#"{{"tenant_id":{tenant_b}}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let session = store
+        .get_session_by_hash(&hash_token(&raw), quark::now())
+        .await
+        .unwrap()
+        .expect("session must still exist");
+    assert_eq!(
+        session.tenant_id,
+        TenantId(tenant_a),
+        "a 403 must NOT mutate the session"
+    );
+
+    // OSS mode (multi_tenant = false) -> 404.
+    let oss_app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store as Arc<dyn AnalyticsSink>,
+        false,
+    );
+    let resp = oss_app
+        .oneshot(
+            Request::post("/admin/workspace/switch")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::from(format!(r#"{{"tenant_id":{tenant_a}}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
