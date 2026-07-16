@@ -37,6 +37,7 @@ control connection follow `QUARK_VALKEY_URL`.
 | Variable | Default | Purpose |
 |---|---|---|
 | `QUARK_DATABASE_URL` | unset (LMDB) | Use Postgres for the store, e.g. `postgres://user:pass@host:5432/db`. Postgres is the shared, multi-node-safe store and also implements the analytics sink. Unset falls back to the embedded LMDB store. |
+| `QUARK_REPLICA_DATABASE_URL` | unset (reads use the primary) | Optional local Postgres **read replica**, e.g. `postgres://user:pass@replica:5432/db`. When set, reads go to the replica and writes stay on the primary (`QUARK_DATABASE_URL`); the auth reads still hit the primary for freshness. Only meaningful with `QUARK_DATABASE_URL` set. Unset means reads use the primary, identical to today. See [SCALING](SCALING.md). |
 | `QUARK_VALKEY_URL` | unset (L1 + store only) | Enable the L2 Valkey cache, e.g. `redis://host:6379`. The same connection also backs the global rate limit and the cross-node invalidation pub/sub. |
 | `QUARK_CLICKHOUSE_URL` | unset (store's embedded sink) | Use ClickHouse for the analytics sink, e.g. `http://user:pass@host:8123/db`. ClickHouse is analytics-only; it never becomes the link store. |
 | `QUARK_NODE_ID` | unset (full 40-bit id space) | LMDB-only id-space partitioning, `0`-`255`. The top 8 bits become the node id and the low 32 bits a node-local counter. Ignored on the Postgres backend (the shared sequence handles allocation) and quark logs that it was ignored. An out-of-range value crashes the process at startup. See [SCALING](SCALING.md). |

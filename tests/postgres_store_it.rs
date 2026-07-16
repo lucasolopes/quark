@@ -78,6 +78,64 @@ async fn count_deliveries(pool: &PgPool, key: &str) -> i64 {
         .unwrap()
 }
 
+/// The read/write split routes writes to the primary pool and reads to the
+/// replica pool. Built via `open_with_replica` with BOTH URLs pointing at the
+/// same test DB (CI has no real replica), this proves the routing wiring: a
+/// `put_link` on the write pool is visible to a `get_link` on the read pool.
+#[tokio::test]
+#[serial(pg)]
+async fn open_with_replica_write_then_read_round_trips() {
+    let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let s = PostgresStore::open_with_replica(&url, &url).await.unwrap();
+    s.reset_for_tests().await.unwrap();
+    let rec = plain_rec("https://replica-routed.example");
+    s.put_link(101, &rec).await.unwrap();
+    let got = s.get_link(101).await.unwrap().unwrap();
+    assert_eq!(got.url, "https://replica-routed.example");
+}
+
+/// Construction test. `open` points both pools at one URL and
+/// `open_with_replica(a, b)` builds two pools; both configurations must
+/// round-trip a write-then-read. sqlx does not expose the inner pool pointer,
+/// so (as the design permits) this asserts behaviorally that each constructor
+/// wires functioning read and write pools rather than comparing handle
+/// identity.
+#[tokio::test]
+#[serial(pg)]
+async fn open_and_open_with_replica_both_wire_working_pools() {
+    let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    // Single URL: both pools are the same handle; the round-trip works.
+    let single = PostgresStore::open(&url).await.unwrap();
+    single.reset_for_tests().await.unwrap();
+    single
+        .put_link(201, &plain_rec("https://single.example"))
+        .await
+        .unwrap();
+    assert_eq!(
+        single.get_link(201).await.unwrap().unwrap().url,
+        "https://single.example"
+    );
+
+    // Distinct constructor: write pool and read pool built separately, both
+    // against the same DB here; the round-trip still works.
+    let split = PostgresStore::open_with_replica(&url, &url).await.unwrap();
+    split.reset_for_tests().await.unwrap();
+    split
+        .put_link(202, &plain_rec("https://split.example"))
+        .await
+        .unwrap();
+    assert_eq!(
+        split.get_link(202).await.unwrap().unwrap().url,
+        "https://split.example"
+    );
+}
+
 #[tokio::test]
 #[serial(pg)]
 async fn put_get_link_pg() {

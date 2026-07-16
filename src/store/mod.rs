@@ -500,7 +500,24 @@ pub async fn open_backends(data_path: &Path) -> Result<Backends, StoreError> {
     let (store, embedded_sink): (Arc<dyn Store>, Arc<dyn AnalyticsSink>) =
         match std::env::var("QUARK_DATABASE_URL") {
             Ok(url) => {
-                let pg = Arc::new(postgres::PostgresStore::open(&url).await?);
+                // Optional read replica: reads go to it, writes stay on the
+                // primary. Unset or empty means both pools point at the primary
+                // (behavior identical to today).
+                let replica = std::env::var("QUARK_REPLICA_DATABASE_URL")
+                    .ok()
+                    .filter(|s| !s.is_empty());
+                let pg = match replica {
+                    Some(replica_url) => {
+                        eprintln!("store: Postgres primary + read replica");
+                        Arc::new(
+                            postgres::PostgresStore::open_with_replica(&url, &replica_url).await?,
+                        )
+                    }
+                    None => {
+                        eprintln!("store: Postgres (single URL, no read replica)");
+                        Arc::new(postgres::PostgresStore::open(&url).await?)
+                    }
+                };
                 (pg.clone(), pg)
             }
             Err(_) => {

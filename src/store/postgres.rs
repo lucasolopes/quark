@@ -218,7 +218,12 @@ async fn enqueue_in_tx(
 }
 
 pub struct PostgresStore {
-    pool: PgPool,
+    /// Primary pool: every write, plus the reads that must be read-your-writes
+    /// fresh (auth). Was the single `pool` before the read/write split.
+    write: PgPool,
+    /// Read pool: the local read replica when `open_with_replica` is used, or a
+    /// clone of `write` (the same handle) under single-URL `open`.
+    read: PgPool,
 }
 
 impl PostgresStore {
@@ -228,7 +233,36 @@ impl PostgresStore {
             .connect(url)
             .await
             .map_err(StoreError::backend)?;
-        let s = PostgresStore { pool };
+        // Single URL: both pools are the SAME handle (PgPool is an internal Arc,
+        // so this clone is cheap and shares connections). Behavior is identical
+        // to the pre-split single-pool store.
+        let s = PostgresStore {
+            read: pool.clone(),
+            write: pool,
+        };
+        s.init_schema().await?;
+        Ok(s)
+    }
+
+    /// Opens a store with a separate read replica: `write` connects to the
+    /// primary, `read` to the replica. Schema init/migration runs on `write`
+    /// ONLY; the replica is read-only and receives the schema through
+    /// streaming replication.
+    pub async fn open_with_replica(
+        primary_url: &str,
+        replica_url: &str,
+    ) -> Result<PostgresStore, StoreError> {
+        let write = PgPoolOptions::new()
+            .max_connections(10)
+            .connect(primary_url)
+            .await
+            .map_err(StoreError::backend)?;
+        let read = PgPoolOptions::new()
+            .max_connections(10)
+            .connect(replica_url)
+            .await
+            .map_err(StoreError::backend)?;
+        let s = PostgresStore { write, read };
         s.init_schema().await?;
         Ok(s)
     }
@@ -239,7 +273,7 @@ impl PostgresStore {
     /// constraints) — so we serialize with a session advisory lock on a
     /// single connection before running the DDL.
     async fn init_schema(&self) -> Result<(), StoreError> {
-        let mut conn = self.pool.acquire().await.map_err(StoreError::backend)?;
+        let mut conn = self.write.acquire().await.map_err(StoreError::backend)?;
         sqlx::query("SELECT pg_advisory_lock($1)")
             .bind(QUARK_SCHEMA_LOCK_ID)
             .execute(&mut *conn)
@@ -332,7 +366,7 @@ impl PostgresStore {
             "ALTER SEQUENCE quark_pixel_id_seq RESTART WITH 1",
         ] {
             sqlx::query(q)
-                .execute(&self.pool)
+                .execute(&self.write)
                 .await
                 .map_err(StoreError::backend)?;
         }
@@ -344,7 +378,7 @@ impl PostgresStore {
 impl Store for PostgresStore {
     async fn next_id(&self) -> Result<u64, StoreError> {
         let row = sqlx::query("SELECT nextval('quark_id_seq') AS id")
-            .fetch_one(&self.pool)
+            .fetch_one(&self.write)
             .await
             .map_err(StoreError::backend)?;
         let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
@@ -356,7 +390,7 @@ impl Store for PostgresStore {
             "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash FROM links WHERE id = $1",
         )
         .bind(id as i64)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.read)
         .await
         .map_err(StoreError::backend)?;
         match row {
@@ -386,7 +420,7 @@ impl Store for PostgresStore {
         .bind(&rec.folder)
         .bind(&rec.fallback_url)
         .bind(&rec.password_hash)
-        .execute(&self.pool)
+        .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
         Ok(())
@@ -395,7 +429,7 @@ impl Store for PostgresStore {
     async fn get_alias(&self, alias: &str) -> Result<Option<u64>, StoreError> {
         let row = sqlx::query("SELECT id FROM aliases WHERE alias = $1")
             .bind(alias)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&self.read)
             .await
             .map_err(StoreError::backend)?;
         match row {
@@ -413,7 +447,7 @@ impl Store for PostgresStore {
         id: u64,
         rec: &Record,
     ) -> Result<bool, StoreError> {
-        let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
+        let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
         let res = sqlx::query(
             "INSERT INTO aliases (alias, id) VALUES ($1,$2) ON CONFLICT (alias) DO NOTHING",
         )
@@ -458,7 +492,7 @@ impl Store for PostgresStore {
         rec: &Record,
         deliveries: &[OutboxRow],
     ) -> Result<(), StoreError> {
-        let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
+        let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
         upsert_link_in_tx(&mut tx, id, rec).await?;
         enqueue_in_tx(&mut tx, deliveries).await?;
         tx.commit().await.map_err(StoreError::backend)?;
@@ -472,7 +506,7 @@ impl Store for PostgresStore {
         rec: &Record,
         deliveries: &[OutboxRow],
     ) -> Result<bool, StoreError> {
-        let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
+        let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
         let res = sqlx::query(
             "INSERT INTO aliases (alias, id) VALUES ($1,$2) ON CONFLICT (alias) DO NOTHING",
         )
@@ -491,7 +525,7 @@ impl Store for PostgresStore {
     }
 
     async fn delete_link_tx(&self, id: u64, deliveries: &[OutboxRow]) -> Result<(), StoreError> {
-        let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
+        let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
         sqlx::query("DELETE FROM links WHERE id = $1")
             .bind(id as i64)
             .execute(&mut *tx)
@@ -526,7 +560,7 @@ impl Store for PostgresStore {
         .bind(&tag_json)
         .bind(limit as i64)
         .bind(folder)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.read)
         .await
         .map_err(StoreError::backend)?;
         rows.iter().map(row_to_link).collect()
@@ -556,7 +590,7 @@ impl Store for PostgresStore {
         .bind(&tag_json)
         .bind(limit as i64)
         .bind(folder)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.read)
         .await
         .map_err(StoreError::backend)?;
         rows.iter().map(row_to_link).collect()
@@ -564,7 +598,7 @@ impl Store for PostgresStore {
 
     async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError> {
         let rows = sqlx::query("SELECT alias, id FROM aliases")
-            .fetch_all(&self.pool)
+            .fetch_all(&self.read)
             .await
             .map_err(StoreError::backend)?;
         let mut out = Vec::new();
@@ -579,12 +613,12 @@ impl Store for PostgresStore {
     async fn delete_link(&self, id: u64) -> Result<(), StoreError> {
         sqlx::query("DELETE FROM links WHERE id = $1")
             .bind(id as i64)
-            .execute(&self.pool)
+            .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
         sqlx::query("DELETE FROM link_health WHERE id = $1")
             .bind(id as i64)
-            .execute(&self.pool)
+            .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
         Ok(())
@@ -593,7 +627,7 @@ impl Store for PostgresStore {
     async fn delete_alias(&self, alias: &str) -> Result<(), StoreError> {
         sqlx::query("DELETE FROM aliases WHERE alias = $1")
             .bind(alias)
-            .execute(&self.pool)
+            .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
         Ok(())
@@ -603,7 +637,7 @@ impl Store for PostgresStore {
         let rows = sqlx::query(
             "SELECT id, url, events, secret, active, created, kind FROM webhooks ORDER BY id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&self.read)
         .await
         .map_err(StoreError::backend)?;
         rows.iter().map(row_to_webhook).collect()
@@ -614,7 +648,7 @@ impl Store for PostgresStore {
             "SELECT id, url, events, secret, active, created, kind FROM webhooks WHERE id = $1",
         )
         .bind(id as i64)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.read)
         .await
         .map_err(StoreError::backend)?;
         match row {
@@ -636,7 +670,7 @@ impl Store for PostgresStore {
         .bind(sub.active)
         .bind(sub.created as i64)
         .bind(sub.kind.as_str())
-        .execute(&self.pool)
+        .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
         Ok(())
@@ -645,7 +679,7 @@ impl Store for PostgresStore {
     async fn delete_webhook(&self, id: u64) -> Result<bool, StoreError> {
         let res = sqlx::query("DELETE FROM webhooks WHERE id = $1")
             .bind(id as i64)
-            .execute(&self.pool)
+            .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
         Ok(res.rows_affected() > 0)
@@ -653,7 +687,7 @@ impl Store for PostgresStore {
 
     async fn next_webhook_id(&self) -> Result<u64, StoreError> {
         let row = sqlx::query("SELECT nextval('quark_webhook_id_seq') AS id")
-            .fetch_one(&self.pool)
+            .fetch_one(&self.write)
             .await
             .map_err(StoreError::backend)?;
         let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
@@ -668,7 +702,7 @@ impl Store for PostgresStore {
                SELECT DISTINCT id, jsonb_array_elements_text(tags) AS tag FROM links \
              ) t GROUP BY tag ORDER BY tag",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&self.read)
         .await
         .map_err(StoreError::backend)?;
         rows.iter()
@@ -684,7 +718,7 @@ impl Store for PostgresStore {
         let rows = sqlx::query(
             "SELECT folder, count(*) AS n FROM links WHERE folder IS NOT NULL GROUP BY folder ORDER BY folder",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&self.read)
         .await
         .map_err(StoreError::backend)?;
         rows.iter()
@@ -701,7 +735,7 @@ impl Store for PostgresStore {
             "SELECT id, name, token_hash, scopes, rate_limit_per_min, created \
              FROM api_tokens ORDER BY id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&self.read)
         .await
         .map_err(StoreError::backend)?;
         rows.iter().map(row_to_api_token).collect()
@@ -715,7 +749,7 @@ impl Store for PostgresStore {
              FROM api_tokens WHERE token_hash = $1",
         )
         .bind(hash)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.write)
         .await
         .map_err(StoreError::backend)?;
         match row {
@@ -738,7 +772,7 @@ impl Store for PostgresStore {
         .bind(&scopes)
         .bind(token.rate_limit_per_min.map(|v| v as i64))
         .bind(token.created as i64)
-        .execute(&self.pool)
+        .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
         Ok(())
@@ -747,7 +781,7 @@ impl Store for PostgresStore {
     async fn delete_api_token(&self, id: u64) -> Result<bool, StoreError> {
         let res = sqlx::query("DELETE FROM api_tokens WHERE id = $1")
             .bind(id as i64)
-            .execute(&self.pool)
+            .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
         Ok(res.rows_affected() > 0)
@@ -755,7 +789,7 @@ impl Store for PostgresStore {
 
     async fn next_api_token_id(&self) -> Result<u64, StoreError> {
         let row = sqlx::query("SELECT nextval('quark_api_token_id_seq') AS id")
-            .fetch_one(&self.pool)
+            .fetch_one(&self.write)
             .await
             .map_err(StoreError::backend)?;
         let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
@@ -766,7 +800,7 @@ impl Store for PostgresStore {
         let row =
             sqlx::query("UPDATE links SET visits = visits + 1 WHERE id = $1 RETURNING visits")
                 .bind(id as i64)
-                .fetch_one(&self.pool)
+                .fetch_one(&self.write)
                 .await
                 .map_err(StoreError::backend)?;
         let visits: i64 = row.try_get("visits").map_err(StoreError::backend)?;
@@ -776,7 +810,7 @@ impl Store for PostgresStore {
     async fn visits(&self, id: u64) -> Result<u64, StoreError> {
         let row = sqlx::query("SELECT visits FROM links WHERE id = $1")
             .bind(id as i64)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&self.read)
             .await
             .map_err(StoreError::backend)?;
         match row {
@@ -797,7 +831,7 @@ impl Store for PostgresStore {
         .bind(health.checked_at as i64)
         .bind(health.status.map(|s| s as i32))
         .bind(health.healthy)
-        .execute(&self.pool)
+        .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
         Ok(())
@@ -805,7 +839,7 @@ impl Store for PostgresStore {
 
     async fn list_link_health(&self) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
         let rows = sqlx::query("SELECT id, checked_at, status, healthy FROM link_health")
-            .fetch_all(&self.pool)
+            .fetch_all(&self.read)
             .await
             .map_err(StoreError::backend)?;
         let mut out = Vec::with_capacity(rows.len());
@@ -840,7 +874,7 @@ impl Store for PostgresStore {
         .bind(&scopes)
         .bind(session.created as i64)
         .bind(session.expires as i64)
-        .execute(&self.pool)
+        .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
         Ok(())
@@ -857,7 +891,7 @@ impl Store for PostgresStore {
         )
         .bind(token_hash)
         .bind(now as i64)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.write)
         .await
         .map_err(StoreError::backend)?;
         match row {
@@ -881,7 +915,7 @@ impl Store for PostgresStore {
     async fn delete_session(&self, token_hash: &str) -> Result<(), StoreError> {
         sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
             .bind(token_hash)
-            .execute(&self.pool)
+            .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
         Ok(())
@@ -890,7 +924,7 @@ impl Store for PostgresStore {
     async fn gc_sessions(&self, now: u64) -> Result<(), StoreError> {
         sqlx::query("DELETE FROM sessions WHERE expires <= $1")
             .bind(now as i64)
-            .execute(&self.pool)
+            .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
         Ok(())
@@ -898,7 +932,7 @@ impl Store for PostgresStore {
 
     async fn list_broken_link_ids(&self) -> Result<Vec<u64>, StoreError> {
         let rows = sqlx::query("SELECT id FROM link_health WHERE healthy = false ORDER BY id")
-            .fetch_all(&self.pool)
+            .fetch_all(&self.read)
             .await
             .map_err(StoreError::backend)?;
         let mut out = Vec::with_capacity(rows.len());
@@ -927,7 +961,7 @@ impl Store for PostgresStore {
         )
         .bind(holder)
         .bind(ttl_secs as i64)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.write)
         .await
         .map_err(StoreError::backend)?;
         Ok(row.is_some())
@@ -943,7 +977,7 @@ impl Store for PostgresStore {
              ON CONFLICT (singleton) DO UPDATE SET blob = $1",
         )
         .bind(&blob)
-        .execute(&self.pool)
+        .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
         Ok(())
@@ -953,7 +987,7 @@ impl Store for PostgresStore {
         &self,
     ) -> Result<Option<crate::sheets::SheetsConnection>, StoreError> {
         let row = sqlx::query("SELECT blob FROM sheets_connection WHERE singleton = TRUE")
-            .fetch_optional(&self.pool)
+            .fetch_optional(&self.write)
             .await
             .map_err(StoreError::backend)?;
         match row {
@@ -967,7 +1001,7 @@ impl Store for PostgresStore {
 
     async fn delete_sheets_connection(&self) -> Result<(), StoreError> {
         sqlx::query("DELETE FROM sheets_connection WHERE singleton = TRUE")
-            .execute(&self.pool)
+            .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
         Ok(())
@@ -992,7 +1026,7 @@ impl Store for PostgresStore {
         )
         .bind(holder)
         .bind(ttl_secs as i64)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.write)
         .await
         .map_err(StoreError::backend)?;
         Ok(row.is_some())
@@ -1007,7 +1041,7 @@ impl Store for PostgresStore {
             "SELECT id, checked_at, status, healthy FROM link_health WHERE id = ANY($1)",
         )
         .bind(&id_list)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.read)
         .await
         .map_err(StoreError::backend)?;
         let mut out = Vec::with_capacity(rows.len());
@@ -1030,7 +1064,7 @@ impl Store for PostgresStore {
 
     async fn next_pixel_id(&self) -> Result<u64, StoreError> {
         let row = sqlx::query("SELECT nextval('quark_pixel_id_seq') AS id")
-            .fetch_one(&self.pool)
+            .fetch_one(&self.write)
             .await
             .map_err(StoreError::backend)?;
         let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
@@ -1042,7 +1076,7 @@ impl Store for PostgresStore {
             "SELECT id, provider, credentials, active, created FROM pixels WHERE id = $1",
         )
         .bind(id as i64)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.read)
         .await
         .map_err(StoreError::backend)?;
         match row {
@@ -1062,7 +1096,7 @@ impl Store for PostgresStore {
         .bind(&credentials)
         .bind(config.active)
         .bind(config.created as i64)
-        .execute(&self.pool)
+        .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
         Ok(())
@@ -1071,7 +1105,7 @@ impl Store for PostgresStore {
     async fn delete_pixel(&self, id: u64) -> Result<bool, StoreError> {
         let res = sqlx::query("DELETE FROM pixels WHERE id = $1")
             .bind(id as i64)
-            .execute(&self.pool)
+            .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
         Ok(res.rows_affected() > 0)
@@ -1081,7 +1115,7 @@ impl Store for PostgresStore {
         let rows = sqlx::query(
             "SELECT id, provider, credentials, active, created FROM pixels ORDER BY id",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&self.read)
         .await
         .map_err(StoreError::backend)?;
         rows.iter().map(row_to_pixel).collect()
@@ -1090,7 +1124,7 @@ impl Store for PostgresStore {
     async fn get_wellknown(&self, name: &str) -> Result<Option<String>, StoreError> {
         let row = sqlx::query("SELECT body FROM wellknown_documents WHERE name = $1")
             .bind(name)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&self.read)
             .await
             .map_err(StoreError::backend)?;
         match row {
@@ -1109,7 +1143,7 @@ impl Store for PostgresStore {
         )
         .bind(name)
         .bind(body)
-        .execute(&self.pool)
+        .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
         Ok(())
@@ -1118,7 +1152,7 @@ impl Store for PostgresStore {
     async fn delete_wellknown(&self, name: &str) -> Result<(), StoreError> {
         sqlx::query("DELETE FROM wellknown_documents WHERE name = $1")
             .bind(name)
-            .execute(&self.pool)
+            .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
         Ok(())
@@ -1128,7 +1162,7 @@ impl Store for PostgresStore {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
+        let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
         for row in rows {
             sqlx::query(
                 "INSERT INTO webhook_deliveries (delivery_key, subscription_id, event_type, payload, created, next_attempt_at) \
@@ -1168,7 +1202,7 @@ impl Store for PostgresStore {
         .bind(lease_until as i64)
         .bind(now as i64)
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.write)
         .await
         .map_err(StoreError::backend)?;
         rows.iter().map(row_to_delivery).collect()
@@ -1178,7 +1212,7 @@ impl Store for PostgresStore {
         sqlx::query("UPDATE webhook_deliveries SET delivered_at = $1 WHERE id = $2")
             .bind(crate::now() as i64)
             .bind(id)
-            .execute(&self.pool)
+            .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
         Ok(())
@@ -1196,7 +1230,7 @@ impl Store for PostgresStore {
         .bind(next_attempt_at as i64)
         .bind(attempts as i32)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
         Ok(())
@@ -1206,7 +1240,7 @@ impl Store for PostgresStore {
         sqlx::query("UPDATE webhook_deliveries SET dead = true, attempts = $1 WHERE id = $2")
             .bind(attempts as i32)
             .bind(id)
-            .execute(&self.pool)
+            .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
         Ok(())
@@ -1255,7 +1289,7 @@ impl AnalyticsSink for PostgresStore {
         for e in events {
             by_id.entry(e.id).or_default().push(e);
         }
-        let mut tx = self.pool.begin().await.map_err(StoreError::backend)?;
+        let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
         for (id, evs) in by_id {
             let mut delta = Aggregates::default();
             for e in &evs {
@@ -1319,7 +1353,7 @@ impl AnalyticsSink for PostgresStore {
         let counter_rows =
             sqlx::query("SELECT dimension, bucket, count FROM click_counters WHERE id=$1")
                 .bind(id as i64)
-                .fetch_all(&self.pool)
+                .fetch_all(&self.read)
                 .await
                 .map_err(StoreError::backend)?;
         let mut agg = Aggregates::default();
@@ -1360,7 +1394,7 @@ impl AnalyticsSink for PostgresStore {
         }
         let meta = sqlx::query("SELECT first_ts, last_ts FROM stats_meta WHERE id=$1")
             .bind(id as i64)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&self.read)
             .await
             .map_err(StoreError::backend)?;
         if let Some(m) = &meta {
@@ -1375,7 +1409,7 @@ impl AnalyticsSink for PostgresStore {
         )
         .bind(id as i64)
         .bind(EVENTS_MAX as i64)
-        .fetch_all(&self.pool)
+        .fetch_all(&self.read)
         .await
         .map_err(StoreError::backend)?;
         if counter_rows.is_empty() && event_rows.is_empty() {
