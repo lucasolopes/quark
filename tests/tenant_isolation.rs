@@ -195,6 +195,7 @@ async fn assert_full_isolation(store: Arc<dyn Store>) {
         scopes: vec![quark::auth::Scope::Full],
         rate_limit_per_min: None,
         created: 0,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     a.put_api_token(&token).await.unwrap();
     assert_eq!(
@@ -298,4 +299,62 @@ async fn every_tenant_owned_entity_is_isolated() {
         let dyn_store: Arc<dyn Store> = pg_store.clone();
         assert_full_isolation(dyn_store).await;
     }
+}
+
+// --- P1b: credentials carry tenant + user ---
+
+#[tokio::test]
+async fn lmdb_token_and_session_carry_tenant_and_user() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = quark::store::open_store(dir.path()).await.unwrap();
+    let t = quark::tenant::TenantId(0);
+
+    let tok = quark::auth::ApiToken {
+        id: 1, name: "t".into(), token_hash: "h1".into(),
+        scopes: vec![quark::auth::Scope::Full], rate_limit_per_min: None, created: 0,
+        tenant_id: t,
+    };
+    store.put_api_token(t, &tok).await.unwrap();
+    let got = store.get_api_token_by_hash("h1").await.unwrap().unwrap();
+    assert_eq!(got.tenant_id, t);
+
+    let sess = quark::auth::Session {
+        token_hash: "s1".into(), subject: "sub".into(), display: "d".into(),
+        scopes: vec![quark::auth::Scope::Full], created: 0, expires: u64::MAX,
+        tenant_id: t, user_id: 7,
+    };
+    store.put_session(t, &sess).await.unwrap();
+    let gs = store.get_session_by_hash("s1", 0).await.unwrap().unwrap();
+    assert_eq!(gs.tenant_id, t);
+    assert_eq!(gs.user_id, 7);
+}
+
+#[tokio::test]
+async fn pg_token_and_session_carry_tenant_and_user() {
+    let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = quark::store::open_postgres(&url).await.unwrap();
+    store.reset_for_tests().await.unwrap();
+    let t = quark::tenant::TenantId(0);
+
+    let tok = quark::auth::ApiToken {
+        id: 1, name: "t".into(), token_hash: "h1-pg".into(),
+        scopes: vec![quark::auth::Scope::Full], rate_limit_per_min: None, created: 0,
+        tenant_id: t,
+    };
+    store.put_api_token(t, &tok).await.unwrap();
+    let got = store.get_api_token_by_hash("h1-pg").await.unwrap().unwrap();
+    assert_eq!(got.tenant_id, t);
+
+    let sess = quark::auth::Session {
+        token_hash: "s1-pg".into(), subject: "sub".into(), display: "d".into(),
+        scopes: vec![quark::auth::Scope::Full], created: 0, expires: u64::MAX,
+        tenant_id: t, user_id: 7,
+    };
+    store.put_session(t, &sess).await.unwrap();
+    let gs = store.get_session_by_hash("s1-pg", 0).await.unwrap().unwrap();
+    assert_eq!(gs.tenant_id, t);
+    assert_eq!(gs.user_id, 7);
 }

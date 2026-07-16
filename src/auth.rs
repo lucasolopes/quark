@@ -32,6 +32,8 @@ pub struct ApiToken {
     pub scopes: Vec<Scope>,
     pub rate_limit_per_min: Option<u32>,
     pub created: u64,
+    #[serde(default)]
+    pub tenant_id: crate::tenant::TenantId,
 }
 
 /// An authenticated panel session, created after a successful OIDC login. The
@@ -48,6 +50,10 @@ pub struct Session {
     pub scopes: Vec<Scope>,
     pub created: u64,
     pub expires: u64,
+    #[serde(default)]
+    pub tenant_id: crate::tenant::TenantId,
+    #[serde(default)]
+    pub user_id: u64,
 }
 
 /// Base62 alphabet (digits, uppercase, lowercase) used by `generate_token`.
@@ -162,6 +168,7 @@ mod tests {
             scopes: vec![Scope::LinksRead, Scope::Webhooks],
             rate_limit_per_min: Some(60),
             created: 100,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
         let json = serde_json::to_string(&tok).unwrap();
         let back: ApiToken = serde_json::from_str(&json).unwrap();

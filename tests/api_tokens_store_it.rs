@@ -25,6 +25,7 @@ async fn api_token_crud_round_trip_pg() {
         scopes: vec![Scope::LinksRead, Scope::Webhooks],
         rate_limit_per_min: Some(60),
         created: 1,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     store.put_api_token(quark::tenant::DEFAULT_TENANT, &token).await.unwrap();
 

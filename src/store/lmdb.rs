@@ -1294,6 +1294,7 @@ mod tests {
             scopes: vec![Scope::LinksRead],
             rate_limit_per_min: Some(60),
             created: 1,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         }
     }
 
@@ -1416,6 +1417,8 @@ mod tests {
             scopes: vec![crate::auth::Scope::Full],
             created: 10,
             expires: 100,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
+            user_id: 0,
         };
         s.put_session(crate::tenant::DEFAULT_TENANT, &sess).await.unwrap();
         // Valid before expiry.

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::Scope;
 
 /// Opaque tenant identifier. `0` is the default/OSS tenant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
 pub struct TenantId(pub u64);
 
 /// The single implicit tenant in OSS mode, and the tenant existing data is

@@ -811,6 +811,8 @@ async fn session_round_trip_and_gc_pg() {
         scopes: vec![quark::auth::Scope::LinksRead, quark::auth::Scope::Analytics],
         created: 10,
         expires: 100,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
+        user_id: 0,
     };
     s.put_session(quark::tenant::DEFAULT_TENANT, &sess).await.unwrap();
     let got = s.get_session_by_hash("h1", 50).await.unwrap().unwrap();

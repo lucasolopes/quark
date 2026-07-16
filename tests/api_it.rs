@@ -2612,6 +2612,8 @@ async fn session_cookie_authorizes_admin_by_scope() {
             scopes: vec![Scope::LinksRead, Scope::Analytics],
             created: now,
             expires: now + 100_000_000_000,
+            tenant_id: quark::tenant::DEFAULT_TENANT,
+            user_id: 0,
         })
         .await
         .unwrap();
@@ -2655,6 +2657,8 @@ async fn session_cookie_authorizes_admin_by_scope() {
             scopes: vec![Scope::Webhooks],
             created: now,
             expires: now + 100_000_000_000,
+            tenant_id: quark::tenant::DEFAULT_TENANT,
+            user_id: 0,
         })
         .await
         .unwrap();
@@ -2680,6 +2684,8 @@ async fn session_cookie_authorizes_admin_by_scope() {
             scopes: vec![Scope::Full],
             created: 1,
             expires: 2,
+            tenant_id: quark::tenant::DEFAULT_TENANT,
+            user_id: 0,
         })
         .await
         .unwrap();
@@ -2741,6 +2747,8 @@ async fn admin_me_reports_session_and_oidc_state() {
             scopes: vec![Scope::Full],
             created: 1,
             expires: 100_000_000_000,
+            tenant_id: quark::tenant::DEFAULT_TENANT,
+            user_id: 0,
         })
         .await
         .unwrap();
@@ -2809,6 +2817,8 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
             scopes: vec![Scope::Full],
             created: now,
             expires: now + 100_000_000_000,
+            tenant_id: quark::tenant::DEFAULT_TENANT,
+            user_id: 0,
         })
         .await
         .unwrap();
@@ -2839,6 +2849,7 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
             scopes: vec![Scope::Webhooks],
             rate_limit_per_min: None,
             created: now,
+            tenant_id: quark::tenant::DEFAULT_TENANT,
         })
         .await
         .unwrap();
@@ -2850,6 +2861,8 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
             scopes: vec![Scope::LinksRead],
             created: now,
             expires: now + 100_000_000_000,
+            tenant_id: quark::tenant::DEFAULT_TENANT,
+            user_id: 0,
         })
         .await
         .unwrap();
@@ -2904,6 +2917,8 @@ async fn logout_requires_csrf_header_and_revokes_session() {
             scopes: vec![Scope::Full],
             created: 1,
             expires: 100_000_000_000,
+            tenant_id: quark::tenant::DEFAULT_TENANT,
+            user_id: 0,
         })
         .await
         .unwrap();
@@ -2981,6 +2996,8 @@ async fn session_cookie_is_ignored_when_oidc_not_configured() {
             scopes: vec![Scope::Full],
             created: 1,
             expires: 100_000_000_000,
+            tenant_id: quark::tenant::DEFAULT_TENANT,
+            user_id: 0,
         })
         .await
         .unwrap();
@@ -3095,6 +3112,8 @@ async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
             scopes: vec![Scope::Full],
             created: now,
             expires: now + 100_000_000_000,
+            tenant_id: quark::tenant::DEFAULT_TENANT,
+            user_id: 0,
         })
         .await
         .unwrap();

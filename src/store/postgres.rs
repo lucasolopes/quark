@@ -130,6 +130,7 @@ fn row_to_api_token(r: &PgRow) -> Result<ApiToken, StoreError> {
         .try_get("rate_limit_per_min")
         .map_err(StoreError::backend)?;
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
     Ok(ApiToken {
         id: id as u64,
         name,
@@ -137,6 +138,7 @@ fn row_to_api_token(r: &PgRow) -> Result<ApiToken, StoreError> {
         scopes: serde_json::from_value(scopes)?,
         rate_limit_per_min: rate_limit_per_min.map(|v| v as u32),
         created: created as u64,
+        tenant_id: TenantId(tenant_id as u64),
     })
 }
 
@@ -398,6 +400,8 @@ impl PostgresStore {
                 "CREATE SEQUENCE IF NOT EXISTS quark_user_id_seq",
                 "CREATE TABLE IF NOT EXISTS memberships (user_id BIGINT NOT NULL, tenant_id BIGINT NOT NULL, role TEXT NOT NULL, created BIGINT NOT NULL, PRIMARY KEY (user_id, tenant_id))",
                 "CREATE INDEX IF NOT EXISTS memberships_by_tenant ON memberships (tenant_id)",
+                // --- Multi-tenancy (P1b): sessions carry the authenticated user ---
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 0",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -876,7 +880,7 @@ impl Store for PostgresStore {
 
     async fn list_api_tokens(&self, tenant: TenantId) -> Result<Vec<ApiToken>, StoreError> {
         let rows = sqlx::query(
-            "SELECT id, name, token_hash, scopes, rate_limit_per_min, created \
+            "SELECT id, name, token_hash, scopes, rate_limit_per_min, created, tenant_id \
              FROM api_tokens WHERE tenant_id = $1 ORDER BY id",
         )
         .bind(tenant.0 as i64)
@@ -890,7 +894,7 @@ impl Store for PostgresStore {
     /// (`api_tokens_token_hash_idx`).
     async fn get_api_token_by_hash(&self, hash: &str) -> Result<Option<ApiToken>, StoreError> {
         let row = sqlx::query(
-            "SELECT id, name, token_hash, scopes, rate_limit_per_min, created \
+            "SELECT id, name, token_hash, scopes, rate_limit_per_min, created, tenant_id \
              FROM api_tokens WHERE token_hash = $1",
         )
         .bind(hash)
@@ -1029,10 +1033,10 @@ impl Store for PostgresStore {
     ) -> Result<(), StoreError> {
         let scopes = serde_json::to_value(&session.scopes)?;
         sqlx::query(
-            "INSERT INTO sessions (token_hash, subject, display, scopes, created, expires, tenant_id) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7) \
+            "INSERT INTO sessions (token_hash, subject, display, scopes, created, expires, tenant_id, user_id) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) \
              ON CONFLICT (token_hash) DO UPDATE \
-               SET subject=$2, display=$3, scopes=$4, created=$5, expires=$6, tenant_id=$7",
+               SET subject=$2, display=$3, scopes=$4, created=$5, expires=$6, tenant_id=$7, user_id=$8",
         )
         .bind(&session.token_hash)
         .bind(&session.subject)
@@ -1041,6 +1045,7 @@ impl Store for PostgresStore {
         .bind(session.created as i64)
         .bind(session.expires as i64)
         .bind(tenant.0 as i64)
+        .bind(session.user_id as i64)
         .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
@@ -1053,7 +1058,7 @@ impl Store for PostgresStore {
         now: u64,
     ) -> Result<Option<crate::auth::Session>, StoreError> {
         let row = sqlx::query(
-            "SELECT token_hash, subject, display, scopes, created, expires FROM sessions \
+            "SELECT token_hash, subject, display, scopes, created, expires, tenant_id, user_id FROM sessions \
              WHERE token_hash = $1 AND expires > $2",
         )
         .bind(token_hash)
@@ -1066,6 +1071,8 @@ impl Store for PostgresStore {
                 let scopes: serde_json::Value = r.try_get("scopes").map_err(StoreError::backend)?;
                 let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
                 let expires: i64 = r.try_get("expires").map_err(StoreError::backend)?;
+                let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
+                let user_id: i64 = r.try_get("user_id").map_err(StoreError::backend)?;
                 Ok(Some(crate::auth::Session {
                     token_hash: r.try_get("token_hash").map_err(StoreError::backend)?,
                     subject: r.try_get("subject").map_err(StoreError::backend)?,
@@ -1073,6 +1080,8 @@ impl Store for PostgresStore {
                     scopes: serde_json::from_value(scopes)?,
                     created: created as u64,
                     expires: expires as u64,
+                    tenant_id: TenantId(tenant_id as u64),
+                    user_id: user_id as u64,
                 }))
             }
             None => Ok(None),

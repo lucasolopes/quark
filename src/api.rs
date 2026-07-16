@@ -1474,6 +1474,10 @@ async fn oidc_callback(
         scopes,
         created: now,
         expires: now + SESSION_TTL_SECS,
+        // Real user_id (linking to a `users`/`memberships` row) lands in a
+        // later multi-tenancy task; OSS/P1b callers stay on the default tenant.
+        tenant_id: crate::tenant::DEFAULT_TENANT,
+        user_id: 0,
     };
     if st.store.put_session(crate::tenant::DEFAULT_TENANT, &session).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -2714,6 +2718,7 @@ async fn admin_tokens_create(
         scopes: req.scopes,
         rate_limit_per_min: req.rate_limit_per_min,
         created: now(),
+        tenant_id: crate::tenant::DEFAULT_TENANT,
     };
     if st.store.put_api_token(crate::tenant::DEFAULT_TENANT, &token).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
