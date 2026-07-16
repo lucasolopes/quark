@@ -23,7 +23,7 @@ const TEST_SECRET: &str = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
 /// skip cleanly.
 async fn setup() -> Option<(Arc<dyn Store>, PgPool)> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
-    let s = PostgresStore::open(&url).await.unwrap();
+    let s = PostgresStore::open(&url, false).await.unwrap();
     s.reset_for_tests().await.unwrap();
     let pool = PgPoolOptions::new()
         .max_connections(6)

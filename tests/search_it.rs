@@ -3,7 +3,7 @@ use serial_test::serial;
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
-    let s = PostgresStore::open(&url).await.unwrap();
+    let s = PostgresStore::open(&url, false).await.unwrap();
     s.reset_for_tests().await.unwrap();
     Some(s)
 }

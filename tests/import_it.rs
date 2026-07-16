@@ -19,7 +19,7 @@ fn test_webhook_dispatcher() -> Arc<quark::webhooks::delivery::WebhookDispatcher
 
 async fn app_admin(token: &str) -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -27,6 +27,7 @@ async fn app_admin(token: &str) -> axum::Router {
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store,
         key: 0x1234,
@@ -45,7 +46,7 @@ async fn app_admin(token: &str) -> axum::Router {
 
 async fn app_no_admin() -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -53,6 +54,7 @@ async fn app_no_admin() -> axum::Router {
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store,
         key: 0x1234,

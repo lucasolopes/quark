@@ -59,6 +59,7 @@ async fn node(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>, url: &str) ->
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store,
         key: 0,
@@ -81,7 +82,7 @@ async fn cache_invalidation_propagates_to_other_node() {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let id = 987_654u64;
     store
         .put_link(

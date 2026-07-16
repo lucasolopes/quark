@@ -54,6 +54,9 @@ pub struct AppState {
     /// The Sheets HTTP seam (real `GoogleSheetsApi` in `main`, absent in tests
     /// that never drive a real sync). `None` is treated as "connector off".
     pub sheets_api: Option<Arc<dyn crate::sheets::client::SheetsApi>>,
+    /// Multi-tenant (cloud) mode, from `QUARK_MULTI_TENANT`. Plumbing only for
+    /// now — nothing reads this yet (no FORCE RLS, no per-tenant tx).
+    pub multi_tenant: bool,
 }
 
 #[derive(Deserialize)]
@@ -3242,7 +3245,9 @@ mod tests {
     /// disabled. `admin_token` sets (or clears) the env break-glass token.
     async fn guard_state(admin_token: Option<&str>) -> Arc<super::AppState> {
         let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-        let (store, sink) = crate::store::open_backends(dir.path()).await.unwrap();
+        let (store, sink) = crate::store::open_backends(dir.path(), false)
+            .await
+            .unwrap();
         let cache = crate::cache::Cache::new(store.clone(), 1000, None);
         let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
         let (tx, _wrx) = tokio::sync::mpsc::channel(1);
@@ -3268,6 +3273,7 @@ mod tests {
             public_host: None,
             real_ip_header: "cf-connecting-ip".to_string(),
             webhooks,
+            multi_tenant: false,
         })
     }
 

@@ -768,7 +768,7 @@ pub async fn open_store(path: &Path) -> Result<Arc<dyn Store>, StoreError> {
 /// Returns the concrete type so tests can reach `reset_for_tests`; cast to
 /// `Arc<dyn Store>` for the `for_tenant` scoping helper.
 pub async fn open_postgres(url: &str) -> Result<Arc<postgres::PostgresStore>, StoreError> {
-    Ok(Arc::new(postgres::PostgresStore::open(url).await?))
+    Ok(Arc::new(postgres::PostgresStore::open(url, false).await?))
 }
 
 /// Pair of backends (Store + AnalyticsSink) sharing the same physical backend.
@@ -782,7 +782,7 @@ pub type Backends = (Arc<dyn Store>, Arc<dyn AnalyticsSink>);
 /// (+ its embedded sink) follows the rule above; the Sink is overridden by
 /// `QUARK_CLICKHOUSE_URL` when set (ClickHouse is analytics-only,
 /// never a Store).
-pub async fn open_backends(data_path: &Path) -> Result<Backends, StoreError> {
+pub async fn open_backends(data_path: &Path, multi_tenant: bool) -> Result<Backends, StoreError> {
     let (store, embedded_sink): (Arc<dyn Store>, Arc<dyn AnalyticsSink>) =
         match std::env::var("QUARK_DATABASE_URL") {
             Ok(url) => {
@@ -796,12 +796,17 @@ pub async fn open_backends(data_path: &Path) -> Result<Backends, StoreError> {
                     Some(replica_url) => {
                         eprintln!("store: Postgres primary + read replica");
                         Arc::new(
-                            postgres::PostgresStore::open_with_replica(&url, &replica_url).await?,
+                            postgres::PostgresStore::open_with_replica(
+                                &url,
+                                &replica_url,
+                                multi_tenant,
+                            )
+                            .await?,
                         )
                     }
                     None => {
                         eprintln!("store: Postgres (single URL, no read replica)");
-                        Arc::new(postgres::PostgresStore::open(&url).await?)
+                        Arc::new(postgres::PostgresStore::open(&url, multi_tenant).await?)
                     }
                 };
                 (pg.clone(), pg)

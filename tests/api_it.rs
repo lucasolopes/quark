@@ -9,7 +9,7 @@ use tower::ServiceExt;
 
 async fn app() -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -17,6 +17,7 @@ async fn app() -> axum::Router {
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store,
         key: 0x1234,
@@ -780,7 +781,7 @@ async fn patch_clears_password_reopening_the_link() {
 #[tokio::test]
 async fn unlock_post_is_rate_limited() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -788,6 +789,7 @@ async fn unlock_post_is_rate_limited() {
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store,
         key: 0x1234,
@@ -880,7 +882,7 @@ async fn blocks_internal_destination_403() {
 #[tokio::test]
 async fn rate_limit_429_after_exceeding() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -888,6 +890,7 @@ async fn rate_limit_429_after_exceeding() {
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store,
         key: 0x1234,
@@ -1008,7 +1011,7 @@ async fn nonexistent_code_404_has_no_store_cache_control() {
 
 async fn app_admin(token: &str) -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -1016,6 +1019,7 @@ async fn app_admin(token: &str) -> axum::Router {
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store,
         key: 0x1234,
@@ -1480,7 +1484,7 @@ async fn admin_gated_create_then_link_is_readable_default_tenant() {
 /// redirect handler sends.
 async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<ClickEvent>) {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (analytics_tx, rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -1488,6 +1492,7 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store,
         key: 0x1234,
@@ -2176,7 +2181,7 @@ async fn patch_adds_app_android_used_for_android_ua() {
 #[tokio::test]
 async fn cors_header_present_when_configured() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -2184,6 +2189,7 @@ async fn cors_header_present_when_configured() {
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store,
         key: 0x1234,
@@ -2505,7 +2511,7 @@ async fn admin_patch_with_invalid_device_value_400() {
 #[tokio::test]
 async fn admin_links_reports_health_and_broken_filter() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -2513,6 +2519,7 @@ async fn admin_links_reports_health_and_broken_filter() {
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -2622,7 +2629,7 @@ async fn admin_links_reports_health_and_broken_filter() {
 async fn session_cookie_authorizes_admin_by_scope() {
     use quark::auth::{hash_token, Scope, Session};
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -2630,6 +2637,7 @@ async fn session_cookie_authorizes_admin_by_scope() {
         sheets: None,
         sheets_api: None,
         oidc_configured: true,
+        multi_tenant: false,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -2754,7 +2762,7 @@ async fn session_cookie_authorizes_admin_by_scope() {
 async fn admin_me_reports_session_and_oidc_state() {
     use quark::auth::{hash_token, Scope, Session};
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -2762,6 +2770,7 @@ async fn admin_me_reports_session_and_oidc_state() {
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -2837,7 +2846,7 @@ async fn login_route_404_when_oidc_disabled() {
 async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
     use quark::auth::{hash_token, ApiToken, Scope, Session};
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -2845,6 +2854,7 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
         sheets: None,
         sheets_api: None,
         oidc_configured: true,
+        multi_tenant: false,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -2950,7 +2960,7 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
 async fn logout_requires_csrf_header_and_revokes_session() {
     use quark::auth::{hash_token, Scope, Session};
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -2958,6 +2968,7 @@ async fn logout_requires_csrf_header_and_revokes_session() {
         sheets: None,
         sheets_api: None,
         oidc_configured: true,
+        multi_tenant: false,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -3030,7 +3041,7 @@ async fn logout_requires_csrf_header_and_revokes_session() {
 async fn session_cookie_is_ignored_when_oidc_not_configured() {
     use quark::auth::{hash_token, Scope, Session};
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
@@ -3039,6 +3050,7 @@ async fn session_cookie_is_ignored_when_oidc_not_configured() {
         sheets_api: None,
         // OIDC turned off (e.g. QUARK_OIDC_ISSUER unset) while a token stays set.
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -3101,7 +3113,7 @@ async fn session_cookie_is_ignored_when_oidc_not_configured() {
 async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
     use quark::auth::{hash_token, Scope, Session};
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let cfg = quark::sheets::SheetsConfig::from_parts(
@@ -3116,6 +3128,7 @@ async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
         sheets: Some(Arc::new(cfg)),
         sheets_api: None,
         oidc_configured: true,
+        multi_tenant: false,
         cache,
         store: store.clone(),
         key: 0x1234,
@@ -3210,7 +3223,7 @@ async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
 #[tokio::test]
 async fn sheets_callback_requires_the_state_cookie() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let cfg = quark::sheets::SheetsConfig::from_parts(
@@ -3225,6 +3238,7 @@ async fn sheets_callback_requires_the_state_cookie() {
         sheets: Some(Arc::new(cfg)),
         sheets_api: None,
         oidc_configured: true,
+        multi_tenant: false,
         cache,
         store: store.clone(),
         key: 0x1234,

@@ -19,7 +19,7 @@ fn test_url() -> Option<String> {
 
 /// Builds a complete quark router over an already-open Postgres — simulates a replica.
 async fn pg_replica(url: &str) -> axum::Router {
-    let pg = Arc::new(PostgresStore::open(url).await.unwrap());
+    let pg = Arc::new(PostgresStore::open(url, false).await.unwrap());
     let store: Arc<dyn Store> = pg.clone();
     let sink: Arc<dyn AnalyticsSink> = pg;
     let cache = Cache::new(store.clone(), 1000, None);
@@ -29,6 +29,7 @@ async fn pg_replica(url: &str) -> axum::Router {
         sheets: None,
         sheets_api: None,
         oidc_configured: false,
+        multi_tenant: false,
         cache,
         store,
         key: 0x1234,
@@ -64,15 +65,15 @@ async fn unique_ids_across_replicas_pg() {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
-    PostgresStore::open(&url)
+    PostgresStore::open(&url, false)
         .await
         .unwrap()
         .reset_for_tests()
         .await
         .unwrap();
 
-    let a = Arc::new(PostgresStore::open(&url).await.unwrap());
-    let b = Arc::new(PostgresStore::open(&url).await.unwrap());
+    let a = Arc::new(PostgresStore::open(&url, false).await.unwrap());
+    let b = Arc::new(PostgresStore::open(&url, false).await.unwrap());
 
     let mut handles = Vec::new();
     for store in [a.clone(), b.clone()] {
@@ -99,7 +100,7 @@ async fn create_on_replica_a_redirect_on_replica_b_pg() {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
-    PostgresStore::open(&url)
+    PostgresStore::open(&url, false)
         .await
         .unwrap()
         .reset_for_tests()

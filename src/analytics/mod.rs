@@ -485,7 +485,9 @@ mod tests {
     #[tokio::test]
     async fn worker_drains_and_writes_on_channel_close() {
         let dir = tempfile::tempdir().unwrap();
-        let (store, sink) = crate::store::open_backends(dir.path()).await.unwrap();
+        let (store, sink) = crate::store::open_backends(dir.path(), false)
+            .await
+            .unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(1000);
         let handle = spawn_worker(
             rx,

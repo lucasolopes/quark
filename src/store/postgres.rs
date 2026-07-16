@@ -280,10 +280,14 @@ pub struct PostgresStore {
     /// Read pool: the local read replica when `open_with_replica` is used, or a
     /// clone of `write` (the same handle) under single-URL `open`.
     read: PgPool,
+    /// Whether this store was opened in multi-tenant (cloud) mode, from
+    /// `QUARK_MULTI_TENANT`. Carried only in this task; not yet used to force
+    /// RLS or wrap queries (that lands in a later task).
+    multi_tenant: bool,
 }
 
 impl PostgresStore {
-    pub async fn open(url: &str) -> Result<PostgresStore, StoreError> {
+    pub async fn open(url: &str, multi_tenant: bool) -> Result<PostgresStore, StoreError> {
         let pool = PgPoolOptions::new()
             .max_connections(10)
             .connect(url)
@@ -295,6 +299,7 @@ impl PostgresStore {
         let s = PostgresStore {
             read: pool.clone(),
             write: pool,
+            multi_tenant,
         };
         s.init_schema().await?;
         Ok(s)
@@ -307,6 +312,7 @@ impl PostgresStore {
     pub async fn open_with_replica(
         primary_url: &str,
         replica_url: &str,
+        multi_tenant: bool,
     ) -> Result<PostgresStore, StoreError> {
         let write = PgPoolOptions::new()
             .max_connections(10)
@@ -318,9 +324,19 @@ impl PostgresStore {
             .connect(replica_url)
             .await
             .map_err(StoreError::backend)?;
-        let s = PostgresStore { write, read };
+        let s = PostgresStore {
+            write,
+            read,
+            multi_tenant,
+        };
         s.init_schema().await?;
         Ok(s)
+    }
+
+    /// Whether this store is running in multi-tenant (cloud) mode. Plumbing
+    /// only for now — nothing reads this yet.
+    pub fn is_multi_tenant(&self) -> bool {
+        self.multi_tenant
     }
 
     /// Creates the schema idempotently. `CREATE TABLE/SEQUENCE IF NOT EXISTS`
@@ -1868,5 +1884,21 @@ mod tests {
         for r in [Role::Owner, Role::Admin, Role::Member, Role::Viewer] {
             assert_eq!(role_from_str(role_to_str(r)).unwrap(), r);
         }
+    }
+
+    // Pure constructor check: `PostgresStore` carries the `multi_tenant` flag
+    // set by its caller (no DB connection needed — we build the struct
+    // literal directly, mirroring what `open`/`open_with_replica` do).
+    #[tokio::test]
+    async fn multi_tenant_flag_defaults_false_and_is_settable() {
+        fn make(multi_tenant: bool) -> PostgresStore {
+            PostgresStore {
+                write: PgPool::connect_lazy("postgres://unused").unwrap(),
+                read: PgPool::connect_lazy("postgres://unused").unwrap(),
+                multi_tenant,
+            }
+        }
+        assert!(!make(false).is_multi_tenant());
+        assert!(make(true).is_multi_tenant());
     }
 }

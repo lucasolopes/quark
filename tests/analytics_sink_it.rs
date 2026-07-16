@@ -20,7 +20,7 @@ fn ev(id: u64, ts: u64) -> ClickEvent {
 #[tokio::test]
 async fn record_and_stats() {
     let dir = tempfile::tempdir().unwrap();
-    let (_store, sink) = open_backends(dir.path()).await.unwrap();
+    let (_store, sink) = open_backends(dir.path(), false).await.unwrap();
 
     sink.record_batch(&[ev(1, 1_752_300_000), ev(1, 1_752_300_050)])
         .await
@@ -35,7 +35,7 @@ async fn record_and_stats() {
 #[tokio::test]
 async fn retention_truncates_at_events_max() {
     let dir = tempfile::tempdir().unwrap();
-    let (_store, sink) = open_backends(dir.path()).await.unwrap();
+    let (_store, sink) = open_backends(dir.path(), false).await.unwrap();
     for batch in 0..12 {
         let evs: Vec<ClickEvent> = (0..100)
             .map(|i| ev(7, 1_752_300_000 + batch * 100 + i))
