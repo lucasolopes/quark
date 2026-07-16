@@ -831,7 +831,10 @@ impl Store for PostgresStore {
         Ok(())
     }
 
-    async fn list_webhooks(&self, tenant: TenantId) -> Result<Vec<WebhookSubscription>, StoreError> {
+    async fn list_webhooks(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<WebhookSubscription>, StoreError> {
         let rows = sqlx::query(
             "SELECT id, url, events, secret, active, created, kind FROM webhooks WHERE tenant_id = $1 ORDER BY id",
         )
@@ -1067,12 +1070,13 @@ impl Store for PostgresStore {
         &self,
         tenant: TenantId,
     ) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
-        let rows =
-            sqlx::query("SELECT id, checked_at, status, healthy FROM link_health WHERE tenant_id = $1")
-                .bind(tenant.0 as i64)
-                .fetch_all(&self.read)
-                .await
-                .map_err(StoreError::backend)?;
+        let rows = sqlx::query(
+            "SELECT id, checked_at, status, healthy FROM link_health WHERE tenant_id = $1",
+        )
+        .bind(tenant.0 as i64)
+        .fetch_all(&self.read)
+        .await
+        .map_err(StoreError::backend)?;
         let mut out = Vec::with_capacity(rows.len());
         for r in &rows {
             let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
@@ -1328,7 +1332,11 @@ impl Store for PostgresStore {
         Ok(id as u64)
     }
 
-    async fn get_pixel(&self, tenant: TenantId, id: u64) -> Result<Option<PixelConfig>, StoreError> {
+    async fn get_pixel(
+        &self,
+        tenant: TenantId,
+        id: u64,
+    ) -> Result<Option<PixelConfig>, StoreError> {
         let row = sqlx::query(
             "SELECT id, provider, credentials, active, created FROM pixels WHERE tenant_id = $1 AND id = $2",
         )
@@ -1495,12 +1503,13 @@ impl Store for PostgresStore {
     }
 
     async fn get_user_by_subject(&self, subject: &str) -> Result<Option<User>, StoreError> {
-        let row =
-            sqlx::query("SELECT id, subject, email, display, created FROM users WHERE subject = $1")
-                .bind(subject)
-                .fetch_optional(&self.read)
-                .await
-                .map_err(StoreError::backend)?;
+        let row = sqlx::query(
+            "SELECT id, subject, email, display, created FROM users WHERE subject = $1",
+        )
+        .bind(subject)
+        .fetch_optional(&self.read)
+        .await
+        .map_err(StoreError::backend)?;
         match row {
             Some(r) => {
                 let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
@@ -1551,10 +1560,7 @@ impl Store for PostgresStore {
         }
     }
 
-    async fn list_memberships_for_user(
-        &self,
-        user_id: u64,
-    ) -> Result<Vec<Membership>, StoreError> {
+    async fn list_memberships_for_user(&self, user_id: u64) -> Result<Vec<Membership>, StoreError> {
         let rows = sqlx::query(
             "SELECT user_id, tenant_id, role, created FROM memberships WHERE user_id = $1 ORDER BY tenant_id",
         )

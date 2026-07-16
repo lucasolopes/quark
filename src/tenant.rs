@@ -1,11 +1,13 @@
 //! Tenancy domain model. A Tenant owns all data; a User is a global identity;
 //! a Membership links a User to a Tenant with a Role. In OSS mode exactly one
 //! tenant exists (`DEFAULT_TENANT`); cloud mode has many.
-use serde::{Deserialize, Serialize};
 use crate::auth::Scope;
+use serde::{Deserialize, Serialize};
 
 /// Opaque tenant identifier. `0` is the default/OSS tenant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
 pub struct TenantId(pub u64);
 
 /// The single implicit tenant in OSS mode, and the tenant existing data is

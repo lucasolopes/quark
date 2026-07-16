@@ -1472,10 +1472,7 @@ async fn admin_gated_create_then_link_is_readable_default_tenant() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FOUND);
-    assert_eq!(
-        resp.headers()["location"],
-        "https://example.com/p1b-e2e"
-    );
+    assert_eq!(resp.headers()["location"], "https://example.com/p1b-e2e");
 }
 
 /// Builds an app like `app()` but returns the analytics receiver too, so
@@ -2572,7 +2569,8 @@ async fn admin_links_reports_health_and_broken_filter() {
     let dead_id = id_by_url("https://dead.example.com");
 
     store
-        .put_link_health(quark::tenant::DEFAULT_TENANT, 
+        .put_link_health(
+            quark::tenant::DEFAULT_TENANT,
             ok_id,
             &quark::store::LinkHealth {
                 checked_at: 10,
@@ -2583,7 +2581,8 @@ async fn admin_links_reports_health_and_broken_filter() {
         .await
         .unwrap();
     store
-        .put_link_health(quark::tenant::DEFAULT_TENANT, 
+        .put_link_health(
+            quark::tenant::DEFAULT_TENANT,
             dead_id,
             &quark::store::LinkHealth {
                 checked_at: 10,
@@ -2648,16 +2647,19 @@ async fn session_cookie_authorizes_admin_by_scope() {
     let now = 1_000_000u64;
     // A reader session (links_read + analytics) can list links.
     store
-        .put_session(quark::tenant::DEFAULT_TENANT, &Session {
-            token_hash: hash_token("reader-token"),
-            subject: "s1".into(),
-            display: "reader@example.com".into(),
-            scopes: vec![Scope::LinksRead, Scope::Analytics],
-            created: now,
-            expires: now + 100_000_000_000,
-            tenant_id: quark::tenant::DEFAULT_TENANT,
-            user_id: 0,
-        })
+        .put_session(
+            quark::tenant::DEFAULT_TENANT,
+            &Session {
+                token_hash: hash_token("reader-token"),
+                subject: "s1".into(),
+                display: "reader@example.com".into(),
+                scopes: vec![Scope::LinksRead, Scope::Analytics],
+                created: now,
+                expires: now + 100_000_000_000,
+                tenant_id: quark::tenant::DEFAULT_TENANT,
+                user_id: 0,
+            },
+        )
         .await
         .unwrap();
     let get = |cookie: Option<&str>| {
@@ -2693,16 +2695,19 @@ async fn session_cookie_authorizes_admin_by_scope() {
 
     // A webhooks-only session cannot write links (PATCH needs links_write) -> 403.
     store
-        .put_session(quark::tenant::DEFAULT_TENANT, &Session {
-            token_hash: hash_token("hooks-token"),
-            subject: "s2".into(),
-            display: "hooks@example.com".into(),
-            scopes: vec![Scope::Webhooks],
-            created: now,
-            expires: now + 100_000_000_000,
-            tenant_id: quark::tenant::DEFAULT_TENANT,
-            user_id: 0,
-        })
+        .put_session(
+            quark::tenant::DEFAULT_TENANT,
+            &Session {
+                token_hash: hash_token("hooks-token"),
+                subject: "s2".into(),
+                display: "hooks@example.com".into(),
+                scopes: vec![Scope::Webhooks],
+                created: now,
+                expires: now + 100_000_000_000,
+                tenant_id: quark::tenant::DEFAULT_TENANT,
+                user_id: 0,
+            },
+        )
         .await
         .unwrap();
     let resp = app
@@ -2720,16 +2725,19 @@ async fn session_cookie_authorizes_admin_by_scope() {
 
     // An expired session does not authenticate -> 401.
     store
-        .put_session(quark::tenant::DEFAULT_TENANT, &Session {
-            token_hash: hash_token("stale-token"),
-            subject: "s3".into(),
-            display: "stale@example.com".into(),
-            scopes: vec![Scope::Full],
-            created: 1,
-            expires: 2,
-            tenant_id: quark::tenant::DEFAULT_TENANT,
-            user_id: 0,
-        })
+        .put_session(
+            quark::tenant::DEFAULT_TENANT,
+            &Session {
+                token_hash: hash_token("stale-token"),
+                subject: "s3".into(),
+                display: "stale@example.com".into(),
+                scopes: vec![Scope::Full],
+                created: 1,
+                expires: 2,
+                tenant_id: quark::tenant::DEFAULT_TENANT,
+                user_id: 0,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -2783,16 +2791,19 @@ async fn admin_me_reports_session_and_oidc_state() {
     assert_eq!(v["oidc_enabled"], false);
 
     store
-        .put_session(quark::tenant::DEFAULT_TENANT, &Session {
-            token_hash: hash_token("tok"),
-            subject: "s1".into(),
-            display: "me@example.com".into(),
-            scopes: vec![Scope::Full],
-            created: 1,
-            expires: 100_000_000_000,
-            tenant_id: quark::tenant::DEFAULT_TENANT,
-            user_id: 0,
-        })
+        .put_session(
+            quark::tenant::DEFAULT_TENANT,
+            &Session {
+                token_hash: hash_token("tok"),
+                subject: "s1".into(),
+                display: "me@example.com".into(),
+                scopes: vec![Scope::Full],
+                created: 1,
+                expires: 100_000_000_000,
+                tenant_id: quark::tenant::DEFAULT_TENANT,
+                user_id: 0,
+            },
+        )
         .await
         .unwrap();
     let resp = app
@@ -2853,16 +2864,19 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
     // A Full session created via OIDC can create a link (POST /) with only the
     // session cookie (no x-admin-token) — the previous bug bounced it with 401.
     store
-        .put_session(quark::tenant::DEFAULT_TENANT, &Session {
-            token_hash: hash_token("full-sess"),
-            subject: "admin".into(),
-            display: "admin@example.com".into(),
-            scopes: vec![Scope::Full],
-            created: now,
-            expires: now + 100_000_000_000,
-            tenant_id: quark::tenant::DEFAULT_TENANT,
-            user_id: 0,
-        })
+        .put_session(
+            quark::tenant::DEFAULT_TENANT,
+            &Session {
+                token_hash: hash_token("full-sess"),
+                subject: "admin".into(),
+                display: "admin@example.com".into(),
+                scopes: vec![Scope::Full],
+                created: now,
+                expires: now + 100_000_000_000,
+                tenant_id: quark::tenant::DEFAULT_TENANT,
+                user_id: 0,
+            },
+        )
         .await
         .unwrap();
     let resp = app
@@ -2885,28 +2899,34 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
     // A low-scope API token in x-admin-token must NOT block a sufficiently-scoped
     // session: send both, expect the session to authorize a links_read GET.
     store
-        .put_api_token(quark::tenant::DEFAULT_TENANT, &ApiToken {
-            id: 1,
-            name: "readonly".into(),
-            token_hash: hash_token("weak-token"),
-            scopes: vec![Scope::Webhooks],
-            rate_limit_per_min: None,
-            created: now,
-            tenant_id: quark::tenant::DEFAULT_TENANT,
-        })
+        .put_api_token(
+            quark::tenant::DEFAULT_TENANT,
+            &ApiToken {
+                id: 1,
+                name: "readonly".into(),
+                token_hash: hash_token("weak-token"),
+                scopes: vec![Scope::Webhooks],
+                rate_limit_per_min: None,
+                created: now,
+                tenant_id: quark::tenant::DEFAULT_TENANT,
+            },
+        )
         .await
         .unwrap();
     store
-        .put_session(quark::tenant::DEFAULT_TENANT, &Session {
-            token_hash: hash_token("reader-sess"),
-            subject: "reader".into(),
-            display: "r@example.com".into(),
-            scopes: vec![Scope::LinksRead],
-            created: now,
-            expires: now + 100_000_000_000,
-            tenant_id: quark::tenant::DEFAULT_TENANT,
-            user_id: 0,
-        })
+        .put_session(
+            quark::tenant::DEFAULT_TENANT,
+            &Session {
+                token_hash: hash_token("reader-sess"),
+                subject: "reader".into(),
+                display: "r@example.com".into(),
+                scopes: vec![Scope::LinksRead],
+                created: now,
+                expires: now + 100_000_000_000,
+                tenant_id: quark::tenant::DEFAULT_TENANT,
+                user_id: 0,
+            },
+        )
         .await
         .unwrap();
     let resp = app
@@ -2953,16 +2973,19 @@ async fn logout_requires_csrf_header_and_revokes_session() {
     });
     let app = router(state);
     store
-        .put_session(quark::tenant::DEFAULT_TENANT, &Session {
-            token_hash: hash_token("sess"),
-            subject: "s".into(),
-            display: "s@example.com".into(),
-            scopes: vec![Scope::Full],
-            created: 1,
-            expires: 100_000_000_000,
-            tenant_id: quark::tenant::DEFAULT_TENANT,
-            user_id: 0,
-        })
+        .put_session(
+            quark::tenant::DEFAULT_TENANT,
+            &Session {
+                token_hash: hash_token("sess"),
+                subject: "s".into(),
+                display: "s@example.com".into(),
+                scopes: vec![Scope::Full],
+                created: 1,
+                expires: 100_000_000_000,
+                tenant_id: quark::tenant::DEFAULT_TENANT,
+                user_id: 0,
+            },
+        )
         .await
         .unwrap();
 
@@ -3032,16 +3055,19 @@ async fn session_cookie_is_ignored_when_oidc_not_configured() {
     let app = router(state);
     // A previously issued, still-unexpired full-scope session.
     store
-        .put_session(quark::tenant::DEFAULT_TENANT, &Session {
-            token_hash: hash_token("leftover"),
-            subject: "s".into(),
-            display: "s@example.com".into(),
-            scopes: vec![Scope::Full],
-            created: 1,
-            expires: 100_000_000_000,
-            tenant_id: quark::tenant::DEFAULT_TENANT,
-            user_id: 0,
-        })
+        .put_session(
+            quark::tenant::DEFAULT_TENANT,
+            &Session {
+                token_hash: hash_token("leftover"),
+                subject: "s".into(),
+                display: "s@example.com".into(),
+                scopes: vec![Scope::Full],
+                created: 1,
+                expires: 100_000_000_000,
+                tenant_id: quark::tenant::DEFAULT_TENANT,
+                user_id: 0,
+            },
+        )
         .await
         .unwrap();
 
@@ -3105,13 +3131,16 @@ async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
     });
     // Seed a connection whose refresh token must never appear in a response.
     store
-        .put_sheets_connection(quark::tenant::DEFAULT_TENANT, &quark::sheets::SheetsConnection {
-            refresh_token: "SECRET".into(),
-            email: "op@example.com".into(),
-            spreadsheet_id: Some("sheet123".into()),
-            last_sync: Some(42),
-            last_status: quark::sheets::SyncStatus::Ok,
-        })
+        .put_sheets_connection(
+            quark::tenant::DEFAULT_TENANT,
+            &quark::sheets::SheetsConnection {
+                refresh_token: "SECRET".into(),
+                email: "op@example.com".into(),
+                spreadsheet_id: Some("sheet123".into()),
+                last_sync: Some(42),
+                last_status: quark::sheets::SyncStatus::Ok,
+            },
+        )
         .await
         .unwrap();
     let app = router(state);
@@ -3148,16 +3177,19 @@ async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
     // though the session authorizes the Full scope.
     let now = 1_000_000u64;
     store
-        .put_session(quark::tenant::DEFAULT_TENANT, &Session {
-            token_hash: hash_token("full-token"),
-            subject: "s1".into(),
-            display: "op@example.com".into(),
-            scopes: vec![Scope::Full],
-            created: now,
-            expires: now + 100_000_000_000,
-            tenant_id: quark::tenant::DEFAULT_TENANT,
-            user_id: 0,
-        })
+        .put_session(
+            quark::tenant::DEFAULT_TENANT,
+            &Session {
+                token_hash: hash_token("full-token"),
+                subject: "s1".into(),
+                display: "op@example.com".into(),
+                scopes: vec![Scope::Full],
+                created: now,
+                expires: now + 100_000_000_000,
+                tenant_id: quark::tenant::DEFAULT_TENANT,
+                user_id: 0,
+            },
+        )
         .await
         .unwrap();
     let resp = app
@@ -3240,5 +3272,9 @@ async fn sheets_callback_requires_the_state_cookie() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    assert!(store.get_sheets_connection(quark::tenant::DEFAULT_TENANT).await.unwrap().is_none());
+    assert!(store
+        .get_sheets_connection(quark::tenant::DEFAULT_TENANT)
+        .await
+        .unwrap()
+        .is_none());
 }

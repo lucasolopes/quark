@@ -78,7 +78,9 @@ async fn unique_ids_across_replicas_pg() {
     for store in [a.clone(), b.clone()] {
         for _ in 0..200 {
             let st = store.clone();
-            handles.push(tokio::spawn(async move { st.next_id(quark::tenant::DEFAULT_TENANT).await.unwrap() }));
+            handles.push(tokio::spawn(async move {
+                st.next_id(quark::tenant::DEFAULT_TENANT).await.unwrap()
+            }));
         }
     }
 

@@ -78,7 +78,12 @@ async fn lmdb_identity_round_trips() {
     };
     store.put_user(&user).await.unwrap();
     assert_eq!(
-        store.get_user_by_subject("oidc|abc").await.unwrap().unwrap().id,
+        store
+            .get_user_by_subject("oidc|abc")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
         uid
     );
     let m = quark::tenant::Membership {
@@ -89,7 +94,12 @@ async fn lmdb_identity_round_trips() {
     };
     store.put_membership(&m).await.unwrap();
     assert_eq!(
-        store.get_membership(uid, TenantId(7)).await.unwrap().unwrap().role,
+        store
+            .get_membership(uid, TenantId(7))
+            .await
+            .unwrap()
+            .unwrap()
+            .role,
         quark::tenant::Role::Admin
     );
     assert_eq!(store.list_memberships_for_user(uid).await.unwrap().len(), 1);
@@ -105,7 +115,10 @@ async fn migration_seeds_default_tenant_and_columns() {
     let store = quark::store::open_postgres(&url).await.unwrap();
     // default tenant exists after init_schema
     let t = store.get_tenant(TenantId(0)).await.unwrap();
-    assert!(t.is_some(), "default tenant 0 must be seeded by init_schema");
+    assert!(
+        t.is_some(),
+        "default tenant 0 must be seeded by init_schema"
+    );
 }
 
 #[tokio::test]
@@ -139,8 +152,14 @@ async fn assert_full_isolation(store: Arc<dyn Store>) {
     // --- link ---
     let r = rec("https://a.example.com/full-sweep");
     a.put_link(9001, &r).await.unwrap();
-    assert!(a.get_link(9001).await.unwrap().is_some(), "A must see its own link");
-    assert!(b.get_link(9001).await.unwrap().is_none(), "B must not see A's link");
+    assert!(
+        a.get_link(9001).await.unwrap().is_some(),
+        "A must see its own link"
+    );
+    assert!(
+        b.get_link(9001).await.unwrap().is_none(),
+        "B must not see A's link"
+    );
     assert_eq!(
         a.list_links(None, 100, None, None).await.unwrap().len(),
         1,
@@ -178,9 +197,19 @@ async fn assert_full_isolation(store: Arc<dyn Store>) {
         kind: quark::webhooks::SubscriptionKind::Generic,
     };
     a.put_webhook(&webhook).await.unwrap();
-    assert!(a.get_webhook(9002).await.unwrap().is_some(), "A must see its own webhook");
-    assert!(b.get_webhook(9002).await.unwrap().is_none(), "B must not see A's webhook");
-    assert_eq!(a.list_webhooks().await.unwrap().len(), 1, "A must list its own webhook");
+    assert!(
+        a.get_webhook(9002).await.unwrap().is_some(),
+        "A must see its own webhook"
+    );
+    assert!(
+        b.get_webhook(9002).await.unwrap().is_none(),
+        "B must not see A's webhook"
+    );
+    assert_eq!(
+        a.list_webhooks().await.unwrap().len(),
+        1,
+        "A must list its own webhook"
+    );
     assert!(
         b.list_webhooks().await.unwrap().is_empty(),
         "B must not list A's webhook"
@@ -217,9 +246,19 @@ async fn assert_full_isolation(store: Arc<dyn Store>) {
         created: 0,
     };
     a.put_pixel(&pixel).await.unwrap();
-    assert!(a.get_pixel(9004).await.unwrap().is_some(), "A must see its own pixel");
-    assert!(b.get_pixel(9004).await.unwrap().is_none(), "B must not see A's pixel");
-    assert_eq!(a.list_pixels().await.unwrap().len(), 1, "A must list its own pixel");
+    assert!(
+        a.get_pixel(9004).await.unwrap().is_some(),
+        "A must see its own pixel"
+    );
+    assert!(
+        b.get_pixel(9004).await.unwrap().is_none(),
+        "B must not see A's pixel"
+    );
+    assert_eq!(
+        a.list_pixels().await.unwrap().len(),
+        1,
+        "A must list its own pixel"
+    );
     assert!(
         b.list_pixels().await.unwrap().is_empty(),
         "B must not list A's pixel"
@@ -263,8 +302,16 @@ async fn assert_full_isolation(store: Arc<dyn Store>) {
 
     // --- visits ---
     a.bump_visits(9001).await.unwrap();
-    assert_eq!(a.visits(9001).await.unwrap(), 1, "A must see its own visit count");
-    assert_eq!(b.visits(9001).await.unwrap(), 0, "B must not see A's visit count");
+    assert_eq!(
+        a.visits(9001).await.unwrap(),
+        1,
+        "A must see its own visit count"
+    );
+    assert_eq!(
+        b.visits(9001).await.unwrap(),
+        0,
+        "B must not see A's visit count"
+    );
 
     // --- sheets_connection ---
     let conn = quark::sheets::SheetsConnection {
@@ -310,8 +357,12 @@ async fn lmdb_token_and_session_carry_tenant_and_user() {
     let t = quark::tenant::TenantId(0);
 
     let tok = quark::auth::ApiToken {
-        id: 1, name: "t".into(), token_hash: "h1".into(),
-        scopes: vec![quark::auth::Scope::Full], rate_limit_per_min: None, created: 0,
+        id: 1,
+        name: "t".into(),
+        token_hash: "h1".into(),
+        scopes: vec![quark::auth::Scope::Full],
+        rate_limit_per_min: None,
+        created: 0,
         tenant_id: t,
     };
     store.put_api_token(t, &tok).await.unwrap();
@@ -319,9 +370,14 @@ async fn lmdb_token_and_session_carry_tenant_and_user() {
     assert_eq!(got.tenant_id, t);
 
     let sess = quark::auth::Session {
-        token_hash: "s1".into(), subject: "sub".into(), display: "d".into(),
-        scopes: vec![quark::auth::Scope::Full], created: 0, expires: u64::MAX,
-        tenant_id: t, user_id: 7,
+        token_hash: "s1".into(),
+        subject: "sub".into(),
+        display: "d".into(),
+        scopes: vec![quark::auth::Scope::Full],
+        created: 0,
+        expires: u64::MAX,
+        tenant_id: t,
+        user_id: 7,
     };
     store.put_session(t, &sess).await.unwrap();
     let gs = store.get_session_by_hash("s1", 0).await.unwrap().unwrap();
@@ -340,8 +396,12 @@ async fn pg_token_and_session_carry_tenant_and_user() {
     let t = quark::tenant::TenantId(0);
 
     let tok = quark::auth::ApiToken {
-        id: 1, name: "t".into(), token_hash: "h1-pg".into(),
-        scopes: vec![quark::auth::Scope::Full], rate_limit_per_min: None, created: 0,
+        id: 1,
+        name: "t".into(),
+        token_hash: "h1-pg".into(),
+        scopes: vec![quark::auth::Scope::Full],
+        rate_limit_per_min: None,
+        created: 0,
         tenant_id: t,
     };
     store.put_api_token(t, &tok).await.unwrap();
@@ -349,15 +409,24 @@ async fn pg_token_and_session_carry_tenant_and_user() {
     assert_eq!(got.tenant_id, t);
 
     let sess = quark::auth::Session {
-        token_hash: "s1-pg".into(), subject: "sub".into(), display: "d".into(),
+        token_hash: "s1-pg".into(),
+        subject: "sub".into(),
+        display: "d".into(),
         // i64::MAX (far future), not u64::MAX: Postgres stores `expires` as
         // BIGINT (i64), so u64::MAX would wrap to -1 and fail the `expires > now`
         // filter. Production expiries are now()+TTL, always well within i64.
-        scopes: vec![quark::auth::Scope::Full], created: 0, expires: i64::MAX as u64,
-        tenant_id: t, user_id: 7,
+        scopes: vec![quark::auth::Scope::Full],
+        created: 0,
+        expires: i64::MAX as u64,
+        tenant_id: t,
+        user_id: 7,
     };
     store.put_session(t, &sess).await.unwrap();
-    let gs = store.get_session_by_hash("s1-pg", 0).await.unwrap().unwrap();
+    let gs = store
+        .get_session_by_hash("s1-pg", 0)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(gs.tenant_id, t);
     assert_eq!(gs.user_id, 7);
 }
@@ -422,7 +491,11 @@ async fn pg_wellknown_and_sheets_pks_are_tenant_correct() {
     a.put_sheets_connection(&conn1).await.unwrap();
     a.put_sheets_connection(&conn2).await.unwrap();
     assert_eq!(
-        a.get_sheets_connection().await.unwrap().unwrap().refresh_token,
+        a.get_sheets_connection()
+            .await
+            .unwrap()
+            .unwrap()
+            .refresh_token,
         "second"
     );
     assert!(b.get_sheets_connection().await.unwrap().is_none());

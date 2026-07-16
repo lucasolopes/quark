@@ -98,7 +98,10 @@ fn relay_client() -> reqwest::Client {
 }
 
 async fn add_sub(store: &Arc<dyn Store>, url: &str) -> WebhookSubscription {
-    let id = store.next_webhook_id(quark::tenant::DEFAULT_TENANT).await.unwrap();
+    let id = store
+        .next_webhook_id(quark::tenant::DEFAULT_TENANT)
+        .await
+        .unwrap();
     let sub = WebhookSubscription {
         id,
         url: url.to_string(),
@@ -108,7 +111,10 @@ async fn add_sub(store: &Arc<dyn Store>, url: &str) -> WebhookSubscription {
         created: 1,
         kind: SubscriptionKind::Generic,
     };
-    store.put_webhook(quark::tenant::DEFAULT_TENANT, &sub).await.unwrap();
+    store
+        .put_webhook(quark::tenant::DEFAULT_TENANT, &sub)
+        .await
+        .unwrap();
     sub
 }
 
@@ -178,7 +184,10 @@ async fn relay_delivers_all_enqueued() {
         .await
         .unwrap();
 
-    let subs = store.list_webhooks(quark::tenant::DEFAULT_TENANT).await.unwrap();
+    let subs = store
+        .list_webhooks(quark::tenant::DEFAULT_TENANT)
+        .await
+        .unwrap();
     let claimed = poll_once(&store, &relay_client(), &subs, now, RELAY_BATCH, |_| false).await;
     assert_eq!(claimed, 2);
 
@@ -235,7 +244,10 @@ async fn failing_endpoint_dead_letters_after_max() {
         .enqueue_deliveries(&[row(&key, sub.id, base)])
         .await
         .unwrap();
-    let subs = store.list_webhooks(quark::tenant::DEFAULT_TENANT).await.unwrap();
+    let subs = store
+        .list_webhooks(quark::tenant::DEFAULT_TENANT)
+        .await
+        .unwrap();
     let client = relay_client();
 
     let mut last_next = 0i64;
@@ -315,7 +327,10 @@ async fn webhook_id_equals_delivery_key_across_attempts() {
         .enqueue_deliveries(&[row(&key, sub.id, base)])
         .await
         .unwrap();
-    let subs = store.list_webhooks(quark::tenant::DEFAULT_TENANT).await.unwrap();
+    let subs = store
+        .list_webhooks(quark::tenant::DEFAULT_TENANT)
+        .await
+        .unwrap();
     let client = relay_client();
 
     poll_once(&store, &client, &subs, base, RELAY_BATCH, |_| false).await;

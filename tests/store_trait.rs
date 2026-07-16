@@ -21,14 +21,27 @@ async fn round_trip_via_trait_object() {
         fallback_url: None,
         password_hash: None,
     };
-    store.put_link(quark::tenant::DEFAULT_TENANT, id, &rec).await.unwrap();
+    store
+        .put_link(quark::tenant::DEFAULT_TENANT, id, &rec)
+        .await
+        .unwrap();
 
-    let got = store.get_link(quark::tenant::DEFAULT_TENANT, id).await.unwrap().unwrap();
+    let got = store
+        .get_link(quark::tenant::DEFAULT_TENANT, id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got.url, "https://example.com/dyn");
 
     assert!(store
         .put_alias_and_link(quark::tenant::DEFAULT_TENANT, "promo-dyn", 999, &rec)
         .await
         .unwrap());
-    assert_eq!(store.get_alias(quark::tenant::DEFAULT_TENANT, "promo-dyn").await.unwrap(), Some(999));
+    assert_eq!(
+        store
+            .get_alias(quark::tenant::DEFAULT_TENANT, "promo-dyn")
+            .await
+            .unwrap(),
+        Some(999)
+    );
 }

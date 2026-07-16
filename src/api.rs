@@ -328,7 +328,9 @@ async fn require_admin_for_create(st: &AppState, headers: &HeaderMap) -> Result<
     if st.admin_token.is_none() && !st.oidc_configured {
         return Ok(());
     }
-    admin_guard(st, headers, Scope::LinksWrite).await.map(|_| ())
+    admin_guard(st, headers, Scope::LinksWrite)
+        .await
+        .map(|_| ())
 }
 
 /// Reasons `create_link_core` can fail. The `create` handler and the
@@ -429,7 +431,11 @@ pub async fn create_link_core(
             ),
         };
         let rows = st.webhooks.lifecycle_deliveries(&ev).await;
-        match st.store.put_alias_and_link_tx(crate::tenant::DEFAULT_TENANT, alias, id, &rec, &rows).await {
+        match st
+            .store
+            .put_alias_and_link_tx(crate::tenant::DEFAULT_TENANT, alias, id, &rec, &rows)
+            .await
+        {
             Ok(true) => {}
             Ok(false) => return Err(CreateError::AliasInUse),
             Err(_) => return Err(CreateError::Backend),
@@ -460,7 +466,12 @@ pub async fn create_link_core(
         ),
     };
     let rows = st.webhooks.lifecycle_deliveries(&ev).await;
-    if st.store.put_link_tx(crate::tenant::DEFAULT_TENANT, id, &rec, &rows).await.is_err() {
+    if st
+        .store
+        .put_link_tx(crate::tenant::DEFAULT_TENANT, id, &rec, &rows)
+        .await
+        .is_err()
+    {
         return Err(CreateError::Backend);
     }
     st.webhooks.emit_if_in_memory(ev);
@@ -760,7 +771,11 @@ async fn app_destination_ok(
 async fn resolve_code(st: &AppState, code: &str) -> Result<Option<u64>, StoreError> {
     match codec::from_base62(code) {
         Some(c) if c <= permute::MAX_ID => Ok(Some(permute::decode(c, st.key))),
-        _ => st.store.get_alias(crate::tenant::DEFAULT_TENANT, code).await,
+        _ => {
+            st.store
+                .get_alias(crate::tenant::DEFAULT_TENANT, code)
+                .await
+        }
     }
 }
 
@@ -1092,7 +1107,11 @@ async fn redirect(
                 }
             }
             if let Some(max) = rec.max_visits {
-                let n = match st.store.bump_visits(crate::tenant::DEFAULT_TENANT, id).await {
+                let n = match st
+                    .store
+                    .bump_visits(crate::tenant::DEFAULT_TENANT, id)
+                    .await
+                {
                     Ok(n) => n,
                     Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
                 };
@@ -1526,7 +1545,12 @@ async fn oidc_callback(
         tenant_id: crate::tenant::DEFAULT_TENANT,
         user_id,
     };
-    if st.store.put_session(crate::tenant::DEFAULT_TENANT, &session).await.is_err() {
+    if st
+        .store
+        .put_session(crate::tenant::DEFAULT_TENANT, &session)
+        .await
+        .is_err()
+    {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     // Over HTTPS use SameSite=None; Secure so the cookie is sent on cross-origin
@@ -1735,7 +1759,12 @@ async fn sheets_callback(
         last_sync: None,
         last_status: crate::sheets::SyncStatus::Never,
     };
-    if st.store.put_sheets_connection(crate::tenant::DEFAULT_TENANT, &conn).await.is_err() {
+    if st
+        .store
+        .put_sheets_connection(crate::tenant::DEFAULT_TENANT, &conn)
+        .await
+        .is_err()
+    {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let clear = format!("{SHEETS_STATE_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
@@ -1849,7 +1878,12 @@ async fn sheets_sync(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Res
     if let Err(e) = sync_result {
         conn.last_status = crate::sheets::SyncStatus::Error(e);
     }
-    if st.store.put_sheets_connection(p.tenant, &conn).await.is_err() {
+    if st
+        .store
+        .put_sheets_connection(p.tenant, &conn)
+        .await
+        .is_err()
+    {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let body = SheetsStatusResponse {
@@ -2041,7 +2075,11 @@ async fn admin_links_list(
                 Err(StoreError::Unsupported) => return StatusCode::NOT_IMPLEMENTED.into_response(),
                 Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
             },
-            None => match st.store.list_links(prin.tenant, p.after, limit, tag, folder).await {
+            None => match st
+                .store
+                .list_links(prin.tenant, p.after, limit, tag, folder)
+                .await
+            {
                 Ok(l) => l,
                 Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
             },
@@ -2053,10 +2091,11 @@ async fn admin_links_list(
         };
         (links, next)
     };
-    let alias_map: std::collections::HashMap<u64, String> = match st.store.list_aliases(prin.tenant).await {
-        Ok(pairs) => pairs.into_iter().map(|(a, id)| (id, a)).collect(),
-        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    };
+    let alias_map: std::collections::HashMap<u64, String> =
+        match st.store.list_aliases(prin.tenant).await {
+            Ok(pairs) => pairs.into_iter().map(|(a, id)| (id, a)).collect(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
     // Fetch health for just this page's ids (not the whole table).
     let page_ids: Vec<u64> = links.iter().map(|(id, _)| *id).collect();
     let health_map: std::collections::HashMap<u64, LinkHealth> =
@@ -2144,7 +2183,11 @@ async fn resolve_for_admin(
 ) -> Result<Option<(u64, Option<String>)>, StoreError> {
     match codec::from_base62(code) {
         Some(c) if c <= permute::MAX_ID => Ok(Some((permute::decode(c, st.key), None))),
-        _ => match st.store.get_alias(crate::tenant::DEFAULT_TENANT, code).await? {
+        _ => match st
+            .store
+            .get_alias(crate::tenant::DEFAULT_TENANT, code)
+            .await?
+        {
             Some(id) => Ok(Some((id, Some(code.to_string())))),
             None => Ok(None),
         },
@@ -2373,7 +2416,12 @@ async fn admin_link_patch(
         ),
     };
     let rows = st.webhooks.lifecycle_deliveries(&ev).await;
-    if st.store.put_link_tx(p.tenant, id, &rec, &rows).await.is_err() {
+    if st
+        .store
+        .put_link_tx(p.tenant, id, &rec, &rows)
+        .await
+        .is_err()
+    {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     st.cache.invalidate(id).await;
@@ -2437,7 +2485,11 @@ async fn admin_webhooks_list(State(st): State<Arc<AppState>>, headers: HeaderMap
 /// Serves a stored well-known document as `application/json`. Public, no auth.
 /// `Some(body)` -> 200 verbatim; `None` -> 404; store error -> 503.
 async fn serve_wellknown(st: &AppState, name: &str) -> Response {
-    match st.store.get_wellknown(crate::tenant::DEFAULT_TENANT, name).await {
+    match st
+        .store
+        .get_wellknown(crate::tenant::DEFAULT_TENANT, name)
+        .await
+    {
         Ok(Some(body)) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -3262,7 +3314,10 @@ mod tests {
             created: 0,
             tenant_id: DEFAULT_TENANT,
         };
-        st.store.put_api_token(DEFAULT_TENANT, &token).await.unwrap();
+        st.store
+            .put_api_token(DEFAULT_TENANT, &token)
+            .await
+            .unwrap();
         let mut ht = GuardHeaders::new();
         ht.insert("x-admin-token", plaintext.parse().unwrap());
 

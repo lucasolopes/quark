@@ -30,10 +30,15 @@ async fn seed_links(s: &PostgresStore, links: &[(&str, Option<&str>)]) -> Vec<u6
         };
         match alias {
             Some(a) => {
-                assert!(s.put_alias_and_link(quark::tenant::DEFAULT_TENANT, a, id, &rec).await.unwrap());
+                assert!(s
+                    .put_alias_and_link(quark::tenant::DEFAULT_TENANT, a, id, &rec)
+                    .await
+                    .unwrap());
             }
             None => {
-                s.put_link(quark::tenant::DEFAULT_TENANT, id, &rec).await.unwrap();
+                s.put_link(quark::tenant::DEFAULT_TENANT, id, &rec)
+                    .await
+                    .unwrap();
             }
         }
         ids.push(id);
@@ -156,7 +161,14 @@ async fn search_keyset_pagination() {
     assert_eq!(page1.len(), 2);
     let after = page1.last().unwrap().0;
     let page2 = store
-        .search_links(quark::tenant::DEFAULT_TENANT, "alfa", Some(after), 2, None, None)
+        .search_links(
+            quark::tenant::DEFAULT_TENANT,
+            "alfa",
+            Some(after),
+            2,
+            None,
+            None,
+        )
         .await
         .unwrap();
     assert!(
