@@ -245,7 +245,7 @@ async fn main() {
     let sheets_config = quark::sheets::SheetsConfig::from_env();
     let sheets_api: std::sync::Arc<dyn quark::sheets::client::SheetsApi> =
         std::sync::Arc::new(quark::sheets::client::GoogleSheetsApi {
-            client: reqwest::Client::new(),
+            client: quark::sheets::client::http_client(),
         });
     match &sheets_config {
         Some(cfg) => match cfg.sync_secs {
@@ -313,16 +313,19 @@ async fn main() {
     // like the link checker so it is safe on every replica; on the single-node
     // LMDB backend the lease is always granted. Never logs the token.
     if let (Some(cfg), Some(api)) = (state.sheets.clone(), state.sheets_api.clone()) {
-        if let Some(secs) = cfg.sync_secs {
+        // The scheduled sync has no request to read a Host from, so it needs
+        // QUARK_PUBLIC_HOST to build correct short URLs. Without it, skip the
+        // schedule (on-demand sync still works, using the request Host) rather
+        // than write "https://localhost/<code>" links into the sheet.
+        if cfg.sync_secs.is_some() && state.public_host.is_none() {
+            eprintln!(
+                "sheets sync: scheduled sync disabled (set QUARK_PUBLIC_HOST so short URLs are correct; on-demand sync still works)"
+            );
+        }
+        if let (Some(secs), Some(public_host)) = (cfg.sync_secs, state.public_host.clone()) {
             let store = state.store.clone();
             let key = state.key;
-            let base_url = format!(
-                "https://{}",
-                state
-                    .public_host
-                    .clone()
-                    .unwrap_or_else(|| "localhost".to_string())
-            );
+            let base_url = format!("https://{public_host}");
             // Per-process holder id for the sync lease (mirrors the health checker).
             let mut hb = [0u8; 8];
             let _ = getrandom::fill(&mut hb);
@@ -332,7 +335,7 @@ async fn main() {
             );
             let ttl = secs.saturating_mul(2);
             tokio::spawn(async move {
-                let client = reqwest::Client::new();
+                let client = quark::sheets::client::http_client();
                 let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
                 loop {
                     ticker.tick().await;

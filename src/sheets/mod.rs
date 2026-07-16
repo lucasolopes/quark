@@ -175,6 +175,11 @@ pub async fn refresh_access_token(
 const SPREADSHEET_TITLE: &str = "quark links";
 /// Page size when reading the catalog for a sync.
 const SYNC_PAGE: usize = 500;
+/// Upper bound on links written in a single sync. A snapshot is one `values`
+/// write, so a very large catalog risks an oversized request and heap. Beyond
+/// this the sync fails with a clear status rather than OOMing or getting a
+/// silent partial sheet; a larger catalog wants a chunked/streaming sync.
+const MAX_SYNC_LINKS: usize = 100_000;
 
 /// Builds the spreadsheet rows from the link catalog: a header row plus one row
 /// per link. `visits` is `id -> visit count` (the same source the panel uses;
@@ -252,6 +257,11 @@ pub async fn sync(
             after = Some(*last_id);
         }
         links.extend(page);
+        if links.len() > MAX_SYNC_LINKS {
+            return Err(format!(
+                "catalog exceeds {MAX_SYNC_LINKS} links; snapshot sync not supported at this size"
+            ));
+        }
         if got < SYNC_PAGE {
             break;
         }

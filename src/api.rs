@@ -1555,13 +1555,17 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
         .into_response()
 }
 
+/// Name of the short-lived cookie holding the signed Sheets OAuth `state`,
+/// binding the connect flow to the browser that started it (anti login-CSRF).
+const SHEETS_STATE_COOKIE: &str = "qk_sheets_state";
+
 /// `GET /admin/integrations/sheets/connect`: begin the Google OAuth connect.
 /// Called by the panel via `fetch` with its admin credential, so it returns the
-/// Google consent URL as JSON (rather than a 303) and sets a signed `state`
-/// cookie; the panel then navigates the browser to that URL. Returning JSON lets
-/// a token-authenticated operator start the flow (a top-level redirect could not
-/// carry the `x-admin-token` header). Returns the admin-surface not-found status
-/// when the connector is not configured.
+/// Google consent URL as JSON (rather than a 303) and sets a signed, short-lived
+/// `state` cookie; the panel then navigates the browser to that URL. Returning
+/// JSON lets a token-authenticated operator start the flow (a top-level redirect
+/// could not carry the `x-admin-token` header). Returns the admin-surface
+/// not-found status when the connector is not configured.
 async fn sheets_connect(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
         return status.into_response();
@@ -1569,17 +1573,28 @@ async fn sheets_connect(State(st): State<Arc<AppState>>, headers: HeaderMap) -> 
     let Some(cfg) = st.sheets.as_ref() else {
         return sheets_off_status(&st).into_response();
     };
-    // The `state` sent to Google is itself HMAC-signed with the server key, so the
-    // callback can verify it WITHOUT a cookie. This avoids the cross-site cookie
-    // problem (a split-origin panel cannot set a first-party cookie on the API),
-    // and is safe here: only an authenticated admin can reach this route to obtain
-    // a signed state, so an attacker cannot forge a connect flow.
-    let state =
-        crate::oidc::sign_login_state(&st.signing_key, &crate::oidc::random_token(), "", "");
+    // The random `state` goes to Google in the URL; a signed copy is ALSO stored
+    // in a short-lived HttpOnly cookie. The callback requires both to match, so
+    // the state is bound to THIS browser and cannot be replayed by an attacker who
+    // merely observes a leaked `state` value (login-CSRF). This is the same
+    // double-submit binding the OIDC login flow uses.
+    let state = crate::oidc::random_token();
+    let signed = crate::oidc::sign_login_state(&st.signing_key, &state, "", "");
     let url = crate::sheets::connect_url(cfg, &state);
+    let secure = if request_is_https(&headers) {
+        "; Secure"
+    } else {
+        ""
+    };
+    let cookie = format!(
+        "{SHEETS_STATE_COOKIE}={signed}; Max-Age=600; Path=/; HttpOnly; SameSite=Lax{secure}"
+    );
     (
         StatusCode::OK,
-        [(header::CACHE_CONTROL, "no-store".to_string())],
+        [
+            (header::SET_COOKIE, cookie),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
         Json(serde_json::json!({ "url": url })),
     )
         .into_response()
@@ -1619,24 +1634,29 @@ fn email_from_id_token(id_token: Option<&str>) -> String {
 async fn sheets_callback(
     State(st): State<Arc<AppState>>,
     Query(params): Query<SheetsCallbackParams>,
+    headers: HeaderMap,
 ) -> Response {
     // No `admin_guard` here: this is a top-level browser redirect from Google and
-    // carries no admin credential. It is authorized by the signed `state` echoed
-    // back in the query, which only an authenticated admin could have obtained at
-    // `/connect` (the HMAC is the server signing key). No cookie is involved, so
-    // the flow works even when the panel and the API are on different origins.
+    // carries no admin credential. It is authorized by a double-submit check on
+    // the `state`: the signed cookie set at `/connect` (only an authenticated
+    // admin gets one) must decode to the same random value the query echoes back.
+    // The cookie binds the flow to THIS browser, so a leaked/observed `state`
+    // cannot be replayed by an attacker to inject their own Google account.
     let Some(cfg) = st.sheets.as_ref() else {
         return sheets_off_status(&st).into_response();
     };
     if params.error.is_some() {
         return (StatusCode::UNAUTHORIZED, "connect was denied at Google").into_response();
     }
-    let valid_state = params
-        .state
-        .as_deref()
-        .and_then(|s| crate::oidc::verify_login_state(&st.signing_key, s))
-        .is_some();
-    if !valid_state {
+    // The cookie holds the signed state; the query echoes the raw random value.
+    let cookie_state = cookie_value(&headers, SHEETS_STATE_COOKIE)
+        .and_then(|c| crate::oidc::verify_login_state(&st.signing_key, c))
+        .map(|(state, _, _)| state);
+    let matches = match (cookie_state.as_deref(), params.state.as_deref()) {
+        (Some(a), Some(b)) => constant_time_eq(a.as_bytes(), b.as_bytes()),
+        _ => false,
+    };
+    if !matches {
         return (StatusCode::BAD_REQUEST, "missing or invalid connect state").into_response();
     }
     let Some(code) = params.code else {
@@ -1667,10 +1687,12 @@ async fn sheets_callback(
     if st.store.put_sheets_connection(&conn).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    let clear = format!("{SHEETS_STATE_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
     (
         StatusCode::SEE_OTHER,
         [
             (header::LOCATION, "/".to_string()),
+            (header::SET_COOKIE, clear),
             (header::CACHE_CONTROL, "no-store".to_string()),
         ],
     )
@@ -1738,6 +1760,16 @@ async fn sheets_sync(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Res
     let (Some(cfg), Some(api)) = (st.sheets.as_ref(), st.sheets_api.as_ref()) else {
         return sheets_off_status(&st).into_response();
     };
+    // Take the same sync lease the scheduled task uses, so an on-demand "Sync now"
+    // cannot race a scheduled tick into creating two spreadsheets. A short holder
+    // id is enough (LMDB always grants; Postgres serializes across replicas). If
+    // another sync holds it, tell the caller to retry rather than double-run.
+    let holder = format!("sheets_ondemand_{}", crate::oidc::random_token());
+    match st.store.try_acquire_sheets_lease(&holder, 120).await {
+        Ok(true) => {}
+        Ok(false) => return (StatusCode::CONFLICT, "a sync is already running").into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
     let mut conn = match st.store.get_sheets_connection().await {
         Ok(Some(c)) => c,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),

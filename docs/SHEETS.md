@@ -25,6 +25,10 @@ The sheet is a mirror, not a two-way sync: quark writes, it never reads your
 edits back. Rename the file or move it wherever you like in Drive; quark keeps
 writing to the same file by its id.
 
+Each sync writes the whole catalog as one snapshot, which is capped at 100,000
+links. A larger catalog fails the sync with a clear status rather than writing a
+partial sheet; that scale wants a chunked export, which is not built yet.
+
 ## The `drive.file` scope, and why
 
 The only Drive scope quark requests is
@@ -41,10 +45,10 @@ show which Google account is connected; it stores only the email address.
 flowchart TD
     subgraph Connect
       A[operator clicks Connect Google Sheets] --> B[GET /admin/integrations/sheets/connect]
-      B -->|returns consent URL with a signed state| P[panel navigates browser to Google]
+      B -->|returns consent URL, sets signed state cookie| P[panel navigates browser to Google]
       P --> G[Google consent, scope openid email drive.file]
       G -->|code| C[GET /admin/integrations/sheets/callback]
-      C --> X[verify signed state, exchange code for tokens]
+      C --> X[verify state cookie matches, exchange code for tokens]
       X --> S[store refresh token server-side, save email]
     end
     subgraph Sync
@@ -63,9 +67,10 @@ access, so Google returns a long-lived refresh token. quark stores that refresh
 token server-side and uses it to mint a short-lived access token for each sync.
 The connect endpoint returns the consent URL as JSON (rather than redirecting) so
 a token-authenticated operator can start the flow; the panel then sends the
-browser to Google. The `state` sent to Google is HMAC-signed with the server key,
-so the callback verifies it directly (no cookie), which keeps the flow working
-even when the panel and the API are on different origins.
+browser to Google. A random `state` goes to Google in the URL and a signed copy
+is stored in a short-lived `HttpOnly` cookie; the callback requires both to
+match, binding the flow to the browser that started it so a leaked `state` cannot
+be replayed to inject another Google account.
 
 ## On-demand and scheduled sync
 

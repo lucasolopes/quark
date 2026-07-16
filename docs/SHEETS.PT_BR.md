@@ -25,6 +25,11 @@ A planilha é um espelho, não uma sincronização de mão dupla: o quark escrev
 nunca lê as suas edições de volta. Renomeie o arquivo ou mova pra onde quiser no
 Drive; o quark continua escrevendo no mesmo arquivo pelo id.
 
+Cada sincronização escreve o catálogo inteiro como um snapshot, limitado a
+100.000 links. Um catálogo maior falha a sincronização com um status claro em vez
+de escrever uma planilha parcial; essa escala pede um export em blocos, que ainda
+não foi construído.
+
 ## O escopo `drive.file`, e por quê
 
 O único escopo do Drive que o quark pede é
@@ -41,10 +46,10 @@ ser dono da planilha e atualizá-la. O quark também pede os escopos básicos
 flowchart TD
     subgraph Conectar
       A[operador clica em Conectar o Google Sheets] --> B[GET /admin/integrations/sheets/connect]
-      B -->|retorna a URL de consentimento com um state assinado| P[o painel navega o browser pro Google]
+      B -->|retorna a URL de consentimento, seta o cookie de state assinado| P[o painel navega o browser pro Google]
       P --> G[consentimento do Google, escopo openid email drive.file]
       G -->|code| C[GET /admin/integrations/sheets/callback]
-      C --> X[verifica o state assinado, troca o code por tokens]
+      C --> X[verifica que o cookie de state bate, troca o code por tokens]
       X --> S[guarda o refresh token no servidor, salva o email]
     end
     subgraph Sincronizar
@@ -63,10 +68,11 @@ offline, então o Google devolve um refresh token de vida longa. O quark guarda
 esse refresh token no servidor e o usa pra gerar um access token de curta duração
 a cada sincronização. O endpoint de connect devolve a URL de consentimento como
 JSON (em vez de redirecionar) pra que um operador autenticado por token consiga
-iniciar o fluxo; o painel então manda o browser pro Google. O `state` enviado ao
-Google é assinado por HMAC com a chave do servidor, então o callback o verifica
-direto (sem cookie), o que mantém o fluxo funcionando mesmo quando o painel e a
-API estão em origens diferentes.
+iniciar o fluxo; o painel então manda o browser pro Google. Um `state` aleatório
+vai pro Google na URL e uma cópia assinada fica num cookie `HttpOnly` de vida
+curta; o callback exige que os dois batam, amarrando o fluxo ao browser que o
+começou, pra que um `state` vazado não possa ser reusado pra injetar outra conta
+Google.
 
 ## Sincronização sob demanda e agendada
 

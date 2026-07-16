@@ -27,6 +27,15 @@ pub struct GoogleSheetsApi {
     pub client: reqwest::Client,
 }
 
+/// Builds the HTTP client for Google API calls with a request timeout, so a
+/// stalled connection cannot hang a sync (and hold the sync lease) forever.
+pub fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("reqwest client builds")
+}
+
 const SHEETS_BASE: &str = "https://sheets.googleapis.com/v4/spreadsheets";
 
 #[async_trait]

@@ -3109,3 +3109,74 @@ async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+// Regression for the connect-state binding: /connect sets a signed state cookie,
+// and the callback refuses a state that is not backed by the matching cookie
+// (anti login-CSRF: a leaked/echoed state alone must not connect an account).
+#[tokio::test]
+async fn sheets_callback_requires_the_state_cookie() {
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let cfg = quark::sheets::SheetsConfig::from_parts(
+        "cid",
+        "sec",
+        "https://h/admin/integrations/sheets/callback",
+        None,
+    )
+    .unwrap();
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: Some(Arc::new(cfg)),
+        sheets_api: None,
+        oidc_configured: true,
+        cache,
+        store: store.clone(),
+        key: 0x1234,
+        signing_key: [0u8; 32],
+        analytics_tx: tx,
+        sink,
+        admin_token: Some("secret".to_string()),
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+    });
+    let app = router(state);
+
+    // Connect (admin-authed) returns the consent URL and sets the state cookie.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/integrations/sheets/connect")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let set_cookie = resp
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .expect("connect sets a state cookie")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(set_cookie.contains("qk_sheets_state="));
+
+    // A callback carrying a forged/echoed state but NO matching cookie is refused
+    // (400), so it never reaches the token exchange and cannot store a connection.
+    let resp = app
+        .oneshot(
+            Request::get("/admin/integrations/sheets/callback?code=x&state=anything")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(store.get_sheets_connection().await.unwrap().is_none());
+}
