@@ -1435,6 +1435,49 @@ async fn create_with_token_when_configured_ok() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+/// P1b end-to-end: an admin-gated create (through `require_admin_for_create`
+/// -> `admin_guard` -> `Principal`) followed by a plain read of the same
+/// code. This is the behavior-preserving assertion for the whole P1b auth
+/// chain: the write lands under the resolved `Principal`'s tenant
+/// (`DEFAULT_TENANT` in P1b) and the redirect read finds it there, exactly
+/// like the pre-P1b (untenanted) shortener did.
+#[tokio::test]
+async fn admin_gated_create_then_link_is_readable_default_tenant() {
+    let app = app_admin("secret").await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(r#"{"url":"https://example.com/p1b-e2e"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    let resp = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    assert_eq!(
+        resp.headers()["location"],
+        "https://example.com/p1b-e2e"
+    );
+}
+
 /// Builds an app like `app()` but returns the analytics receiver too, so
 /// tests can inspect the `ClickEvent` (in particular `variant`) that the
 /// redirect handler sends.
