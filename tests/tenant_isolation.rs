@@ -350,7 +350,10 @@ async fn pg_token_and_session_carry_tenant_and_user() {
 
     let sess = quark::auth::Session {
         token_hash: "s1-pg".into(), subject: "sub".into(), display: "d".into(),
-        scopes: vec![quark::auth::Scope::Full], created: 0, expires: u64::MAX,
+        // i64::MAX (far future), not u64::MAX: Postgres stores `expires` as
+        // BIGINT (i64), so u64::MAX would wrap to -1 and fail the `expires > now`
+        // filter. Production expiries are now()+TTL, always well within i64.
+        scopes: vec![quark::auth::Scope::Full], created: 0, expires: i64::MAX as u64,
         tenant_id: t, user_id: 7,
     };
     store.put_session(t, &sess).await.unwrap();

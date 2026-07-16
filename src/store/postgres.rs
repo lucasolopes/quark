@@ -448,7 +448,7 @@ impl PostgresStore {
                     JOIN pg_class c ON c.oid = i.indrelid \
                     WHERE c.relname = 'sheets_connection' AND i.indisprimary \
                       AND ( \
-                        SELECT array_agg(a.attname ORDER BY a.attname) \
+                        SELECT array_agg(a.attname::text ORDER BY a.attname) \
                         FROM pg_attribute a \
                         WHERE a.attrelid = c.oid AND a.attnum = ANY(i.indkey) \
                       ) = ARRAY['tenant_id'] \
@@ -472,7 +472,7 @@ impl PostgresStore {
                     JOIN pg_class c ON c.oid = i.indrelid \
                     WHERE c.relname = 'wellknown_documents' AND i.indisprimary \
                       AND ( \
-                        SELECT array_agg(a.attname ORDER BY a.attname) \
+                        SELECT array_agg(a.attname::text ORDER BY a.attname) \
                         FROM pg_attribute a \
                         WHERE a.attrelid = c.oid AND a.attnum = ANY(i.indkey) \
                       ) = ARRAY['name', 'tenant_id'] \
