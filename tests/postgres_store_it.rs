@@ -705,6 +705,45 @@ async fn list_broken_link_ids_pg() {
 
 #[tokio::test]
 #[serial]
+async fn sheets_connection_round_trips_pg() {
+    let Some(s) = fresh().await else { return };
+    assert!(s.get_sheets_connection().await.unwrap().is_none());
+    let c = quark::sheets::SheetsConnection {
+        refresh_token: "rt".into(),
+        email: "me@x.com".into(),
+        spreadsheet_id: Some("s1".into()),
+        last_sync: Some(5),
+        last_status: quark::sheets::SyncStatus::Ok,
+    };
+    s.put_sheets_connection(&c).await.unwrap();
+    let got = s.get_sheets_connection().await.unwrap().unwrap();
+    assert_eq!(got.email, "me@x.com");
+    assert_eq!(got.spreadsheet_id.as_deref(), Some("s1"));
+    // Upsert replaces the single row.
+    let c2 = quark::sheets::SheetsConnection {
+        email: "other@x.com".into(),
+        ..c.clone()
+    };
+    s.put_sheets_connection(&c2).await.unwrap();
+    let got = s.get_sheets_connection().await.unwrap().unwrap();
+    assert_eq!(got.email, "other@x.com");
+    s.delete_sheets_connection().await.unwrap();
+    assert!(s.get_sheets_connection().await.unwrap().is_none());
+}
+
+#[tokio::test]
+#[serial]
+async fn sheets_lease_single_holder_and_renew_pg() {
+    let Some(s) = fresh().await else { return };
+    // Mirrors the health lease: first holder acquires; a different holder is
+    // refused while it is valid; the holder can renew.
+    assert!(s.try_acquire_sheets_lease("node-a", 60).await.unwrap());
+    assert!(!s.try_acquire_sheets_lease("node-b", 60).await.unwrap());
+    assert!(s.try_acquire_sheets_lease("node-a", 60).await.unwrap());
+}
+
+#[tokio::test]
+#[serial]
 async fn session_round_trip_and_gc_pg() {
     let Some(s) = fresh().await else { return };
     let sess = quark::auth::Session {

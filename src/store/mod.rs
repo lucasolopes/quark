@@ -407,6 +407,30 @@ pub trait Store: Send + Sync + 'static {
         holder: &str,
         ttl_secs: u64,
     ) -> Result<bool, StoreError>;
+    /// Persists the single Sheets connection (OSS is single-tenant), replacing
+    /// any existing one. The `refresh_token` inside is stored server-side and is
+    /// never surfaced in an API response.
+    async fn put_sheets_connection(
+        &self,
+        c: &crate::sheets::SheetsConnection,
+    ) -> Result<(), StoreError>;
+    /// Reads the single Sheets connection, or `None` when the connector has
+    /// never been connected (or was disconnected).
+    async fn get_sheets_connection(
+        &self,
+    ) -> Result<Option<crate::sheets::SheetsConnection>, StoreError>;
+    /// Removes the single Sheets connection (disconnect); a missing connection
+    /// is not an error.
+    async fn delete_sheets_connection(&self) -> Result<(), StoreError>;
+    /// Tries to acquire (or renew) the single scheduled-sync lease for
+    /// `ttl_secs`, identified by `holder`, mirroring `try_acquire_health_lease`:
+    /// only one node runs the scheduled sync at a time; the single-node LMDB
+    /// backend always returns `true`.
+    async fn try_acquire_sheets_lease(
+        &self,
+        holder: &str,
+        ttl_secs: u64,
+    ) -> Result<bool, StoreError>;
     async fn next_pixel_id(&self) -> Result<u64, StoreError>;
     async fn get_pixel(&self, id: u64) -> Result<Option<PixelConfig>, StoreError>;
     async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError>;

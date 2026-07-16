@@ -142,3 +142,20 @@ export interface CreatePixelRequest {
 
 /** The two well-known app-association document names the backend accepts. */
 export type WellknownName = "apple-app-site-association" | "assetlinks.json";
+
+/**
+ * Status of the Google Sheets connector (`GET /admin/integrations/sheets/status`).
+ * The refresh token is never part of this shape — it stays server-side.
+ * `unavailable` is a panel-only marker (never sent by the server): the status
+ * endpoint returns the admin not-found status (401/404) when the connector is
+ * off, and `api.sheetsStatus` maps that to `{ connected: false, unavailable: true }`
+ * so the Extensions card can render a neutral fallback instead of erroring.
+ */
+export interface SheetsStatus {
+  connected: boolean;
+  email?: string;
+  spreadsheet_url?: string;
+  last_sync?: number;
+  last_status: { state: "never" | "ok" | "error"; detail?: string };
+  unavailable?: boolean;
+}

@@ -1,5 +1,6 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
+import { configDefaults } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
@@ -16,6 +17,9 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: './src/test-setup.ts',
+    // Playwright specs live in ./e2e and must not be collected by Vitest (they
+    // use @playwright/test, not the Vitest runner).
+    exclude: [...configDefaults.exclude, 'e2e/**'],
     // Multi-step userEvent flows (dialogs with typing + clicks) can exceed the
     // 5s default on a loaded machine; give them headroom so the suite is not
     // flaky under load.

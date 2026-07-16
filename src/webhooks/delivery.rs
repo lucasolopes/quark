@@ -937,6 +937,27 @@ mod tests {
         ) -> Result<bool, StoreError> {
             unimplemented!()
         }
+        async fn put_sheets_connection(
+            &self,
+            _c: &crate::sheets::SheetsConnection,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn get_sheets_connection(
+            &self,
+        ) -> Result<Option<crate::sheets::SheetsConnection>, StoreError> {
+            unimplemented!()
+        }
+        async fn delete_sheets_connection(&self) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn try_acquire_sheets_lease(
+            &self,
+            _holder: &str,
+            _ttl_secs: u64,
+        ) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
         async fn put_session(&self, _session: &crate::auth::Session) -> Result<(), StoreError> {
             unimplemented!()
         }

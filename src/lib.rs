@@ -12,6 +12,7 @@ pub mod oidc;
 pub mod password;
 pub mod permute;
 pub mod pixel;
+pub mod sheets;
 pub mod store;
 pub mod webhooks;
 

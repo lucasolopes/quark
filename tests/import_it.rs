@@ -24,6 +24,8 @@ async fn app_admin(token: &str) -> axum::Router {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store,
@@ -48,6 +50,8 @@ async fn app_no_admin() -> axum::Router {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store,

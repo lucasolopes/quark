@@ -32,6 +32,8 @@ async fn app_admin_with_dispatcher(
     ));
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store,
@@ -71,6 +73,8 @@ async fn app_admin_with_dispatcher_clicked_subscribed(
     ));
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store,

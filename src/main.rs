@@ -239,6 +239,25 @@ async fn main() {
         }
     };
 
+    // Google Sheets connector (opt-in via QUARK_SHEETS_CLIENT_ID/_SECRET/
+    // _REDIRECT_URL). The HTTP seam is always built; the config gates whether the
+    // routes and the scheduled sync do anything.
+    let sheets_config = quark::sheets::SheetsConfig::from_env();
+    let sheets_api: std::sync::Arc<dyn quark::sheets::client::SheetsApi> =
+        std::sync::Arc::new(quark::sheets::client::GoogleSheetsApi {
+            client: reqwest::Client::new(),
+        });
+    match &sheets_config {
+        Some(cfg) => match cfg.sync_secs {
+            Some(secs) => eprintln!("sheets sync: enabled (scheduled every {secs}s)"),
+            None => eprintln!("sheets sync: enabled (on demand)"),
+        },
+        None => eprintln!(
+            "sheets sync: disabled (set QUARK_SHEETS_CLIENT_ID/_SECRET/_REDIRECT_URL to enable)"
+        ),
+    }
+    let sheets = sheets_config.map(Arc::new);
+
     let state = Arc::new(AppState {
         cache,
         store,
@@ -254,6 +273,8 @@ async fn main() {
         webhooks,
         oidc,
         oidc_configured,
+        sheets,
+        sheets_api: Some(sheets_api),
     });
     match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {
@@ -286,6 +307,81 @@ async fn main() {
             );
         }
         None => eprintln!("link health checker: disabled (set QUARK_HEALTH_CHECK_SECS to enable)"),
+    }
+
+    // Scheduled Sheets sync (opt-in via QUARK_SHEETS_SYNC_SECS). Lease-coordinated
+    // like the link checker so it is safe on every replica; on the single-node
+    // LMDB backend the lease is always granted. Never logs the token.
+    if let (Some(cfg), Some(api)) = (state.sheets.clone(), state.sheets_api.clone()) {
+        if let Some(secs) = cfg.sync_secs {
+            let store = state.store.clone();
+            let key = state.key;
+            let base_url = format!(
+                "https://{}",
+                state
+                    .public_host
+                    .clone()
+                    .unwrap_or_else(|| "localhost".to_string())
+            );
+            // Per-process holder id for the sync lease (mirrors the health checker).
+            let mut hb = [0u8; 8];
+            let _ = getrandom::fill(&mut hb);
+            let holder: String = format!(
+                "sheets_{}",
+                hb.iter().map(|b| format!("{b:02x}")).collect::<String>()
+            );
+            let ttl = secs.saturating_mul(2);
+            tokio::spawn(async move {
+                let client = reqwest::Client::new();
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
+                loop {
+                    ticker.tick().await;
+                    if !store
+                        .try_acquire_sheets_lease(&holder, ttl)
+                        .await
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
+                    let Ok(Some(mut conn)) = store.get_sheets_connection().await else {
+                        continue;
+                    };
+                    let outcome = match quark::sheets::refresh_access_token(
+                        &client,
+                        &cfg,
+                        &conn.refresh_token,
+                    )
+                    .await
+                    {
+                        Ok(token) => {
+                            quark::sheets::sync(
+                                &store,
+                                api.as_ref(),
+                                key,
+                                &base_url,
+                                &mut conn,
+                                &token,
+                                quark::now(),
+                            )
+                            .await
+                        }
+                        Err(e) => Err(e),
+                    };
+                    if let Err(e) = &outcome {
+                        conn.last_status = quark::sheets::SyncStatus::Error(e.clone());
+                        eprintln!("{}", serde_json::json!({ "sheets_sync_error": e }));
+                    } else {
+                        eprintln!("{}", serde_json::json!({ "sheets_sync": "ok" }));
+                    }
+                    if let Err(e) = store.put_sheets_connection(&conn).await {
+                        eprintln!(
+                            "{}",
+                            serde_json::json!({ "sheets_sync_persist_error": e.to_string() })
+                        );
+                    }
+                }
+            });
+        }
     }
 
     // Garbage-collect expired OIDC login sessions hourly (only when OIDC is on).

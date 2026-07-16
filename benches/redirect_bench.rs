@@ -64,6 +64,8 @@ fn bench(c: &mut Criterion) {
         );
         let state = Arc::new(AppState {
             oidc: None,
+            sheets: None,
+            sheets_api: None,
             oidc_configured: false,
             cache,
             store: store.clone(),

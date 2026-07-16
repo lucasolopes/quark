@@ -84,3 +84,23 @@ async fn put_alias_and_link_is_atomic() {
     assert_eq!(store.get_alias("promo").await.unwrap(), Some(5));
     assert!(store.get_link(9).await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn sheets_connection_round_trips() {
+    let dir = tmp();
+    let store = open_store(dir.path()).await.unwrap();
+    assert!(store.get_sheets_connection().await.unwrap().is_none());
+    let c = quark::sheets::SheetsConnection {
+        refresh_token: "rt".into(),
+        email: "me@x.com".into(),
+        spreadsheet_id: Some("s1".into()),
+        last_sync: Some(5),
+        last_status: quark::sheets::SyncStatus::Ok,
+    };
+    store.put_sheets_connection(&c).await.unwrap();
+    let got = store.get_sheets_connection().await.unwrap().unwrap();
+    assert_eq!(got.email, "me@x.com");
+    assert_eq!(got.spreadsheet_id.as_deref(), Some("s1"));
+    store.delete_sheets_connection().await.unwrap();
+    assert!(store.get_sheets_connection().await.unwrap().is_none());
+}

@@ -8,6 +8,7 @@ const TAGS_QUERY_KEY = ["tags"];
 const FOLDERS_QUERY_KEY = ["folders"];
 const TOKENS_QUERY_KEY = ["tokens"];
 const PIXELS_QUERY_KEY = ["pixels"];
+const SHEETS_STATUS_QUERY_KEY = ["sheets", "status"];
 
 /**
  * The application's single TanStack Query client. `retry: false` because a
@@ -239,6 +240,38 @@ export function useDeletePixel() {
   return useMutation({
     mutationFn: (id: number) => api.deletePixel(id),
     onSuccess: () => { void client.invalidateQueries({ queryKey: PIXELS_QUERY_KEY }); },
+  });
+}
+
+/**
+ * Google Sheets connector status, for the Extensions card. `retry: false` so a
+ * connector-off response (which `api.sheetsStatus` maps to `unavailable`, not an
+ * error) resolves at once and the card never spins. `api.sheetsStatus` never
+ * throws on 401/404, so this query does not hit the error boundary.
+ */
+export function useSheetsStatus() {
+  return useQuery({
+    queryKey: SHEETS_STATUS_QUERY_KEY,
+    queryFn: () => api.sheetsStatus(),
+    retry: false,
+  });
+}
+
+/** Runs one on-demand Sheets sync; on success invalidates the status query so the last-sync time and state refresh. */
+export function useSheetsSync() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.sheetsSync(),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: SHEETS_STATUS_QUERY_KEY }); },
+  });
+}
+
+/** Disconnects the Sheets connector; on success invalidates the status query so the card falls back to the connect state. */
+export function useSheetsDisconnect() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.sheetsDisconnect(),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: SHEETS_STATUS_QUERY_KEY }); },
   });
 }
 

@@ -19,7 +19,7 @@ const LOCAL_BITS: u32 = 40 - NODE_BITS;
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1;
 
 /// Number of named LMDB sub-databases opened in the environment.
-const MAX_DBS: u32 = 12;
+const MAX_DBS: u32 = 13;
 /// Virtual address space (mmap) reserved for the LMDB environment.
 const MAP_SIZE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 
@@ -64,6 +64,7 @@ pub struct LmdbStore {
     wellknown: Database<Str, Str>,
     health: Database<BeU64, Bytes>,
     sessions: Database<Str, Bytes>,
+    sheets: Database<Str, Bytes>,
     node_id: Option<u8>,
 }
 
@@ -96,6 +97,7 @@ impl LmdbStore {
         let wellknown = env.create_database(&mut wtxn, Some("wellknown"))?;
         let health = env.create_database(&mut wtxn, Some("health"))?;
         let sessions = env.create_database(&mut wtxn, Some("sessions"))?;
+        let sheets = env.create_database(&mut wtxn, Some("sheets"))?;
         wtxn.commit()?;
         Ok(LmdbStore {
             env,
@@ -111,6 +113,7 @@ impl LmdbStore {
             wellknown,
             health,
             sessions,
+            sheets,
             node_id,
         })
     }
@@ -370,6 +373,43 @@ impl Store for LmdbStore {
         _ttl_secs: u64,
     ) -> Result<bool, StoreError> {
         // LMDB is single-node: there is only ever one checker.
+        Ok(true)
+    }
+
+    async fn put_sheets_connection(
+        &self,
+        c: &crate::sheets::SheetsConnection,
+    ) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec(c)?;
+        let mut wtxn = self.env.write_txn()?;
+        self.sheets.put(&mut wtxn, "connection", &bytes)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn get_sheets_connection(
+        &self,
+    ) -> Result<Option<crate::sheets::SheetsConnection>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        match self.sheets.get(&rtxn, "connection")? {
+            Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_sheets_connection(&self) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        self.sheets.delete(&mut wtxn, "connection")?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn try_acquire_sheets_lease(
+        &self,
+        _holder: &str,
+        _ttl_secs: u64,
+    ) -> Result<bool, StoreError> {
+        // LMDB is single-node: there is only ever one scheduled sync.
         Ok(true)
     }
 
