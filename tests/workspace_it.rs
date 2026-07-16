@@ -333,3 +333,89 @@ async fn workspace_switch_checks_membership() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+/// `GET /admin/me` (cloud): a fresh user with zero memberships gets
+/// `memberships: []` and `current_tenant: null` -- the signal the frontend
+/// uses to route to onboarding. After self-serving a workspace (making the
+/// caller Owner there), `/admin/me` lists that membership and `current_tenant`
+/// points at it.
+#[tokio::test]
+#[serial]
+async fn me_memberships() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_user_id, raw) = seed_session(&store, "me-memberships-subject").await;
+
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+
+    // Fresh user, zero memberships -> onboarding signal.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/me")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let me: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(me["authenticated"], true);
+    assert_eq!(me["memberships"], serde_json::json!([]));
+    assert_eq!(me["current_tenant"], serde_json::Value::Null);
+
+    // Self-serve a workspace -> caller becomes Owner there.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/tenants")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::from(
+                    r#"{"name":"Acme","slug":"me-memberships-acme"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let tenant: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let tenant_id = tenant["id"].as_u64().unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/me")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let me: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(me["current_tenant"], tenant_id);
+    let memberships = me["memberships"].as_array().unwrap();
+    assert_eq!(memberships.len(), 1);
+    assert_eq!(memberships[0]["tenant_id"], tenant_id);
+    assert_eq!(memberships[0]["name"], "Acme");
+    assert_eq!(memberships[0]["slug"], "me-memberships-acme");
+    assert_eq!(memberships[0]["role"], "owner");
+}

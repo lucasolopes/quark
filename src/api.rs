@@ -1648,11 +1648,35 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
     let oidc_enabled = st.oidc.is_some();
     if let Some(raw) = cookie_value(&headers, SESSION_COOKIE) {
         if let Ok(Some(session)) = st.store.get_session_by_hash(&hash_token(raw), now()).await {
+            let memberships = if st.multi_tenant {
+                let ms = st
+                    .store
+                    .list_memberships_for_user(session.user_id)
+                    .await
+                    .unwrap_or_default();
+                let mut out = Vec::new();
+                for m in ms {
+                    if let Ok(Some(t)) = st.store.get_tenant(m.tenant_id).await {
+                        out.push(serde_json::json!({
+                            "tenant_id": t.id.0,
+                            "name": t.name,
+                            "slug": t.slug,
+                            "role": m.role,
+                        }));
+                    }
+                }
+                out
+            } else {
+                Vec::new()
+            };
+            let current_tenant = st.multi_tenant.then_some(session.tenant_id.0);
             return Json(serde_json::json!({
                 "authenticated": true,
                 "display": session.display,
                 "scopes": session.scopes,
                 "oidc_enabled": oidc_enabled,
+                "memberships": memberships,
+                "current_tenant": current_tenant,
             }))
             .into_response();
         }
