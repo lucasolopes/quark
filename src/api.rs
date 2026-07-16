@@ -328,7 +328,7 @@ async fn require_admin_for_create(st: &AppState, headers: &HeaderMap) -> Result<
     if st.admin_token.is_none() && !st.oidc_configured {
         return Ok(());
     }
-    admin_guard(st, headers, Scope::LinksWrite).await
+    admin_guard(st, headers, Scope::LinksWrite).await.map(|_| ())
 }
 
 /// Reasons `create_link_core` can fail. The `create` handler and the
@@ -1230,15 +1230,16 @@ async fn stats(
     Path(code): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Analytics).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::Analytics).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     let id = match resolve_code(&st, &code).await {
         Ok(Some(id)) => id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    match st.store.get_link(crate::tenant::DEFAULT_TENANT, id).await {
+    match st.store.get_link(p.tenant, id).await {
         Ok(Some(_)) => {}
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -1254,10 +1255,22 @@ async fn stats(
     }
 }
 
-/// Authorizes an admin request against a required `Scope`: `Ok(())` if
+/// The authenticated caller behind an authorized admin request: which tenant
+/// its data access is scoped to, the backing user (when known — OIDC only),
+/// and the scopes the credential carries. Resolved by `admin_guard` and
+/// threaded into handlers so tenant-owned reads/writes go through the
+/// principal's tenant rather than a hardcoded default.
+#[derive(Debug)]
+pub struct Principal {
+    pub tenant: crate::tenant::TenantId,
+    pub user_id: Option<u64>,
+    pub scopes: Vec<Scope>,
+}
+
+/// Authorizes an admin request against a required `Scope`: `Ok(Principal)` if
 /// authorized; `Err(status)` otherwise. Returns `StatusCode` (not `Response`)
-/// to stay `Copy`/small — avoids clippy's `result_large_err` lint, which
-/// would trigger with `Response` in the `Err`.
+/// in the error to stay `Copy`/small — avoids clippy's `result_large_err`
+/// lint, which would trigger with `Response` in the `Err`.
 ///
 /// Order (exact status contract, must not regress the env-token-only path):
 /// 1. The env `QUARK_ADMIN_TOKEN`, compared in constant time, is always
@@ -1274,7 +1287,7 @@ async fn admin_guard(
     st: &AppState,
     headers: &HeaderMap,
     required: Scope,
-) -> Result<(), StatusCode> {
+) -> Result<Principal, StatusCode> {
     let provided = headers
         .get("x-admin-token")
         .and_then(|v| v.to_str().ok())
@@ -1283,7 +1296,11 @@ async fn admin_guard(
     // 1) Break-glass env admin token (always Full).
     if let Some(expected) = st.admin_token.as_deref() {
         if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
-            return Ok(());
+            return Ok(Principal {
+                tenant: crate::tenant::DEFAULT_TENANT,
+                user_id: None,
+                scopes: vec![Scope::Full],
+            });
         }
     }
 
@@ -1317,11 +1334,21 @@ async fn admin_guard(
                         Some(limit) => {
                             let key = format!("tok:{}", token.id);
                             if st.ratelimiter.check_with_limit(&key, now(), limit).await {
-                                return Ok(());
+                                return Ok(Principal {
+                                    tenant: token.tenant_id,
+                                    user_id: None,
+                                    scopes: token.scopes.clone(),
+                                });
                             }
                             saw_rate_limited = true;
                         }
-                        None => return Ok(()),
+                        None => {
+                            return Ok(Principal {
+                                tenant: token.tenant_id,
+                                user_id: None,
+                                scopes: token.scopes.clone(),
+                            })
+                        }
                     }
                 } else {
                     saw_insufficient = true;
@@ -1341,7 +1368,11 @@ async fn admin_guard(
             match st.store.get_session_by_hash(&hash, now()).await {
                 Ok(Some(session)) => {
                     if session.scopes.iter().any(|s| s.covers(required)) {
-                        return Ok(());
+                        return Ok(Principal {
+                            tenant: session.tenant_id,
+                            user_id: Some(session.user_id),
+                            scopes: session.scopes.clone(),
+                        });
                     }
                     saw_insufficient = true;
                 }
@@ -1720,13 +1751,14 @@ struct SheetsStatusResponse {
 /// `GET /admin/integrations/sheets/status`: report connection state for the
 /// panel. Never includes the refresh token.
 async fn sheets_status(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     if st.sheets.is_none() {
         return sheets_off_status(&st).into_response();
     }
-    let conn = match st.store.get_sheets_connection(crate::tenant::DEFAULT_TENANT).await {
+    let conn = match st.store.get_sheets_connection(p.tenant).await {
         Ok(c) => c,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
@@ -1755,9 +1787,10 @@ async fn sheets_status(State(st): State<Arc<AppState>>, headers: HeaderMap) -> R
 /// access token, syncs the catalog, persists the updated connection, and returns
 /// the status JSON. A sync error is surfaced in the status (200), not a 500.
 async fn sheets_sync(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     if let Err(status) = csrf_guard(&headers) {
         return status.into_response();
     }
@@ -1774,7 +1807,7 @@ async fn sheets_sync(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Res
         Ok(false) => return (StatusCode::CONFLICT, "a sync is already running").into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
-    let mut conn = match st.store.get_sheets_connection(crate::tenant::DEFAULT_TENANT).await {
+    let mut conn = match st.store.get_sheets_connection(p.tenant).await {
         Ok(Some(c)) => c,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -1800,7 +1833,7 @@ async fn sheets_sync(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Res
     if let Err(e) = sync_result {
         conn.last_status = crate::sheets::SyncStatus::Error(e);
     }
-    if st.store.put_sheets_connection(crate::tenant::DEFAULT_TENANT, &conn).await.is_err() {
+    if st.store.put_sheets_connection(p.tenant, &conn).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let body = SheetsStatusResponse {
@@ -1817,16 +1850,17 @@ async fn sheets_sync(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Res
 
 /// `DELETE /admin/integrations/sheets`: disconnect (drops the stored connection).
 async fn sheets_disconnect(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     if let Err(status) = csrf_guard(&headers) {
         return status.into_response();
     }
     if st.sheets.is_none() {
         return sheets_off_status(&st).into_response();
     }
-    if st.store.delete_sheets_connection(crate::tenant::DEFAULT_TENANT).await.is_err() {
+    if st.store.delete_sheets_connection(p.tenant).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     StatusCode::NO_CONTENT.into_response()
@@ -1924,9 +1958,10 @@ async fn admin_links_list(
     headers: HeaderMap,
     Query(p): Query<ListParams>,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::LinksRead).await {
-        return status.into_response();
-    }
+    let prin = match admin_guard(&st, &headers, Scope::LinksRead).await {
+        Ok(prin) => prin,
+        Err(status) => return status.into_response(),
+    };
     let limit = p
         .limit
         .unwrap_or(DEFAULT_PAGE_LIMIT)
@@ -1945,14 +1980,14 @@ async fn admin_links_list(
     // is ignored for this filter; tag/folder still apply). Otherwise the normal
     // link listing/search runs.
     let (links, next_after): (Vec<(u64, Record)>, Option<u64>) = if broken_only {
-        let ids = match st.store.list_broken_link_ids(crate::tenant::DEFAULT_TENANT).await {
+        let ids = match st.store.list_broken_link_ids(prin.tenant).await {
             Ok(v) => v,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
         let mut picked: Vec<(u64, Record)> = Vec::new();
         let mut last: Option<u64> = None;
         for id in ids.into_iter().filter(|&id| p.after.is_none_or(|a| id > a)) {
-            let rec = match st.store.get_link(crate::tenant::DEFAULT_TENANT, id).await {
+            let rec = match st.store.get_link(prin.tenant, id).await {
                 Ok(Some(r)) => r,
                 Ok(None) => continue,
                 Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -1983,14 +2018,14 @@ async fn admin_links_list(
         let links = match q {
             Some(term) => match st
                 .store
-                .search_links(crate::tenant::DEFAULT_TENANT, term, p.after, limit, tag, folder)
+                .search_links(prin.tenant, term, p.after, limit, tag, folder)
                 .await
             {
                 Ok(l) => l,
                 Err(StoreError::Unsupported) => return StatusCode::NOT_IMPLEMENTED.into_response(),
                 Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
             },
-            None => match st.store.list_links(crate::tenant::DEFAULT_TENANT, p.after, limit, tag, folder).await {
+            None => match st.store.list_links(prin.tenant, p.after, limit, tag, folder).await {
                 Ok(l) => l,
                 Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
             },
@@ -2002,21 +2037,21 @@ async fn admin_links_list(
         };
         (links, next)
     };
-    let alias_map: std::collections::HashMap<u64, String> = match st.store.list_aliases(crate::tenant::DEFAULT_TENANT).await {
+    let alias_map: std::collections::HashMap<u64, String> = match st.store.list_aliases(prin.tenant).await {
         Ok(pairs) => pairs.into_iter().map(|(a, id)| (id, a)).collect(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     // Fetch health for just this page's ids (not the whole table).
     let page_ids: Vec<u64> = links.iter().map(|(id, _)| *id).collect();
     let health_map: std::collections::HashMap<u64, LinkHealth> =
-        match st.store.link_health_for(crate::tenant::DEFAULT_TENANT, &page_ids).await {
+        match st.store.link_health_for(prin.tenant, &page_ids).await {
             Ok(v) => v.into_iter().collect(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
     let mut rows: Vec<LinkRow> = Vec::with_capacity(links.len());
     for (id, rec) in links {
         let health = health_map.get(&id);
-        let visits = match st.store.visits(crate::tenant::DEFAULT_TENANT, id).await {
+        let visits = match st.store.visits(prin.tenant, id).await {
             Ok(v) => v,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
@@ -2050,10 +2085,11 @@ async fn admin_links_list(
 /// `GET /admin/tags`: the distinct set of tags across all links, for the
 /// panel's filter control.
 async fn admin_tags_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::LinksRead).await {
-        return status.into_response();
-    }
-    match st.store.list_tags(crate::tenant::DEFAULT_TENANT).await {
+    let p = match admin_guard(&st, &headers, Scope::LinksRead).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.store.list_tags(p.tenant).await {
         Ok(tags) => {
             let rows: Vec<serde_json::Value> = tags
                 .into_iter()
@@ -2068,10 +2104,11 @@ async fn admin_tags_list(State(st): State<Arc<AppState>>, headers: HeaderMap) ->
 /// `GET /admin/folders`: the distinct folder names with their link counts, for
 /// the panel's folder selector and filter control.
 async fn admin_folders_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::LinksRead).await {
-        return status.into_response();
-    }
-    match st.store.list_folders(crate::tenant::DEFAULT_TENANT).await {
+    let p = match admin_guard(&st, &headers, Scope::LinksRead).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.store.list_folders(p.tenant).await {
         Ok(folders) => {
             let rows: Vec<serde_json::Value> = folders
                 .into_iter()
@@ -2103,15 +2140,16 @@ async fn admin_link_delete(
     Path(code): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::LinksWrite).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::LinksWrite).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     let (id, alias) = match resolve_for_admin(&st, &code).await {
         Ok(Some(v)) => v,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    let rec = match st.store.get_link(crate::tenant::DEFAULT_TENANT, id).await {
+    let rec = match st.store.get_link(p.tenant, id).await {
         Ok(Some(r)) => r,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -2130,11 +2168,11 @@ async fn admin_link_delete(
         ),
     };
     let rows = st.webhooks.lifecycle_deliveries(&ev).await;
-    if st.store.delete_link_tx(crate::tenant::DEFAULT_TENANT, id, &rows).await.is_err() {
+    if st.store.delete_link_tx(p.tenant, id, &rows).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     if let Some(a) = &alias {
-        let _ = st.store.delete_alias(crate::tenant::DEFAULT_TENANT, a).await;
+        let _ = st.store.delete_alias(p.tenant, a).await;
     }
     st.cache.invalidate(id).await;
     st.webhooks.emit_if_in_memory(ev);
@@ -2147,15 +2185,16 @@ async fn admin_link_patch(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::LinksWrite).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::LinksWrite).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     let (id, alias) = match resolve_for_admin(&st, &code).await {
         Ok(Some(v)) => v,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    let mut rec = match st.store.get_link(crate::tenant::DEFAULT_TENANT, id).await {
+    let mut rec = match st.store.get_link(p.tenant, id).await {
         Ok(Some(r)) => r,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -2318,7 +2357,7 @@ async fn admin_link_patch(
         ),
     };
     let rows = st.webhooks.lifecycle_deliveries(&ev).await;
-    if st.store.put_link_tx(crate::tenant::DEFAULT_TENANT, id, &rec, &rows).await.is_err() {
+    if st.store.put_link_tx(p.tenant, id, &rec, &rows).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     st.cache.invalidate(id).await;
@@ -2355,10 +2394,11 @@ struct WebhookRow {
 }
 
 async fn admin_webhooks_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Webhooks).await {
-        return status.into_response();
-    }
-    match st.store.list_webhooks(crate::tenant::DEFAULT_TENANT).await {
+    let p = match admin_guard(&st, &headers, Scope::Webhooks).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.store.list_webhooks(p.tenant).await {
         Ok(subs) => {
             let rows: Vec<WebhookRow> = subs
                 .into_iter()
@@ -2454,10 +2494,11 @@ fn has_required_pixel_credentials(provider: Provider, c: &PixelCredentials) -> b
 }
 
 async fn admin_pixels_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Analytics).await {
-        return status.into_response();
-    }
-    match st.store.list_pixels(crate::tenant::DEFAULT_TENANT).await {
+    let p = match admin_guard(&st, &headers, Scope::Analytics).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.store.list_pixels(p.tenant).await {
         Ok(pixels) => {
             let rows: Vec<PixelRow> = pixels.iter().map(to_pixel_row).collect();
             Json(serde_json::json!({ "pixels": rows })).into_response()
@@ -2493,10 +2534,11 @@ impl From<ApiToken> for ApiTokenRow {
 }
 
 async fn admin_tokens_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
-        return status.into_response();
-    }
-    match st.store.list_api_tokens(crate::tenant::DEFAULT_TENANT).await {
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.store.list_api_tokens(p.tenant).await {
         Ok(tokens) => {
             let rows: Vec<ApiTokenRow> = tokens.into_iter().map(ApiTokenRow::from).collect();
             Json(serde_json::json!({ "tokens": rows })).into_response()
@@ -2510,20 +2552,21 @@ async fn admin_webhooks_create(
     headers: HeaderMap,
     Json(req): Json<WebhookCreateReq>,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Webhooks).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::Webhooks).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     if let Err((status, msg)) = validate_webhook_url(&req.url) {
         return (status, msg).into_response();
     }
-    let count = match st.store.list_webhooks(crate::tenant::DEFAULT_TENANT).await {
+    let count = match st.store.list_webhooks(p.tenant).await {
         Ok(subs) => subs.len(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     if count >= MAX_WEBHOOK_SUBSCRIPTIONS {
         return (StatusCode::BAD_REQUEST, "webhook subscription cap reached").into_response();
     }
-    let id = match st.store.next_webhook_id(crate::tenant::DEFAULT_TENANT).await {
+    let id = match st.store.next_webhook_id(p.tenant).await {
         Ok(id) => id,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
@@ -2543,7 +2586,7 @@ async fn admin_webhooks_create(
         created: now(),
         kind: req.kind,
     };
-    if st.store.put_webhook(crate::tenant::DEFAULT_TENANT, &sub).await.is_err() {
+    if st.store.put_webhook(p.tenant, &sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let mut resp = serde_json::json!({ "id": id });
@@ -2559,10 +2602,11 @@ async fn admin_webhooks_patch(
     headers: HeaderMap,
     Json(req): Json<WebhookPatchReq>,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Webhooks).await {
-        return status.into_response();
-    }
-    let mut sub = match st.store.get_webhook(crate::tenant::DEFAULT_TENANT, id).await {
+    let p = match admin_guard(&st, &headers, Scope::Webhooks).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let mut sub = match st.store.get_webhook(p.tenant, id).await {
         Ok(Some(s)) => s,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -2595,7 +2639,7 @@ async fn admin_webhooks_patch(
         SubscriptionKind::Generic => {}
         _ => sub.secret = String::new(),
     }
-    if st.store.put_webhook(crate::tenant::DEFAULT_TENANT, &sub).await.is_err() {
+    if st.store.put_webhook(p.tenant, &sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     StatusCode::OK.into_response()
@@ -2614,13 +2658,14 @@ async fn admin_wellknown_get(
     Path(name): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     if !WELLKNOWN_NAMES.contains(&name.as_str()) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    match st.store.get_wellknown(crate::tenant::DEFAULT_TENANT, &name).await {
+    match st.store.get_wellknown(p.tenant, &name).await {
         Ok(Some(body)) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
         // Admin read of an unset document: 200 with an empty body (the panel
         // treats empty as "not configured"). Avoids a spurious 404 in the
@@ -2637,9 +2682,10 @@ async fn admin_wellknown_put(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     if !WELLKNOWN_NAMES.contains(&name.as_str()) {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -2653,7 +2699,7 @@ async fn admin_wellknown_put(
     if serde_json::from_str::<serde_json::Value>(text).is_err() {
         return (StatusCode::BAD_REQUEST, "invalid json").into_response();
     }
-    if st.store.put_wellknown(crate::tenant::DEFAULT_TENANT, &name, text).await.is_err() {
+    if st.store.put_wellknown(p.tenant, &name, text).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     StatusCode::OK.into_response()
@@ -2664,10 +2710,11 @@ async fn admin_webhooks_delete(
     Path(id): Path<u64>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Webhooks).await {
-        return status.into_response();
-    }
-    match st.store.delete_webhook(crate::tenant::DEFAULT_TENANT, id).await {
+    let p = match admin_guard(&st, &headers, Scope::Webhooks).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.store.delete_webhook(p.tenant, id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -2692,21 +2739,22 @@ async fn admin_tokens_create(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     let req: CreateTokenReq = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
     };
-    let existing = match st.store.list_api_tokens(crate::tenant::DEFAULT_TENANT).await {
+    let existing = match st.store.list_api_tokens(p.tenant).await {
         Ok(t) => t,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     if existing.len() >= MAX_API_TOKENS {
         return (StatusCode::BAD_REQUEST, "token cap reached").into_response();
     }
-    let id = match st.store.next_api_token_id(crate::tenant::DEFAULT_TENANT).await {
+    let id = match st.store.next_api_token_id(p.tenant).await {
         Ok(id) => id,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
@@ -2718,9 +2766,9 @@ async fn admin_tokens_create(
         scopes: req.scopes,
         rate_limit_per_min: req.rate_limit_per_min,
         created: now(),
-        tenant_id: crate::tenant::DEFAULT_TENANT,
+        tenant_id: p.tenant,
     };
-    if st.store.put_api_token(crate::tenant::DEFAULT_TENANT, &token).await.is_err() {
+    if st.store.put_api_token(p.tenant, &token).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     (
@@ -2738,10 +2786,11 @@ async fn admin_tokens_delete(
     Path(id): Path<u64>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
-        return status.into_response();
-    }
-    match st.store.delete_api_token(crate::tenant::DEFAULT_TENANT, id).await {
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.store.delete_api_token(p.tenant, id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -2753,9 +2802,10 @@ async fn admin_pixels_create(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Analytics).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::Analytics).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     let req: PixelCreateReq = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
@@ -2767,14 +2817,14 @@ async fn admin_pixels_create(
         )
             .into_response();
     }
-    let existing = match st.store.list_pixels(crate::tenant::DEFAULT_TENANT).await {
-        Ok(p) => p,
+    let existing = match st.store.list_pixels(p.tenant).await {
+        Ok(pixels) => pixels,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     if existing.len() >= PIXELS_CAP {
         return (StatusCode::BAD_REQUEST, "pixel config limit reached (20)").into_response();
     }
-    let id = match st.store.next_pixel_id(crate::tenant::DEFAULT_TENANT).await {
+    let id = match st.store.next_pixel_id(p.tenant).await {
         Ok(id) => id,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
@@ -2785,7 +2835,7 @@ async fn admin_pixels_create(
         active: req.active.unwrap_or(true),
         created: now(),
     };
-    if st.store.put_pixel(crate::tenant::DEFAULT_TENANT, &config).await.is_err() {
+    if st.store.put_pixel(p.tenant, &config).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     (StatusCode::CREATED, Json(to_pixel_row(&config))).into_response()
@@ -2796,10 +2846,11 @@ async fn admin_pixels_delete(
     Path(id): Path<u64>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Analytics).await {
-        return status.into_response();
-    }
-    match st.store.delete_pixel(crate::tenant::DEFAULT_TENANT, id).await {
+    let p = match admin_guard(&st, &headers, Scope::Analytics).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.store.delete_pixel(p.tenant, id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -2815,15 +2866,16 @@ async fn admin_webhooks_test(
     Path(id): Path<u64>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Webhooks).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::Webhooks).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     // Bare POST (no body) is a cross-site "simple" request; require the custom
     // header so the SameSite=None session cookie can't be used to fire tests.
     if let Err(status) = csrf_guard(&headers) {
         return status.into_response();
     }
-    let sub = match st.store.get_webhook(crate::tenant::DEFAULT_TENANT, id).await {
+    let sub = match st.store.get_webhook(p.tenant, id).await {
         Ok(Some(s)) => s,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -2912,13 +2964,14 @@ async fn admin_wellknown_delete(
     Path(name): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     if !WELLKNOWN_NAMES.contains(&name.as_str()) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    if st.store.delete_wellknown(crate::tenant::DEFAULT_TENANT, &name).await.is_err() {
+    if st.store.delete_wellknown(p.tenant, &name).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     StatusCode::NO_CONTENT.into_response()
@@ -3095,6 +3148,7 @@ mod tests {
     use axum::http::HeaderMap as ReqHeaderMap;
     use axum::routing::any;
     use axum::Router as TestRouter;
+    use std::sync::Arc;
     use std::sync::Mutex;
     use tokio::net::TcpListener;
 
@@ -3113,6 +3167,102 @@ mod tests {
             fallback_url: None,
             password_hash: None,
         }
+    }
+
+    /// Minimal `AppState` for exercising `admin_guard` directly: LMDB-backed
+    /// store (so API tokens can be inserted), no OIDC/sheets, rate limiter
+    /// disabled. `admin_token` sets (or clears) the env break-glass token.
+    async fn guard_state(admin_token: Option<&str>) -> Arc<super::AppState> {
+        let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+        let (store, sink) = crate::store::open_backends(dir.path()).await.unwrap();
+        let cache = crate::cache::Cache::new(store.clone(), 1000, None);
+        let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+        let (tx, _wrx) = tokio::sync::mpsc::channel(1);
+        let webhooks = Arc::new(crate::webhooks::delivery::WebhookDispatcher::new(
+            tx,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        ));
+        Arc::new(super::AppState {
+            oidc: None,
+            sheets: None,
+            sheets_api: None,
+            oidc_configured: false,
+            cache,
+            store,
+            key: 0x1234,
+            signing_key: [0u8; 32],
+            analytics_tx,
+            sink,
+            admin_token: admin_token.map(str::to_string),
+            ratelimiter: crate::abuse::ratelimit::RateLimiter::disabled(),
+            block_private: true,
+            public_host: None,
+            real_ip_header: "cf-connecting-ip".to_string(),
+            webhooks,
+        })
+    }
+
+    /// `admin_guard` returns the resolved `Principal` on every success path
+    /// while keeping the status contract (401/403) byte for byte. The
+    /// integration admin-auth tests guard the full 401/403/404/429/503 matrix
+    /// end to end; this asserts the in-process Principal contents the HTTP
+    /// surface cannot observe in P1b (tenant is always the default).
+    #[tokio::test]
+    async fn admin_guard_resolves_principal_per_credential() {
+        use super::admin_guard;
+        use crate::auth::{hash_token, ApiToken, Scope};
+        use crate::tenant::DEFAULT_TENANT;
+        use axum::http::{HeaderMap as GuardHeaders, StatusCode};
+
+        let st = guard_state(Some("secret")).await;
+
+        // 1) env admin token present + provided -> Full principal, default tenant.
+        let mut h = GuardHeaders::new();
+        h.insert("x-admin-token", "secret".parse().unwrap());
+        let p = admin_guard(&st, &h, Scope::Full)
+            .await
+            .expect("env admin token authorizes");
+        assert_eq!(p.tenant, DEFAULT_TENANT);
+        assert_eq!(p.user_id, None);
+        assert_eq!(p.scopes, vec![Scope::Full]);
+
+        // 3) no credential, env token configured -> 401 (contract preserved).
+        assert_eq!(
+            admin_guard(&st, &GuardHeaders::new(), Scope::Full)
+                .await
+                .unwrap_err(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        // A stored API token scoped to [LinksRead] on the default tenant.
+        let plaintext = "qtok_principal_resolution_test";
+        let token = ApiToken {
+            id: 1,
+            name: "t".into(),
+            token_hash: hash_token(plaintext),
+            scopes: vec![Scope::LinksRead],
+            rate_limit_per_min: None,
+            created: 0,
+            tenant_id: DEFAULT_TENANT,
+        };
+        st.store.put_api_token(DEFAULT_TENANT, &token).await.unwrap();
+        let mut ht = GuardHeaders::new();
+        ht.insert("x-admin-token", plaintext.parse().unwrap());
+
+        // 2) covering API token -> Principal carries the token's tenant + scopes.
+        let p = admin_guard(&st, &ht, Scope::LinksRead)
+            .await
+            .expect("api token covers LinksRead");
+        assert_eq!(p.tenant, DEFAULT_TENANT);
+        assert_eq!(p.user_id, None);
+        assert_eq!(p.scopes, vec![Scope::LinksRead]);
+
+        // 4) valid-but-insufficient token -> 403 (contract preserved).
+        assert_eq!(
+            admin_guard(&st, &ht, Scope::Full).await.unwrap_err(),
+            StatusCode::FORBIDDEN
+        );
     }
 
     const IPHONE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)";
