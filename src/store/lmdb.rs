@@ -2,15 +2,69 @@ use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVE
 use crate::auth::ApiToken;
 use crate::pixel::PixelConfig;
 use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError};
+use crate::tenant::{Membership, Tenant, TenantId, User, DEFAULT_TENANT};
 use crate::webhooks::WebhookSubscription;
 use heed::byteorder::BigEndian;
 use heed::types::{Bytes, Str, U64};
 use heed::{Database, Env, EnvOpenOptions};
 use std::collections::BTreeMap;
-use std::ops::Bound;
 use std::path::Path;
 
 type BeU64 = U64<BigEndian>;
+
+/// Prefixes a big-endian tenant id onto a key so each tenant occupies a
+/// disjoint, contiguous range within a shared sub-db. `tenant_id` is an
+/// ownership prefix, never a code-space partition (the id/short-code namespace
+/// stays global — see the `meta` counters, which are NOT prefixed).
+fn tkey(tenant: TenantId, key: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + key.len());
+    out.extend_from_slice(&tenant.0.to_be_bytes());
+    out.extend_from_slice(key);
+    out
+}
+
+/// `tkey` for a numeric (u64, big-endian) key — links/health/pixels/etc.
+fn tkey_id(tenant: TenantId, id: u64) -> Vec<u8> {
+    tkey(tenant, &id.to_be_bytes())
+}
+
+/// The 8-byte prefix identifying a tenant's contiguous key range.
+fn tprefix(tenant: TenantId) -> [u8; 8] {
+    tenant.0.to_be_bytes()
+}
+
+/// Decodes the `u64` id stored in the low 8 bytes of a tenant-prefixed key.
+fn id_from_tkey(key: &[u8]) -> u64 {
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(&key[8..16]);
+    u64::from_be_bytes(buf)
+}
+
+/// Membership key: `user_id` (be) then `tenant_id` (be), so all of a user's
+/// memberships share a contiguous `user_id` prefix.
+fn membership_key(user_id: u64, tenant: TenantId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(16);
+    out.extend_from_slice(&user_id.to_be_bytes());
+    out.extend_from_slice(&tenant.0.to_be_bytes());
+    out
+}
+
+/// The named tenant-owned sub-dbs re-keyed by the boot migration. `meta`
+/// (global counters) and `sessions` (global hash lookup) are intentionally
+/// absent — they are never tenant-prefixed.
+const TENANT_OWNED_DBS: [&str; 11] = [
+    "links",
+    "aliases",
+    "stats",
+    "events",
+    "webhooks",
+    "api_tokens",
+    "visits",
+    "pixels",
+    "wellknown",
+    "health",
+    "sheets",
+];
 
 /// Defensive partitioning of the 40-bit space across nodes (see docs/SCALING.md).
 /// The 8 high bits identify the node; the 32 low bits are the node's local counter.
@@ -19,7 +73,8 @@ const LOCAL_BITS: u32 = 40 - NODE_BITS;
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1;
 
 /// Number of named LMDB sub-databases opened in the environment.
-const MAX_DBS: u32 = 13;
+/// 13 original + 3 identity sub-dbs (`tenants`, `users`, `memberships`).
+const MAX_DBS: u32 = 16;
 /// Virtual address space (mmap) reserved for the LMDB environment.
 const MAP_SIZE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 
@@ -52,19 +107,27 @@ fn compose_id(node_id: Option<u8>, counter: u64) -> Result<u64, StoreError> {
 
 pub struct LmdbStore {
     env: Env,
-    links: Database<BeU64, Bytes>,
-    aliases: Database<Str, BeU64>,
+    // Tenant-owned sub-dbs: keys are `tkey(tenant, original_key)` (Bytes), so
+    // each tenant occupies a disjoint contiguous range.
+    links: Database<Bytes, Bytes>,
+    aliases: Database<Bytes, BeU64>,
+    // Global counters (id/short-code namespace is global) — NOT tenant-prefixed.
     meta: Database<Str, BeU64>,
-    stats: Database<BeU64, Bytes>,
-    events: Database<BeU64, Bytes>,
-    webhooks: Database<BeU64, Bytes>,
-    api_tokens: Database<BeU64, Bytes>,
-    visits: Database<BeU64, BeU64>,
-    pixels: Database<BeU64, Bytes>,
-    wellknown: Database<Str, Str>,
-    health: Database<BeU64, Bytes>,
+    stats: Database<Bytes, Bytes>,
+    events: Database<Bytes, Bytes>,
+    webhooks: Database<Bytes, Bytes>,
+    api_tokens: Database<Bytes, Bytes>,
+    visits: Database<Bytes, BeU64>,
+    pixels: Database<Bytes, Bytes>,
+    wellknown: Database<Bytes, Str>,
+    health: Database<Bytes, Bytes>,
+    // Global hash-lookup — keyed by token hash, tenant travels in the value.
     sessions: Database<Str, Bytes>,
-    sheets: Database<Str, Bytes>,
+    sheets: Database<Bytes, Bytes>,
+    // Identity / tenancy (tenant-less).
+    tenants: Database<BeU64, Bytes>,
+    users: Database<Str, Bytes>,
+    memberships: Database<Bytes, Bytes>,
     node_id: Option<u8>,
 }
 
@@ -98,8 +161,11 @@ impl LmdbStore {
         let health = env.create_database(&mut wtxn, Some("health"))?;
         let sessions = env.create_database(&mut wtxn, Some("sessions"))?;
         let sheets = env.create_database(&mut wtxn, Some("sheets"))?;
+        let tenants = env.create_database(&mut wtxn, Some("tenants"))?;
+        let users = env.create_database(&mut wtxn, Some("users"))?;
+        let memberships = env.create_database(&mut wtxn, Some("memberships"))?;
         wtxn.commit()?;
-        Ok(LmdbStore {
+        let store = LmdbStore {
             env,
             links,
             aliases,
@@ -114,14 +180,81 @@ impl LmdbStore {
             health,
             sessions,
             sheets,
+            tenants,
+            users,
+            memberships,
             node_id,
-        })
+        };
+        // One-time re-keying of any pre-tenancy data into DEFAULT_TENANT, then
+        // seed the default tenant row. Both are idempotent (guarded / upsert).
+        store.migrate_pre_tenancy_keys_to_default()?;
+        store.seed_default_tenant()?;
+        Ok(store)
+    }
+
+    /// One-time migration: any tenant-owned key written before tenancy has no
+    /// 8-byte prefix. On boot, re-key every such entry under `DEFAULT_TENANT`.
+    /// Guarded by a `meta["tenancy_migrated"]` marker so it runs at most once;
+    /// on a fresh DB it re-keys nothing and just sets the marker.
+    fn migrate_pre_tenancy_keys_to_default(&self) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        if self.meta.get(&wtxn, "tenancy_migrated")?.unwrap_or(0) == 1 {
+            return Ok(());
+        }
+        let prefix = tprefix(DEFAULT_TENANT);
+        for name in TENANT_OWNED_DBS {
+            // Re-open each sub-db with a raw Bytes/Bytes codec so we can re-key
+            // regardless of the value type it normally stores.
+            let db: Database<Bytes, Bytes> = self
+                .env
+                .open_database(&wtxn, Some(name))?
+                .expect("sub-db created in open()");
+            let entries: Vec<(Vec<u8>, Vec<u8>)> = {
+                let mut v = Vec::new();
+                for item in db.iter(&wtxn)? {
+                    let (k, val) = item?;
+                    v.push((k.to_vec(), val.to_vec()));
+                }
+                v
+            };
+            db.clear(&mut wtxn)?;
+            for (k, val) in entries {
+                let mut nk = Vec::with_capacity(8 + k.len());
+                nk.extend_from_slice(&prefix);
+                nk.extend_from_slice(&k);
+                db.put(&mut wtxn, &nk, &val)?;
+            }
+        }
+        self.meta.put(&mut wtxn, "tenancy_migrated", &1)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    /// Upserts the `DEFAULT_TENANT` row (id 0, slug "default"), so the default
+    /// tenant always exists. Idempotent.
+    fn seed_default_tenant(&self) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        if self.tenants.get(&wtxn, &DEFAULT_TENANT.0)?.is_none() {
+            let t = Tenant {
+                id: DEFAULT_TENANT,
+                name: "default".into(),
+                slug: "default".into(),
+                created: 0,
+            };
+            self.tenants
+                .put(&mut wtxn, &DEFAULT_TENANT.0, &serde_json::to_vec(&t)?)?;
+        }
+        wtxn.commit()?;
+        Ok(())
     }
 }
 
 #[async_trait::async_trait]
 impl Store for LmdbStore {
-    async fn next_id(&self) -> Result<u64, StoreError> {
+    async fn next_id(&self, _tenant: TenantId) -> Result<u64, StoreError> {
+        // The id / short-code namespace is GLOBAL by design: the `meta` counter
+        // is never tenant-prefixed. `tenant` is accepted for a uniform trait but
+        // does not partition the counter.
         let mut wtxn = self.env.write_txn()?;
         let cur = self.meta.get(&wtxn, "next_id")?.unwrap_or(0);
         let next = cur + 1;
@@ -131,42 +264,44 @@ impl Store for LmdbStore {
         Ok(id)
     }
 
-    async fn get_link(&self, id: u64) -> Result<Option<Record>, StoreError> {
+    async fn get_link(&self, tenant: TenantId, id: u64) -> Result<Option<Record>, StoreError> {
         let rtxn = self.env.read_txn()?;
-        match self.links.get(&rtxn, &id)? {
+        match self.links.get(&rtxn, &tkey_id(tenant, id))? {
             Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
             None => Ok(None),
         }
     }
 
-    async fn put_link(&self, id: u64, rec: &Record) -> Result<(), StoreError> {
+    async fn put_link(&self, tenant: TenantId, id: u64, rec: &Record) -> Result<(), StoreError> {
         let bytes = serde_json::to_vec(rec)?;
         let mut wtxn = self.env.write_txn()?;
-        self.links.put(&mut wtxn, &id, &bytes)?;
+        self.links.put(&mut wtxn, &tkey_id(tenant, id), &bytes)?;
         wtxn.commit()?;
         Ok(())
     }
 
-    async fn get_alias(&self, alias: &str) -> Result<Option<u64>, StoreError> {
+    async fn get_alias(&self, tenant: TenantId, alias: &str) -> Result<Option<u64>, StoreError> {
         let rtxn = self.env.read_txn()?;
-        Ok(self.aliases.get(&rtxn, alias)?)
+        Ok(self.aliases.get(&rtxn, &tkey(tenant, alias.as_bytes()))?)
     }
 
     /// Writes alias + link in a single transaction: either both or neither.
     /// Avoids an orphaned link if the process fails between the two writes.
     async fn put_alias_and_link(
         &self,
+        tenant: TenantId,
         alias: &str,
         id: u64,
         rec: &Record,
     ) -> Result<bool, StoreError> {
         let bytes = serde_json::to_vec(rec)?;
         let mut wtxn = self.env.write_txn()?;
-        if self.aliases.get(&wtxn, alias)?.is_some() {
+        let akey = tkey(tenant, alias.as_bytes());
+        if self.aliases.get(&wtxn, &akey)?.is_some() {
             return Ok(false);
         }
-        self.links.put(&mut wtxn, &id, &bytes)?;
-        self.aliases.put(&mut wtxn, alias, &id)?;
+        self.links.put(&mut wtxn, &tkey_id(tenant, id), &bytes)?;
+        self.aliases.put(&mut wtxn, &akey, &id)?;
         wtxn.commit()?;
         Ok(true)
     }
@@ -178,43 +313,54 @@ impl Store for LmdbStore {
     // behavior is unchanged).
     async fn put_link_tx(
         &self,
+        tenant: TenantId,
         id: u64,
         rec: &Record,
         _deliveries: &[OutboxRow],
     ) -> Result<(), StoreError> {
-        self.put_link(id, rec).await
+        self.put_link(tenant, id, rec).await
     }
 
     async fn put_alias_and_link_tx(
         &self,
+        tenant: TenantId,
         alias: &str,
         id: u64,
         rec: &Record,
         _deliveries: &[OutboxRow],
     ) -> Result<bool, StoreError> {
-        self.put_alias_and_link(alias, id, rec).await
+        self.put_alias_and_link(tenant, alias, id, rec).await
     }
 
-    async fn delete_link_tx(&self, id: u64, _deliveries: &[OutboxRow]) -> Result<(), StoreError> {
-        self.delete_link(id).await
+    async fn delete_link_tx(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        _deliveries: &[OutboxRow],
+    ) -> Result<(), StoreError> {
+        self.delete_link(tenant, id).await
     }
 
     async fn list_links(
         &self,
+        tenant: TenantId,
         after: Option<u64>,
         limit: usize,
         tag: Option<&str>,
         folder: Option<&str>,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let rtxn = self.env.read_txn()?;
-        let start = match after {
-            Some(a) => Bound::Excluded(a),
-            None => Bound::Unbounded,
-        };
-        let range = (start, Bound::Unbounded);
+        let prefix = tprefix(tenant);
         let mut out = Vec::new();
-        for item in self.links.range(&rtxn, &range)? {
-            let (id, bytes) = item?;
+        // Iterate only this tenant's contiguous prefix range (keyset by id).
+        for item in self.links.prefix_iter(&rtxn, &prefix)? {
+            let (key, bytes) = item?;
+            let id = id_from_tkey(key);
+            if let Some(a) = after {
+                if id <= a {
+                    continue;
+                }
+            }
             let rec: Record = serde_json::from_slice(bytes)?;
             if let Some(t) = tag {
                 if !rec.tags.iter().any(|x| x == t) {
@@ -237,6 +383,7 @@ impl Store for LmdbStore {
 
     async fn search_links(
         &self,
+        _tenant: TenantId,
         _q: &str,
         _after: Option<u64>,
         _limit: usize,
@@ -246,67 +393,82 @@ impl Store for LmdbStore {
         Err(StoreError::Unsupported)
     }
 
-    async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError> {
+    async fn list_aliases(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError> {
         let rtxn = self.env.read_txn()?;
+        let prefix = tprefix(tenant);
         let mut out = Vec::new();
-        for item in self.aliases.iter(&rtxn)? {
-            let (alias, id) = item?;
-            out.push((alias.to_string(), id));
+        for item in self.aliases.prefix_iter(&rtxn, &prefix)? {
+            let (key, id) = item?;
+            // Strip the 8-byte tenant prefix to recover the alias string.
+            let alias = String::from_utf8_lossy(&key[8..]).into_owned();
+            out.push((alias, id));
         }
         Ok(out)
     }
 
-    async fn delete_link(&self, id: u64) -> Result<(), StoreError> {
+    async fn delete_link(&self, tenant: TenantId, id: u64) -> Result<(), StoreError> {
         let mut wtxn = self.env.write_txn()?;
-        self.links.delete(&mut wtxn, &id)?;
+        let k = tkey_id(tenant, id);
+        self.links.delete(&mut wtxn, &k)?;
         // Drop the link's health entry too, so deleted links don't leave orphan
         // rows that grow unbounded and slow the admin list / sweep.
-        self.health.delete(&mut wtxn, &id)?;
+        self.health.delete(&mut wtxn, &k)?;
         wtxn.commit()?;
         Ok(())
     }
 
-    async fn delete_alias(&self, alias: &str) -> Result<(), StoreError> {
+    async fn delete_alias(&self, tenant: TenantId, alias: &str) -> Result<(), StoreError> {
         let mut wtxn = self.env.write_txn()?;
-        self.aliases.delete(&mut wtxn, alias)?;
+        self.aliases
+            .delete(&mut wtxn, &tkey(tenant, alias.as_bytes()))?;
         wtxn.commit()?;
         Ok(())
     }
 
-    async fn list_webhooks(&self) -> Result<Vec<WebhookSubscription>, StoreError> {
+    async fn list_webhooks(&self, tenant: TenantId) -> Result<Vec<WebhookSubscription>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut out = Vec::new();
-        for item in self.webhooks.iter(&rtxn)? {
+        for item in self.webhooks.prefix_iter(&rtxn, &tprefix(tenant))? {
             let (_, bytes) = item?;
             out.push(serde_json::from_slice(bytes)?);
         }
         Ok(out)
     }
 
-    async fn get_webhook(&self, id: u64) -> Result<Option<WebhookSubscription>, StoreError> {
+    async fn get_webhook(
+        &self,
+        tenant: TenantId,
+        id: u64,
+    ) -> Result<Option<WebhookSubscription>, StoreError> {
         let rtxn = self.env.read_txn()?;
-        match self.webhooks.get(&rtxn, &id)? {
+        match self.webhooks.get(&rtxn, &tkey_id(tenant, id))? {
             Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
             None => Ok(None),
         }
     }
 
-    async fn put_webhook(&self, sub: &WebhookSubscription) -> Result<(), StoreError> {
+    async fn put_webhook(
+        &self,
+        tenant: TenantId,
+        sub: &WebhookSubscription,
+    ) -> Result<(), StoreError> {
         let bytes = serde_json::to_vec(sub)?;
         let mut wtxn = self.env.write_txn()?;
-        self.webhooks.put(&mut wtxn, &sub.id, &bytes)?;
+        self.webhooks
+            .put(&mut wtxn, &tkey_id(tenant, sub.id), &bytes)?;
         wtxn.commit()?;
         Ok(())
     }
 
-    async fn delete_webhook(&self, id: u64) -> Result<bool, StoreError> {
+    async fn delete_webhook(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError> {
         let mut wtxn = self.env.write_txn()?;
-        let existed = self.webhooks.delete(&mut wtxn, &id)?;
+        let existed = self.webhooks.delete(&mut wtxn, &tkey_id(tenant, id))?;
         wtxn.commit()?;
         Ok(existed)
     }
 
-    async fn next_webhook_id(&self) -> Result<u64, StoreError> {
+    async fn next_webhook_id(&self, _tenant: TenantId) -> Result<u64, StoreError> {
+        // Global id namespace (not tenant-prefixed).
         let mut wtxn = self.env.write_txn()?;
         let cur = self.meta.get(&wtxn, "next_webhook_id")?.unwrap_or(0);
         let next = cur + 1;
@@ -315,52 +477,65 @@ impl Store for LmdbStore {
         Ok(next)
     }
 
-    async fn bump_visits(&self, id: u64) -> Result<u64, StoreError> {
+    async fn bump_visits(&self, tenant: TenantId, id: u64) -> Result<u64, StoreError> {
         let mut wtxn = self.env.write_txn()?;
-        let cur = self.visits.get(&wtxn, &id)?.unwrap_or(0);
+        let k = tkey_id(tenant, id);
+        let cur = self.visits.get(&wtxn, &k)?.unwrap_or(0);
         let next = cur + 1;
-        self.visits.put(&mut wtxn, &id, &next)?;
+        self.visits.put(&mut wtxn, &k, &next)?;
         wtxn.commit()?;
         Ok(next)
     }
 
-    async fn put_link_health(&self, id: u64, health: &LinkHealth) -> Result<(), StoreError> {
+    async fn put_link_health(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        health: &LinkHealth,
+    ) -> Result<(), StoreError> {
         let bytes = serde_json::to_vec(health)?;
         let mut wtxn = self.env.write_txn()?;
-        self.health.put(&mut wtxn, &id, &bytes)?;
+        self.health.put(&mut wtxn, &tkey_id(tenant, id), &bytes)?;
         wtxn.commit()?;
         Ok(())
     }
 
-    async fn list_link_health(&self) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
+    async fn list_link_health(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut out = Vec::new();
-        for item in self.health.iter(&rtxn)? {
-            let (id, bytes) = item?;
-            out.push((id, serde_json::from_slice(bytes)?));
+        for item in self.health.prefix_iter(&rtxn, &tprefix(tenant))? {
+            let (key, bytes) = item?;
+            out.push((id_from_tkey(key), serde_json::from_slice(bytes)?));
         }
         Ok(out)
     }
 
-    async fn link_health_for(&self, ids: &[u64]) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
+    async fn link_health_for(
+        &self,
+        tenant: TenantId,
+        ids: &[u64],
+    ) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut out = Vec::with_capacity(ids.len());
         for &id in ids {
-            if let Some(bytes) = self.health.get(&rtxn, &id)? {
+            if let Some(bytes) = self.health.get(&rtxn, &tkey_id(tenant, id))? {
                 out.push((id, serde_json::from_slice(bytes)?));
             }
         }
         Ok(out)
     }
 
-    async fn list_broken_link_ids(&self) -> Result<Vec<u64>, StoreError> {
+    async fn list_broken_link_ids(&self, tenant: TenantId) -> Result<Vec<u64>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut out = Vec::new();
-        for item in self.health.iter(&rtxn)? {
-            let (id, bytes) = item?;
+        for item in self.health.prefix_iter(&rtxn, &tprefix(tenant))? {
+            let (key, bytes) = item?;
             let h: LinkHealth = serde_json::from_slice(bytes)?;
             if !h.healthy {
-                out.push(id);
+                out.push(id_from_tkey(key));
             }
         }
         out.sort_unstable();
@@ -378,28 +553,31 @@ impl Store for LmdbStore {
 
     async fn put_sheets_connection(
         &self,
+        tenant: TenantId,
         c: &crate::sheets::SheetsConnection,
     ) -> Result<(), StoreError> {
         let bytes = serde_json::to_vec(c)?;
         let mut wtxn = self.env.write_txn()?;
-        self.sheets.put(&mut wtxn, "connection", &bytes)?;
+        self.sheets
+            .put(&mut wtxn, &tkey(tenant, b"connection"), &bytes)?;
         wtxn.commit()?;
         Ok(())
     }
 
     async fn get_sheets_connection(
         &self,
+        tenant: TenantId,
     ) -> Result<Option<crate::sheets::SheetsConnection>, StoreError> {
         let rtxn = self.env.read_txn()?;
-        match self.sheets.get(&rtxn, "connection")? {
+        match self.sheets.get(&rtxn, &tkey(tenant, b"connection"))? {
             Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
             None => Ok(None),
         }
     }
 
-    async fn delete_sheets_connection(&self) -> Result<(), StoreError> {
+    async fn delete_sheets_connection(&self, tenant: TenantId) -> Result<(), StoreError> {
         let mut wtxn = self.env.write_txn()?;
-        self.sheets.delete(&mut wtxn, "connection")?;
+        self.sheets.delete(&mut wtxn, &tkey(tenant, b"connection"))?;
         wtxn.commit()?;
         Ok(())
     }
@@ -413,7 +591,15 @@ impl Store for LmdbStore {
         Ok(true)
     }
 
-    async fn put_session(&self, session: &crate::auth::Session) -> Result<(), StoreError> {
+    async fn put_session(
+        &self,
+        _tenant: TenantId,
+        session: &crate::auth::Session,
+    ) -> Result<(), StoreError> {
+        // Sessions are looked up by token hash globally; the hash is unique
+        // across tenants. In P1a the `Session` struct does not yet carry the
+        // tenant (that field lands in P1b), so `tenant` is accepted but not
+        // persisted here — this keeps P1a a pure data-layer change.
         let bytes = serde_json::to_vec(session)?;
         let mut wtxn = self.env.write_txn()?;
         self.sessions.put(&mut wtxn, &session.token_hash, &bytes)?;
@@ -465,10 +651,10 @@ impl Store for LmdbStore {
         Ok(())
     }
 
-    async fn list_tags(&self) -> Result<Vec<(String, u64)>, StoreError> {
+    async fn list_tags(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut counts: BTreeMap<String, u64> = BTreeMap::new();
-        for item in self.links.iter(&rtxn)? {
+        for item in self.links.prefix_iter(&rtxn, &tprefix(tenant))? {
             let (_, bytes) = item?;
             let rec: Record = serde_json::from_slice(bytes)?;
             let mut seen = std::collections::BTreeSet::new();
@@ -481,10 +667,10 @@ impl Store for LmdbStore {
         Ok(counts.into_iter().collect())
     }
 
-    async fn list_folders(&self) -> Result<Vec<(String, u64)>, StoreError> {
+    async fn list_folders(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut counts: BTreeMap<String, u64> = BTreeMap::new();
-        for item in self.links.iter(&rtxn)? {
+        for item in self.links.prefix_iter(&rtxn, &tprefix(tenant))? {
             let (_, bytes) = item?;
             let rec: Record = serde_json::from_slice(bytes)?;
             if let Some(f) = rec.folder {
@@ -494,10 +680,10 @@ impl Store for LmdbStore {
         Ok(counts.into_iter().collect())
     }
 
-    async fn list_api_tokens(&self) -> Result<Vec<ApiToken>, StoreError> {
+    async fn list_api_tokens(&self, tenant: TenantId) -> Result<Vec<ApiToken>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut out = Vec::new();
-        for item in self.api_tokens.iter(&rtxn)? {
+        for item in self.api_tokens.prefix_iter(&rtxn, &tprefix(tenant))? {
             let (_, bytes) = item?;
             out.push(serde_json::from_slice(bytes)?);
         }
@@ -505,7 +691,8 @@ impl Store for LmdbStore {
     }
 
     /// LMDB has no secondary index, so the hot-path lookup by hash scans the
-    /// (small, admin-managed) token set. Postgres backs this with a real
+    /// (small, admin-managed) token set across ALL tenants (the hash is globally
+    /// unique, so the match is unambiguous). Postgres backs this with a real
     /// index for the network-backend case.
     async fn get_api_token_by_hash(&self, hash: &str) -> Result<Option<ApiToken>, StoreError> {
         let rtxn = self.env.read_txn()?;
@@ -519,22 +706,24 @@ impl Store for LmdbStore {
         Ok(None)
     }
 
-    async fn put_api_token(&self, token: &ApiToken) -> Result<(), StoreError> {
+    async fn put_api_token(&self, tenant: TenantId, token: &ApiToken) -> Result<(), StoreError> {
         let bytes = serde_json::to_vec(token)?;
         let mut wtxn = self.env.write_txn()?;
-        self.api_tokens.put(&mut wtxn, &token.id, &bytes)?;
+        self.api_tokens
+            .put(&mut wtxn, &tkey_id(tenant, token.id), &bytes)?;
         wtxn.commit()?;
         Ok(())
     }
 
-    async fn delete_api_token(&self, id: u64) -> Result<bool, StoreError> {
+    async fn delete_api_token(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError> {
         let mut wtxn = self.env.write_txn()?;
-        let existed = self.api_tokens.delete(&mut wtxn, &id)?;
+        let existed = self.api_tokens.delete(&mut wtxn, &tkey_id(tenant, id))?;
         wtxn.commit()?;
         Ok(existed)
     }
 
-    async fn next_api_token_id(&self) -> Result<u64, StoreError> {
+    async fn next_api_token_id(&self, _tenant: TenantId) -> Result<u64, StoreError> {
+        // Global id namespace (not tenant-prefixed).
         let mut wtxn = self.env.write_txn()?;
         let cur = self.meta.get(&wtxn, "next_api_token_id")?.unwrap_or(0);
         let next = cur + 1;
@@ -543,12 +732,13 @@ impl Store for LmdbStore {
         Ok(next)
     }
 
-    async fn visits(&self, id: u64) -> Result<u64, StoreError> {
+    async fn visits(&self, tenant: TenantId, id: u64) -> Result<u64, StoreError> {
         let rtxn = self.env.read_txn()?;
-        Ok(self.visits.get(&rtxn, &id)?.unwrap_or(0))
+        Ok(self.visits.get(&rtxn, &tkey_id(tenant, id))?.unwrap_or(0))
     }
 
-    async fn next_pixel_id(&self) -> Result<u64, StoreError> {
+    async fn next_pixel_id(&self, _tenant: TenantId) -> Result<u64, StoreError> {
+        // Global id namespace (not tenant-prefixed).
         let mut wtxn = self.env.write_txn()?;
         let cur = self.meta.get(&wtxn, "next_pixel_id")?.unwrap_or(0);
         let next = cur + 1;
@@ -557,56 +747,147 @@ impl Store for LmdbStore {
         Ok(next)
     }
 
-    async fn get_pixel(&self, id: u64) -> Result<Option<PixelConfig>, StoreError> {
+    async fn get_pixel(&self, tenant: TenantId, id: u64) -> Result<Option<PixelConfig>, StoreError> {
         let rtxn = self.env.read_txn()?;
-        match self.pixels.get(&rtxn, &id)? {
+        match self.pixels.get(&rtxn, &tkey_id(tenant, id))? {
             Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
             None => Ok(None),
         }
     }
 
-    async fn put_pixel(&self, config: &PixelConfig) -> Result<(), StoreError> {
+    async fn put_pixel(&self, tenant: TenantId, config: &PixelConfig) -> Result<(), StoreError> {
         let bytes = serde_json::to_vec(config)?;
         let mut wtxn = self.env.write_txn()?;
-        self.pixels.put(&mut wtxn, &config.id, &bytes)?;
+        self.pixels
+            .put(&mut wtxn, &tkey_id(tenant, config.id), &bytes)?;
         wtxn.commit()?;
         Ok(())
     }
 
-    async fn delete_pixel(&self, id: u64) -> Result<bool, StoreError> {
+    async fn delete_pixel(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError> {
         let mut wtxn = self.env.write_txn()?;
-        let existed = self.pixels.delete(&mut wtxn, &id)?;
+        let existed = self.pixels.delete(&mut wtxn, &tkey_id(tenant, id))?;
         wtxn.commit()?;
         Ok(existed)
     }
 
-    async fn list_pixels(&self) -> Result<Vec<PixelConfig>, StoreError> {
+    async fn list_pixels(&self, tenant: TenantId) -> Result<Vec<PixelConfig>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut out = Vec::new();
-        for item in self.pixels.iter(&rtxn)? {
+        for item in self.pixels.prefix_iter(&rtxn, &tprefix(tenant))? {
             let (_, bytes) = item?;
             out.push(serde_json::from_slice(bytes)?);
         }
         Ok(out)
     }
 
-    async fn get_wellknown(&self, name: &str) -> Result<Option<String>, StoreError> {
+    async fn get_wellknown(
+        &self,
+        tenant: TenantId,
+        name: &str,
+    ) -> Result<Option<String>, StoreError> {
         let rtxn = self.env.read_txn()?;
-        Ok(self.wellknown.get(&rtxn, name)?.map(|s| s.to_string()))
+        Ok(self
+            .wellknown
+            .get(&rtxn, &tkey(tenant, name.as_bytes()))?
+            .map(|s| s.to_string()))
     }
 
-    async fn put_wellknown(&self, name: &str, body: &str) -> Result<(), StoreError> {
+    async fn put_wellknown(
+        &self,
+        tenant: TenantId,
+        name: &str,
+        body: &str,
+    ) -> Result<(), StoreError> {
         let mut wtxn = self.env.write_txn()?;
-        self.wellknown.put(&mut wtxn, name, body)?;
+        self.wellknown
+            .put(&mut wtxn, &tkey(tenant, name.as_bytes()), body)?;
         wtxn.commit()?;
         Ok(())
     }
 
-    async fn delete_wellknown(&self, name: &str) -> Result<(), StoreError> {
+    async fn delete_wellknown(&self, tenant: TenantId, name: &str) -> Result<(), StoreError> {
         let mut wtxn = self.env.write_txn()?;
-        self.wellknown.delete(&mut wtxn, name)?;
+        self.wellknown
+            .delete(&mut wtxn, &tkey(tenant, name.as_bytes()))?;
         wtxn.commit()?;
         Ok(())
+    }
+
+    // --- Identity / tenancy ---
+    async fn put_tenant(&self, t: &Tenant) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec(t)?;
+        let mut wtxn = self.env.write_txn()?;
+        self.tenants.put(&mut wtxn, &t.id.0, &bytes)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn get_tenant(&self, id: TenantId) -> Result<Option<Tenant>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        match self.tenants.get(&rtxn, &id.0)? {
+            Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn next_user_id(&self) -> Result<u64, StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        let cur = self.meta.get(&wtxn, "next_user_id")?.unwrap_or(0);
+        let next = cur + 1;
+        self.meta.put(&mut wtxn, "next_user_id", &next)?;
+        wtxn.commit()?;
+        Ok(next)
+    }
+
+    async fn put_user(&self, u: &User) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec(u)?;
+        let mut wtxn = self.env.write_txn()?;
+        self.users.put(&mut wtxn, &u.subject, &bytes)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn get_user_by_subject(&self, subject: &str) -> Result<Option<User>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        match self.users.get(&rtxn, subject)? {
+            Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn put_membership(&self, m: &Membership) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec(m)?;
+        let mut wtxn = self.env.write_txn()?;
+        self.memberships
+            .put(&mut wtxn, &membership_key(m.user_id, m.tenant_id), &bytes)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn get_membership(
+        &self,
+        user_id: u64,
+        tenant: TenantId,
+    ) -> Result<Option<Membership>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        match self.memberships.get(&rtxn, &membership_key(user_id, tenant))? {
+            Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_memberships_for_user(
+        &self,
+        user_id: u64,
+    ) -> Result<Vec<Membership>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        for item in self.memberships.prefix_iter(&rtxn, &user_id.to_be_bytes())? {
+            let (_, bytes) = item?;
+            out.push(serde_json::from_slice(bytes)?);
+        }
+        Ok(out)
     }
 
     // The durable webhook outbox is Postgres-only. On the single-node LMDB
@@ -655,18 +936,22 @@ impl AnalyticsSink for LmdbStore {
         for e in events {
             by_id.entry(e.id).or_default().push(e);
         }
+        // Analytics is single-tenant in P1a (per-tenant click routing is a later
+        // task); stats/events keys are prefixed with DEFAULT_TENANT to stay
+        // consistent with the tenant-prefixed sub-dbs and the boot migration.
         let mut wtxn = self.env.write_txn()?;
         for (id, evs) in by_id {
-            let mut agg: Aggregates = match self.stats.get(&wtxn, &id)? {
+            let k = tkey_id(DEFAULT_TENANT, id);
+            let mut agg: Aggregates = match self.stats.get(&wtxn, &k)? {
                 Some(b) => serde_json::from_slice(b)?,
                 None => Aggregates::default(),
             };
             for e in &evs {
                 agg.apply(e);
             }
-            self.stats.put(&mut wtxn, &id, &serde_json::to_vec(&agg)?)?;
+            self.stats.put(&mut wtxn, &k, &serde_json::to_vec(&agg)?)?;
 
-            let mut recent: Vec<ClickEvent> = match self.events.get(&wtxn, &id)? {
+            let mut recent: Vec<ClickEvent> = match self.events.get(&wtxn, &k)? {
                 Some(b) => serde_json::from_slice(b)?,
                 None => Vec::new(),
             };
@@ -678,7 +963,7 @@ impl AnalyticsSink for LmdbStore {
                 recent.drain(0..drop);
             }
             self.events
-                .put(&mut wtxn, &id, &serde_json::to_vec(&recent)?)?;
+                .put(&mut wtxn, &k, &serde_json::to_vec(&recent)?)?;
         }
         wtxn.commit()?;
         Ok(())
@@ -686,11 +971,12 @@ impl AnalyticsSink for LmdbStore {
 
     async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError> {
         let rtxn = self.env.read_txn()?;
-        let agg = match self.stats.get(&rtxn, &id)? {
+        let k = tkey_id(DEFAULT_TENANT, id);
+        let agg = match self.stats.get(&rtxn, &k)? {
             Some(b) => serde_json::from_slice::<Aggregates>(b)?,
             None => return Ok(None),
         };
-        let mut recent: Vec<ClickEvent> = match self.events.get(&rtxn, &id)? {
+        let mut recent: Vec<ClickEvent> = match self.events.get(&rtxn, &k)? {
             Some(b) => serde_json::from_slice(b)?,
             None => Vec::new(),
         };
@@ -777,17 +1063,17 @@ mod tests {
     async fn next_id_default_is_compatible_with_today() {
         let dir = tempfile::tempdir().unwrap();
         let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        assert_eq!(s.next_id().await.unwrap(), 1);
-        assert_eq!(s.next_id().await.unwrap(), 2);
-        assert_eq!(s.next_id().await.unwrap(), 3);
+        assert_eq!(s.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), 1);
+        assert_eq!(s.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), 2);
+        assert_eq!(s.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), 3);
     }
 
     #[tokio::test]
     async fn next_id_with_node_prefixes_and_increments_local() {
         let dir = tempfile::tempdir().unwrap();
         let s = LmdbStore::open_with_node_id(dir.path(), Some(5)).unwrap();
-        assert_eq!(s.next_id().await.unwrap(), (5u64 << LOCAL_BITS) | 1);
-        assert_eq!(s.next_id().await.unwrap(), (5u64 << LOCAL_BITS) | 2);
+        assert_eq!(s.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), (5u64 << LOCAL_BITS) | 1);
+        assert_eq!(s.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), (5u64 << LOCAL_BITS) | 2);
     }
 
     #[tokio::test]
@@ -796,7 +1082,7 @@ mod tests {
         let dir_b = tempfile::tempdir().unwrap();
         let a = LmdbStore::open_with_node_id(dir_a.path(), Some(0)).unwrap();
         let b = LmdbStore::open_with_node_id(dir_b.path(), Some(1)).unwrap();
-        assert_ne!(a.next_id().await.unwrap(), b.next_id().await.unwrap());
+        assert_ne!(a.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), b.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap());
     }
 
     #[tokio::test]
@@ -808,10 +1094,10 @@ mod tests {
             s.meta.put(&mut wtxn, "next_id", &(LOCAL_MAX - 1)).unwrap();
             wtxn.commit().unwrap();
         }
-        let last = s.next_id().await.unwrap();
+        let last = s.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap();
         assert_eq!(last, (7u64 << LOCAL_BITS) | LOCAL_MAX);
         assert!(matches!(
-            s.next_id().await,
+            s.next_id(crate::tenant::DEFAULT_TENANT).await,
             Err(crate::store::StoreError::IdSpaceExhausted)
         ));
         let rtxn = s.env.read_txn().unwrap();
@@ -822,23 +1108,23 @@ mod tests {
     async fn wellknown_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        assert_eq!(s.get_wellknown("assetlinks.json").await.unwrap(), None);
+        assert_eq!(s.get_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json").await.unwrap(), None);
         let body = r#"{"relation":["delegate_permission/common.handle_all_urls"]}"#;
-        s.put_wellknown("assetlinks.json", body).await.unwrap();
+        s.put_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json", body).await.unwrap();
         assert_eq!(
-            s.get_wellknown("assetlinks.json").await.unwrap(),
+            s.get_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json").await.unwrap(),
             Some(body.to_string())
         );
-        s.delete_wellknown("assetlinks.json").await.unwrap();
-        assert_eq!(s.get_wellknown("assetlinks.json").await.unwrap(), None);
-        s.delete_wellknown("assetlinks.json").await.unwrap();
+        s.delete_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json").await.unwrap();
+        assert_eq!(s.get_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json").await.unwrap(), None);
+        s.delete_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json").await.unwrap();
     }
 
     #[tokio::test]
     async fn search_links_is_unsupported_on_lmdb() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        let r = store.search_links("anything", None, 10, None, None).await;
+        let r = store.search_links(crate::tenant::DEFAULT_TENANT, "anything", None, 10, None, None).await;
         assert!(matches!(r, Err(StoreError::Unsupported)));
     }
 
@@ -861,39 +1147,39 @@ mod tests {
             password_hash: None,
         };
         for id in 1..=5u64 {
-            s.put_link(id, &rec(&format!("https://e{id}.com")))
+            s.put_link(crate::tenant::DEFAULT_TENANT, id, &rec(&format!("https://e{id}.com")))
                 .await
                 .unwrap();
         }
-        s.put_alias_and_link("promo", 10, &rec("https://promo.com"))
+        s.put_alias_and_link(crate::tenant::DEFAULT_TENANT, "promo", 10, &rec("https://promo.com"))
             .await
             .unwrap();
 
-        let p1 = s.list_links(None, 3, None, None).await.unwrap();
+        let p1 = s.list_links(crate::tenant::DEFAULT_TENANT, None, 3, None, None).await.unwrap();
         assert_eq!(
             p1.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![1, 2, 3]
         );
-        let p2 = s.list_links(Some(3), 3, None, None).await.unwrap();
+        let p2 = s.list_links(crate::tenant::DEFAULT_TENANT, Some(3), 3, None, None).await.unwrap();
         assert_eq!(
             p2.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![4, 5, 10]
         );
 
-        let al = s.list_aliases().await.unwrap();
+        let al = s.list_aliases(crate::tenant::DEFAULT_TENANT).await.unwrap();
         assert_eq!(al, vec![("promo".to_string(), 10u64)]);
 
-        s.delete_link(2).await.unwrap();
-        assert!(s.get_link(2).await.unwrap().is_none());
-        s.delete_alias("promo").await.unwrap();
-        assert_eq!(s.get_alias("promo").await.unwrap(), None);
+        s.delete_link(crate::tenant::DEFAULT_TENANT, 2).await.unwrap();
+        assert!(s.get_link(crate::tenant::DEFAULT_TENANT, 2).await.unwrap().is_none());
+        s.delete_alias(crate::tenant::DEFAULT_TENANT, "promo").await.unwrap();
+        assert_eq!(s.get_alias(crate::tenant::DEFAULT_TENANT, "promo").await.unwrap(), None);
     }
 
     #[tokio::test]
     async fn webhook_crud_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        let id = store.next_webhook_id().await.unwrap();
+        let id = store.next_webhook_id(crate::tenant::DEFAULT_TENANT).await.unwrap();
         let sub = WebhookSubscription {
             id,
             url: "https://e.com".into(),
@@ -903,14 +1189,14 @@ mod tests {
             created: 1,
             kind: crate::webhooks::SubscriptionKind::Generic,
         };
-        store.put_webhook(&sub).await.unwrap();
+        store.put_webhook(crate::tenant::DEFAULT_TENANT, &sub).await.unwrap();
         assert_eq!(
-            store.get_webhook(id).await.unwrap().unwrap().url,
+            store.get_webhook(crate::tenant::DEFAULT_TENANT, id).await.unwrap().unwrap().url,
             "https://e.com"
         );
-        assert_eq!(store.list_webhooks().await.unwrap().len(), 1);
-        assert!(store.delete_webhook(id).await.unwrap());
-        assert!(store.get_webhook(id).await.unwrap().is_none());
+        assert_eq!(store.list_webhooks(crate::tenant::DEFAULT_TENANT).await.unwrap().len(), 1);
+        assert!(store.delete_webhook(crate::tenant::DEFAULT_TENANT, id).await.unwrap());
+        assert!(store.get_webhook(crate::tenant::DEFAULT_TENANT, id).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -931,24 +1217,24 @@ mod tests {
             fallback_url: None,
             password_hash: None,
         };
-        s.put_link(1, &rec("https://a.com", &["rust", "web"]))
+        s.put_link(crate::tenant::DEFAULT_TENANT, 1, &rec("https://a.com", &["rust", "web"]))
             .await
             .unwrap();
-        s.put_link(2, &rec("https://b.com", &["web"]))
+        s.put_link(crate::tenant::DEFAULT_TENANT, 2, &rec("https://b.com", &["web"]))
             .await
             .unwrap();
-        s.put_link(3, &rec("https://c.com", &[])).await.unwrap();
+        s.put_link(crate::tenant::DEFAULT_TENANT, 3, &rec("https://c.com", &[])).await.unwrap();
 
-        let got = s.get_link(1).await.unwrap().unwrap();
+        let got = s.get_link(crate::tenant::DEFAULT_TENANT, 1).await.unwrap().unwrap();
         assert_eq!(got.tags, vec!["rust".to_string(), "web".to_string()]);
 
-        let filtered = s.list_links(None, 50, Some("rust"), None).await.unwrap();
+        let filtered = s.list_links(crate::tenant::DEFAULT_TENANT, None, 50, Some("rust"), None).await.unwrap();
         assert_eq!(
             filtered.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![1]
         );
 
-        let tags = s.list_tags().await.unwrap();
+        let tags = s.list_tags(crate::tenant::DEFAULT_TENANT).await.unwrap();
         assert_eq!(tags, vec![("rust".to_string(), 1), ("web".to_string(), 2)]);
     }
 
@@ -970,22 +1256,22 @@ mod tests {
             fallback_url: None,
             password_hash: None,
         };
-        s.put_link(1, &rec("https://a.com", Some("Marketing")))
+        s.put_link(crate::tenant::DEFAULT_TENANT, 1, &rec("https://a.com", Some("Marketing")))
             .await
             .unwrap();
-        s.put_link(2, &rec("https://b.com", Some("Marketing")))
+        s.put_link(crate::tenant::DEFAULT_TENANT, 2, &rec("https://b.com", Some("Marketing")))
             .await
             .unwrap();
-        s.put_link(3, &rec("https://c.com", Some("Docs")))
+        s.put_link(crate::tenant::DEFAULT_TENANT, 3, &rec("https://c.com", Some("Docs")))
             .await
             .unwrap();
-        s.put_link(4, &rec("https://d.com", None)).await.unwrap();
+        s.put_link(crate::tenant::DEFAULT_TENANT, 4, &rec("https://d.com", None)).await.unwrap();
 
-        let got = s.get_link(1).await.unwrap().unwrap();
+        let got = s.get_link(crate::tenant::DEFAULT_TENANT, 1).await.unwrap().unwrap();
         assert_eq!(got.folder.as_deref(), Some("Marketing"));
 
         let filtered = s
-            .list_links(None, 50, None, Some("marketing"))
+            .list_links(crate::tenant::DEFAULT_TENANT, None, 50, None, Some("marketing"))
             .await
             .unwrap();
         assert_eq!(
@@ -993,7 +1279,7 @@ mod tests {
             vec![1, 2]
         );
 
-        let folders = s.list_folders().await.unwrap();
+        let folders = s.list_folders(crate::tenant::DEFAULT_TENANT).await.unwrap();
         assert_eq!(
             folders,
             vec![("Docs".to_string(), 1u64), ("Marketing".to_string(), 2u64)]
@@ -1015,17 +1301,17 @@ mod tests {
     async fn api_token_crud_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        let id = store.next_api_token_id().await.unwrap();
+        let id = store.next_api_token_id(crate::tenant::DEFAULT_TENANT).await.unwrap();
         let hash = hash_token("qtok_abc123");
         let token = sample_token(id, hash.clone());
-        store.put_api_token(&token).await.unwrap();
+        store.put_api_token(crate::tenant::DEFAULT_TENANT, &token).await.unwrap();
 
         assert_eq!(
             store.get_api_token_by_hash(&hash).await.unwrap(),
             Some(token)
         );
-        assert_eq!(store.list_api_tokens().await.unwrap().len(), 1);
-        assert!(store.delete_api_token(id).await.unwrap());
+        assert_eq!(store.list_api_tokens(crate::tenant::DEFAULT_TENANT).await.unwrap().len(), 1);
+        assert!(store.delete_api_token(crate::tenant::DEFAULT_TENANT, id).await.unwrap());
         assert_eq!(store.get_api_token_by_hash(&hash).await.unwrap(), None);
     }
 
@@ -1043,15 +1329,15 @@ mod tests {
     async fn delete_api_token_returns_false_when_missing() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        assert!(!store.delete_api_token(999).await.unwrap());
+        assert!(!store.delete_api_token(crate::tenant::DEFAULT_TENANT, 999).await.unwrap());
     }
 
     #[tokio::test]
     async fn next_api_token_id_increments() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        let a = store.next_api_token_id().await.unwrap();
-        let b = store.next_api_token_id().await.unwrap();
+        let a = store.next_api_token_id(crate::tenant::DEFAULT_TENANT).await.unwrap();
+        let b = store.next_api_token_id(crate::tenant::DEFAULT_TENANT).await.unwrap();
         assert_eq!(b, a + 1);
     }
 
@@ -1060,8 +1346,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
 
-        assert_eq!(s.next_pixel_id().await.unwrap(), 1);
-        assert_eq!(s.next_pixel_id().await.unwrap(), 2);
+        assert_eq!(s.next_pixel_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), 1);
+        assert_eq!(s.next_pixel_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), 2);
 
         let config = PixelConfig {
             id: 1,
@@ -1075,24 +1361,24 @@ mod tests {
             active: true,
             created: 42,
         };
-        s.put_pixel(&config).await.unwrap();
+        s.put_pixel(crate::tenant::DEFAULT_TENANT, &config).await.unwrap();
 
-        let got = s.get_pixel(1).await.unwrap().unwrap();
+        let got = s.get_pixel(crate::tenant::DEFAULT_TENANT, 1).await.unwrap().unwrap();
         assert_eq!(got.provider, Provider::Ga4);
         assert_eq!(got.credentials.measurement_id.as_deref(), Some("G-1"));
         assert!(got.active);
         assert_eq!(got.created, 42);
 
-        assert!(s.get_pixel(999).await.unwrap().is_none());
+        assert!(s.get_pixel(crate::tenant::DEFAULT_TENANT, 999).await.unwrap().is_none());
 
-        let list = s.list_pixels().await.unwrap();
+        let list = s.list_pixels(crate::tenant::DEFAULT_TENANT).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, 1);
 
-        assert!(s.delete_pixel(1).await.unwrap());
-        assert!(!s.delete_pixel(1).await.unwrap());
-        assert!(s.get_pixel(1).await.unwrap().is_none());
-        assert!(s.list_pixels().await.unwrap().is_empty());
+        assert!(s.delete_pixel(crate::tenant::DEFAULT_TENANT, 1).await.unwrap());
+        assert!(!s.delete_pixel(crate::tenant::DEFAULT_TENANT, 1).await.unwrap());
+        assert!(s.get_pixel(crate::tenant::DEFAULT_TENANT, 1).await.unwrap().is_none());
+        assert!(s.list_pixels(crate::tenant::DEFAULT_TENANT).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1113,8 +1399,8 @@ mod tests {
             fallback_url: None,
             password_hash: None,
         };
-        s.put_link(1, &rec).await.unwrap();
-        let got = s.get_link(1).await.unwrap().unwrap();
+        s.put_link(crate::tenant::DEFAULT_TENANT, 1, &rec).await.unwrap();
+        let got = s.get_link(crate::tenant::DEFAULT_TENANT, 1).await.unwrap().unwrap();
         assert_eq!(got.app_ios.as_deref(), Some("https://apps.apple.com/x"));
         assert_eq!(got.app_android, None);
     }
@@ -1131,7 +1417,7 @@ mod tests {
             created: 10,
             expires: 100,
         };
-        s.put_session(&sess).await.unwrap();
+        s.put_session(crate::tenant::DEFAULT_TENANT, &sess).await.unwrap();
         // Valid before expiry.
         assert_eq!(
             s.get_session_by_hash("abc", 50)
@@ -1152,14 +1438,14 @@ mod tests {
         s.delete_session("abc").await.unwrap();
         assert!(s.get_session_by_hash("abc", 50).await.unwrap().is_none());
         // gc removes expired rows.
-        s.put_session(&crate::auth::Session {
+        s.put_session(crate::tenant::DEFAULT_TENANT, &crate::auth::Session {
             token_hash: "old".into(),
             expires: 5,
             ..sess.clone()
         })
         .await
         .unwrap();
-        s.put_session(&crate::auth::Session {
+        s.put_session(crate::tenant::DEFAULT_TENANT, &crate::auth::Session {
             token_hash: "new".into(),
             expires: 999,
             ..sess.clone()
@@ -1175,9 +1461,9 @@ mod tests {
     async fn link_health_round_trip_and_overwrite() {
         let dir = tempfile::tempdir().unwrap();
         let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        assert!(s.list_link_health().await.unwrap().is_empty());
+        assert!(s.list_link_health(crate::tenant::DEFAULT_TENANT).await.unwrap().is_empty());
 
-        s.put_link_health(
+        s.put_link_health(crate::tenant::DEFAULT_TENANT, 
             1,
             &crate::store::LinkHealth {
                 checked_at: 100,
@@ -1187,7 +1473,7 @@ mod tests {
         )
         .await
         .unwrap();
-        s.put_link_health(
+        s.put_link_health(crate::tenant::DEFAULT_TENANT, 
             2,
             &crate::store::LinkHealth {
                 checked_at: 100,
@@ -1197,11 +1483,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let all = s.list_link_health().await.unwrap();
+        let all = s.list_link_health(crate::tenant::DEFAULT_TENANT).await.unwrap();
         assert_eq!(all.len(), 2);
 
         // Overwrite id 1 (recovered -> broken).
-        s.put_link_health(
+        s.put_link_health(crate::tenant::DEFAULT_TENANT, 
             1,
             &crate::store::LinkHealth {
                 checked_at: 200,
@@ -1212,7 +1498,7 @@ mod tests {
         .await
         .unwrap();
         let map: std::collections::HashMap<u64, crate::store::LinkHealth> =
-            s.list_link_health().await.unwrap().into_iter().collect();
+            s.list_link_health(crate::tenant::DEFAULT_TENANT).await.unwrap().into_iter().collect();
         assert_eq!(map.len(), 2);
         assert_eq!(
             map[&1],

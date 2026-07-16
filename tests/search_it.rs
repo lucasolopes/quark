@@ -13,7 +13,7 @@ async fn fresh() -> Option<PostgresStore> {
 async fn seed_links(s: &PostgresStore, links: &[(&str, Option<&str>)]) -> Vec<u64> {
     let mut ids = Vec::new();
     for (url, alias) in links {
-        let id = s.next_id().await.unwrap();
+        let id = s.next_id(quark::tenant::DEFAULT_TENANT).await.unwrap();
         let rec = Record {
             url: url.to_string(),
             expiry: None,
@@ -30,10 +30,10 @@ async fn seed_links(s: &PostgresStore, links: &[(&str, Option<&str>)]) -> Vec<u6
         };
         match alias {
             Some(a) => {
-                assert!(s.put_alias_and_link(a, id, &rec).await.unwrap());
+                assert!(s.put_alias_and_link(quark::tenant::DEFAULT_TENANT, a, id, &rec).await.unwrap());
             }
             None => {
-                s.put_link(id, &rec).await.unwrap();
+                s.put_link(quark::tenant::DEFAULT_TENANT, id, &rec).await.unwrap();
             }
         }
         ids.push(id);
@@ -58,7 +58,7 @@ async fn search_matches_url_and_alias() {
     )
     .await;
     let hits = store
-        .search_links("rust", None, 50, None, None)
+        .search_links(quark::tenant::DEFAULT_TENANT, "rust", None, 50, None, None)
         .await
         .unwrap();
     let urls: Vec<&str> = hits.iter().map(|(_, r)| r.url.as_str()).collect();
@@ -91,7 +91,7 @@ async fn search_escapes_wildcards() {
     )
     .await;
     let hits = store
-        .search_links("50%", None, 50, None, None)
+        .search_links(quark::tenant::DEFAULT_TENANT, "50%", None, 50, None, None)
         .await
         .unwrap();
     let urls: Vec<&str> = hits.iter().map(|(_, r)| r.url.as_str()).collect();
@@ -120,7 +120,7 @@ async fn search_is_case_insensitive() {
     )
     .await;
     let hits = store
-        .search_links("RUST", None, 50, None, None)
+        .search_links(quark::tenant::DEFAULT_TENANT, "RUST", None, 50, None, None)
         .await
         .unwrap();
     assert!(
@@ -150,13 +150,13 @@ async fn search_keyset_pagination() {
     )
     .await;
     let page1 = store
-        .search_links("alfa", None, 2, None, None)
+        .search_links(quark::tenant::DEFAULT_TENANT, "alfa", None, 2, None, None)
         .await
         .unwrap();
     assert_eq!(page1.len(), 2);
     let after = page1.last().unwrap().0;
     let page2 = store
-        .search_links("alfa", Some(after), 2, None, None)
+        .search_links(quark::tenant::DEFAULT_TENANT, "alfa", Some(after), 2, None, None)
         .await
         .unwrap();
     assert!(

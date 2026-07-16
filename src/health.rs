@@ -184,7 +184,7 @@ where
     RF: Future<Output = bool>,
 {
     let prev: HashMap<u64, LinkHealth> = store
-        .list_link_health()
+        .list_link_health(crate::tenant::DEFAULT_TENANT)
         .await
         .map_err(|e| e.to_string())?
         .into_iter()
@@ -196,7 +196,7 @@ where
     let mut first_chunk = true;
     loop {
         let page = store
-            .list_links(after, LIST_PAGE, None, None)
+            .list_links(crate::tenant::DEFAULT_TENANT, after, LIST_PAGE, None, None)
             .await
             .map_err(|e| e.to_string())?;
         let n = page.len();
@@ -252,7 +252,7 @@ where
                     }
                 }
                 store
-                    .put_link_health(id, &health)
+                    .put_link_health(crate::tenant::DEFAULT_TENANT, id, &health)
                     .await
                     .map_err(|e| e.to_string())?;
             }
@@ -412,11 +412,11 @@ mod tests {
             Arc::new(LmdbStore::open_with_node_id(dir.path(), None).unwrap());
 
         // id 1: external, will probe BROKEN (no prior health -> assumed healthy -> transition).
-        store.put_link(1, &rec("http://a.example/")).await.unwrap();
+        store.put_link(crate::tenant::DEFAULT_TENANT, 1, &rec("http://a.example/")).await.unwrap();
         // id 2: external, was BROKEN, will probe HEALTHY -> recovered.
-        store.put_link(2, &rec("http://b.example/")).await.unwrap();
+        store.put_link(crate::tenant::DEFAULT_TENANT, 2, &rec("http://b.example/")).await.unwrap();
         store
-            .put_link_health(
+            .put_link_health(crate::tenant::DEFAULT_TENANT, 
                 2,
                 &LinkHealth {
                     checked_at: 1,
@@ -427,7 +427,7 @@ mod tests {
             .await
             .unwrap();
         // id 3: internal host, must be SKIPPED (never probed, no health written).
-        store.put_link(3, &rec("http://127.0.0.1/x")).await.unwrap();
+        store.put_link(crate::tenant::DEFAULT_TENANT, 3, &rec("http://127.0.0.1/x")).await.unwrap();
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         let dispatcher = WebhookDispatcher::new(
@@ -460,7 +460,7 @@ mod tests {
 
         // Health persisted for 1 and 2 only.
         let health: HashMap<u64, LinkHealth> = store
-            .list_link_health()
+            .list_link_health(crate::tenant::DEFAULT_TENANT)
             .await
             .unwrap()
             .into_iter()

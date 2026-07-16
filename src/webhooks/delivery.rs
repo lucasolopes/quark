@@ -131,7 +131,7 @@ impl WebhookDispatcher {
         let Some(store) = &self.outbox else {
             return Vec::new();
         };
-        let subs = match store.list_webhooks().await {
+        let subs = match store.list_webhooks(crate::tenant::DEFAULT_TENANT).await {
             Ok(subs) => subs,
             Err(e) => {
                 eprintln!(
@@ -215,7 +215,7 @@ async fn refresh_snapshot(
     clicked: &AtomicBool,
     expired: &AtomicBool,
 ) -> Vec<WebhookSubscription> {
-    match store.list_webhooks().await {
+    match store.list_webhooks(crate::tenant::DEFAULT_TENANT).await {
         Ok(subs) => {
             let has_clicked = subs
                 .iter()
@@ -457,7 +457,7 @@ pub fn spawn_webhook_relay(store: Arc<dyn Store>, client: reqwest::Client) -> Jo
 /// permanently: the row is only ever dead-lettered against a real, refreshed
 /// snapshot on a later tick... see the note in `deliver_claimed`).
 async fn refresh_relay_snapshot(store: &Arc<dyn Store>) -> Vec<WebhookSubscription> {
-    match store.list_webhooks().await {
+    match store.list_webhooks(crate::tenant::DEFAULT_TENANT).await {
         Ok(subs) => subs,
         Err(e) => {
             eprintln!(
@@ -520,7 +520,7 @@ async fn deliver_claimed(
     let fetched;
     let sub = match subs.iter().find(|s| s.id == delivery.subscription_id) {
         Some(s) => s,
-        None => match store.get_webhook(delivery.subscription_id).await {
+        None => match store.get_webhook(crate::tenant::DEFAULT_TENANT, delivery.subscription_id).await {
             Ok(Some(s)) => {
                 fetched = s;
                 &fetched
@@ -792,20 +792,34 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Store for StubStore {
-        async fn next_id(&self) -> Result<u64, StoreError> {
+        async fn next_id(&self, _tenant: crate::tenant::TenantId) -> Result<u64, StoreError> {
             unimplemented!()
         }
-        async fn get_link(&self, _id: u64) -> Result<Option<Record>, StoreError> {
+        async fn get_link(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+        ) -> Result<Option<Record>, StoreError> {
             unimplemented!()
         }
-        async fn put_link(&self, _id: u64, _rec: &Record) -> Result<(), StoreError> {
+        async fn put_link(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+            _rec: &Record,
+        ) -> Result<(), StoreError> {
             unimplemented!()
         }
-        async fn get_alias(&self, _alias: &str) -> Result<Option<u64>, StoreError> {
+        async fn get_alias(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _alias: &str,
+        ) -> Result<Option<u64>, StoreError> {
             unimplemented!()
         }
         async fn put_alias_and_link(
             &self,
+            _tenant: crate::tenant::TenantId,
             _alias: &str,
             _id: u64,
             _rec: &Record,
@@ -814,6 +828,7 @@ mod tests {
         }
         async fn put_link_tx(
             &self,
+            _tenant: crate::tenant::TenantId,
             _id: u64,
             _rec: &Record,
             _deliveries: &[OutboxRow],
@@ -822,6 +837,7 @@ mod tests {
         }
         async fn put_alias_and_link_tx(
             &self,
+            _tenant: crate::tenant::TenantId,
             _alias: &str,
             _id: u64,
             _rec: &Record,
@@ -831,6 +847,7 @@ mod tests {
         }
         async fn delete_link_tx(
             &self,
+            _tenant: crate::tenant::TenantId,
             _id: u64,
             _deliveries: &[OutboxRow],
         ) -> Result<(), StoreError> {
@@ -838,6 +855,7 @@ mod tests {
         }
         async fn list_links(
             &self,
+            _tenant: crate::tenant::TenantId,
             _after: Option<u64>,
             _limit: usize,
             _tag: Option<&str>,
@@ -847,6 +865,7 @@ mod tests {
         }
         async fn search_links(
             &self,
+            _tenant: crate::tenant::TenantId,
             _q: &str,
             _after: Option<u64>,
             _limit: usize,
@@ -855,37 +874,75 @@ mod tests {
         ) -> Result<Vec<(u64, Record)>, StoreError> {
             unimplemented!()
         }
-        async fn list_tags(&self) -> Result<Vec<(String, u64)>, StoreError> {
+        async fn list_tags(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Vec<(String, u64)>, StoreError> {
             unimplemented!()
         }
-        async fn list_folders(&self) -> Result<Vec<(String, u64)>, StoreError> {
+        async fn list_folders(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Vec<(String, u64)>, StoreError> {
             unimplemented!()
         }
-        async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError> {
+        async fn list_aliases(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Vec<(String, u64)>, StoreError> {
             unimplemented!()
         }
-        async fn delete_link(&self, _id: u64) -> Result<(), StoreError> {
+        async fn delete_link(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+        ) -> Result<(), StoreError> {
             unimplemented!()
         }
-        async fn delete_alias(&self, _alias: &str) -> Result<(), StoreError> {
+        async fn delete_alias(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _alias: &str,
+        ) -> Result<(), StoreError> {
             unimplemented!()
         }
-        async fn list_webhooks(&self) -> Result<Vec<WebhookSubscription>, StoreError> {
+        async fn list_webhooks(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Vec<WebhookSubscription>, StoreError> {
             Ok(self.subs.clone())
         }
-        async fn get_webhook(&self, _id: u64) -> Result<Option<WebhookSubscription>, StoreError> {
+        async fn get_webhook(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+        ) -> Result<Option<WebhookSubscription>, StoreError> {
             unimplemented!()
         }
-        async fn put_webhook(&self, _sub: &WebhookSubscription) -> Result<(), StoreError> {
+        async fn put_webhook(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _sub: &WebhookSubscription,
+        ) -> Result<(), StoreError> {
             unimplemented!()
         }
-        async fn delete_webhook(&self, _id: u64) -> Result<bool, StoreError> {
+        async fn delete_webhook(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+        ) -> Result<bool, StoreError> {
             unimplemented!()
         }
-        async fn next_webhook_id(&self) -> Result<u64, StoreError> {
+        async fn next_webhook_id(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<u64, StoreError> {
             unimplemented!()
         }
-        async fn list_api_tokens(&self) -> Result<Vec<crate::auth::ApiToken>, StoreError> {
+        async fn list_api_tokens(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Vec<crate::auth::ApiToken>, StoreError> {
             unimplemented!()
         }
         async fn get_api_token_by_hash(
@@ -894,23 +951,43 @@ mod tests {
         ) -> Result<Option<crate::auth::ApiToken>, StoreError> {
             unimplemented!()
         }
-        async fn put_api_token(&self, _token: &crate::auth::ApiToken) -> Result<(), StoreError> {
+        async fn put_api_token(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _token: &crate::auth::ApiToken,
+        ) -> Result<(), StoreError> {
             unimplemented!()
         }
-        async fn delete_api_token(&self, _id: u64) -> Result<bool, StoreError> {
+        async fn delete_api_token(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+        ) -> Result<bool, StoreError> {
             unimplemented!()
         }
-        async fn next_api_token_id(&self) -> Result<u64, StoreError> {
+        async fn next_api_token_id(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<u64, StoreError> {
             unimplemented!()
         }
-        async fn bump_visits(&self, _id: u64) -> Result<u64, StoreError> {
+        async fn bump_visits(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+        ) -> Result<u64, StoreError> {
             unimplemented!()
         }
-        async fn visits(&self, _id: u64) -> Result<u64, StoreError> {
+        async fn visits(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+        ) -> Result<u64, StoreError> {
             unimplemented!()
         }
         async fn put_link_health(
             &self,
+            _tenant: crate::tenant::TenantId,
             _id: u64,
             _health: &crate::store::LinkHealth,
         ) -> Result<(), StoreError> {
@@ -918,16 +995,21 @@ mod tests {
         }
         async fn list_link_health(
             &self,
+            _tenant: crate::tenant::TenantId,
         ) -> Result<Vec<(u64, crate::store::LinkHealth)>, StoreError> {
             unimplemented!()
         }
         async fn link_health_for(
             &self,
+            _tenant: crate::tenant::TenantId,
             _ids: &[u64],
         ) -> Result<Vec<(u64, crate::store::LinkHealth)>, StoreError> {
             unimplemented!()
         }
-        async fn list_broken_link_ids(&self) -> Result<Vec<u64>, StoreError> {
+        async fn list_broken_link_ids(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Vec<u64>, StoreError> {
             unimplemented!()
         }
         async fn try_acquire_health_lease(
@@ -939,16 +1021,21 @@ mod tests {
         }
         async fn put_sheets_connection(
             &self,
+            _tenant: crate::tenant::TenantId,
             _c: &crate::sheets::SheetsConnection,
         ) -> Result<(), StoreError> {
             unimplemented!()
         }
         async fn get_sheets_connection(
             &self,
+            _tenant: crate::tenant::TenantId,
         ) -> Result<Option<crate::sheets::SheetsConnection>, StoreError> {
             unimplemented!()
         }
-        async fn delete_sheets_connection(&self) -> Result<(), StoreError> {
+        async fn delete_sheets_connection(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<(), StoreError> {
             unimplemented!()
         }
         async fn try_acquire_sheets_lease(
@@ -958,7 +1045,11 @@ mod tests {
         ) -> Result<bool, StoreError> {
             unimplemented!()
         }
-        async fn put_session(&self, _session: &crate::auth::Session) -> Result<(), StoreError> {
+        async fn put_session(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _session: &crate::auth::Session,
+        ) -> Result<(), StoreError> {
             unimplemented!()
         }
         async fn get_session_by_hash(
@@ -974,31 +1065,96 @@ mod tests {
         async fn gc_sessions(&self, _now: u64) -> Result<(), StoreError> {
             unimplemented!()
         }
-        async fn next_pixel_id(&self) -> Result<u64, StoreError> {
+        async fn next_pixel_id(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<u64, StoreError> {
             unimplemented!()
         }
         async fn get_pixel(
             &self,
+            _tenant: crate::tenant::TenantId,
             _id: u64,
         ) -> Result<Option<crate::pixel::PixelConfig>, StoreError> {
             unimplemented!()
         }
-        async fn put_pixel(&self, _config: &crate::pixel::PixelConfig) -> Result<(), StoreError> {
+        async fn put_pixel(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _config: &crate::pixel::PixelConfig,
+        ) -> Result<(), StoreError> {
             unimplemented!()
         }
-        async fn delete_pixel(&self, _id: u64) -> Result<bool, StoreError> {
+        async fn delete_pixel(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+        ) -> Result<bool, StoreError> {
             unimplemented!()
         }
-        async fn list_pixels(&self) -> Result<Vec<crate::pixel::PixelConfig>, StoreError> {
+        async fn list_pixels(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Vec<crate::pixel::PixelConfig>, StoreError> {
             unimplemented!()
         }
-        async fn get_wellknown(&self, _name: &str) -> Result<Option<String>, StoreError> {
+        async fn get_wellknown(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _name: &str,
+        ) -> Result<Option<String>, StoreError> {
             unimplemented!()
         }
-        async fn put_wellknown(&self, _name: &str, _body: &str) -> Result<(), StoreError> {
+        async fn put_wellknown(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _name: &str,
+            _body: &str,
+        ) -> Result<(), StoreError> {
             unimplemented!()
         }
-        async fn delete_wellknown(&self, _name: &str) -> Result<(), StoreError> {
+        async fn delete_wellknown(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _name: &str,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn put_tenant(&self, _t: &crate::tenant::Tenant) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn get_tenant(
+            &self,
+            _id: crate::tenant::TenantId,
+        ) -> Result<Option<crate::tenant::Tenant>, StoreError> {
+            unimplemented!()
+        }
+        async fn next_user_id(&self) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
+        async fn put_user(&self, _u: &crate::tenant::User) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn get_user_by_subject(
+            &self,
+            _subject: &str,
+        ) -> Result<Option<crate::tenant::User>, StoreError> {
+            unimplemented!()
+        }
+        async fn put_membership(&self, _m: &crate::tenant::Membership) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn get_membership(
+            &self,
+            _user_id: u64,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Option<crate::tenant::Membership>, StoreError> {
+            unimplemented!()
+        }
+        async fn list_memberships_for_user(
+            &self,
+            _user_id: u64,
+        ) -> Result<Vec<crate::tenant::Membership>, StoreError> {
             unimplemented!()
         }
         async fn enqueue_deliveries(&self, _rows: &[OutboxRow]) -> Result<(), StoreError> {

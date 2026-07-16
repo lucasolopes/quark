@@ -249,7 +249,7 @@ pub async fn sync(
     let mut after: Option<u64> = None;
     loop {
         let page = store
-            .list_links(after, SYNC_PAGE, None, None)
+            .list_links(crate::tenant::DEFAULT_TENANT, after, SYNC_PAGE, None, None)
             .await
             .map_err(|e| format!("list_links: {e:?}"))?;
         let got = page.len();
@@ -269,7 +269,7 @@ pub async fn sync(
 
     let mut visits = std::collections::HashMap::with_capacity(links.len());
     for (id, _) in &links {
-        if let Ok(v) = store.visits(*id).await {
+        if let Ok(v) = store.visits(crate::tenant::DEFAULT_TENANT, *id).await {
             visits.insert(*id, v);
         }
     }
