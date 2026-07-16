@@ -365,6 +365,7 @@ pub enum CreateError {
 #[allow(clippy::too_many_arguments)]
 pub async fn create_link_core(
     st: &AppState,
+    tenant: crate::tenant::TenantId,
     url: &str,
     alias: Option<&str>,
     ttl: Option<u64>,
@@ -415,7 +416,7 @@ pub async fn create_link_core(
         if codec::from_base62(alias).is_some() {
             return Err(CreateError::AliasCollision);
         }
-        let id = match st.store.next_id(crate::tenant::DEFAULT_TENANT).await {
+        let id = match st.store.next_id(tenant).await {
             Ok(id) => id,
             Err(StoreError::IdSpaceExhausted) => return Err(CreateError::IdExhausted),
             Err(_) => return Err(CreateError::Backend),
@@ -433,10 +434,10 @@ pub async fn create_link_core(
                 None,
             ),
         };
-        let rows = st.webhooks.lifecycle_deliveries(&ev).await;
+        let rows = st.webhooks.lifecycle_deliveries(tenant, &ev).await;
         match st
             .store
-            .put_alias_and_link_tx(crate::tenant::DEFAULT_TENANT, alias, id, &rec, &rows)
+            .put_alias_and_link_tx(tenant, alias, id, &rec, &rows)
             .await
         {
             Ok(true) => {}
@@ -447,7 +448,7 @@ pub async fn create_link_core(
         return Ok(alias.to_string());
     }
 
-    let id = match st.store.next_id(crate::tenant::DEFAULT_TENANT).await {
+    let id = match st.store.next_id(tenant).await {
         Ok(id) => id,
         Err(StoreError::IdSpaceExhausted) => return Err(CreateError::IdExhausted),
         Err(_) => return Err(CreateError::Backend),
@@ -468,13 +469,8 @@ pub async fn create_link_core(
             None,
         ),
     };
-    let rows = st.webhooks.lifecycle_deliveries(&ev).await;
-    if st
-        .store
-        .put_link_tx(crate::tenant::DEFAULT_TENANT, id, &rec, &rows)
-        .await
-        .is_err()
-    {
+    let rows = st.webhooks.lifecycle_deliveries(tenant, &ev).await;
+    if st.store.put_link_tx(tenant, id, &rec, &rows).await.is_err() {
         return Err(CreateError::Backend);
     }
     st.webhooks.emit_if_in_memory(ev);
@@ -583,6 +579,7 @@ async fn create(
     };
     match create_link_core(
         &st,
+        crate::tenant::DEFAULT_TENANT,
         &req.url,
         req.alias.as_deref(),
         req.ttl,
@@ -629,9 +626,10 @@ async fn admin_import(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::LinksWrite).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::LinksWrite).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     // Content-type-sniffed body: a cross-site text/plain POST would parse, so
     // guard it like the other cookie-authable simple-POST endpoints.
     if let Err(status) = csrf_guard(&headers) {
@@ -654,6 +652,7 @@ async fn admin_import(
     for (index, row) in rows.into_iter().enumerate() {
         match create_link_core(
             &st,
+            p.tenant,
             &row.url,
             row.alias.as_deref(),
             row.ttl,
@@ -771,14 +770,14 @@ async fn app_destination_ok(
 /// domain); if not, treats it as an alias in the store. `Ok(Some(id))` resolved,
 /// `Ok(None)` doesn't exist, `Err` backend failure. Each handler maps these
 /// cases to its own HTTP response (the redirect attaches Cache-Control on 404).
-async fn resolve_code(st: &AppState, code: &str) -> Result<Option<u64>, StoreError> {
+async fn resolve_code(
+    st: &AppState,
+    tenant: crate::tenant::TenantId,
+    code: &str,
+) -> Result<Option<u64>, StoreError> {
     match codec::from_base62(code) {
         Some(c) if c <= permute::MAX_ID => Ok(Some(permute::decode(c, st.key))),
-        _ => {
-            st.store
-                .get_alias(crate::tenant::DEFAULT_TENANT, code)
-                .await
-        }
+        _ => st.store.get_alias(tenant, code).await,
     }
 }
 
@@ -984,7 +983,7 @@ async fn unlock(
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
     }
-    let id = match resolve_code(&st, &code).await {
+    let id = match resolve_code(&st, crate::tenant::DEFAULT_TENANT, &code).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             return (
@@ -1063,7 +1062,7 @@ async fn redirect(
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    let id = match resolve_code(&st, &code).await {
+    let id = match resolve_code(&st, crate::tenant::DEFAULT_TENANT, &code).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             return (
@@ -1256,7 +1255,7 @@ async fn stats(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
-    let id = match resolve_code(&st, &code).await {
+    let id = match resolve_code(&st, p.tenant, &code).await {
         Ok(Some(id)) => id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -1645,9 +1644,10 @@ const SHEETS_STATE_COOKIE: &str = "qk_sheets_state";
 /// could not carry the `x-admin-token` header). Returns the admin-surface
 /// not-found status when the connector is not configured.
 async fn sheets_connect(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(status) = admin_guard(&st, &headers, Scope::Full).await {
-        return status.into_response();
-    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     let Some(cfg) = st.sheets.as_ref() else {
         return sheets_off_status(&st).into_response();
     };
@@ -1656,8 +1656,16 @@ async fn sheets_connect(State(st): State<Arc<AppState>>, headers: HeaderMap) -> 
     // the state is bound to THIS browser and cannot be replayed by an attacker who
     // merely observes a leaked `state` value (login-CSRF). This is the same
     // double-submit binding the OIDC login flow uses.
+    //
+    // The signed cookie's otherwise-unused `verifier` slot carries the calling
+    // principal's tenant (as a decimal string) across the top-level redirect to
+    // Google and back, so `sheets_callback` persists the connection under the
+    // SAME tenant that started the flow (Host->tenant resolution is P3; until
+    // then this is the only way the callback — which carries no admin
+    // credential — learns the tenant).
     let state = crate::oidc::random_token();
-    let signed = crate::oidc::sign_login_state(&st.signing_key, &state, "", "");
+    let signed =
+        crate::oidc::sign_login_state(&st.signing_key, &state, &p.tenant.0.to_string(), "");
     let url = crate::sheets::connect_url(cfg, &state);
     let secure = if request_is_https(&headers) {
         "; Secure"
@@ -1727,10 +1735,18 @@ async fn sheets_callback(
         return (StatusCode::UNAUTHORIZED, "connect was denied at Google").into_response();
     }
     // The cookie holds the signed state; the query echoes the raw random value.
-    let cookie_state = cookie_value(&headers, SHEETS_STATE_COOKIE)
-        .and_then(|c| crate::oidc::verify_login_state(&st.signing_key, c))
-        .map(|(state, _, _)| state);
-    let matches = match (cookie_state.as_deref(), params.state.as_deref()) {
+    // The `verifier` slot carries the tenant that started the flow (see
+    // `sheets_connect`); it comes from the SAME HMAC-verified cookie as the
+    // state itself, so it is exactly as trustworthy.
+    let verified = cookie_value(&headers, SHEETS_STATE_COOKIE)
+        .and_then(|c| crate::oidc::verify_login_state(&st.signing_key, c));
+    let cookie_state = verified.as_ref().map(|(state, _, _)| state.as_str());
+    let tenant = verified
+        .as_ref()
+        .and_then(|(_, verifier, _)| verifier.parse::<u64>().ok())
+        .map(crate::tenant::TenantId)
+        .unwrap_or(crate::tenant::DEFAULT_TENANT);
+    let matches = match (cookie_state, params.state.as_deref()) {
         (Some(a), Some(b)) => constant_time_eq(a.as_bytes(), b.as_bytes()),
         _ => false,
     };
@@ -1762,12 +1778,7 @@ async fn sheets_callback(
         last_sync: None,
         last_status: crate::sheets::SyncStatus::Never,
     };
-    if st
-        .store
-        .put_sheets_connection(crate::tenant::DEFAULT_TENANT, &conn)
-        .await
-        .is_err()
-    {
+    if st.store.put_sheets_connection(tenant, &conn).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let clear = format!("{SHEETS_STATE_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
@@ -2182,15 +2193,12 @@ async fn admin_folders_list(State(st): State<Arc<AppState>>, headers: HeaderMap)
 /// alias to remove; if it's an alias string, returns the alias to delete alongside it.
 async fn resolve_for_admin(
     st: &AppState,
+    tenant: crate::tenant::TenantId,
     code: &str,
 ) -> Result<Option<(u64, Option<String>)>, StoreError> {
     match codec::from_base62(code) {
         Some(c) if c <= permute::MAX_ID => Ok(Some((permute::decode(c, st.key), None))),
-        _ => match st
-            .store
-            .get_alias(crate::tenant::DEFAULT_TENANT, code)
-            .await?
-        {
+        _ => match st.store.get_alias(tenant, code).await? {
             Some(id) => Ok(Some((id, Some(code.to_string())))),
             None => Ok(None),
         },
@@ -2206,7 +2214,7 @@ async fn admin_link_delete(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
-    let (id, alias) = match resolve_for_admin(&st, &code).await {
+    let (id, alias) = match resolve_for_admin(&st, p.tenant, &code).await {
         Ok(Some(v)) => v,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -2229,7 +2237,7 @@ async fn admin_link_delete(
             None,
         ),
     };
-    let rows = st.webhooks.lifecycle_deliveries(&ev).await;
+    let rows = st.webhooks.lifecycle_deliveries(p.tenant, &ev).await;
     if st.store.delete_link_tx(p.tenant, id, &rows).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
@@ -2251,7 +2259,7 @@ async fn admin_link_patch(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
-    let (id, alias) = match resolve_for_admin(&st, &code).await {
+    let (id, alias) = match resolve_for_admin(&st, p.tenant, &code).await {
         Ok(Some(v)) => v,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -2418,7 +2426,7 @@ async fn admin_link_patch(
             None,
         ),
     };
-    let rows = st.webhooks.lifecycle_deliveries(&ev).await;
+    let rows = st.webhooks.lifecycle_deliveries(p.tenant, &ev).await;
     if st
         .store
         .put_link_tx(p.tenant, id, &rec, &rows)
@@ -3209,9 +3217,10 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::{
-        access_log_line, app_destination, cache_control_for, classify_platform, fbclid_from_query,
-        normalize_max_visits, parse_cors_origins, send_test_event_guarded, EventType, Platform,
-        SubscriptionKind, WebhookSubscription,
+        access_log_line, app_destination, cache_control_for, classify_platform, create_link_core,
+        fbclid_from_query, normalize_max_visits, parse_cors_origins, resolve_code,
+        resolve_for_admin, send_test_event_guarded, EventType, Platform, SubscriptionKind,
+        WebhookSubscription,
     };
     use crate::store::Record;
     use axum::body::Bytes;
@@ -3339,6 +3348,177 @@ mod tests {
         assert_eq!(
             admin_guard(&st, &ht, Scope::Full).await.unwrap_err(),
             StatusCode::FORBIDDEN
+        );
+    }
+
+    /// P2a Task 3: `create_link_core` must write under the `tenant` PARAM, not
+    /// `DEFAULT_TENANT`. Exercises both branches (numeric id and custom alias)
+    /// against a store keyed by tenant, so a regression to the old hardcode
+    /// would make the link/alias invisible under the passed tenant (and
+    /// visible under `DEFAULT_TENANT` instead).
+    #[tokio::test]
+    async fn create_link_core_numeric_writes_under_the_passed_tenant() {
+        let st = guard_state(None).await;
+        let tenant = crate::tenant::TenantId(7);
+        let headers = ReqHeaderMap::new();
+
+        let code = create_link_core(
+            &st,
+            tenant,
+            "https://example.com/numeric",
+            None,
+            None,
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            &headers,
+        )
+        .await
+        .expect("create succeeds");
+        let permuted = crate::codec::from_base62(&code).expect("numeric code decodes");
+        let id = crate::permute::decode(permuted, st.key);
+
+        assert!(
+            st.store.get_link(tenant, id).await.unwrap().is_some(),
+            "the link must be visible under the passed tenant"
+        );
+        assert!(
+            st.store
+                .get_link(crate::tenant::DEFAULT_TENANT, id)
+                .await
+                .unwrap()
+                .is_none(),
+            "the link must NOT be visible under DEFAULT_TENANT"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_link_core_alias_writes_under_the_passed_tenant() {
+        let st = guard_state(None).await;
+        let tenant = crate::tenant::TenantId(7);
+        let headers = ReqHeaderMap::new();
+
+        let code = create_link_core(
+            &st,
+            tenant,
+            "https://example.com/alias",
+            Some("my-alias"),
+            None,
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            &headers,
+        )
+        .await
+        .expect("create succeeds");
+        assert_eq!(code, "my-alias");
+
+        assert!(
+            st.store
+                .get_alias(tenant, "my-alias")
+                .await
+                .unwrap()
+                .is_some(),
+            "the alias must resolve under the passed tenant"
+        );
+        assert_eq!(
+            st.store
+                .get_alias(crate::tenant::DEFAULT_TENANT, "my-alias")
+                .await
+                .unwrap(),
+            None,
+            "the alias must NOT resolve under DEFAULT_TENANT"
+        );
+    }
+
+    /// `resolve_code`'s alias branch must call `get_alias(tenant, code)` with
+    /// the PASSED tenant, not `DEFAULT_TENANT` (the numeric-code branch is
+    /// tenant-independent by construction, so this only exercises aliases).
+    #[tokio::test]
+    async fn resolve_code_resolves_alias_within_the_passed_tenant() {
+        let st = guard_state(None).await;
+        let tenant = crate::tenant::TenantId(9);
+        let rec = Record {
+            url: "https://example.com".into(),
+            expiry: None,
+            created: 0,
+            tags: Vec::new(),
+            max_visits: None,
+            rules: Vec::new(),
+            variants: Vec::new(),
+            app_ios: None,
+            app_android: None,
+            folder: None,
+            fallback_url: None,
+            password_hash: None,
+        };
+        st.store
+            .put_alias_and_link(tenant, "foo", 5, &rec)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resolve_code(&st, tenant, "foo").await.unwrap(),
+            Some(5),
+            "resolve_code must resolve the alias within its own tenant"
+        );
+        assert_eq!(
+            resolve_code(&st, crate::tenant::DEFAULT_TENANT, "foo")
+                .await
+                .unwrap(),
+            None,
+            "resolve_code must NOT resolve the alias from a different tenant"
+        );
+    }
+
+    /// `resolve_for_admin`'s alias branch must call `get_alias(tenant, code)`
+    /// with the PASSED tenant, mirroring `resolve_code`.
+    #[tokio::test]
+    async fn resolve_for_admin_resolves_alias_within_the_passed_tenant() {
+        let st = guard_state(None).await;
+        let tenant = crate::tenant::TenantId(11);
+        let rec = Record {
+            url: "https://example.com".into(),
+            expiry: None,
+            created: 0,
+            tags: Vec::new(),
+            max_visits: None,
+            rules: Vec::new(),
+            variants: Vec::new(),
+            app_ios: None,
+            app_android: None,
+            folder: None,
+            fallback_url: None,
+            password_hash: None,
+        };
+        st.store
+            .put_alias_and_link(tenant, "bar", 6, &rec)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resolve_for_admin(&st, tenant, "bar").await.unwrap(),
+            Some((6, Some("bar".to_string()))),
+            "resolve_for_admin must resolve the alias within its own tenant"
+        );
+        assert_eq!(
+            resolve_for_admin(&st, crate::tenant::DEFAULT_TENANT, "bar")
+                .await
+                .unwrap(),
+            None,
+            "resolve_for_admin must NOT resolve the alias from a different tenant"
         );
     }
 

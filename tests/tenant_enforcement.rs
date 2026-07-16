@@ -128,6 +128,7 @@ async fn cloud_analytics_and_outbox_accessors_survive_force_rls() {
         payload: "{}".to_string(),
         created: 0,
         next_attempt_at: 0,
+        tenant_id: TenantId(1),
     };
     t1.put_link_tx(
         link_id,
@@ -140,9 +141,15 @@ async fn cloud_analytics_and_outbox_accessors_survive_force_rls() {
     // The delivery actually landed and is claimable by the relay (bare pool,
     // no `app.tenant_id` set — must not be fail-closed by FORCE either).
     let claimed = bare.claim_due_deliveries(1, 10).await.unwrap();
-    assert!(
-        claimed.iter().any(|d| d.delivery_key == delivery_key),
-        "delivery enqueued by put_link_tx must be claimable by the outbox relay"
+    let d = claimed
+        .iter()
+        .find(|d| d.delivery_key == delivery_key)
+        .expect("delivery enqueued by put_link_tx must be claimable by the outbox relay");
+    assert_eq!(
+        d.tenant_id,
+        TenantId(1),
+        "the claimed row must carry the subscription's tenant, so the relay \
+         resolves it via get_webhook(TenantId(1), ...) and not DEFAULT_TENANT"
     );
 
     // Analytics: `record_batch`/`stats` run on the bare pool too and must not

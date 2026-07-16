@@ -3292,3 +3292,93 @@ async fn sheets_callback_requires_the_state_cookie() {
         .unwrap()
         .is_none());
 }
+
+/// P2a Task 3: `/connect` must bind the state cookie to the CALLING
+/// principal's tenant (not always `DEFAULT_TENANT`), so `sheets_callback` can
+/// later persist the connection under the right tenant even though the
+/// callback itself carries no admin credential. Exercised with an API token
+/// scoped to a non-default tenant (P2b has no real tenant signup yet, but the
+/// `Principal`/`ApiToken` plumbing already carries an arbitrary `tenant_id`).
+#[tokio::test]
+async fn sheets_connect_binds_the_state_cookie_to_the_callers_tenant() {
+    use quark::auth::{hash_token, ApiToken, Scope};
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let cfg = quark::sheets::SheetsConfig::from_parts(
+        "cid",
+        "sec",
+        "https://h/admin/integrations/sheets/callback",
+        None,
+    )
+    .unwrap();
+    let signing_key = [0u8; 32];
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: Some(Arc::new(cfg)),
+        sheets_api: None,
+        oidc_configured: false,
+        multi_tenant: false,
+        cache,
+        store: store.clone(),
+        key: 0x1234,
+        signing_key,
+        analytics_tx: tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+    });
+    let tenant = quark::tenant::TenantId(42);
+    store
+        .put_api_token(
+            tenant,
+            &ApiToken {
+                id: 1,
+                name: "t".into(),
+                token_hash: hash_token("tenant-42-token"),
+                scopes: vec![Scope::Full],
+                rate_limit_per_min: None,
+                created: 0,
+                tenant_id: tenant,
+            },
+        )
+        .await
+        .unwrap();
+    let app = router(state);
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/integrations/sheets/connect")
+                .header("x-admin-token", "tenant-42-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let set_cookie = resp
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .expect("connect sets a state cookie")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let cookie_value = set_cookie
+        .split(';')
+        .next()
+        .unwrap()
+        .strip_prefix("qk_sheets_state=")
+        .expect("cookie carries the sheets state name");
+    let (_state, verifier, _nonce) = quark::oidc::verify_login_state(&signing_key, cookie_value)
+        .expect("the cookie's HMAC must verify");
+    assert_eq!(
+        verifier,
+        tenant.0.to_string(),
+        "the state cookie must carry the calling principal's tenant"
+    );
+}

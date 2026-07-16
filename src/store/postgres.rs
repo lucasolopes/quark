@@ -177,6 +177,7 @@ fn row_to_delivery(r: &PgRow) -> Result<OutboxDelivery, StoreError> {
     let event_type: String = r.try_get("event_type").map_err(StoreError::backend)?;
     let payload: String = r.try_get("payload").map_err(StoreError::backend)?;
     let attempts: i32 = r.try_get("attempts").map_err(StoreError::backend)?;
+    let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
     Ok(OutboxDelivery {
         id,
         delivery_key,
@@ -184,6 +185,7 @@ fn row_to_delivery(r: &PgRow) -> Result<OutboxDelivery, StoreError> {
         event_type,
         payload,
         attempts: attempts as u32,
+        tenant_id: TenantId(tenant_id as u64),
     })
 }
 
@@ -324,8 +326,8 @@ async fn enqueue_in_tx(
 ) -> Result<(), StoreError> {
     for row in rows {
         sqlx::query(
-            "INSERT INTO webhook_deliveries (delivery_key, subscription_id, event_type, payload, created, next_attempt_at) \
-             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (delivery_key) DO NOTHING",
+            "INSERT INTO webhook_deliveries (delivery_key, subscription_id, event_type, payload, created, next_attempt_at, tenant_id) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (delivery_key) DO NOTHING",
         )
         .bind(&row.delivery_key)
         .bind(row.subscription_id as i64)
@@ -333,6 +335,7 @@ async fn enqueue_in_tx(
         .bind(&row.payload)
         .bind(row.created as i64)
         .bind(row.next_attempt_at as i64)
+        .bind(row.tenant_id.0 as i64)
         .execute(&mut **tx)
         .await
         .map_err(StoreError::backend)?;
@@ -1784,8 +1787,8 @@ impl Store for PostgresStore {
         let mut tx = self.write.begin().await.map_err(StoreError::backend)?;
         for row in rows {
             sqlx::query(
-                "INSERT INTO webhook_deliveries (delivery_key, subscription_id, event_type, payload, created, next_attempt_at) \
-                 VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (delivery_key) DO NOTHING",
+                "INSERT INTO webhook_deliveries (delivery_key, subscription_id, event_type, payload, created, next_attempt_at, tenant_id) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (delivery_key) DO NOTHING",
             )
             .bind(&row.delivery_key)
             .bind(row.subscription_id as i64)
@@ -1793,6 +1796,7 @@ impl Store for PostgresStore {
             .bind(&row.payload)
             .bind(row.created as i64)
             .bind(row.next_attempt_at as i64)
+            .bind(row.tenant_id.0 as i64)
             .execute(&mut *tx)
             .await
             .map_err(StoreError::backend)?;
@@ -1816,7 +1820,7 @@ impl Store for PostgresStore {
                  FOR UPDATE SKIP LOCKED \
                  LIMIT $3 \
              ) \
-             RETURNING id, delivery_key, subscription_id, event_type, payload, attempts",
+             RETURNING id, delivery_key, subscription_id, event_type, payload, attempts, tenant_id",
         )
         .bind(lease_until as i64)
         .bind(now as i64)

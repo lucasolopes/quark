@@ -71,6 +71,7 @@ fn outbox_row(key: &str, sub_id: u64, at: u64) -> OutboxRow {
         payload: r#"{"id":"evt_test","type":"link.created"}"#.to_string(),
         created: at,
         next_attempt_at: at,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     }
 }
 

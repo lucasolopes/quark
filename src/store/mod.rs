@@ -211,6 +211,11 @@ pub struct OutboxRow {
     pub payload: String,
     pub created: u64,
     pub next_attempt_at: u64,
+    /// The tenant that owns the subscription this row delivers to (the
+    /// link/event's tenant). Stamped by `lifecycle_deliveries` and carried
+    /// through so `claim_due_deliveries` can hand it back to the relay, which
+    /// resolves the subscription within the correct tenant.
+    pub tenant_id: TenantId,
 }
 
 /// A claimed (leased) outbox delivery the relay is about to attempt. `id` is
@@ -224,6 +229,10 @@ pub struct OutboxDelivery {
     pub event_type: String,
     pub payload: String,
     pub attempts: u32,
+    /// The tenant that owns the subscription (carried from the `OutboxRow`
+    /// that was enqueued). The relay uses this to resolve the subscription
+    /// within the right tenant instead of assuming `DEFAULT_TENANT`.
+    pub tenant_id: TenantId,
 }
 
 #[derive(Debug)]

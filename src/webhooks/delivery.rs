@@ -113,13 +113,16 @@ impl WebhookDispatcher {
 
     /// Builds the durable delivery rows for a lifecycle event
     /// (created/updated/deleted) WITHOUT enqueuing them. On the Postgres
-    /// backend (`outbox` set) it reads the current active subscriptions
-    /// (`list_webhooks` + `matches`) and returns one `OutboxRow` per match
-    /// (`delivery_key = "<event_id>.<sub_id>"`, payload = `ev.body`); the caller
-    /// then enqueues those rows inside the SAME transaction as the link
-    /// mutation (via the `_tx` store methods), closing the dual-write window.
-    /// On LMDB (no outbox) it falls back to the in-memory best-effort `emit`
-    /// and returns an empty `Vec` (single-node stays in-memory, unchanged).
+    /// backend (`outbox` set) it reads `tenant`'s active subscriptions
+    /// (`list_webhooks(tenant)` + `matches`) and returns one `OutboxRow` per
+    /// match (`delivery_key = "<event_id>.<sub_id>"`, payload = `ev.body`,
+    /// `tenant_id = tenant`); the caller then enqueues those rows inside the
+    /// SAME transaction as the link mutation (via the `_tx` store methods),
+    /// closing the dual-write window. `tenant` is the link/event's tenant, so
+    /// the relay can later resolve the subscription in the right tenant
+    /// instead of assuming `DEFAULT_TENANT`. On LMDB (no outbox) it falls back
+    /// to the in-memory best-effort `emit` and returns an empty `Vec`
+    /// (single-node stays in-memory, unchanged).
     ///
     /// The subscription read is a read, not part of the atomic write, so it
     /// stays outside the mutation's transaction. A store error is logged and
@@ -127,11 +130,15 @@ impl WebhookDispatcher {
     /// the admin layer and never fails the admin request. This must NOT be
     /// called from the redirect hot path; `link.clicked`/`link.expired` use
     /// `emit` instead.
-    pub async fn lifecycle_deliveries(&self, ev: &WebhookEvent) -> Vec<OutboxRow> {
+    pub async fn lifecycle_deliveries(
+        &self,
+        tenant: crate::tenant::TenantId,
+        ev: &WebhookEvent,
+    ) -> Vec<OutboxRow> {
         let Some(store) = &self.outbox else {
             return Vec::new();
         };
-        let subs = match store.list_webhooks(crate::tenant::DEFAULT_TENANT).await {
+        let subs = match store.list_webhooks(tenant).await {
             Ok(subs) => subs,
             Err(e) => {
                 eprintln!(
@@ -152,6 +159,7 @@ impl WebhookDispatcher {
                 payload: ev.body.clone(),
                 created: now,
                 next_attempt_at: now,
+                tenant_id: tenant,
             })
             .collect()
     }
@@ -456,6 +464,15 @@ pub fn spawn_webhook_relay(store: Arc<dyn Store>, client: reqwest::Client) -> Jo
 /// `deliver_claimed`, so a transient snapshot miss does not silently drop it
 /// permanently: the row is only ever dead-lettered against a real, refreshed
 /// snapshot on a later tick... see the note in `deliver_claimed`).
+///
+/// Scoped to `DEFAULT_TENANT` only: it is a same-tenant fast path (ids are
+/// globally unique, so a hit here is never a cross-tenant match), not the
+/// authoritative source. `deliver_claimed` falls through to
+/// `store.get_webhook(delivery.tenant_id, ...)` on a miss, which is correct
+/// for every tenant — this snapshot just avoids that DB round-trip for the
+/// common (`DEFAULT_TENANT`) case. Multi-tenant load may want an
+/// all-tenant snapshot keyed by `(tenant, id)` instead; not needed while P2b
+/// has not yet created real tenants.
 async fn refresh_relay_snapshot(store: &Arc<dyn Store>) -> Vec<WebhookSubscription> {
     match store.list_webhooks(crate::tenant::DEFAULT_TENANT).await {
         Ok(subs) => subs,
@@ -521,7 +538,7 @@ async fn deliver_claimed(
     let sub = match subs.iter().find(|s| s.id == delivery.subscription_id) {
         Some(s) => s,
         None => match store
-            .get_webhook(crate::tenant::DEFAULT_TENANT, delivery.subscription_id)
+            .get_webhook(delivery.tenant_id, delivery.subscription_id)
             .await
         {
             Ok(Some(s)) => {
@@ -789,8 +806,20 @@ mod tests {
 
     /// Minimal `Store` stub: only `list_webhooks` is exercised by the
     /// delivery worker; every other method is unreachable from these tests.
+    /// `seen_tenant` records the tenant `list_webhooks` was last called with,
+    /// so tests can assert a caller threaded the right tenant through.
     struct StubStore {
         subs: Vec<WebhookSubscription>,
+        seen_tenant: std::sync::Mutex<Option<crate::tenant::TenantId>>,
+    }
+
+    impl StubStore {
+        fn new(subs: Vec<WebhookSubscription>) -> Self {
+            Self {
+                subs,
+                seen_tenant: std::sync::Mutex::new(None),
+            }
+        }
     }
 
     #[async_trait::async_trait]
@@ -911,8 +940,9 @@ mod tests {
         }
         async fn list_webhooks(
             &self,
-            _tenant: crate::tenant::TenantId,
+            tenant: crate::tenant::TenantId,
         ) -> Result<Vec<WebhookSubscription>, StoreError> {
+            *self.seen_tenant.lock().unwrap() = Some(tenant);
             Ok(self.subs.clone())
         }
         async fn get_webhook(
@@ -1396,15 +1426,13 @@ mod tests {
 
     #[tokio::test]
     async fn worker_refuses_internal_destination() {
-        let store: Arc<dyn Store> = Arc::new(StubStore {
-            subs: vec![sub(
-                1,
-                "http://127.0.0.1:9/hook",
-                vec![EventType::LinkCreated],
-                true,
-                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
-            )],
-        });
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![sub(
+            1,
+            "http://127.0.0.1:9/hook",
+            vec![EventType::LinkCreated],
+            true,
+            "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+        )]));
         let clicked = Arc::new(AtomicBool::new(false));
         let expired = Arc::new(AtomicBool::new(false));
         let (tx, rx) = tokio::sync::mpsc::channel(WEBHOOK_CHANNEL_CAPACITY);
@@ -1457,24 +1485,22 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_snapshot_sets_clicked_and_expired_flags() {
-        let store: Arc<dyn Store> = Arc::new(StubStore {
-            subs: vec![
-                sub(
-                    1,
-                    "https://x",
-                    vec![EventType::LinkClicked],
-                    true,
-                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
-                ),
-                sub(
-                    2,
-                    "https://y",
-                    vec![EventType::LinkExpired],
-                    false,
-                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
-                ),
-            ],
-        });
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![
+            sub(
+                1,
+                "https://x",
+                vec![EventType::LinkClicked],
+                true,
+                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            ),
+            sub(
+                2,
+                "https://y",
+                vec![EventType::LinkExpired],
+                false,
+                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            ),
+        ]));
         let clicked = Arc::new(AtomicBool::new(false));
         let expired = Arc::new(AtomicBool::new(false));
         let subs = refresh_snapshot(&store, &clicked, &expired).await;
@@ -1509,31 +1535,30 @@ mod tests {
     /// WITHOUT touching the in-memory channel and WITHOUT enqueuing.
     #[tokio::test]
     async fn lifecycle_deliveries_builds_rows_for_matching_active_subs() {
-        let store: Arc<dyn Store> = Arc::new(StubStore {
-            subs: vec![
-                sub(
-                    7,
-                    "https://a",
-                    vec![EventType::LinkCreated],
-                    true,
-                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
-                ),
-                sub(
-                    8,
-                    "https://b",
-                    vec![EventType::LinkDeleted],
-                    true,
-                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
-                ),
-                sub(
-                    9,
-                    "https://c",
-                    vec![EventType::LinkCreated],
-                    false,
-                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
-                ),
-            ],
-        });
+        let stub = Arc::new(StubStore::new(vec![
+            sub(
+                7,
+                "https://a",
+                vec![EventType::LinkCreated],
+                true,
+                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            ),
+            sub(
+                8,
+                "https://b",
+                vec![EventType::LinkDeleted],
+                true,
+                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            ),
+            sub(
+                9,
+                "https://c",
+                vec![EventType::LinkCreated],
+                false,
+                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            ),
+        ]));
+        let store: Arc<dyn Store> = stub.clone();
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         let dispatcher = WebhookDispatcher::new(
             tx,
@@ -1542,16 +1567,32 @@ mod tests {
         )
         .with_outbox(store);
 
+        // A non-default tenant: this is the exact call shape `create_link_core`/
+        // `admin_link_delete`/`admin_link_patch` use, so the row must be
+        // scoped to (and stamped with) THIS tenant, not `DEFAULT_TENANT`.
+        let tenant = crate::tenant::TenantId(7);
         let rows = dispatcher
-            .lifecycle_deliveries(&WebhookEvent {
-                event_type: EventType::LinkCreated,
-                body: r#"{"id":"evt_abc","type":"link.created"}"#.to_string(),
-            })
+            .lifecycle_deliveries(
+                tenant,
+                &WebhookEvent {
+                    event_type: EventType::LinkCreated,
+                    body: r#"{"id":"evt_abc","type":"link.created"}"#.to_string(),
+                },
+            )
             .await;
 
         assert_eq!(rows.len(), 1, "only the active link.created sub matches");
         assert_eq!(rows[0].delivery_key, "evt_abc.7");
         assert_eq!(rows[0].subscription_id, 7);
+        assert_eq!(
+            rows[0].tenant_id, tenant,
+            "the row must be stamped with the passed tenant, not DEFAULT_TENANT"
+        );
+        assert_eq!(
+            *stub.seen_tenant.lock().unwrap(),
+            Some(tenant),
+            "list_webhooks must be called with the passed tenant"
+        );
         // Outbox path must not emit onto the in-memory channel.
         assert!(rx.try_recv().is_err());
     }
@@ -1571,7 +1612,9 @@ mod tests {
             body: "{}".to_string(),
         };
 
-        let rows = dispatcher.lifecycle_deliveries(&ev).await;
+        let rows = dispatcher
+            .lifecycle_deliveries(crate::tenant::DEFAULT_TENANT, &ev)
+            .await;
         assert!(rows.is_empty());
         assert!(
             rx.try_recv().is_err(),
