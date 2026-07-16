@@ -22,10 +22,10 @@ async fn put_get_link() {
         fallback_url: None,
         password_hash: None,
     };
-    store.put_link(7, &rec).await.unwrap();
-    let got = store.get_link(7).await.unwrap().unwrap();
+    store.put_link(quark::tenant::DEFAULT_TENANT, 7, &rec).await.unwrap();
+    let got = store.get_link(quark::tenant::DEFAULT_TENANT, 7).await.unwrap().unwrap();
     assert_eq!(got.url, "https://example.com");
-    assert!(store.get_link(999).await.unwrap().is_none());
+    assert!(store.get_link(quark::tenant::DEFAULT_TENANT, 999).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -33,11 +33,11 @@ async fn next_id_increments_and_persists() {
     let dir = tmp();
     {
         let store = open_store(dir.path()).await.unwrap();
-        assert_eq!(store.next_id().await.unwrap(), 1);
-        assert_eq!(store.next_id().await.unwrap(), 2);
+        assert_eq!(store.next_id(quark::tenant::DEFAULT_TENANT).await.unwrap(), 1);
+        assert_eq!(store.next_id(quark::tenant::DEFAULT_TENANT).await.unwrap(), 2);
     }
     let store = open_store(dir.path()).await.unwrap();
-    assert_eq!(store.next_id().await.unwrap(), 3);
+    assert_eq!(store.next_id(quark::tenant::DEFAULT_TENANT).await.unwrap(), 3);
 }
 
 #[tokio::test]
@@ -73,23 +73,23 @@ async fn put_alias_and_link_is_atomic() {
         password_hash: None,
     };
 
-    assert!(store.put_alias_and_link("promo", 5, &rec).await.unwrap());
-    assert_eq!(store.get_alias("promo").await.unwrap(), Some(5));
+    assert!(store.put_alias_and_link(quark::tenant::DEFAULT_TENANT, "promo", 5, &rec).await.unwrap());
+    assert_eq!(store.get_alias(quark::tenant::DEFAULT_TENANT, "promo").await.unwrap(), Some(5));
     assert_eq!(
-        store.get_link(5).await.unwrap().unwrap().url,
+        store.get_link(quark::tenant::DEFAULT_TENANT, 5).await.unwrap().unwrap().url,
         "https://example.com"
     );
 
-    assert!(!store.put_alias_and_link("promo", 9, &rec2).await.unwrap());
-    assert_eq!(store.get_alias("promo").await.unwrap(), Some(5));
-    assert!(store.get_link(9).await.unwrap().is_none());
+    assert!(!store.put_alias_and_link(quark::tenant::DEFAULT_TENANT, "promo", 9, &rec2).await.unwrap());
+    assert_eq!(store.get_alias(quark::tenant::DEFAULT_TENANT, "promo").await.unwrap(), Some(5));
+    assert!(store.get_link(quark::tenant::DEFAULT_TENANT, 9).await.unwrap().is_none());
 }
 
 #[tokio::test]
 async fn sheets_connection_round_trips() {
     let dir = tmp();
     let store = open_store(dir.path()).await.unwrap();
-    assert!(store.get_sheets_connection().await.unwrap().is_none());
+    assert!(store.get_sheets_connection(quark::tenant::DEFAULT_TENANT).await.unwrap().is_none());
     let c = quark::sheets::SheetsConnection {
         refresh_token: "rt".into(),
         email: "me@x.com".into(),
@@ -97,10 +97,10 @@ async fn sheets_connection_round_trips() {
         last_sync: Some(5),
         last_status: quark::sheets::SyncStatus::Ok,
     };
-    store.put_sheets_connection(&c).await.unwrap();
-    let got = store.get_sheets_connection().await.unwrap().unwrap();
+    store.put_sheets_connection(quark::tenant::DEFAULT_TENANT, &c).await.unwrap();
+    let got = store.get_sheets_connection(quark::tenant::DEFAULT_TENANT).await.unwrap().unwrap();
     assert_eq!(got.email, "me@x.com");
     assert_eq!(got.spreadsheet_id.as_deref(), Some("s1"));
-    store.delete_sheets_connection().await.unwrap();
-    assert!(store.get_sheets_connection().await.unwrap().is_none());
+    store.delete_sheets_connection(quark::tenant::DEFAULT_TENANT).await.unwrap();
+    assert!(store.get_sheets_connection(quark::tenant::DEFAULT_TENANT).await.unwrap().is_none());
 }
