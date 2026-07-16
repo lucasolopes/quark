@@ -1669,7 +1669,22 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
             } else {
                 Vec::new()
             };
-            let current_tenant = st.multi_tenant.then_some(session.tenant_id.0);
+            // The current workspace is the session's tenant ONLY when the user
+            // actually has a membership there. A fresh cloud user's session still
+            // carries DEFAULT_TENANT (0) with no membership in it, so report
+            // `null` to signal onboarding rather than a phantom "workspace 0".
+            let current_tenant = if st.multi_tenant {
+                match st
+                    .store
+                    .get_membership(session.user_id, session.tenant_id)
+                    .await
+                {
+                    Ok(Some(_)) => Some(session.tenant_id.0),
+                    _ => None,
+                }
+            } else {
+                None
+            };
             return Json(serde_json::json!({
                 "authenticated": true,
                 "display": session.display,
