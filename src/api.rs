@@ -1637,8 +1637,13 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
 /// by `/admin/tenants`: creating a first workspace must be reachable by ANY
 /// authenticated OIDC user, including one with zero memberships (so
 /// `admin_guard`'s scope check, which a 0-membership user could never pass,
-/// does not apply here).
+/// does not apply here). Gated on `st.oidc_configured`, same as `admin_guard`'s
+/// session branch, so disabling OIDC immediately stops leftover session
+/// cookies from resolving a user here too.
 async fn session_user_id(st: &AppState, headers: &HeaderMap) -> Option<u64> {
+    if !st.oidc_configured {
+        return None;
+    }
     let raw = cookie_value(headers, SESSION_COOKIE)?;
     let session = st
         .store
@@ -1713,7 +1718,8 @@ async fn admin_tenants_create(
     if let Err(e) = st.store.put_tenant(&tenant).await {
         return conflict_or_503(e).into_response();
     }
-    st.store
+    if st
+        .store
         .put_membership(&crate::tenant::Membership {
             user_id,
             tenant_id: crate::tenant::TenantId(id),
@@ -1721,7 +1727,10 @@ async fn admin_tenants_create(
             created: now(),
         })
         .await
-        .ok();
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     set_session_tenant(&st, &headers, crate::tenant::TenantId(id)).await;
     Json(tenant).into_response()
 }
@@ -3348,6 +3357,16 @@ mod tests {
     /// store (so API tokens can be inserted), no OIDC/sheets, rate limiter
     /// disabled. `admin_token` sets (or clears) the env break-glass token.
     async fn guard_state(admin_token: Option<&str>) -> Arc<super::AppState> {
+        guard_state_with_oidc(admin_token, false).await
+    }
+
+    /// Same as `guard_state`, but lets the caller control `oidc_configured`
+    /// (needed to exercise the OIDC-gated session paths, e.g.
+    /// `session_user_id`, without wiring a real IdP).
+    async fn guard_state_with_oidc(
+        admin_token: Option<&str>,
+        oidc_configured: bool,
+    ) -> Arc<super::AppState> {
         let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
         let (store, sink) = crate::store::open_backends(dir.path(), false)
             .await
@@ -3364,7 +3383,7 @@ mod tests {
             oidc: None,
             sheets: None,
             sheets_api: None,
-            oidc_configured: false,
+            oidc_configured,
             cache,
             store,
             key: 0x1234,
@@ -3444,6 +3463,52 @@ mod tests {
             admin_guard(&st, &ht, Scope::Full).await.unwrap_err(),
             StatusCode::FORBIDDEN
         );
+    }
+
+    /// `session_user_id` must gate on `st.oidc_configured`, same as
+    /// `admin_guard`'s session branch: a leftover session cookie must stop
+    /// resolving a user the instant OIDC is disabled, even though the
+    /// session row itself is still valid in the store.
+    #[tokio::test]
+    async fn session_user_id_none_when_oidc_not_configured() {
+        use super::session_user_id;
+        use crate::auth::{hash_token, Session};
+
+        let raw = "session_gate_test_token";
+        let session = Session {
+            token_hash: hash_token(raw),
+            subject: "sub".into(),
+            display: "display".into(),
+            scopes: Vec::new(),
+            created: 0,
+            expires: u64::MAX,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
+            user_id: 42,
+        };
+
+        // OIDC disabled: even a store-valid session cookie must resolve to
+        // nothing, matching admin_guard's session-branch gate.
+        let st_off = guard_state_with_oidc(None, false).await;
+        st_off
+            .store
+            .put_session(crate::tenant::DEFAULT_TENANT, &session)
+            .await
+            .unwrap();
+        let mut headers = ReqHeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            format!("qk_session={raw}").parse().unwrap(),
+        );
+        assert_eq!(session_user_id(&st_off, &headers).await, None);
+
+        // OIDC enabled + same valid session -> resolves the user_id.
+        let st_on = guard_state_with_oidc(None, true).await;
+        st_on
+            .store
+            .put_session(crate::tenant::DEFAULT_TENANT, &session)
+            .await
+            .unwrap();
+        assert_eq!(session_user_id(&st_on, &headers).await, Some(42));
     }
 
     /// P2a Task 3: `create_link_core` must write under the `tenant` PARAM, not
