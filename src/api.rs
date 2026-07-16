@@ -1403,10 +1403,11 @@ async fn admin_guard(
                             .await
                         {
                             Ok(Some(m)) => crate::tenant::role_scopes(m.role).to_vec(),
-                            Ok(None) => {
-                                saw_insufficient = true;
-                                vec![]
-                            }
+                            // No membership in the current tenant -> empty scopes.
+                            // The covering check below fails and the unconditional
+                            // `saw_insufficient = true` after it yields 403; setting
+                            // the flag here too would be a dead assignment.
+                            Ok(None) => vec![],
                             Err(_) => {
                                 saw_store_error = true;
                                 vec![]
