@@ -391,7 +391,10 @@ impl PostgresStore {
                 // Sheets connector (roadmap: Google Sheets). A single connection
                 // row (single-tenant OSS), plus a lease mirroring `health_lease`
                 // so only one node runs the scheduled sync at a time.
-                "CREATE TABLE IF NOT EXISTS sheets_connection (singleton BOOLEAN PRIMARY KEY DEFAULT TRUE, blob JSONB NOT NULL)",
+                // P1b Task 5: fresh DBs get the tenant-correct shape directly
+                // (`tenant_id` PK, no `singleton`); the migration below reworks
+                // any pre-existing table created under the old shape.
+                "CREATE TABLE IF NOT EXISTS sheets_connection (tenant_id BIGINT NOT NULL DEFAULT 0 PRIMARY KEY, blob JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS sheets_lease (id INT PRIMARY KEY, holder TEXT NOT NULL, expires_at BIGINT NOT NULL)",
                 // --- Multi-tenancy (P1a): identity tables + seeded default tenant ---
                 "CREATE TABLE IF NOT EXISTS tenants (id BIGINT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, created BIGINT NOT NULL)",
@@ -421,8 +424,44 @@ impl PostgresStore {
                 .map_err(StoreError::backend)?;
             }
 
-            // Per-tenant listing/aggregation indexes + the sheets singleton
-            // reworked to a per-tenant unique key. Plain (non-CONCURRENTLY)
+            // P1b Task 5: tenant-correct primary keys, reworked from the
+            // legacy single-tenant designs. Idempotent: `DROP CONSTRAINT IF
+            // EXISTS` is a no-op on a table that's already been migrated (or
+            // was created fresh with the new shape above), and the `DO $$ ...
+            // $$` guard skips the `ADD PRIMARY KEY` when it's already present
+            // (Postgres has no `ADD PRIMARY KEY IF NOT EXISTS`). Must run
+            // after the `tenant_id` column backfill above, since both PKs
+            // include `tenant_id`.
+            //
+            // sheets_connection: drop the legacy `singleton` PK/column, key on
+            // `tenant_id` alone. The old `sheets_connection_by_tenant` unique
+            // index is now redundant with the PK and is dropped.
+            for ddl in [
+                "ALTER TABLE sheets_connection DROP CONSTRAINT IF EXISTS sheets_connection_pkey",
+                "ALTER TABLE sheets_connection DROP COLUMN IF EXISTS singleton",
+                "DROP INDEX IF EXISTS sheets_connection_by_tenant",
+                "DO $$ BEGIN \
+                    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='sheets_connection_pkey') THEN \
+                        ALTER TABLE sheets_connection ADD PRIMARY KEY (tenant_id); \
+                    END IF; \
+                END $$",
+                // wellknown_documents: PK was `name` alone, which cannot hold
+                // two tenants' documents of the same name. Rework to
+                // `(tenant_id, name)`.
+                "ALTER TABLE wellknown_documents DROP CONSTRAINT IF EXISTS wellknown_documents_pkey",
+                "DO $$ BEGIN \
+                    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='wellknown_documents_pkey') THEN \
+                        ALTER TABLE wellknown_documents ADD PRIMARY KEY (tenant_id, name); \
+                    END IF; \
+                END $$",
+            ] {
+                sqlx::query(ddl)
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(StoreError::backend)?;
+            }
+
+            // Per-tenant listing/aggregation indexes. Plain (non-CONCURRENTLY)
             // CREATE INDEX: the build takes a brief SHARE lock that blocks writes
             // for its duration — negligible here because these tables are small.
             // CONCURRENTLY was tried and rejected: `init_schema` runs on every
@@ -433,7 +472,6 @@ impl PostgresStore {
             // forever. Non-blocking builds for genuinely large tables belong in a
             // dedicated out-of-band migration step, not this every-boot path.
             for ddl in [
-                "CREATE UNIQUE INDEX IF NOT EXISTS sheets_connection_by_tenant ON sheets_connection (tenant_id)",
                 "CREATE INDEX IF NOT EXISTS links_by_tenant_id ON links (tenant_id, id)",
                 "CREATE INDEX IF NOT EXISTS webhooks_by_tenant ON webhooks (tenant_id, id)",
                 "CREATE INDEX IF NOT EXISTS pixels_by_tenant ON pixels (tenant_id, id)",
@@ -1151,16 +1189,15 @@ impl Store for PostgresStore {
         tenant: TenantId,
         c: &crate::sheets::SheetsConnection,
     ) -> Result<(), StoreError> {
-        // The connection is now keyed per tenant (unique index
-        // `sheets_connection_by_tenant`); `singleton` stays TRUE for the legacy
-        // primary key but is no longer the logical key.
+        // The connection is keyed per tenant (P1b Task 5: `tenant_id` is now
+        // the primary key; the legacy `singleton` column is gone).
         let blob = serde_json::to_value(c)?;
         sqlx::query(
-            "INSERT INTO sheets_connection (singleton, blob, tenant_id) VALUES (TRUE, $1, $2) \
-             ON CONFLICT (tenant_id) DO UPDATE SET blob = $1",
+            "INSERT INTO sheets_connection (tenant_id, blob) VALUES ($1, $2) \
+             ON CONFLICT (tenant_id) DO UPDATE SET blob = EXCLUDED.blob",
         )
-        .bind(&blob)
         .bind(tenant.0 as i64)
+        .bind(&blob)
         .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
@@ -1347,7 +1384,7 @@ impl Store for PostgresStore {
     ) -> Result<(), StoreError> {
         sqlx::query(
             "INSERT INTO wellknown_documents (name, body, tenant_id) VALUES ($1,$2,$3) \
-             ON CONFLICT (name) DO UPDATE SET body=EXCLUDED.body, tenant_id=EXCLUDED.tenant_id",
+             ON CONFLICT (tenant_id, name) DO UPDATE SET body = EXCLUDED.body",
         )
         .bind(name)
         .bind(body)

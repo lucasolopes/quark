@@ -358,3 +358,75 @@ async fn pg_token_and_session_carry_tenant_and_user() {
     assert_eq!(gs.tenant_id, t);
     assert_eq!(gs.user_id, 7);
 }
+
+// --- P1b Task 5: tenant-correct PKs for sheets_connection and
+// wellknown_documents (closes a P1a carry-over: the old PKs were `singleton`
+// / `name` alone, which cannot hold two tenants' rows at once). ---
+
+#[tokio::test]
+async fn pg_wellknown_and_sheets_pks_are_tenant_correct() {
+    let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = quark::store::open_postgres(&url).await.unwrap();
+    store.reset_for_tests().await.unwrap();
+    let dyn_store: Arc<dyn Store> = store.clone();
+    let a = dyn_store.clone().for_tenant(TenantId(31));
+    let b = dyn_store.clone().for_tenant(TenantId(32));
+
+    // Two tenants, same wellknown document name -> both coexist under the
+    // new (tenant_id, name) PK; the old `name`-only PK would reject the
+    // second insert or clobber the first tenant's row.
+    a.put_wellknown("apple-app-site-association", "{\"tenant\":31}")
+        .await
+        .unwrap();
+    b.put_wellknown("apple-app-site-association", "{\"tenant\":32}")
+        .await
+        .unwrap();
+    assert_eq!(
+        a.get_wellknown("apple-app-site-association")
+            .await
+            .unwrap()
+            .unwrap(),
+        "{\"tenant\":31}"
+    );
+    assert_eq!(
+        b.get_wellknown("apple-app-site-association")
+            .await
+            .unwrap()
+            .unwrap(),
+        "{\"tenant\":32}"
+    );
+
+    // sheets_connection: put twice for the same tenant -> upsert (one row),
+    // reads back the latest, under the new `(tenant_id)` PK (no `singleton`
+    // column).
+    let conn1 = quark::sheets::SheetsConnection {
+        refresh_token: "first".into(),
+        email: "a@example.com".into(),
+        spreadsheet_id: None,
+        last_sync: None,
+        last_status: quark::sheets::SyncStatus::Never,
+    };
+    let conn2 = quark::sheets::SheetsConnection {
+        refresh_token: "second".into(),
+        email: "a@example.com".into(),
+        spreadsheet_id: None,
+        last_sync: None,
+        last_status: quark::sheets::SyncStatus::Never,
+    };
+    a.put_sheets_connection(&conn1).await.unwrap();
+    a.put_sheets_connection(&conn2).await.unwrap();
+    assert_eq!(
+        a.get_sheets_connection().await.unwrap().unwrap().refresh_token,
+        "second"
+    );
+    assert!(b.get_sheets_connection().await.unwrap().is_none());
+
+    // Re-run init_schema (boot-time migration) twice more to confirm the PK
+    // migration is idempotent (no panics/errors on a schema that already has
+    // the new PKs).
+    quark::store::open_postgres(&url).await.unwrap();
+    quark::store::open_postgres(&url).await.unwrap();
+}
