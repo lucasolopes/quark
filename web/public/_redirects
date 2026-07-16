@@ -1,0 +1,3 @@
+# SPA fallback: serve index.html for any path that isn't a real asset, so
+# client-side deep links (e.g. /links/abc, /tokens) resolve instead of 404ing.
+/*  /index.html  200
