@@ -1525,6 +1525,7 @@ async fn oidc_callback(
         .to_string();
     let user_id = match crate::oidc::ensure_user_and_membership(
         st.store.as_ref(),
+        st.multi_tenant,
         &claims.subject,
         &email,
         &claims.display,

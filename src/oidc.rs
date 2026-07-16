@@ -321,14 +321,20 @@ pub fn map_scopes(claims: &serde_json::Value, cfg: &OidcConfig) -> Vec<Scope> {
 }
 
 /// Resolves the `User` for a verified login (creating one on first login, keyed
-/// by the immutable `subject`) and upserts its `Membership` in `DEFAULT_TENANT`,
-/// with a `role` aligned to the same IdP group that produced `scopes`. Returns
-/// the user id the caller should bind the new `Session` to.
+/// by the immutable `subject`). Returns the user id the caller should bind the
+/// new `Session` to.
+///
+/// OSS (`multi_tenant == false`): also upserts the `Membership` in
+/// `DEFAULT_TENANT`, with a `role` aligned to the same IdP group that produced
+/// `scopes`. Cloud (`multi_tenant == true`): creates no membership — a cloud
+/// user starts with 0 memberships until they create or are invited to a
+/// workspace (P2b/P2c).
 ///
 /// Authorization is unaffected by this: it is decided by `scopes` (from
 /// `map_scopes`) alone, unchanged; the stored `role` is a record, not a gate.
 pub async fn ensure_user_and_membership(
     store: &dyn Store,
+    multi_tenant: bool,
     subject: &str,
     email: &str,
     display: &str,
@@ -349,19 +355,23 @@ pub async fn ensure_user_and_membership(
             u
         }
     };
-    let role = if scopes.iter().any(|s| *s == Scope::Full) {
-        Role::Admin
-    } else {
-        Role::Viewer
-    };
-    store
-        .put_membership(&Membership {
-            user_id: user.id,
-            tenant_id: DEFAULT_TENANT,
-            role,
-            created: crate::now(),
-        })
-        .await?;
+    if !multi_tenant {
+        // OSS: single implicit tenant 0. Cloud: no membership until the user
+        // creates or is invited to a workspace (P2b/P2c).
+        let role = if scopes.iter().any(|s| *s == Scope::Full) {
+            Role::Admin
+        } else {
+            Role::Viewer
+        };
+        store
+            .put_membership(&Membership {
+                user_id: user.id,
+                tenant_id: DEFAULT_TENANT,
+                role,
+                created: crate::now(),
+            })
+            .await?;
+    }
     Ok(user.id)
 }
 
@@ -563,6 +573,7 @@ mod tests {
         // First login with the admin group -> creates the user, Admin membership.
         let id1 = ensure_user_and_membership(
             &store,
+            false,
             "sub-1",
             "sub1@example.com",
             "Sub One",
@@ -583,6 +594,7 @@ mod tests {
         // user, but does refresh the membership role to match the new scopes.
         let id2 = ensure_user_and_membership(
             &store,
+            false,
             "sub-1",
             "sub1@example.com",
             "Sub One",
@@ -601,6 +613,7 @@ mod tests {
         // A different subject gets its own user id.
         let id3 = ensure_user_and_membership(
             &store,
+            false,
             "sub-2",
             "sub2@example.com",
             "Sub Two",
@@ -615,5 +628,28 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(membership.role, Role::Viewer);
+    }
+
+    // Cloud mode: login upserts the User but creates NO membership in the
+    // default tenant — a cloud user starts with 0 memberships until they
+    // create or are invited to a workspace (P2b/P2c).
+    #[tokio::test]
+    async fn cloud_login_creates_user_but_no_default_membership() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::store::lmdb::LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let uid = ensure_user_and_membership(&store, true, "sub-cloud", "e@x", "E", &[Scope::Full])
+            .await
+            .unwrap();
+        assert!(store
+            .get_user_by_subject("sub-cloud")
+            .await
+            .unwrap()
+            .is_some());
+        // no membership was created in the default tenant
+        assert!(store
+            .list_memberships_for_user(uid)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }
