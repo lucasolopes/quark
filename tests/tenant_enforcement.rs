@@ -10,6 +10,7 @@
 //! Postgres. Correct by construction either way.
 
 use quark::analytics::{AnalyticsSink, ClickEvent};
+use quark::auth::{ApiToken, Scope, Session};
 use quark::store::postgres::PostgresStore;
 use quark::store::{OutboxRow, Record, Store};
 use quark::tenant::TenantId;
@@ -178,5 +179,72 @@ async fn cloud_analytics_and_outbox_accessors_survive_force_rls() {
     assert!(
         stats.is_some(),
         "stats must read back the just-recorded click (no spurious 0-rows under FORCE)"
+    );
+}
+
+/// CRITICAL regression: `init_schema` must NOT `FORCE` RLS on `api_tokens` or
+/// `sessions`. Auth runs *before* a tenant is known (a bearer token/session
+/// cookie is the thing that resolves the tenant), so these lookups run on the
+/// bare pool with no `app.tenant_id` set. If they were FORCE'd, login and API
+/// auth would silently fail closed (0 rows) for every tenant in cloud mode.
+#[tokio::test]
+async fn cloud_hash_lookups_survive_force_rls() {
+    let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = PostgresStore::open(&url, true).await.unwrap();
+    store.reset_for_tests().await.unwrap();
+    let bare = Arc::new(store) as Arc<dyn Store>;
+    let t1 = bare.clone().for_tenant(TenantId(1));
+
+    // Put via the tenant-scoped write path (as production does when issuing
+    // a token/session for a logged-in tenant), then look up by hash on the
+    // bare pool (as production's auth middleware does before a tenant is
+    // known).
+    let token_id = t1.next_api_token_id().await.unwrap();
+    let token = ApiToken {
+        id: token_id,
+        name: "enforcement-ci".into(),
+        token_hash: "enforcement_token_hash".into(),
+        scopes: vec![Scope::LinksRead],
+        rate_limit_per_min: None,
+        created: 0,
+        tenant_id: TenantId(1),
+    };
+    t1.put_api_token(&token).await.unwrap();
+
+    let got_token = bare
+        .get_api_token_by_hash("enforcement_token_hash")
+        .await
+        .unwrap();
+    assert_eq!(
+        got_token.map(|t| t.id),
+        Some(token_id),
+        "get_api_token_by_hash must find the token from the bare pool \
+         (api_tokens must not be FORCE'd)"
+    );
+
+    let session = Session {
+        token_hash: "enforcement_session_hash".into(),
+        subject: "sub-enforcement".into(),
+        display: "enforcement@example.com".into(),
+        scopes: vec![Scope::LinksRead],
+        created: 0,
+        expires: 1_000_000_000,
+        tenant_id: TenantId(1),
+        user_id: 0,
+    };
+    t1.put_session(&session).await.unwrap();
+
+    let got_session = bare
+        .get_session_by_hash("enforcement_session_hash", 0)
+        .await
+        .unwrap();
+    assert_eq!(
+        got_session.map(|s| s.subject),
+        Some("sub-enforcement".to_string()),
+        "get_session_by_hash must find the session from the bare pool \
+         (sessions must not be FORCE'd)"
     );
 }
