@@ -1,11 +1,13 @@
 //! Tenancy domain model. A Tenant owns all data; a User is a global identity;
 //! a Membership links a User to a Tenant with a Role. In OSS mode exactly one
 //! tenant exists (`DEFAULT_TENANT`); cloud mode has many.
-use serde::{Deserialize, Serialize};
 use crate::auth::Scope;
+use serde::{Deserialize, Serialize};
 
 /// Opaque tenant identifier. `0` is the default/OSS tenant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
 pub struct TenantId(pub u64);
 
 /// The single implicit tenant in OSS mode, and the tenant existing data is
@@ -36,6 +38,7 @@ pub enum Role {
     Owner,
     Admin,
     Member,
+    Viewer,
 }
 
 /// Many-to-many join between a user and a tenant, carrying the role.
@@ -56,6 +59,7 @@ pub fn role_scopes(role: Role) -> &'static [Scope] {
         // handler layer in P2, not via a scope).
         Role::Owner | Role::Admin => &[Scope::Full],
         Role::Member => &[Scope::LinksWrite, Scope::LinksRead, Scope::Analytics],
+        Role::Viewer => &[Scope::LinksRead, Scope::Analytics],
     }
 }
 
@@ -88,5 +92,14 @@ mod tests {
         let t = TenantId(42);
         let j = serde_json::to_string(&t).unwrap();
         assert_eq!(serde_json::from_str::<TenantId>(&j).unwrap(), t);
+    }
+
+    #[test]
+    fn viewer_is_read_only() {
+        let s = role_scopes(Role::Viewer);
+        assert!(s.contains(&Scope::LinksRead));
+        assert!(s.contains(&Scope::Analytics));
+        assert!(!s.contains(&Scope::LinksWrite));
+        assert!(!s.contains(&Scope::Full));
     }
 }

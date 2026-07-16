@@ -258,7 +258,10 @@ async fn api_token_works_when_no_env_admin_token_is_configured() {
     let cache = Cache::new(store.clone(), 1000, None);
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
 
-    let id = store.next_api_token_id(quark::tenant::DEFAULT_TENANT).await.unwrap();
+    let id = store
+        .next_api_token_id(quark::tenant::DEFAULT_TENANT)
+        .await
+        .unwrap();
     let plaintext = quark::auth::generate_token();
     let token = quark::auth::ApiToken {
         id,
@@ -267,8 +270,12 @@ async fn api_token_works_when_no_env_admin_token_is_configured() {
         scopes: vec![quark::auth::Scope::LinksRead],
         rate_limit_per_min: None,
         created: 1,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
-    store.put_api_token(quark::tenant::DEFAULT_TENANT, &token).await.unwrap();
+    store
+        .put_api_token(quark::tenant::DEFAULT_TENANT, &token)
+        .await
+        .unwrap();
     let state = Arc::new(AppState {
         oidc: None,
         sheets: None,

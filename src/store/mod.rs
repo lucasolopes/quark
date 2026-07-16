@@ -367,7 +367,8 @@ pub trait Store: Send + Sync + 'static {
     async fn list_folders(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError>;
     async fn delete_link(&self, tenant: TenantId, id: u64) -> Result<(), StoreError>;
     async fn delete_alias(&self, tenant: TenantId, alias: &str) -> Result<(), StoreError>;
-    async fn list_webhooks(&self, tenant: TenantId) -> Result<Vec<WebhookSubscription>, StoreError>;
+    async fn list_webhooks(&self, tenant: TenantId)
+        -> Result<Vec<WebhookSubscription>, StoreError>;
     async fn get_webhook(
         &self,
         tenant: TenantId,
@@ -473,14 +474,18 @@ pub trait Store: Send + Sync + 'static {
         ttl_secs: u64,
     ) -> Result<bool, StoreError>;
     async fn next_pixel_id(&self, tenant: TenantId) -> Result<u64, StoreError>;
-    async fn get_pixel(&self, tenant: TenantId, id: u64) -> Result<Option<PixelConfig>, StoreError>;
+    async fn get_pixel(&self, tenant: TenantId, id: u64)
+        -> Result<Option<PixelConfig>, StoreError>;
     async fn put_pixel(&self, tenant: TenantId, config: &PixelConfig) -> Result<(), StoreError>;
     async fn delete_pixel(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError>;
     async fn list_pixels(&self, tenant: TenantId) -> Result<Vec<PixelConfig>, StoreError>;
     /// Reads a well-known app-association document by name. The raw JSON is
     /// returned verbatim (no parsing here; validation lives at the HTTP layer).
-    async fn get_wellknown(&self, tenant: TenantId, name: &str)
-        -> Result<Option<String>, StoreError>;
+    async fn get_wellknown(
+        &self,
+        tenant: TenantId,
+        name: &str,
+    ) -> Result<Option<String>, StoreError>;
     /// Stores a well-known document, replacing any existing body for `name`.
     async fn put_wellknown(
         &self,
@@ -511,10 +516,7 @@ pub trait Store: Send + Sync + 'static {
         tenant: TenantId,
     ) -> Result<Option<Membership>, StoreError>;
     /// All memberships for a user, across tenants.
-    async fn list_memberships_for_user(
-        &self,
-        user_id: u64,
-    ) -> Result<Vec<Membership>, StoreError>;
+    async fn list_memberships_for_user(&self, user_id: u64) -> Result<Vec<Membership>, StoreError>;
 
     /// Durable webhook outbox (scale-audit #3), Postgres-only. Inserts one
     /// delivery row per (event, subscription) with `ON CONFLICT (delivery_key)

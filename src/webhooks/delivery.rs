@@ -520,7 +520,10 @@ async fn deliver_claimed(
     let fetched;
     let sub = match subs.iter().find(|s| s.id == delivery.subscription_id) {
         Some(s) => s,
-        None => match store.get_webhook(crate::tenant::DEFAULT_TENANT, delivery.subscription_id).await {
+        None => match store
+            .get_webhook(crate::tenant::DEFAULT_TENANT, delivery.subscription_id)
+            .await
+        {
             Ok(Some(s)) => {
                 fetched = s;
                 &fetched
@@ -1065,10 +1068,7 @@ mod tests {
         async fn gc_sessions(&self, _now: u64) -> Result<(), StoreError> {
             unimplemented!()
         }
-        async fn next_pixel_id(
-            &self,
-            _tenant: crate::tenant::TenantId,
-        ) -> Result<u64, StoreError> {
+        async fn next_pixel_id(&self, _tenant: crate::tenant::TenantId) -> Result<u64, StoreError> {
             unimplemented!()
         }
         async fn get_pixel(

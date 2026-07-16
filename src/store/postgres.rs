@@ -130,6 +130,7 @@ fn row_to_api_token(r: &PgRow) -> Result<ApiToken, StoreError> {
         .try_get("rate_limit_per_min")
         .map_err(StoreError::backend)?;
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
     Ok(ApiToken {
         id: id as u64,
         name,
@@ -137,6 +138,7 @@ fn row_to_api_token(r: &PgRow) -> Result<ApiToken, StoreError> {
         scopes: serde_json::from_value(scopes)?,
         rate_limit_per_min: rate_limit_per_min.map(|v| v as u32),
         created: created as u64,
+        tenant_id: TenantId(tenant_id as u64),
     })
 }
 
@@ -146,6 +148,7 @@ fn role_to_str(r: Role) -> &'static str {
         Role::Owner => "owner",
         Role::Admin => "admin",
         Role::Member => "member",
+        Role::Viewer => "viewer",
     }
 }
 fn role_from_str(s: &str) -> Result<Role, StoreError> {
@@ -153,6 +156,7 @@ fn role_from_str(s: &str) -> Result<Role, StoreError> {
         "owner" => Ok(Role::Owner),
         "admin" => Ok(Role::Admin),
         "member" => Ok(Role::Member),
+        "viewer" => Ok(Role::Viewer),
         other => Err(StoreError::Backend(format!("unknown role: {other}"))),
     }
 }
@@ -368,7 +372,7 @@ impl PostgresStore {
                 // Idempotent migration for a `links` table created before variants
                 // existed (#17).
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS variants JSONB NOT NULL DEFAULT '[]'",
-                "CREATE TABLE IF NOT EXISTS wellknown_documents (name TEXT PRIMARY KEY, body TEXT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS wellknown_documents (name TEXT NOT NULL, body TEXT NOT NULL, tenant_id BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (tenant_id, name))",
                 // Atomic analytics (scale-audit #4): counters incremented with
                 // `ON CONFLICT DO UPDATE SET count = count + EXCLUDED.count`
                 // instead of the old whole-blob read-modify-write under an
@@ -387,7 +391,10 @@ impl PostgresStore {
                 // Sheets connector (roadmap: Google Sheets). A single connection
                 // row (single-tenant OSS), plus a lease mirroring `health_lease`
                 // so only one node runs the scheduled sync at a time.
-                "CREATE TABLE IF NOT EXISTS sheets_connection (singleton BOOLEAN PRIMARY KEY DEFAULT TRUE, blob JSONB NOT NULL)",
+                // P1b Task 5: fresh DBs get the tenant-correct shape directly
+                // (`tenant_id` PK, no `singleton`); the migration below reworks
+                // any pre-existing table created under the old shape.
+                "CREATE TABLE IF NOT EXISTS sheets_connection (tenant_id BIGINT NOT NULL DEFAULT 0 PRIMARY KEY, blob JSONB NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS sheets_lease (id INT PRIMARY KEY, holder TEXT NOT NULL, expires_at BIGINT NOT NULL)",
                 // --- Multi-tenancy (P1a): identity tables + seeded default tenant ---
                 "CREATE TABLE IF NOT EXISTS tenants (id BIGINT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, created BIGINT NOT NULL)",
@@ -396,6 +403,8 @@ impl PostgresStore {
                 "CREATE SEQUENCE IF NOT EXISTS quark_user_id_seq",
                 "CREATE TABLE IF NOT EXISTS memberships (user_id BIGINT NOT NULL, tenant_id BIGINT NOT NULL, role TEXT NOT NULL, created BIGINT NOT NULL, PRIMARY KEY (user_id, tenant_id))",
                 "CREATE INDEX IF NOT EXISTS memberships_by_tenant ON memberships (tenant_id)",
+                // --- Multi-tenancy (P1b): sessions carry the authenticated user ---
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 0",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -415,8 +424,71 @@ impl PostgresStore {
                 .map_err(StoreError::backend)?;
             }
 
-            // Per-tenant listing/aggregation indexes + the sheets singleton
-            // reworked to a per-tenant unique key. Plain (non-CONCURRENTLY)
+            // P1b Task 5: tenant-correct primary keys, reworked from the
+            // legacy single-tenant designs. Each block below is a true no-op
+            // once the PK already covers the target column set: the `DO $$
+            // ... $$` guard checks the *current* PK's columns via the catalog
+            // (pg_index/pg_attribute) first, and only runs the drop/alter
+            // when they don't already match. That keeps a table that's
+            // already migrated (or was created fresh with the new shape
+            // above) from having its PK index dropped and rebuilt (ACCESS
+            // EXCLUSIVE lock) on every boot. Must run after the `tenant_id`
+            // column backfill above, since both target PKs include
+            // `tenant_id`.
+            //
+            // sheets_connection: drop the legacy `singleton` PK/column, key on
+            // `tenant_id` alone. The old `sheets_connection_by_tenant` unique
+            // index is now redundant with the PK and is dropped.
+            for ddl in [
+                "DO $$ \
+                BEGIN \
+                  IF NOT EXISTS ( \
+                    SELECT 1 \
+                    FROM pg_index i \
+                    JOIN pg_class c ON c.oid = i.indrelid \
+                    WHERE c.relname = 'sheets_connection' AND i.indisprimary \
+                      AND ( \
+                        SELECT array_agg(a.attname::text ORDER BY a.attname) \
+                        FROM pg_attribute a \
+                        WHERE a.attrelid = c.oid AND a.attnum = ANY(i.indkey) \
+                      ) = ARRAY['tenant_id'] \
+                  ) THEN \
+                    ALTER TABLE sheets_connection DROP CONSTRAINT IF EXISTS sheets_connection_pkey; \
+                    ALTER TABLE sheets_connection DROP COLUMN IF EXISTS singleton; \
+                    ALTER TABLE sheets_connection ADD PRIMARY KEY (tenant_id); \
+                  END IF; \
+                END $$",
+                "DROP INDEX IF EXISTS sheets_connection_by_tenant",
+                // wellknown_documents: PK was `name` alone, which cannot hold
+                // two tenants' documents of the same name. Rework to
+                // `(tenant_id, name)`. `array_agg(... ORDER BY attname)`
+                // sorts alphabetically, so the target is `['name',
+                // 'tenant_id']`.
+                "DO $$ \
+                BEGIN \
+                  IF NOT EXISTS ( \
+                    SELECT 1 \
+                    FROM pg_index i \
+                    JOIN pg_class c ON c.oid = i.indrelid \
+                    WHERE c.relname = 'wellknown_documents' AND i.indisprimary \
+                      AND ( \
+                        SELECT array_agg(a.attname::text ORDER BY a.attname) \
+                        FROM pg_attribute a \
+                        WHERE a.attrelid = c.oid AND a.attnum = ANY(i.indkey) \
+                      ) = ARRAY['name', 'tenant_id'] \
+                  ) THEN \
+                    ALTER TABLE wellknown_documents DROP CONSTRAINT IF EXISTS wellknown_documents_pkey; \
+                    ALTER TABLE wellknown_documents ADD PRIMARY KEY (tenant_id, name); \
+                  END IF; \
+                END $$",
+            ] {
+                sqlx::query(ddl)
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(StoreError::backend)?;
+            }
+
+            // Per-tenant listing/aggregation indexes. Plain (non-CONCURRENTLY)
             // CREATE INDEX: the build takes a brief SHARE lock that blocks writes
             // for its duration — negligible here because these tables are small.
             // CONCURRENTLY was tried and rejected: `init_schema` runs on every
@@ -427,7 +499,6 @@ impl PostgresStore {
             // forever. Non-blocking builds for genuinely large tables belong in a
             // dedicated out-of-band migration step, not this every-boot path.
             for ddl in [
-                "CREATE UNIQUE INDEX IF NOT EXISTS sheets_connection_by_tenant ON sheets_connection (tenant_id)",
                 "CREATE INDEX IF NOT EXISTS links_by_tenant_id ON links (tenant_id, id)",
                 "CREATE INDEX IF NOT EXISTS webhooks_by_tenant ON webhooks (tenant_id, id)",
                 "CREATE INDEX IF NOT EXISTS pixels_by_tenant ON pixels (tenant_id, id)",
@@ -760,7 +831,10 @@ impl Store for PostgresStore {
         Ok(())
     }
 
-    async fn list_webhooks(&self, tenant: TenantId) -> Result<Vec<WebhookSubscription>, StoreError> {
+    async fn list_webhooks(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<WebhookSubscription>, StoreError> {
         let rows = sqlx::query(
             "SELECT id, url, events, secret, active, created, kind FROM webhooks WHERE tenant_id = $1 ORDER BY id",
         )
@@ -874,7 +948,7 @@ impl Store for PostgresStore {
 
     async fn list_api_tokens(&self, tenant: TenantId) -> Result<Vec<ApiToken>, StoreError> {
         let rows = sqlx::query(
-            "SELECT id, name, token_hash, scopes, rate_limit_per_min, created \
+            "SELECT id, name, token_hash, scopes, rate_limit_per_min, created, tenant_id \
              FROM api_tokens WHERE tenant_id = $1 ORDER BY id",
         )
         .bind(tenant.0 as i64)
@@ -888,7 +962,7 @@ impl Store for PostgresStore {
     /// (`api_tokens_token_hash_idx`).
     async fn get_api_token_by_hash(&self, hash: &str) -> Result<Option<ApiToken>, StoreError> {
         let row = sqlx::query(
-            "SELECT id, name, token_hash, scopes, rate_limit_per_min, created \
+            "SELECT id, name, token_hash, scopes, rate_limit_per_min, created, tenant_id \
              FROM api_tokens WHERE token_hash = $1",
         )
         .bind(hash)
@@ -996,12 +1070,13 @@ impl Store for PostgresStore {
         &self,
         tenant: TenantId,
     ) -> Result<Vec<(u64, LinkHealth)>, StoreError> {
-        let rows =
-            sqlx::query("SELECT id, checked_at, status, healthy FROM link_health WHERE tenant_id = $1")
-                .bind(tenant.0 as i64)
-                .fetch_all(&self.read)
-                .await
-                .map_err(StoreError::backend)?;
+        let rows = sqlx::query(
+            "SELECT id, checked_at, status, healthy FROM link_health WHERE tenant_id = $1",
+        )
+        .bind(tenant.0 as i64)
+        .fetch_all(&self.read)
+        .await
+        .map_err(StoreError::backend)?;
         let mut out = Vec::with_capacity(rows.len());
         for r in &rows {
             let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
@@ -1027,10 +1102,10 @@ impl Store for PostgresStore {
     ) -> Result<(), StoreError> {
         let scopes = serde_json::to_value(&session.scopes)?;
         sqlx::query(
-            "INSERT INTO sessions (token_hash, subject, display, scopes, created, expires, tenant_id) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7) \
+            "INSERT INTO sessions (token_hash, subject, display, scopes, created, expires, tenant_id, user_id) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) \
              ON CONFLICT (token_hash) DO UPDATE \
-               SET subject=$2, display=$3, scopes=$4, created=$5, expires=$6, tenant_id=$7",
+               SET subject=$2, display=$3, scopes=$4, created=$5, expires=$6, tenant_id=$7, user_id=$8",
         )
         .bind(&session.token_hash)
         .bind(&session.subject)
@@ -1039,6 +1114,7 @@ impl Store for PostgresStore {
         .bind(session.created as i64)
         .bind(session.expires as i64)
         .bind(tenant.0 as i64)
+        .bind(session.user_id as i64)
         .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
@@ -1051,7 +1127,7 @@ impl Store for PostgresStore {
         now: u64,
     ) -> Result<Option<crate::auth::Session>, StoreError> {
         let row = sqlx::query(
-            "SELECT token_hash, subject, display, scopes, created, expires FROM sessions \
+            "SELECT token_hash, subject, display, scopes, created, expires, tenant_id, user_id FROM sessions \
              WHERE token_hash = $1 AND expires > $2",
         )
         .bind(token_hash)
@@ -1064,6 +1140,8 @@ impl Store for PostgresStore {
                 let scopes: serde_json::Value = r.try_get("scopes").map_err(StoreError::backend)?;
                 let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
                 let expires: i64 = r.try_get("expires").map_err(StoreError::backend)?;
+                let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
+                let user_id: i64 = r.try_get("user_id").map_err(StoreError::backend)?;
                 Ok(Some(crate::auth::Session {
                     token_hash: r.try_get("token_hash").map_err(StoreError::backend)?,
                     subject: r.try_get("subject").map_err(StoreError::backend)?,
@@ -1071,6 +1149,8 @@ impl Store for PostgresStore {
                     scopes: serde_json::from_value(scopes)?,
                     created: created as u64,
                     expires: expires as u64,
+                    tenant_id: TenantId(tenant_id as u64),
+                    user_id: user_id as u64,
                 }))
             }
             None => Ok(None),
@@ -1140,16 +1220,15 @@ impl Store for PostgresStore {
         tenant: TenantId,
         c: &crate::sheets::SheetsConnection,
     ) -> Result<(), StoreError> {
-        // The connection is now keyed per tenant (unique index
-        // `sheets_connection_by_tenant`); `singleton` stays TRUE for the legacy
-        // primary key but is no longer the logical key.
+        // The connection is keyed per tenant (P1b Task 5: `tenant_id` is now
+        // the primary key; the legacy `singleton` column is gone).
         let blob = serde_json::to_value(c)?;
         sqlx::query(
-            "INSERT INTO sheets_connection (singleton, blob, tenant_id) VALUES (TRUE, $1, $2) \
-             ON CONFLICT (tenant_id) DO UPDATE SET blob = $1",
+            "INSERT INTO sheets_connection (tenant_id, blob) VALUES ($1, $2) \
+             ON CONFLICT (tenant_id) DO UPDATE SET blob = EXCLUDED.blob",
         )
-        .bind(&blob)
         .bind(tenant.0 as i64)
+        .bind(&blob)
         .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
@@ -1253,7 +1332,11 @@ impl Store for PostgresStore {
         Ok(id as u64)
     }
 
-    async fn get_pixel(&self, tenant: TenantId, id: u64) -> Result<Option<PixelConfig>, StoreError> {
+    async fn get_pixel(
+        &self,
+        tenant: TenantId,
+        id: u64,
+    ) -> Result<Option<PixelConfig>, StoreError> {
         let row = sqlx::query(
             "SELECT id, provider, credentials, active, created FROM pixels WHERE tenant_id = $1 AND id = $2",
         )
@@ -1336,7 +1419,7 @@ impl Store for PostgresStore {
     ) -> Result<(), StoreError> {
         sqlx::query(
             "INSERT INTO wellknown_documents (name, body, tenant_id) VALUES ($1,$2,$3) \
-             ON CONFLICT (name) DO UPDATE SET body=EXCLUDED.body, tenant_id=EXCLUDED.tenant_id",
+             ON CONFLICT (tenant_id, name) DO UPDATE SET body = EXCLUDED.body",
         )
         .bind(name)
         .bind(body)
@@ -1420,12 +1503,13 @@ impl Store for PostgresStore {
     }
 
     async fn get_user_by_subject(&self, subject: &str) -> Result<Option<User>, StoreError> {
-        let row =
-            sqlx::query("SELECT id, subject, email, display, created FROM users WHERE subject = $1")
-                .bind(subject)
-                .fetch_optional(&self.read)
-                .await
-                .map_err(StoreError::backend)?;
+        let row = sqlx::query(
+            "SELECT id, subject, email, display, created FROM users WHERE subject = $1",
+        )
+        .bind(subject)
+        .fetch_optional(&self.read)
+        .await
+        .map_err(StoreError::backend)?;
         match row {
             Some(r) => {
                 let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
@@ -1476,10 +1560,7 @@ impl Store for PostgresStore {
         }
     }
 
-    async fn list_memberships_for_user(
-        &self,
-        user_id: u64,
-    ) -> Result<Vec<Membership>, StoreError> {
+    async fn list_memberships_for_user(&self, user_id: u64) -> Result<Vec<Membership>, StoreError> {
         let rows = sqlx::query(
             "SELECT user_id, tenant_id, role, created FROM memberships WHERE user_id = $1 ORDER BY tenant_id",
         )
@@ -1775,5 +1856,17 @@ impl AnalyticsSink for PostgresStore {
             aggregates: agg,
             recent,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_str_round_trips_all_variants() {
+        for r in [Role::Owner, Role::Admin, Role::Member, Role::Viewer] {
+            assert_eq!(role_from_str(role_to_str(r)).unwrap(), r);
+        }
     }
 }

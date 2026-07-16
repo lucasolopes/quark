@@ -80,7 +80,10 @@ async fn worker_flush_forwards_batch_to_active_pixel_with_real_short_code() {
     let (mock_base, captured) = mock_server("/mp/collect").await;
     let dir = tempfile::tempdir().unwrap();
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    store.put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1)).await.unwrap();
+    store
+        .put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1))
+        .await
+        .unwrap();
 
     let bases = PixelBases {
         ga4: mock_base,
@@ -119,7 +122,10 @@ async fn worker_flush_skips_inactive_pixel_configs() {
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     let mut inactive = ga4_config(1);
     inactive.active = false;
-    store.put_pixel(quark::tenant::DEFAULT_TENANT, &inactive).await.unwrap();
+    store
+        .put_pixel(quark::tenant::DEFAULT_TENANT, &inactive)
+        .await
+        .unwrap();
 
     let bases = PixelBases {
         ga4: mock_base,
@@ -148,7 +154,10 @@ async fn worker_flush_skips_inactive_pixel_configs() {
 async fn worker_flush_is_fail_open_when_provider_is_down() {
     let dir = tempfile::tempdir().unwrap();
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    store.put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1)).await.unwrap();
+    store
+        .put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1))
+        .await
+        .unwrap();
 
     let bases = PixelBases {
         ga4: "http://127.0.0.1:1".to_string(),
@@ -188,7 +197,10 @@ async fn worker_flush_is_fail_open_when_provider_returns_500() {
 
     let dir = tempfile::tempdir().unwrap();
     let (store, sink) = open_backends(dir.path()).await.unwrap();
-    store.put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1)).await.unwrap();
+    store
+        .put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1))
+        .await
+        .unwrap();
 
     let bases = PixelBases {
         ga4: format!("http://{addr}"),
@@ -241,7 +253,10 @@ async fn worker_forwards_to_a_pixel_added_after_start_once_the_snapshot_refreshe
     );
 
     // Added only now, after the worker's initial snapshot load already ran.
-    store.put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1)).await.unwrap();
+    store
+        .put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1))
+        .await
+        .unwrap();
 
     // Past the 5s ticker: the worker refreshes its cached snapshot here,
     // with no event flowing through the channel (so no per-flush store

@@ -425,7 +425,10 @@ impl Store for LmdbStore {
         Ok(())
     }
 
-    async fn list_webhooks(&self, tenant: TenantId) -> Result<Vec<WebhookSubscription>, StoreError> {
+    async fn list_webhooks(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<WebhookSubscription>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut out = Vec::new();
         for item in self.webhooks.prefix_iter(&rtxn, &tprefix(tenant))? {
@@ -577,7 +580,8 @@ impl Store for LmdbStore {
 
     async fn delete_sheets_connection(&self, tenant: TenantId) -> Result<(), StoreError> {
         let mut wtxn = self.env.write_txn()?;
-        self.sheets.delete(&mut wtxn, &tkey(tenant, b"connection"))?;
+        self.sheets
+            .delete(&mut wtxn, &tkey(tenant, b"connection"))?;
         wtxn.commit()?;
         Ok(())
     }
@@ -747,7 +751,11 @@ impl Store for LmdbStore {
         Ok(next)
     }
 
-    async fn get_pixel(&self, tenant: TenantId, id: u64) -> Result<Option<PixelConfig>, StoreError> {
+    async fn get_pixel(
+        &self,
+        tenant: TenantId,
+        id: u64,
+    ) -> Result<Option<PixelConfig>, StoreError> {
         let rtxn = self.env.read_txn()?;
         match self.pixels.get(&rtxn, &tkey_id(tenant, id))? {
             Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
@@ -871,19 +879,22 @@ impl Store for LmdbStore {
         tenant: TenantId,
     ) -> Result<Option<Membership>, StoreError> {
         let rtxn = self.env.read_txn()?;
-        match self.memberships.get(&rtxn, &membership_key(user_id, tenant))? {
+        match self
+            .memberships
+            .get(&rtxn, &membership_key(user_id, tenant))?
+        {
             Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
             None => Ok(None),
         }
     }
 
-    async fn list_memberships_for_user(
-        &self,
-        user_id: u64,
-    ) -> Result<Vec<Membership>, StoreError> {
+    async fn list_memberships_for_user(&self, user_id: u64) -> Result<Vec<Membership>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut out = Vec::new();
-        for item in self.memberships.prefix_iter(&rtxn, &user_id.to_be_bytes())? {
+        for item in self
+            .memberships
+            .prefix_iter(&rtxn, &user_id.to_be_bytes())?
+        {
             let (_, bytes) = item?;
             out.push(serde_json::from_slice(bytes)?);
         }
@@ -1072,8 +1083,14 @@ mod tests {
     async fn next_id_with_node_prefixes_and_increments_local() {
         let dir = tempfile::tempdir().unwrap();
         let s = LmdbStore::open_with_node_id(dir.path(), Some(5)).unwrap();
-        assert_eq!(s.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), (5u64 << LOCAL_BITS) | 1);
-        assert_eq!(s.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), (5u64 << LOCAL_BITS) | 2);
+        assert_eq!(
+            s.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap(),
+            (5u64 << LOCAL_BITS) | 1
+        );
+        assert_eq!(
+            s.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap(),
+            (5u64 << LOCAL_BITS) | 2
+        );
     }
 
     #[tokio::test]
@@ -1082,7 +1099,10 @@ mod tests {
         let dir_b = tempfile::tempdir().unwrap();
         let a = LmdbStore::open_with_node_id(dir_a.path(), Some(0)).unwrap();
         let b = LmdbStore::open_with_node_id(dir_b.path(), Some(1)).unwrap();
-        assert_ne!(a.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), b.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap());
+        assert_ne!(
+            a.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap(),
+            b.next_id(crate::tenant::DEFAULT_TENANT).await.unwrap()
+        );
     }
 
     #[tokio::test]
@@ -1108,23 +1128,50 @@ mod tests {
     async fn wellknown_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        assert_eq!(s.get_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json").await.unwrap(), None);
-        let body = r#"{"relation":["delegate_permission/common.handle_all_urls"]}"#;
-        s.put_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json", body).await.unwrap();
         assert_eq!(
-            s.get_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json").await.unwrap(),
+            s.get_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json")
+                .await
+                .unwrap(),
+            None
+        );
+        let body = r#"{"relation":["delegate_permission/common.handle_all_urls"]}"#;
+        s.put_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json", body)
+            .await
+            .unwrap();
+        assert_eq!(
+            s.get_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json")
+                .await
+                .unwrap(),
             Some(body.to_string())
         );
-        s.delete_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json").await.unwrap();
-        assert_eq!(s.get_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json").await.unwrap(), None);
-        s.delete_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json").await.unwrap();
+        s.delete_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json")
+            .await
+            .unwrap();
+        assert_eq!(
+            s.get_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json")
+                .await
+                .unwrap(),
+            None
+        );
+        s.delete_wellknown(crate::tenant::DEFAULT_TENANT, "assetlinks.json")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn search_links_is_unsupported_on_lmdb() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        let r = store.search_links(crate::tenant::DEFAULT_TENANT, "anything", None, 10, None, None).await;
+        let r = store
+            .search_links(
+                crate::tenant::DEFAULT_TENANT,
+                "anything",
+                None,
+                10,
+                None,
+                None,
+            )
+            .await;
         assert!(matches!(r, Err(StoreError::Unsupported)));
     }
 
@@ -1147,20 +1194,35 @@ mod tests {
             password_hash: None,
         };
         for id in 1..=5u64 {
-            s.put_link(crate::tenant::DEFAULT_TENANT, id, &rec(&format!("https://e{id}.com")))
-                .await
-                .unwrap();
-        }
-        s.put_alias_and_link(crate::tenant::DEFAULT_TENANT, "promo", 10, &rec("https://promo.com"))
+            s.put_link(
+                crate::tenant::DEFAULT_TENANT,
+                id,
+                &rec(&format!("https://e{id}.com")),
+            )
             .await
             .unwrap();
+        }
+        s.put_alias_and_link(
+            crate::tenant::DEFAULT_TENANT,
+            "promo",
+            10,
+            &rec("https://promo.com"),
+        )
+        .await
+        .unwrap();
 
-        let p1 = s.list_links(crate::tenant::DEFAULT_TENANT, None, 3, None, None).await.unwrap();
+        let p1 = s
+            .list_links(crate::tenant::DEFAULT_TENANT, None, 3, None, None)
+            .await
+            .unwrap();
         assert_eq!(
             p1.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![1, 2, 3]
         );
-        let p2 = s.list_links(crate::tenant::DEFAULT_TENANT, Some(3), 3, None, None).await.unwrap();
+        let p2 = s
+            .list_links(crate::tenant::DEFAULT_TENANT, Some(3), 3, None, None)
+            .await
+            .unwrap();
         assert_eq!(
             p2.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![4, 5, 10]
@@ -1169,17 +1231,33 @@ mod tests {
         let al = s.list_aliases(crate::tenant::DEFAULT_TENANT).await.unwrap();
         assert_eq!(al, vec![("promo".to_string(), 10u64)]);
 
-        s.delete_link(crate::tenant::DEFAULT_TENANT, 2).await.unwrap();
-        assert!(s.get_link(crate::tenant::DEFAULT_TENANT, 2).await.unwrap().is_none());
-        s.delete_alias(crate::tenant::DEFAULT_TENANT, "promo").await.unwrap();
-        assert_eq!(s.get_alias(crate::tenant::DEFAULT_TENANT, "promo").await.unwrap(), None);
+        s.delete_link(crate::tenant::DEFAULT_TENANT, 2)
+            .await
+            .unwrap();
+        assert!(s
+            .get_link(crate::tenant::DEFAULT_TENANT, 2)
+            .await
+            .unwrap()
+            .is_none());
+        s.delete_alias(crate::tenant::DEFAULT_TENANT, "promo")
+            .await
+            .unwrap();
+        assert_eq!(
+            s.get_alias(crate::tenant::DEFAULT_TENANT, "promo")
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
     async fn webhook_crud_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        let id = store.next_webhook_id(crate::tenant::DEFAULT_TENANT).await.unwrap();
+        let id = store
+            .next_webhook_id(crate::tenant::DEFAULT_TENANT)
+            .await
+            .unwrap();
         let sub = WebhookSubscription {
             id,
             url: "https://e.com".into(),
@@ -1189,14 +1267,36 @@ mod tests {
             created: 1,
             kind: crate::webhooks::SubscriptionKind::Generic,
         };
-        store.put_webhook(crate::tenant::DEFAULT_TENANT, &sub).await.unwrap();
+        store
+            .put_webhook(crate::tenant::DEFAULT_TENANT, &sub)
+            .await
+            .unwrap();
         assert_eq!(
-            store.get_webhook(crate::tenant::DEFAULT_TENANT, id).await.unwrap().unwrap().url,
+            store
+                .get_webhook(crate::tenant::DEFAULT_TENANT, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .url,
             "https://e.com"
         );
-        assert_eq!(store.list_webhooks(crate::tenant::DEFAULT_TENANT).await.unwrap().len(), 1);
-        assert!(store.delete_webhook(crate::tenant::DEFAULT_TENANT, id).await.unwrap());
-        assert!(store.get_webhook(crate::tenant::DEFAULT_TENANT, id).await.unwrap().is_none());
+        assert_eq!(
+            store
+                .list_webhooks(crate::tenant::DEFAULT_TENANT)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(store
+            .delete_webhook(crate::tenant::DEFAULT_TENANT, id)
+            .await
+            .unwrap());
+        assert!(store
+            .get_webhook(crate::tenant::DEFAULT_TENANT, id)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -1217,18 +1317,35 @@ mod tests {
             fallback_url: None,
             password_hash: None,
         };
-        s.put_link(crate::tenant::DEFAULT_TENANT, 1, &rec("https://a.com", &["rust", "web"]))
+        s.put_link(
+            crate::tenant::DEFAULT_TENANT,
+            1,
+            &rec("https://a.com", &["rust", "web"]),
+        )
+        .await
+        .unwrap();
+        s.put_link(
+            crate::tenant::DEFAULT_TENANT,
+            2,
+            &rec("https://b.com", &["web"]),
+        )
+        .await
+        .unwrap();
+        s.put_link(crate::tenant::DEFAULT_TENANT, 3, &rec("https://c.com", &[]))
             .await
             .unwrap();
-        s.put_link(crate::tenant::DEFAULT_TENANT, 2, &rec("https://b.com", &["web"]))
-            .await
-            .unwrap();
-        s.put_link(crate::tenant::DEFAULT_TENANT, 3, &rec("https://c.com", &[])).await.unwrap();
 
-        let got = s.get_link(crate::tenant::DEFAULT_TENANT, 1).await.unwrap().unwrap();
+        let got = s
+            .get_link(crate::tenant::DEFAULT_TENANT, 1)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got.tags, vec!["rust".to_string(), "web".to_string()]);
 
-        let filtered = s.list_links(crate::tenant::DEFAULT_TENANT, None, 50, Some("rust"), None).await.unwrap();
+        let filtered = s
+            .list_links(crate::tenant::DEFAULT_TENANT, None, 50, Some("rust"), None)
+            .await
+            .unwrap();
         assert_eq!(
             filtered.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![1]
@@ -1256,22 +1373,50 @@ mod tests {
             fallback_url: None,
             password_hash: None,
         };
-        s.put_link(crate::tenant::DEFAULT_TENANT, 1, &rec("https://a.com", Some("Marketing")))
-            .await
-            .unwrap();
-        s.put_link(crate::tenant::DEFAULT_TENANT, 2, &rec("https://b.com", Some("Marketing")))
-            .await
-            .unwrap();
-        s.put_link(crate::tenant::DEFAULT_TENANT, 3, &rec("https://c.com", Some("Docs")))
-            .await
-            .unwrap();
-        s.put_link(crate::tenant::DEFAULT_TENANT, 4, &rec("https://d.com", None)).await.unwrap();
+        s.put_link(
+            crate::tenant::DEFAULT_TENANT,
+            1,
+            &rec("https://a.com", Some("Marketing")),
+        )
+        .await
+        .unwrap();
+        s.put_link(
+            crate::tenant::DEFAULT_TENANT,
+            2,
+            &rec("https://b.com", Some("Marketing")),
+        )
+        .await
+        .unwrap();
+        s.put_link(
+            crate::tenant::DEFAULT_TENANT,
+            3,
+            &rec("https://c.com", Some("Docs")),
+        )
+        .await
+        .unwrap();
+        s.put_link(
+            crate::tenant::DEFAULT_TENANT,
+            4,
+            &rec("https://d.com", None),
+        )
+        .await
+        .unwrap();
 
-        let got = s.get_link(crate::tenant::DEFAULT_TENANT, 1).await.unwrap().unwrap();
+        let got = s
+            .get_link(crate::tenant::DEFAULT_TENANT, 1)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got.folder.as_deref(), Some("Marketing"));
 
         let filtered = s
-            .list_links(crate::tenant::DEFAULT_TENANT, None, 50, None, Some("marketing"))
+            .list_links(
+                crate::tenant::DEFAULT_TENANT,
+                None,
+                50,
+                None,
+                Some("marketing"),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -1294,6 +1439,7 @@ mod tests {
             scopes: vec![Scope::LinksRead],
             rate_limit_per_min: Some(60),
             created: 1,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         }
     }
 
@@ -1301,17 +1447,33 @@ mod tests {
     async fn api_token_crud_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        let id = store.next_api_token_id(crate::tenant::DEFAULT_TENANT).await.unwrap();
+        let id = store
+            .next_api_token_id(crate::tenant::DEFAULT_TENANT)
+            .await
+            .unwrap();
         let hash = hash_token("qtok_abc123");
         let token = sample_token(id, hash.clone());
-        store.put_api_token(crate::tenant::DEFAULT_TENANT, &token).await.unwrap();
+        store
+            .put_api_token(crate::tenant::DEFAULT_TENANT, &token)
+            .await
+            .unwrap();
 
         assert_eq!(
             store.get_api_token_by_hash(&hash).await.unwrap(),
             Some(token)
         );
-        assert_eq!(store.list_api_tokens(crate::tenant::DEFAULT_TENANT).await.unwrap().len(), 1);
-        assert!(store.delete_api_token(crate::tenant::DEFAULT_TENANT, id).await.unwrap());
+        assert_eq!(
+            store
+                .list_api_tokens(crate::tenant::DEFAULT_TENANT)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(store
+            .delete_api_token(crate::tenant::DEFAULT_TENANT, id)
+            .await
+            .unwrap());
         assert_eq!(store.get_api_token_by_hash(&hash).await.unwrap(), None);
     }
 
@@ -1329,15 +1491,24 @@ mod tests {
     async fn delete_api_token_returns_false_when_missing() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        assert!(!store.delete_api_token(crate::tenant::DEFAULT_TENANT, 999).await.unwrap());
+        assert!(!store
+            .delete_api_token(crate::tenant::DEFAULT_TENANT, 999)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
     async fn next_api_token_id_increments() {
         let dir = tempfile::tempdir().unwrap();
         let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        let a = store.next_api_token_id(crate::tenant::DEFAULT_TENANT).await.unwrap();
-        let b = store.next_api_token_id(crate::tenant::DEFAULT_TENANT).await.unwrap();
+        let a = store
+            .next_api_token_id(crate::tenant::DEFAULT_TENANT)
+            .await
+            .unwrap();
+        let b = store
+            .next_api_token_id(crate::tenant::DEFAULT_TENANT)
+            .await
+            .unwrap();
         assert_eq!(b, a + 1);
     }
 
@@ -1346,8 +1517,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
 
-        assert_eq!(s.next_pixel_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), 1);
-        assert_eq!(s.next_pixel_id(crate::tenant::DEFAULT_TENANT).await.unwrap(), 2);
+        assert_eq!(
+            s.next_pixel_id(crate::tenant::DEFAULT_TENANT)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            s.next_pixel_id(crate::tenant::DEFAULT_TENANT)
+                .await
+                .unwrap(),
+            2
+        );
 
         let config = PixelConfig {
             id: 1,
@@ -1361,24 +1542,48 @@ mod tests {
             active: true,
             created: 42,
         };
-        s.put_pixel(crate::tenant::DEFAULT_TENANT, &config).await.unwrap();
+        s.put_pixel(crate::tenant::DEFAULT_TENANT, &config)
+            .await
+            .unwrap();
 
-        let got = s.get_pixel(crate::tenant::DEFAULT_TENANT, 1).await.unwrap().unwrap();
+        let got = s
+            .get_pixel(crate::tenant::DEFAULT_TENANT, 1)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got.provider, Provider::Ga4);
         assert_eq!(got.credentials.measurement_id.as_deref(), Some("G-1"));
         assert!(got.active);
         assert_eq!(got.created, 42);
 
-        assert!(s.get_pixel(crate::tenant::DEFAULT_TENANT, 999).await.unwrap().is_none());
+        assert!(s
+            .get_pixel(crate::tenant::DEFAULT_TENANT, 999)
+            .await
+            .unwrap()
+            .is_none());
 
         let list = s.list_pixels(crate::tenant::DEFAULT_TENANT).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, 1);
 
-        assert!(s.delete_pixel(crate::tenant::DEFAULT_TENANT, 1).await.unwrap());
-        assert!(!s.delete_pixel(crate::tenant::DEFAULT_TENANT, 1).await.unwrap());
-        assert!(s.get_pixel(crate::tenant::DEFAULT_TENANT, 1).await.unwrap().is_none());
-        assert!(s.list_pixels(crate::tenant::DEFAULT_TENANT).await.unwrap().is_empty());
+        assert!(s
+            .delete_pixel(crate::tenant::DEFAULT_TENANT, 1)
+            .await
+            .unwrap());
+        assert!(!s
+            .delete_pixel(crate::tenant::DEFAULT_TENANT, 1)
+            .await
+            .unwrap());
+        assert!(s
+            .get_pixel(crate::tenant::DEFAULT_TENANT, 1)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(s
+            .list_pixels(crate::tenant::DEFAULT_TENANT)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -1399,8 +1604,14 @@ mod tests {
             fallback_url: None,
             password_hash: None,
         };
-        s.put_link(crate::tenant::DEFAULT_TENANT, 1, &rec).await.unwrap();
-        let got = s.get_link(crate::tenant::DEFAULT_TENANT, 1).await.unwrap().unwrap();
+        s.put_link(crate::tenant::DEFAULT_TENANT, 1, &rec)
+            .await
+            .unwrap();
+        let got = s
+            .get_link(crate::tenant::DEFAULT_TENANT, 1)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got.app_ios.as_deref(), Some("https://apps.apple.com/x"));
         assert_eq!(got.app_android, None);
     }
@@ -1416,8 +1627,12 @@ mod tests {
             scopes: vec![crate::auth::Scope::Full],
             created: 10,
             expires: 100,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
+            user_id: 0,
         };
-        s.put_session(crate::tenant::DEFAULT_TENANT, &sess).await.unwrap();
+        s.put_session(crate::tenant::DEFAULT_TENANT, &sess)
+            .await
+            .unwrap();
         // Valid before expiry.
         assert_eq!(
             s.get_session_by_hash("abc", 50)
@@ -1438,18 +1653,24 @@ mod tests {
         s.delete_session("abc").await.unwrap();
         assert!(s.get_session_by_hash("abc", 50).await.unwrap().is_none());
         // gc removes expired rows.
-        s.put_session(crate::tenant::DEFAULT_TENANT, &crate::auth::Session {
-            token_hash: "old".into(),
-            expires: 5,
-            ..sess.clone()
-        })
+        s.put_session(
+            crate::tenant::DEFAULT_TENANT,
+            &crate::auth::Session {
+                token_hash: "old".into(),
+                expires: 5,
+                ..sess.clone()
+            },
+        )
         .await
         .unwrap();
-        s.put_session(crate::tenant::DEFAULT_TENANT, &crate::auth::Session {
-            token_hash: "new".into(),
-            expires: 999,
-            ..sess.clone()
-        })
+        s.put_session(
+            crate::tenant::DEFAULT_TENANT,
+            &crate::auth::Session {
+                token_hash: "new".into(),
+                expires: 999,
+                ..sess.clone()
+            },
+        )
         .await
         .unwrap();
         s.gc_sessions(50).await.unwrap();
@@ -1461,9 +1682,14 @@ mod tests {
     async fn link_health_round_trip_and_overwrite() {
         let dir = tempfile::tempdir().unwrap();
         let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        assert!(s.list_link_health(crate::tenant::DEFAULT_TENANT).await.unwrap().is_empty());
+        assert!(s
+            .list_link_health(crate::tenant::DEFAULT_TENANT)
+            .await
+            .unwrap()
+            .is_empty());
 
-        s.put_link_health(crate::tenant::DEFAULT_TENANT, 
+        s.put_link_health(
+            crate::tenant::DEFAULT_TENANT,
             1,
             &crate::store::LinkHealth {
                 checked_at: 100,
@@ -1473,7 +1699,8 @@ mod tests {
         )
         .await
         .unwrap();
-        s.put_link_health(crate::tenant::DEFAULT_TENANT, 
+        s.put_link_health(
+            crate::tenant::DEFAULT_TENANT,
             2,
             &crate::store::LinkHealth {
                 checked_at: 100,
@@ -1483,11 +1710,15 @@ mod tests {
         )
         .await
         .unwrap();
-        let all = s.list_link_health(crate::tenant::DEFAULT_TENANT).await.unwrap();
+        let all = s
+            .list_link_health(crate::tenant::DEFAULT_TENANT)
+            .await
+            .unwrap();
         assert_eq!(all.len(), 2);
 
         // Overwrite id 1 (recovered -> broken).
-        s.put_link_health(crate::tenant::DEFAULT_TENANT, 
+        s.put_link_health(
+            crate::tenant::DEFAULT_TENANT,
             1,
             &crate::store::LinkHealth {
                 checked_at: 200,
@@ -1497,8 +1728,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let map: std::collections::HashMap<u64, crate::store::LinkHealth> =
-            s.list_link_health(crate::tenant::DEFAULT_TENANT).await.unwrap().into_iter().collect();
+        let map: std::collections::HashMap<u64, crate::store::LinkHealth> = s
+            .list_link_health(crate::tenant::DEFAULT_TENANT)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
         assert_eq!(map.len(), 2);
         assert_eq!(
             map[&1],

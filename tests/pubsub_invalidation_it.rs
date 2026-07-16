@@ -84,7 +84,11 @@ async fn cache_invalidation_propagates_to_other_node() {
     let (store, sink) = open_backends(dir.path()).await.unwrap();
     let id = 987_654u64;
     store
-        .put_link(quark::tenant::DEFAULT_TENANT, id, &rec("https://old.example"))
+        .put_link(
+            quark::tenant::DEFAULT_TENANT,
+            id,
+            &rec("https://old.example"),
+        )
         .await
         .unwrap();
 
@@ -97,7 +101,10 @@ async fn cache_invalidation_propagates_to_other_node() {
         node_b.cache.get(id).await.unwrap().unwrap().url,
         "https://old.example"
     );
-    store.delete_link(quark::tenant::DEFAULT_TENANT, id).await.unwrap();
+    store
+        .delete_link(quark::tenant::DEFAULT_TENANT, id)
+        .await
+        .unwrap();
 
     node_a.cache.invalidate(id).await;
 

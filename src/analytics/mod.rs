@@ -346,7 +346,12 @@ pub fn spawn_worker(
 /// logged — a wedged or erroring store never stalls the worker and never
 /// empties out a snapshot that was previously known-good.
 async fn refresh_pixel_snapshot(store: &Arc<dyn Store>, pixels: &mut Vec<PixelConfig>) {
-    match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, store.list_pixels(crate::tenant::DEFAULT_TENANT)).await {
+    match tokio::time::timeout(
+        PIXEL_SNAPSHOT_TIMEOUT,
+        store.list_pixels(crate::tenant::DEFAULT_TENANT),
+    )
+    .await
+    {
         Ok(Ok(configs)) => *pixels = configs,
         Ok(Err(e)) => {
             eprintln!("{}", serde_json::json!({"pixel_list_error": e.to_string()}));
