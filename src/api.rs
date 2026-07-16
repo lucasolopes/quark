@@ -1422,9 +1422,7 @@ async fn admin_guard(
                             scopes: effective_scopes,
                         });
                     }
-                    if !effective_scopes.is_empty() {
-                        saw_insufficient = true;
-                    }
+                    saw_insufficient = true;
                 }
                 Ok(None) => {}
                 Err(_) => saw_store_error = true,
@@ -3526,6 +3524,53 @@ mod tests {
         // 4) valid-but-insufficient token -> 403 (contract preserved).
         assert_eq!(
             admin_guard(&st, &ht, Scope::Full).await.unwrap_err(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// OSS session with EMPTY `session.scopes` must still yield 403, not 401.
+    /// The OIDC-session branch in `admin_guard` unconditionally sets
+    /// `saw_insufficient` after a failed covering check (byte-for-byte with
+    /// the original behavior) precisely so this case falls through to the
+    /// 403 tail instead of `not_found_status` (401). The OIDC callback
+    /// currently rejects empty-scope logins, so this session shape doesn't
+    /// arise in practice today — but the guard's own status contract must
+    /// not depend on that invariant holding in another function.
+    #[tokio::test]
+    async fn admin_guard_oss_empty_scope_session_is_forbidden_not_unauthorized() {
+        use super::admin_guard;
+        use crate::auth::{hash_token, Scope, Session};
+        use axum::http::{HeaderMap as GuardHeaders, StatusCode};
+
+        let st = guard_state_with_oidc(None, true).await;
+        assert!(!st.multi_tenant);
+
+        let raw = "oss_empty_scope_session_test";
+        let session = Session {
+            token_hash: hash_token(raw),
+            subject: "sub".into(),
+            display: "display".into(),
+            scopes: Vec::new(),
+            created: 0,
+            expires: u64::MAX,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
+            user_id: 7,
+        };
+        st.store
+            .put_session(crate::tenant::DEFAULT_TENANT, &session)
+            .await
+            .unwrap();
+
+        let mut headers = GuardHeaders::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            format!("qk_session={raw}").parse().unwrap(),
+        );
+
+        assert_eq!(
+            admin_guard(&st, &headers, Scope::LinksRead)
+                .await
+                .unwrap_err(),
             StatusCode::FORBIDDEN
         );
     }
