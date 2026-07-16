@@ -125,3 +125,177 @@ async fn pg_two_tenants_do_not_see_each_others_links() {
     assert_eq!(b.list_links(None, 100, None, None).await.unwrap().len(), 0);
     assert_eq!(a.list_links(None, 100, None, None).await.unwrap().len(), 1);
 }
+
+// --- Full entity sweep: every tenant-owned method, both backends ---
+
+/// Exercises every tenant-owned entity for cross-tenant leakage: tenant A
+/// writes one of each, tenant B must see none of it (get -> None, list ->
+/// empty), and A must still see its own write. Shared by the LMDB and
+/// Postgres arms below so both backends run the identical battery.
+async fn assert_full_isolation(store: Arc<dyn Store>) {
+    let a = store.clone().for_tenant(TenantId(11));
+    let b = store.clone().for_tenant(TenantId(22));
+
+    // --- link ---
+    let r = rec("https://a.example.com/full-sweep");
+    a.put_link(9001, &r).await.unwrap();
+    assert!(a.get_link(9001).await.unwrap().is_some(), "A must see its own link");
+    assert!(b.get_link(9001).await.unwrap().is_none(), "B must not see A's link");
+    assert_eq!(
+        a.list_links(None, 100, None, None).await.unwrap().len(),
+        1,
+        "A must list its own link"
+    );
+    assert!(
+        b.list_links(None, 100, None, None)
+            .await
+            .unwrap()
+            .is_empty(),
+        "B must not list A's link"
+    );
+
+    // --- alias ---
+    a.put_alias_and_link("full-sweep-alias", 9001, &r)
+        .await
+        .unwrap();
+    assert!(
+        a.get_alias("full-sweep-alias").await.unwrap().is_some(),
+        "A must see its own alias"
+    );
+    assert!(
+        b.get_alias("full-sweep-alias").await.unwrap().is_none(),
+        "B must not see A's alias"
+    );
+
+    // --- webhook ---
+    let webhook = quark::webhooks::WebhookSubscription {
+        id: 9002,
+        url: "https://hooks.example.com/full-sweep".into(),
+        events: vec![quark::webhooks::EventType::LinkCreated],
+        secret: "shh".into(),
+        active: true,
+        created: 0,
+        kind: quark::webhooks::SubscriptionKind::Generic,
+    };
+    a.put_webhook(&webhook).await.unwrap();
+    assert!(a.get_webhook(9002).await.unwrap().is_some(), "A must see its own webhook");
+    assert!(b.get_webhook(9002).await.unwrap().is_none(), "B must not see A's webhook");
+    assert_eq!(a.list_webhooks().await.unwrap().len(), 1, "A must list its own webhook");
+    assert!(
+        b.list_webhooks().await.unwrap().is_empty(),
+        "B must not list A's webhook"
+    );
+
+    // --- api_token (list is tenant-scoped; hash-lookup is deliberately
+    // tenant-less by design, so it is not asserted here) ---
+    let token = quark::auth::ApiToken {
+        id: 9003,
+        name: "full-sweep-token".into(),
+        token_hash: "full-sweep-hash".into(),
+        scopes: vec![quark::auth::Scope::Full],
+        rate_limit_per_min: None,
+        created: 0,
+    };
+    a.put_api_token(&token).await.unwrap();
+    assert_eq!(
+        a.list_api_tokens().await.unwrap().len(),
+        1,
+        "A must list its own api token"
+    );
+    assert!(
+        b.list_api_tokens().await.unwrap().is_empty(),
+        "B must not list A's api token"
+    );
+
+    // --- pixel ---
+    let pixel = quark::pixel::PixelConfig {
+        id: 9004,
+        provider: quark::pixel::Provider::Ga4,
+        credentials: quark::pixel::PixelCredentials::default(),
+        active: true,
+        created: 0,
+    };
+    a.put_pixel(&pixel).await.unwrap();
+    assert!(a.get_pixel(9004).await.unwrap().is_some(), "A must see its own pixel");
+    assert!(b.get_pixel(9004).await.unwrap().is_none(), "B must not see A's pixel");
+    assert_eq!(a.list_pixels().await.unwrap().len(), 1, "A must list its own pixel");
+    assert!(
+        b.list_pixels().await.unwrap().is_empty(),
+        "B must not list A's pixel"
+    );
+
+    // --- wellknown ---
+    a.put_wellknown("apple-app-site-association", "{\"full\":\"sweep\"}")
+        .await
+        .unwrap();
+    assert!(
+        a.get_wellknown("apple-app-site-association")
+            .await
+            .unwrap()
+            .is_some(),
+        "A must see its own wellknown document"
+    );
+    assert!(
+        b.get_wellknown("apple-app-site-association")
+            .await
+            .unwrap()
+            .is_none(),
+        "B must not see A's wellknown document"
+    );
+
+    // --- link_health ---
+    let health = quark::store::LinkHealth {
+        checked_at: 1,
+        status: Some(200),
+        healthy: true,
+    };
+    a.put_link_health(9001, &health).await.unwrap();
+    assert_eq!(
+        a.list_link_health().await.unwrap().len(),
+        1,
+        "A must list its own link health"
+    );
+    assert!(
+        b.list_link_health().await.unwrap().is_empty(),
+        "B must not list A's link health"
+    );
+
+    // --- visits ---
+    a.bump_visits(9001).await.unwrap();
+    assert_eq!(a.visits(9001).await.unwrap(), 1, "A must see its own visit count");
+    assert_eq!(b.visits(9001).await.unwrap(), 0, "B must not see A's visit count");
+
+    // --- sheets_connection ---
+    let conn = quark::sheets::SheetsConnection {
+        refresh_token: "full-sweep-refresh".into(),
+        email: "a@full-sweep.example.com".into(),
+        spreadsheet_id: None,
+        last_sync: None,
+        last_status: quark::sheets::SyncStatus::Never,
+    };
+    a.put_sheets_connection(&conn).await.unwrap();
+    assert!(
+        a.get_sheets_connection().await.unwrap().is_some(),
+        "A must see its own sheets connection"
+    );
+    assert!(
+        b.get_sheets_connection().await.unwrap().is_none(),
+        "B must not see A's sheets connection"
+    );
+}
+
+#[tokio::test]
+async fn every_tenant_owned_entity_is_isolated() {
+    // LMDB arm: always runs.
+    let dir = tempfile::tempdir().unwrap();
+    let lmdb_store = open_store(dir.path()).await.unwrap();
+    assert_full_isolation(lmdb_store).await;
+
+    // Postgres arm: only when a test database is configured.
+    if let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() {
+        let pg_store = quark::store::open_postgres(&url).await.unwrap();
+        pg_store.reset_for_tests().await.unwrap();
+        let dyn_store: Arc<dyn Store> = pg_store.clone();
+        assert_full_isolation(dyn_store).await;
+    }
+}
