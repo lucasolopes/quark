@@ -416,7 +416,16 @@ impl PostgresStore {
             }
 
             // Per-tenant listing/aggregation indexes + the sheets singleton
-            // reworked to a per-tenant unique key.
+            // reworked to a per-tenant unique key. Plain (non-CONCURRENTLY)
+            // CREATE INDEX: the build takes a brief SHARE lock that blocks writes
+            // for its duration — negligible here because these tables are small.
+            // CONCURRENTLY was tried and rejected: `init_schema` runs on every
+            // boot while holding a session advisory lock, and a CONCURRENTLY
+            // build (which waits for concurrent transactions) under that lock
+            // deadlocks when connections race the migration, and an interrupted
+            // build leaves an INVALID index that `IF NOT EXISTS` then skips
+            // forever. Non-blocking builds for genuinely large tables belong in a
+            // dedicated out-of-band migration step, not this every-boot path.
             for ddl in [
                 "CREATE UNIQUE INDEX IF NOT EXISTS sheets_connection_by_tenant ON sheets_connection (tenant_id)",
                 "CREATE INDEX IF NOT EXISTS links_by_tenant_id ON links (tenant_id, id)",
