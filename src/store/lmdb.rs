@@ -848,6 +848,15 @@ impl Store for LmdbStore {
         Ok(next)
     }
 
+    async fn next_tenant_id(&self) -> Result<u64, StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        let cur = self.meta.get(&wtxn, "next_tenant_id")?.unwrap_or(0);
+        let next = cur + 1;
+        self.meta.put(&mut wtxn, "next_tenant_id", &next)?;
+        wtxn.commit()?;
+        Ok(next)
+    }
+
     async fn put_user(&self, u: &User) -> Result<(), StoreError> {
         let bytes = serde_json::to_vec(u)?;
         let mut wtxn = self.env.write_txn()?;

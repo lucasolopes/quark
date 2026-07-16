@@ -1388,11 +1388,39 @@ async fn admin_guard(
             let hash = hash_token(raw);
             match st.store.get_session_by_hash(&hash, now()).await {
                 Ok(Some(session)) => {
-                    if session.scopes.iter().any(|s| s.covers(required)) {
+                    // Where the session's authorization comes from differs by
+                    // deployment mode. OSS: the stored `session.scopes`, which
+                    // is the OIDC group->scope map computed at login. Cloud: the
+                    // caller's role in the CURRENT workspace (`session.tenant_id`),
+                    // so switching workspaces re-derives scopes from membership and
+                    // never trusts a scope set minted for a different tenant. A
+                    // cloud session whose user has no membership in the current
+                    // tenant is treated as insufficient (403), never authorized.
+                    let effective_scopes = if st.multi_tenant {
+                        match st
+                            .store
+                            .get_membership(session.user_id, session.tenant_id)
+                            .await
+                        {
+                            Ok(Some(m)) => crate::tenant::role_scopes(m.role).to_vec(),
+                            // No membership in the current tenant -> empty scopes.
+                            // The covering check below fails and the unconditional
+                            // `saw_insufficient = true` after it yields 403; setting
+                            // the flag here too would be a dead assignment.
+                            Ok(None) => vec![],
+                            Err(_) => {
+                                saw_store_error = true;
+                                vec![]
+                            }
+                        }
+                    } else {
+                        session.scopes.clone()
+                    };
+                    if effective_scopes.iter().any(|s| s.covers(required)) {
                         return Ok(Principal {
                             tenant: session.tenant_id,
                             user_id: Some(session.user_id),
-                            scopes: session.scopes.clone(),
+                            scopes: effective_scopes,
                         });
                     }
                     saw_insufficient = true;
@@ -1525,6 +1553,7 @@ async fn oidc_callback(
         .to_string();
     let user_id = match crate::oidc::ensure_user_and_membership(
         st.store.as_ref(),
+        st.multi_tenant,
         &claims.subject,
         &email,
         &claims.display,
@@ -1619,17 +1648,193 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
     let oidc_enabled = st.oidc.is_some();
     if let Some(raw) = cookie_value(&headers, SESSION_COOKIE) {
         if let Ok(Some(session)) = st.store.get_session_by_hash(&hash_token(raw), now()).await {
+            let memberships = if st.multi_tenant {
+                let ms = st
+                    .store
+                    .list_memberships_for_user(session.user_id)
+                    .await
+                    .unwrap_or_default();
+                let mut out = Vec::new();
+                for m in ms {
+                    if let Ok(Some(t)) = st.store.get_tenant(m.tenant_id).await {
+                        out.push(serde_json::json!({
+                            "tenant_id": t.id.0,
+                            "name": t.name,
+                            "slug": t.slug,
+                            "role": m.role,
+                        }));
+                    }
+                }
+                out
+            } else {
+                Vec::new()
+            };
+            // The current workspace is the session's tenant ONLY when the user
+            // actually has a membership there. A fresh cloud user's session still
+            // carries DEFAULT_TENANT (0) with no membership in it, so report
+            // `null` to signal onboarding rather than a phantom "workspace 0".
+            let current_tenant = if st.multi_tenant {
+                match st
+                    .store
+                    .get_membership(session.user_id, session.tenant_id)
+                    .await
+                {
+                    Ok(Some(_)) => Some(session.tenant_id.0),
+                    _ => None,
+                }
+            } else {
+                None
+            };
             return Json(serde_json::json!({
                 "authenticated": true,
                 "display": session.display,
                 "scopes": session.scopes,
                 "oidc_enabled": oidc_enabled,
+                "memberships": memberships,
+                "current_tenant": current_tenant,
             }))
             .into_response();
         }
     }
     Json(serde_json::json!({ "authenticated": false, "oidc_enabled": oidc_enabled }))
         .into_response()
+}
+
+/// Resolves the session cookie to its `user_id`, independent of scopes. Used
+/// by `/admin/tenants`: creating a first workspace must be reachable by ANY
+/// authenticated OIDC user, including one with zero memberships (so
+/// `admin_guard`'s scope check, which a 0-membership user could never pass,
+/// does not apply here). Gated on `st.oidc_configured`, same as `admin_guard`'s
+/// session branch, so disabling OIDC immediately stops leftover session
+/// cookies from resolving a user here too.
+async fn session_user_id(st: &AppState, headers: &HeaderMap) -> Option<u64> {
+    if !st.oidc_configured {
+        return None;
+    }
+    let raw = cookie_value(headers, SESSION_COOKIE)?;
+    let session = st
+        .store
+        .get_session_by_hash(&hash_token(raw), now())
+        .await
+        .ok()
+        .flatten()?;
+    Some(session.user_id)
+}
+
+/// Re-points the current session at `tenant` (the workspace just created),
+/// so the next request the browser makes is already scoped to it. A missing
+/// or invalid session is a silent no-op: the caller already authenticated via
+/// `session_user_id` earlier in the same request.
+async fn set_session_tenant(st: &AppState, headers: &HeaderMap, tenant: crate::tenant::TenantId) {
+    let Some(raw) = cookie_value(headers, SESSION_COOKIE) else {
+        return;
+    };
+    let hash = hash_token(raw);
+    if let Ok(Some(mut session)) = st.store.get_session_by_hash(&hash, now()).await {
+        session.tenant_id = tenant;
+        let _ = st.store.put_session(tenant, &session).await;
+    }
+}
+
+/// Maps a `put_tenant` failure to its HTTP status: a duplicate `slug` (unique
+/// violation) is a client-fixable `409`, anything else is a `503` (backend
+/// unavailable).
+fn conflict_or_503(e: StoreError) -> StatusCode {
+    match e {
+        StoreError::UniqueViolation => StatusCode::CONFLICT,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateTenantReq {
+    name: String,
+    slug: String,
+}
+
+/// `POST /admin/tenants`: self-serve workspace creation (cloud only). Any
+/// authenticated OIDC user may create a workspace — not gated by
+/// `admin_guard`'s scope check, since a user with zero memberships must still
+/// be able to create their first one. Creates the `Tenant`, grants the
+/// caller `Owner` on it, and re-points their session at it.
+async fn admin_tenants_create(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateTenantReq>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(user_id) = session_user_id(&st, &headers).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let ip = client_ip(&headers, &st.real_ip_header, None);
+    if !st.ratelimiter.check(&ip, now()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+    }
+    let id = match st.store.next_tenant_id().await {
+        Ok(i) => i,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let tenant = crate::tenant::Tenant {
+        id: crate::tenant::TenantId(id),
+        name: req.name,
+        slug: req.slug,
+        created: now(),
+    };
+    if let Err(e) = st.store.put_tenant(&tenant).await {
+        return conflict_or_503(e).into_response();
+    }
+    if st
+        .store
+        .put_membership(&crate::tenant::Membership {
+            user_id,
+            tenant_id: crate::tenant::TenantId(id),
+            role: crate::tenant::Role::Owner,
+            created: now(),
+        })
+        .await
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    set_session_tenant(&st, &headers, crate::tenant::TenantId(id)).await;
+    Json(tenant).into_response()
+}
+
+#[derive(Deserialize)]
+struct SwitchReq {
+    tenant_id: u64,
+}
+
+/// `POST /admin/workspace/switch`: change the session's current workspace
+/// (cloud only). SECURITY: always validates membership before switching — a
+/// caller may only switch to a tenant they belong to. A missing membership
+/// leaves the session untouched and returns `403`, rather than mutating it
+/// and failing closed some other way.
+async fn admin_workspace_switch(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<SwitchReq>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(user_id) = session_user_id(&st, &headers).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    match st
+        .store
+        .get_membership(user_id, crate::tenant::TenantId(req.tenant_id))
+        .await
+    {
+        Ok(Some(_)) => {
+            set_session_tenant(&st, &headers, crate::tenant::TenantId(req.tenant_id)).await;
+            StatusCode::OK.into_response()
+        }
+        Ok(None) => StatusCode::FORBIDDEN.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
 }
 
 /// Name of the short-lived cookie holding the signed Sheets OAuth `state`,
@@ -3141,6 +3346,8 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route("/admin/callback", get(oidc_callback))
         .route("/admin/logout", post(oidc_logout))
         .route("/admin/me", get(admin_me))
+        .route("/admin/tenants", post(admin_tenants_create))
+        .route("/admin/workspace/switch", post(admin_workspace_switch))
         .route("/admin/integrations/sheets/connect", get(sheets_connect))
         .route("/admin/integrations/sheets/callback", get(sheets_callback))
         .route("/admin/integrations/sheets/sync", post(sheets_sync))
@@ -3253,6 +3460,16 @@ mod tests {
     /// store (so API tokens can be inserted), no OIDC/sheets, rate limiter
     /// disabled. `admin_token` sets (or clears) the env break-glass token.
     async fn guard_state(admin_token: Option<&str>) -> Arc<super::AppState> {
+        guard_state_with_oidc(admin_token, false).await
+    }
+
+    /// Same as `guard_state`, but lets the caller control `oidc_configured`
+    /// (needed to exercise the OIDC-gated session paths, e.g.
+    /// `session_user_id`, without wiring a real IdP).
+    async fn guard_state_with_oidc(
+        admin_token: Option<&str>,
+        oidc_configured: bool,
+    ) -> Arc<super::AppState> {
         let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
         let (store, sink) = crate::store::open_backends(dir.path(), false)
             .await
@@ -3269,7 +3486,7 @@ mod tests {
             oidc: None,
             sheets: None,
             sheets_api: None,
-            oidc_configured: false,
+            oidc_configured,
             cache,
             store,
             key: 0x1234,
@@ -3349,6 +3566,99 @@ mod tests {
             admin_guard(&st, &ht, Scope::Full).await.unwrap_err(),
             StatusCode::FORBIDDEN
         );
+    }
+
+    /// OSS session with EMPTY `session.scopes` must still yield 403, not 401.
+    /// The OIDC-session branch in `admin_guard` unconditionally sets
+    /// `saw_insufficient` after a failed covering check (byte-for-byte with
+    /// the original behavior) precisely so this case falls through to the
+    /// 403 tail instead of `not_found_status` (401). The OIDC callback
+    /// currently rejects empty-scope logins, so this session shape doesn't
+    /// arise in practice today — but the guard's own status contract must
+    /// not depend on that invariant holding in another function.
+    #[tokio::test]
+    async fn admin_guard_oss_empty_scope_session_is_forbidden_not_unauthorized() {
+        use super::admin_guard;
+        use crate::auth::{hash_token, Scope, Session};
+        use axum::http::{HeaderMap as GuardHeaders, StatusCode};
+
+        let st = guard_state_with_oidc(None, true).await;
+        assert!(!st.multi_tenant);
+
+        let raw = "oss_empty_scope_session_test";
+        let session = Session {
+            token_hash: hash_token(raw),
+            subject: "sub".into(),
+            display: "display".into(),
+            scopes: Vec::new(),
+            created: 0,
+            expires: u64::MAX,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
+            user_id: 7,
+        };
+        st.store
+            .put_session(crate::tenant::DEFAULT_TENANT, &session)
+            .await
+            .unwrap();
+
+        let mut headers = GuardHeaders::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            format!("qk_session={raw}").parse().unwrap(),
+        );
+
+        assert_eq!(
+            admin_guard(&st, &headers, Scope::LinksRead)
+                .await
+                .unwrap_err(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    /// `session_user_id` must gate on `st.oidc_configured`, same as
+    /// `admin_guard`'s session branch: a leftover session cookie must stop
+    /// resolving a user the instant OIDC is disabled, even though the
+    /// session row itself is still valid in the store.
+    #[tokio::test]
+    async fn session_user_id_none_when_oidc_not_configured() {
+        use super::session_user_id;
+        use crate::auth::{hash_token, Session};
+
+        let raw = "session_gate_test_token";
+        let session = Session {
+            token_hash: hash_token(raw),
+            subject: "sub".into(),
+            display: "display".into(),
+            scopes: Vec::new(),
+            created: 0,
+            expires: u64::MAX,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
+            user_id: 42,
+        };
+
+        // OIDC disabled: even a store-valid session cookie must resolve to
+        // nothing, matching admin_guard's session-branch gate.
+        let st_off = guard_state_with_oidc(None, false).await;
+        st_off
+            .store
+            .put_session(crate::tenant::DEFAULT_TENANT, &session)
+            .await
+            .unwrap();
+        let mut headers = ReqHeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            format!("qk_session={raw}").parse().unwrap(),
+        );
+        assert_eq!(session_user_id(&st_off, &headers).await, None);
+
+        // OIDC enabled + same valid session -> resolves the user_id.
+        let st_on = guard_state_with_oidc(None, true).await;
+        st_on
+            .store
+            .put_session(crate::tenant::DEFAULT_TENANT, &session)
+            .await
+            .unwrap();
+        assert_eq!(session_user_id(&st_on, &headers).await, Some(42));
     }
 
     /// P2a Task 3: `create_link_core` must write under the `tenant` PARAM, not

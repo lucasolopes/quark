@@ -9,13 +9,19 @@
 //! the test early-returns; the controller runs the gated arm against real
 //! Postgres. Correct by construction either way.
 
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use quark::analytics::{AnalyticsSink, ClickEvent};
-use quark::auth::{ApiToken, Scope, Session};
+use quark::api::{router, AppState};
+use quark::auth::{hash_token, ApiToken, Scope, Session};
+use quark::cache::Cache;
 use quark::store::postgres::PostgresStore;
 use quark::store::{OutboxRow, Record, Store};
-use quark::tenant::TenantId;
+use quark::tenant::{Membership, Role, TenantId};
+use quark::webhooks::delivery::WebhookDispatcher;
 use quark::webhooks::{EventType, SubscriptionKind, WebhookSubscription};
 use std::sync::Arc;
+use tower::ServiceExt;
 
 fn rec(url: &str) -> Record {
     Record {
@@ -246,5 +252,157 @@ async fn cloud_hash_lookups_survive_force_rls() {
         Some("sub-enforcement".to_string()),
         "get_session_by_hash must find the session from the bare pool \
          (sessions must not be FORCE'd)"
+    );
+}
+
+/// A `WebhookDispatcher` whose receiver is dropped: `emit` silently no-ops.
+fn test_webhook_dispatcher() -> Arc<WebhookDispatcher> {
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    Arc::new(WebhookDispatcher::new(
+        tx,
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    ))
+}
+
+/// Builds a cloud-mode `AppState` (`multi_tenant = true`, `oidc_configured =
+/// true`, no env admin token) over the given Postgres-backed store/sink, so
+/// `admin_guard`'s OIDC-session branch derives scopes from membership role.
+fn cloud_state(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>) -> Arc<AppState> {
+    let cache = Cache::new(store.clone(), 1000, None);
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: true,
+        multi_tenant: true,
+        cache,
+        store,
+        key: 0x1234,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+    })
+}
+
+/// Puts a login session (keyed by the hash of `raw`) for `user_id` in `tenant`.
+async fn put_login_session(store: &Arc<dyn Store>, raw: &str, user_id: u64, tenant: TenantId) {
+    let session = Session {
+        token_hash: hash_token(raw),
+        subject: format!("sub-{user_id}"),
+        display: format!("user-{user_id}@example.com"),
+        // Deliberately grant a broad stored scope: in cloud mode `admin_guard`
+        // must IGNORE this and use the membership role, so a session minted with
+        // Full here still cannot exceed the caller's role in the tenant.
+        scopes: vec![Scope::Full],
+        created: 0,
+        // Far future, but within i64 (the BIGINT column): u64::MAX would wrap
+        // to -1 and read back as already-expired.
+        expires: 4_000_000_000,
+        tenant_id: tenant,
+        user_id,
+    };
+    store.put_session(tenant, &session).await.unwrap();
+}
+
+/// CRITICAL (P2b Task 5): in cloud mode the OIDC-session branch of `admin_guard`
+/// authorizes by the caller's MEMBERSHIP ROLE in the current tenant
+/// (`session.tenant_id`), not by the stored `session.scopes`. A Viewer can read
+/// links but not write them; a session whose user has no membership in the
+/// current tenant is treated as insufficient (403), even though the session row
+/// itself carries `Scope::Full`.
+#[tokio::test]
+async fn admin_guard_role_scopes_in_cloud() {
+    let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = PostgresStore::open(&url, true).await.unwrap();
+    store.reset_for_tests().await.unwrap();
+    let pg = Arc::new(store);
+    let store_dyn: Arc<dyn Store> = pg.clone();
+    let sink_dyn: Arc<dyn AnalyticsSink> = pg.clone();
+
+    // A Viewer in tenant 1.
+    let viewer_tenant = TenantId(1);
+    let viewer_id = 900u64;
+    store_dyn
+        .put_membership(&Membership {
+            user_id: viewer_id,
+            tenant_id: viewer_tenant,
+            role: Role::Viewer,
+            created: 0,
+        })
+        .await
+        .unwrap();
+    let viewer_raw = "viewer-session-token";
+    put_login_session(&store_dyn, viewer_raw, viewer_id, viewer_tenant).await;
+
+    // A user with NO membership in the tenant its session points at.
+    let orphan_id = 901u64;
+    let orphan_tenant = TenantId(2);
+    let orphan_raw = "orphan-session-token";
+    put_login_session(&store_dyn, orphan_raw, orphan_id, orphan_tenant).await;
+
+    let app = router(cloud_state(store_dyn, sink_dyn));
+
+    // Viewer -> LinksRead (GET /admin/links) is allowed (200).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/links")
+                .header("cookie", format!("qk_session={viewer_raw}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "Viewer role must cover LinksRead in the current tenant"
+    );
+
+    // Viewer -> LinksWrite (POST / create) is denied (403), even though the
+    // stored session scope is Full.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={viewer_raw}"))
+                .body(Body::from(r#"{"url":"https://example.com/viewer-write"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "Viewer role must NOT cover LinksWrite (stored session.scopes=Full is ignored in cloud)"
+    );
+
+    // No membership in the session's tenant -> any required scope is 403.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/links")
+                .header("cookie", format!("qk_session={orphan_raw}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "a session whose user has no membership in the current tenant must never authorize"
     );
 }
