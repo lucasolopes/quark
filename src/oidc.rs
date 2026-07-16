@@ -4,6 +4,8 @@
 //! token stays a break-glass path regardless.
 
 use crate::auth::Scope;
+use crate::store::{Store, StoreError};
+use crate::tenant::{Membership, Role, User, DEFAULT_TENANT};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as b64url, Engine as _};
 use hmac::{Hmac, KeyInit, Mac};
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
@@ -318,6 +320,51 @@ pub fn map_scopes(claims: &serde_json::Value, cfg: &OidcConfig) -> Vec<Scope> {
     Vec::new()
 }
 
+/// Resolves the `User` for a verified login (creating one on first login, keyed
+/// by the immutable `subject`) and upserts its `Membership` in `DEFAULT_TENANT`,
+/// with a `role` aligned to the same IdP group that produced `scopes`. Returns
+/// the user id the caller should bind the new `Session` to.
+///
+/// Authorization is unaffected by this: it is decided by `scopes` (from
+/// `map_scopes`) alone, unchanged; the stored `role` is a record, not a gate.
+pub async fn ensure_user_and_membership(
+    store: &dyn Store,
+    subject: &str,
+    email: &str,
+    display: &str,
+    scopes: &[Scope],
+) -> Result<u64, StoreError> {
+    let user = match store.get_user_by_subject(subject).await? {
+        Some(u) => u,
+        None => {
+            let id = store.next_user_id().await?;
+            let u = User {
+                id,
+                subject: subject.to_string(),
+                email: email.to_string(),
+                display: display.to_string(),
+                created: crate::now(),
+            };
+            store.put_user(&u).await?;
+            u
+        }
+    };
+    let role = if scopes.iter().any(|s| *s == Scope::Full) {
+        Role::Admin
+    } else {
+        Role::Viewer
+    };
+    store
+        .put_membership(&Membership {
+            user_id: user.id,
+            tenant_id: DEFAULT_TENANT,
+            role,
+            created: crate::now(),
+        })
+        .await?;
+    Ok(user.id)
+}
+
 /// Live OIDC state held in `AppState`: the config, an HTTP client, the resolved
 /// discovery document, and a refreshable JWKS.
 pub struct OidcRuntime {
@@ -506,5 +553,67 @@ mod tests {
         // missing claim -> nothing
         let missing = serde_json::json!({ "sub": "x" });
         assert!(map_scopes(&missing, &c).is_empty());
+    }
+
+    #[tokio::test]
+    async fn ensure_user_and_membership_creates_once_and_sets_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::store::lmdb::LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+
+        // First login with the admin group -> creates the user, Admin membership.
+        let id1 = ensure_user_and_membership(
+            &store,
+            "sub-1",
+            "sub1@example.com",
+            "Sub One",
+            &[Scope::Full],
+        )
+        .await
+        .unwrap();
+        let user = store.get_user_by_subject("sub-1").await.unwrap().unwrap();
+        assert_eq!(user.id, id1);
+        let membership = store
+            .get_membership(id1, DEFAULT_TENANT)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(membership.role, Role::Admin);
+
+        // Second login (e.g. readonly this time) does not create a duplicate
+        // user, but does refresh the membership role to match the new scopes.
+        let id2 = ensure_user_and_membership(
+            &store,
+            "sub-1",
+            "sub1@example.com",
+            "Sub One",
+            &[Scope::LinksRead, Scope::Analytics],
+        )
+        .await
+        .unwrap();
+        assert_eq!(id2, id1);
+        let membership = store
+            .get_membership(id1, DEFAULT_TENANT)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(membership.role, Role::Viewer);
+
+        // A different subject gets its own user id.
+        let id3 = ensure_user_and_membership(
+            &store,
+            "sub-2",
+            "sub2@example.com",
+            "Sub Two",
+            &[Scope::LinksRead, Scope::Analytics],
+        )
+        .await
+        .unwrap();
+        assert_ne!(id3, id1);
+        let membership = store
+            .get_membership(id3, DEFAULT_TENANT)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(membership.role, Role::Viewer);
     }
 }

@@ -1496,6 +1496,24 @@ async fn oidc_callback(
     if scopes.is_empty() {
         return (StatusCode::FORBIDDEN, "your account has no quark access").into_response();
     }
+    let email = claims
+        .raw
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let user_id = match crate::oidc::ensure_user_and_membership(
+        st.store.as_ref(),
+        &claims.subject,
+        &email,
+        &claims.display,
+        &scopes,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
     let raw = generate_token();
     let now = now();
     let session = crate::auth::Session {
@@ -1505,10 +1523,8 @@ async fn oidc_callback(
         scopes,
         created: now,
         expires: now + SESSION_TTL_SECS,
-        // Real user_id (linking to a `users`/`memberships` row) lands in a
-        // later multi-tenancy task; OSS/P1b callers stay on the default tenant.
         tenant_id: crate::tenant::DEFAULT_TENANT,
-        user_id: 0,
+        user_id,
     };
     if st.store.put_session(crate::tenant::DEFAULT_TENANT, &session).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
