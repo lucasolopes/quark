@@ -298,6 +298,11 @@ impl PostgresStore {
                 // (dead, delivered_at, next_attempt_at), hence the index.
                 "CREATE TABLE IF NOT EXISTS webhook_deliveries (id BIGSERIAL PRIMARY KEY, delivery_key TEXT UNIQUE NOT NULL, subscription_id BIGINT NOT NULL, event_type TEXT NOT NULL, payload TEXT NOT NULL, created BIGINT NOT NULL, attempts INT NOT NULL DEFAULT 0, next_attempt_at BIGINT NOT NULL, delivered_at BIGINT, dead BOOLEAN NOT NULL DEFAULT FALSE)",
                 "CREATE INDEX IF NOT EXISTS webhook_deliveries_poll_idx ON webhook_deliveries (dead, delivered_at, next_attempt_at)",
+                // Sheets connector (roadmap: Google Sheets). A single connection
+                // row (single-tenant OSS), plus a lease mirroring `health_lease`
+                // so only one node runs the scheduled sync at a time.
+                "CREATE TABLE IF NOT EXISTS sheets_connection (singleton BOOLEAN PRIMARY KEY DEFAULT TRUE, blob JSONB NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS sheets_lease (id INT PRIMARY KEY, holder TEXT NOT NULL, expires_at BIGINT NOT NULL)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -320,7 +325,7 @@ impl PostgresStore {
     /// Used in tests: resets all state.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries RESTART IDENTITY",
+            "TRUNCATE links, aliases, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
@@ -918,6 +923,71 @@ impl Store for PostgresStore {
                SET holder = $1, expires_at = EXTRACT(EPOCH FROM now())::bigint + $2 \
              WHERE health_lease.expires_at < EXTRACT(EPOCH FROM now())::bigint \
                 OR health_lease.holder = $1 \
+             RETURNING holder",
+        )
+        .bind(holder)
+        .bind(ttl_secs as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(row.is_some())
+    }
+
+    async fn put_sheets_connection(
+        &self,
+        c: &crate::sheets::SheetsConnection,
+    ) -> Result<(), StoreError> {
+        let blob = serde_json::to_value(c)?;
+        sqlx::query(
+            "INSERT INTO sheets_connection (singleton, blob) VALUES (TRUE, $1) \
+             ON CONFLICT (singleton) DO UPDATE SET blob = $1",
+        )
+        .bind(&blob)
+        .execute(&self.pool)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn get_sheets_connection(
+        &self,
+    ) -> Result<Option<crate::sheets::SheetsConnection>, StoreError> {
+        let row = sqlx::query("SELECT blob FROM sheets_connection WHERE singleton = TRUE")
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => {
+                let blob: serde_json::Value = r.try_get("blob").map_err(StoreError::backend)?;
+                Ok(Some(serde_json::from_value(blob)?))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_sheets_connection(&self) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM sheets_connection WHERE singleton = TRUE")
+            .execute(&self.pool)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn try_acquire_sheets_lease(
+        &self,
+        holder: &str,
+        ttl_secs: u64,
+    ) -> Result<bool, StoreError> {
+        // Mirrors `try_acquire_health_lease`: use the DATABASE clock for both the
+        // new expiry and the takeover comparison, so app-node clock skew cannot
+        // decide lease ownership.
+        let row = sqlx::query(
+            "INSERT INTO sheets_lease (id, holder, expires_at) \
+             VALUES (1, $1, EXTRACT(EPOCH FROM now())::bigint + $2) \
+             ON CONFLICT (id) DO UPDATE \
+               SET holder = $1, expires_at = EXTRACT(EPOCH FROM now())::bigint + $2 \
+             WHERE sheets_lease.expires_at < EXTRACT(EPOCH FROM now())::bigint \
+                OR sheets_lease.holder = $1 \
              RETURNING holder",
         )
         .bind(holder)

@@ -33,6 +33,7 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
 - **Links protegidos por senha:** senha opt-in por link (argon2id). Um link protegido serve um interstitial self-contained; a senha correta seta um cookie de unlock assinado, por-code, de 12h, e o redirect segue. O texto puro nunca é armazenado; só `has_password` é exposto. Doc: `docs/LINK-PASSWORD.md`.
 - **Monitoramento de link quebrado:** checker de fundo opt-in (`QUARK_HEALTH_CHECK_SECS`) sonda cada destino, grava a saúde e emite webhooks `link.broken`/`link.recovered` na transição. O painel mostra uma bolinha de status e um filtro "só quebrados". Doc: `docs/LINK-HEALTH.md`.
 - **Login OIDC:** "entrar com seu provedor de identidade" opt-in (Authorization Code + PKCE), sessões opacas revogáveis server-side, mapeamento claim→escopo default-closed. O `QUARK_ADMIN_TOKEN` segue como break-glass. Doc: `docs/OIDC-LOGIN.md`.
+- **Sincronização com o Google Sheets:** conector OAuth nativo opt-in (escopo `drive.file`) que espelha o catálogo de links numa planilha do operador, sincronizada sob demanda pelo painel e num agendamento opcional coordenado por lease. O refresh token fica guardado no servidor e nunca é devolvido. Doc: `docs/SHEETS.md`.
 - **Arquitetura plugável**: traits `Store` / `CacheTier` / `AnalyticsSink`:
   - **L2 Valkey** (`QUARK_VALKEY_URL`): cache compartilhado, circuit-breaker + timeout, fail-open.
   - **Postgres** (`QUARK_DATABASE_URL`): store relacional multi-nó (sequência de id atômica).

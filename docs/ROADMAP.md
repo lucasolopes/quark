@@ -33,6 +33,7 @@ bottleneck being geography/RTT, not the server).
 - **Password-protected links:** an opt-in per-link password (argon2id). A protected link serves a self-contained interstitial; the correct password sets a signed, per-code, 12h unlock cookie and the redirect proceeds. The plaintext is never stored; only `has_password` is exposed. Doc: `docs/LINK-PASSWORD.md`.
 - **Broken-link monitoring:** an opt-in background checker (`QUARK_HEALTH_CHECK_SECS`) probes each destination, records its health, and emits `link.broken`/`link.recovered` webhooks on a transition. Panel shows a status dot and a "broken only" filter. Doc: `docs/LINK-HEALTH.md`.
 - **OIDC login:** opt-in "sign in with your identity provider" (Authorization Code + PKCE), opaque revocable server-side sessions, default-closed claim-to-scope mapping. The `QUARK_ADMIN_TOKEN` stays a break-glass. Doc: `docs/OIDC-LOGIN.md`.
+- **Google Sheets sync:** opt-in native OAuth connector (scope `drive.file`) that mirrors the link catalog into a spreadsheet the operator owns, synced on demand from the panel and on an optional lease-coordinated schedule. The refresh token is stored server-side and never returned. Doc: `docs/SHEETS.md`.
 - **Pluggable architecture**: `Store` / `CacheTier` / `AnalyticsSink` traits:
   - **L2 Valkey** (`QUARK_VALKEY_URL`): shared cache, circuit breaker + timeout, fail-open.
   - **Postgres** (`QUARK_DATABASE_URL`): multi-node relational store (atomic id sequence).

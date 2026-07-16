@@ -14,6 +14,8 @@ async fn app() -> axum::Router {
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store,
@@ -783,6 +785,8 @@ async fn unlock_post_is_rate_limited() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store,
@@ -881,6 +885,8 @@ async fn rate_limit_429_after_exceeding() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store,
@@ -1007,6 +1013,8 @@ async fn app_admin(token: &str) -> axum::Router {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store,
@@ -1437,6 +1445,8 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
     let (analytics_tx, rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store,
@@ -2131,6 +2141,8 @@ async fn cors_header_present_when_configured() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store,
@@ -2458,6 +2470,8 @@ async fn admin_links_reports_health_and_broken_filter() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store: store.clone(),
@@ -2571,6 +2585,8 @@ async fn session_cookie_authorizes_admin_by_scope() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: true,
         cache,
         store: store.clone(),
@@ -2686,6 +2702,8 @@ async fn admin_me_reports_session_and_oidc_state() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store: store.clone(),
@@ -2762,6 +2780,8 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: true,
         cache,
         store: store.clone(),
@@ -2859,6 +2879,8 @@ async fn logout_requires_csrf_header_and_revokes_session() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: true,
         cache,
         store: store.clone(),
@@ -2932,6 +2954,8 @@ async fn session_cookie_is_ignored_when_oidc_not_configured() {
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         // OIDC turned off (e.g. QUARK_OIDC_ISSUER unset) while a token stays set.
         oidc_configured: false,
         cache,
@@ -2985,4 +3009,174 @@ async fn session_cookie_is_ignored_when_oidc_not_configured() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
+    use quark::auth::{hash_token, Scope, Session};
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let cfg = quark::sheets::SheetsConfig::from_parts(
+        "cid",
+        "sec",
+        "https://h/admin/integrations/sheets/callback",
+        None,
+    )
+    .unwrap();
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: Some(Arc::new(cfg)),
+        sheets_api: None,
+        oidc_configured: true,
+        cache,
+        store: store.clone(),
+        key: 0x1234,
+        signing_key: [0u8; 32],
+        analytics_tx: tx,
+        sink,
+        admin_token: Some("secret".to_string()),
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+    });
+    // Seed a connection whose refresh token must never appear in a response.
+    store
+        .put_sheets_connection(&quark::sheets::SheetsConnection {
+            refresh_token: "SECRET".into(),
+            email: "op@example.com".into(),
+            spreadsheet_id: Some("sheet123".into()),
+            last_sync: Some(42),
+            last_status: quark::sheets::SyncStatus::Ok,
+        })
+        .await
+        .unwrap();
+    let app = router(state);
+
+    // Status reports connected and never leaks the refresh token.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/integrations/sheets/status")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(
+        !text.contains("SECRET"),
+        "response must not leak refresh token"
+    );
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["connected"], true);
+    assert_eq!(v["email"], "op@example.com");
+    assert_eq!(
+        v["spreadsheet_url"],
+        "https://docs.google.com/spreadsheets/d/sheet123"
+    );
+
+    // A session-cookie sync without the CSRF header is rejected (403), even
+    // though the session authorizes the Full scope.
+    let now = 1_000_000u64;
+    store
+        .put_session(&Session {
+            token_hash: hash_token("full-token"),
+            subject: "s1".into(),
+            display: "op@example.com".into(),
+            scopes: vec![Scope::Full],
+            created: now,
+            expires: now + 100_000_000_000,
+        })
+        .await
+        .unwrap();
+    let resp = app
+        .oneshot(
+            Request::post("/admin/integrations/sheets/sync")
+                .header("cookie", "qk_session=full-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+// Regression for the connect-state binding: /connect sets a signed state cookie,
+// and the callback refuses a state that is not backed by the matching cookie
+// (anti login-CSRF: a leaked/echoed state alone must not connect an account).
+#[tokio::test]
+async fn sheets_callback_requires_the_state_cookie() {
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path()).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let cfg = quark::sheets::SheetsConfig::from_parts(
+        "cid",
+        "sec",
+        "https://h/admin/integrations/sheets/callback",
+        None,
+    )
+    .unwrap();
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: Some(Arc::new(cfg)),
+        sheets_api: None,
+        oidc_configured: true,
+        cache,
+        store: store.clone(),
+        key: 0x1234,
+        signing_key: [0u8; 32],
+        analytics_tx: tx,
+        sink,
+        admin_token: Some("secret".to_string()),
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+    });
+    let app = router(state);
+
+    // Connect (admin-authed) returns the consent URL and sets the state cookie.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/integrations/sheets/connect")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let set_cookie = resp
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .expect("connect sets a state cookie")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(set_cookie.contains("qk_sheets_state="));
+
+    // A callback carrying a forged/echoed state but NO matching cookie is refused
+    // (400), so it never reaches the token exchange and cannot store a connection.
+    let resp = app
+        .oneshot(
+            Request::get("/admin/integrations/sheets/callback?code=x&state=anything")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(store.get_sheets_connection().await.unwrap().is_none());
 }

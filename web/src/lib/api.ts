@@ -7,7 +7,7 @@ import type {
   ImportSummary, TagsResponse, FoldersResponse,
   ListTokensResponse, CreateTokenRequest, CreateTokenResponse,
   ListPixelsResponse, CreatePixelRequest, Pixel,
-  WellknownName, MeResponse,
+  WellknownName, MeResponse, SheetsStatus,
 } from "./types";
 
 /**
@@ -158,6 +158,37 @@ export const api = {
   },
   async deleteWellknown(name: WellknownName): Promise<void> {
     const res = await req(`/admin/wellknown/${encodeURIComponent(name)}`, { method: "DELETE" });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  /**
+   * Google Sheets connector status. The connector-off case returns the admin
+   * not-found status (401 when an admin credential exists, else 404) — the same
+   * as a genuine auth failure. We must NOT route it through `req`, whose 401
+   * path calls the global `onUnauthorized` handler: an operator viewing the
+   * Extensions page with the connector off would be bounced to /login. So this
+   * does a raw fetch and maps any non-OK to a neutral "unavailable" status the
+   * card renders as the old "via Webhooks" fallback (it never throws to the
+   * error boundary).
+   */
+  async sheetsStatus(): Promise<SheetsStatus> {
+    const headers = new Headers();
+    const token = getToken();
+    if (token) headers.set("x-admin-token", token);
+    const res = await fetch(BASE + "/admin/integrations/sheets/status", { headers, credentials: "include" });
+    if (!res.ok) return { connected: false, unavailable: true, last_status: { state: "never" } };
+    return (await res.json()) as SheetsStatus;
+  },
+  /** Starts the Google OAuth connect: returns the consent URL to navigate to (the server also sets a signed state cookie). */
+  async sheetsConnect(): Promise<{ url: string }> {
+    return jsonOrThrow(await req("/admin/integrations/sheets/connect"));
+  },
+  /** Runs one on-demand sync. Returns the same shape as `sheetsStatus`; a sync error comes back as 200 with `last_status.state === "error"`. */
+  async sheetsSync(): Promise<SheetsStatus> {
+    return jsonOrThrow(await req("/admin/integrations/sheets/sync", { method: "POST" }));
+  },
+  /** Disconnects the connector (drops the stored connection, including the refresh token). */
+  async sheetsDisconnect(): Promise<void> {
+    const res = await req("/admin/integrations/sheets", { method: "DELETE" });
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
 };

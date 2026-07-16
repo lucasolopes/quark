@@ -24,6 +24,8 @@ async fn app_with_token(admin_token: Option<&str>) -> axum::Router {
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
+        sheets: None,
+        sheets_api: None,
         oidc_configured: false,
         cache,
         store,
