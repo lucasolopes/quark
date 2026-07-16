@@ -1,0 +1,38 @@
+# Example Fly.io config for a multi-region quark (Tier 2 in docs/DEPLOY-MULTIREGION.md).
+# Fly is ONE example target; quark is a portable Docker binary driven by env vars,
+# so nothing here is required. Copy to fly.toml and edit `app`, regions, and the
+# primary region to your own. Secrets (QUARK_KEY, QUARK_SIGNING_KEY, the database
+# URLs) are set with `fly secrets set`, never committed.
+
+app = "your-quark-app"
+primary_region = "gru"          # the region holding the Postgres primary
+
+[build]
+  dockerfile = "Dockerfile"     # the repo's multi-stage build; no buildpack
+
+[env]
+  QUARK_ADDR = "0.0.0.0:8080"
+  # QUARK_DATABASE_URL: the PRIMARY Postgres, same for every region (writes).
+  # QUARK_REPLICA_DATABASE_URL: the LOCAL read replica; per-region value, so set
+  #   it per machine/region rather than here (see the guide). Unset = reads hit
+  #   the primary (single-region behavior).
+  # QUARK_VALKEY_URL: a Valkey reachable on the private network (cache + rate
+  #   limit + pub/sub invalidation).
+  # All three, plus QUARK_KEY and QUARK_SIGNING_KEY, are set via `fly secrets`.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false     # keep a machine warm in each region for latency
+  min_machines_running = 1
+
+  [http_service.checks]
+    [http_service.checks.health]
+      path = "/health"           # quark answers 200 "ok"
+      interval = "15s"
+      timeout = "2s"
+
+# Deploy machines in the regions your clicks come from, e.g.:
+#   fly scale count 3 --region gru,iad,fra
+# The primary_region holds the Postgres primary; other regions run a local read
+# replica and connect to the primary over Fly 6PN (private, no VPN).
