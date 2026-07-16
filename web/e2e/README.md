@@ -29,7 +29,7 @@ flowchart LR
 From the repo root, start the test IdP once:
 
 ```bash
-docker compose -f docker-compose.e2e.yml up -d --wait
+docker compose -f docker-compose.e2e.yml up -d
 ```
 
 Build the backend (any profile), then run the suite:

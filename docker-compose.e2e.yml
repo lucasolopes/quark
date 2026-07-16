@@ -14,12 +14,6 @@ services:
     ports: ["8081:8081"]
     volumes:
       - ./e2e/keycloak:/opt/keycloak/data/import:ro
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "exec 3<>/dev/tcp/localhost/8081 && echo -e 'GET /realms/quark HTTP/1.0\\r\\n\\r\\n' >&3 && cat <&3 | grep -q quark",
-        ]
-      interval: 5s
-      timeout: 5s
-      retries: 30
+    # No container healthcheck: the Keycloak image ships without curl/bash, so a
+    # CMD probe is unreliable. Readiness is polled from the host by the E2E
+    # global-setup (it waits on the realm discovery endpoint).

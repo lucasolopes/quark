@@ -37,13 +37,18 @@ function killExistingQuark(): void {
 }
 
 export default async function globalSetup(): Promise<void> {
-  // 1) Keycloak must already be up (docker compose -f docker-compose.e2e.yml up -d).
+  // 1) Keycloak must be starting/up (docker compose -f docker-compose.e2e.yml up -d).
+  // Poll the realm discovery: the container takes ~15-40s to import the realm.
   if (!(await reachable(DISCOVERY))) {
-    throw new Error(
-      `Keycloak is not reachable at ${DISCOVERY}.\n` +
-        `Start the test IdP first, from the repo root:\n` +
-        `  docker compose -f docker-compose.e2e.yml up -d --wait`,
-    );
+    try {
+      await waitFor(DISCOVERY, "Keycloak realm", 90_000);
+    } catch {
+      throw new Error(
+        `Keycloak is not reachable at ${DISCOVERY}.\n` +
+          `Start the test IdP first, from the repo root:\n` +
+          `  docker compose -f docker-compose.e2e.yml up -d`,
+      );
+    }
   }
 
   // 2) Locate a built quark binary. Pick the NEWEST of debug/release by mtime so
