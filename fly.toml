@@ -1,0 +1,30 @@
+# quark production — single region (São Paulo) to start. Add regions later per
+# docs/DEPLOY-MULTIREGION.md; the read/write split (QUARK_REPLICA_DATABASE_URL)
+# activates then. Secrets are set with `fly secrets set`, never here.
+app = "quark-prod"
+primary_region = "gru"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  QUARK_ADDR = "0.0.0.0:8080"
+  # Public host: makes short URLs and OAuth redirects use the real domain.
+  QUARK_PUBLIC_HOST = "app.quarkus.com.br"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "get"
+    path = "/health"
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
