@@ -2716,6 +2716,80 @@ impl AnalyticsSink for PostgresStore {
             recent,
         }))
     }
+
+    /// Same shape as `stats`, but summed across every link owned by
+    /// `tenant` instead of keyed by one `id`: `SUM(count) GROUP BY
+    /// dimension, bucket` over `click_counters` and `MIN(first_ts)`/
+    /// `MAX(last_ts)` over `stats_meta`. No `recent` (per-link raw events
+    /// don't compose across links).
+    ///
+    /// These analytics tables are NOT_FORCED (bare `self.read` pool, no RLS)
+    /// — `WHERE tenant_id = $1` on both queries is the ONLY isolation this
+    /// aggregate has. Dropping it from either query would leak every
+    /// tenant's clicks into every other tenant's `/admin/stats`.
+    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError> {
+        let tenant = tenant as i64;
+        let counter_rows = sqlx::query(
+            "SELECT dimension, bucket, SUM(count)::BIGINT AS count FROM click_counters \
+             WHERE tenant_id = $1 GROUP BY dimension, bucket",
+        )
+        .bind(tenant)
+        .fetch_all(&self.read)
+        .await
+        .map_err(StoreError::backend)?;
+        let mut agg = Aggregates::default();
+        for r in &counter_rows {
+            let dimension: String = r.try_get("dimension").map_err(StoreError::backend)?;
+            let bucket: String = r.try_get("bucket").map_err(StoreError::backend)?;
+            let count: i64 = r.try_get("count").map_err(StoreError::backend)?;
+            let count = count as u64;
+            match dimension.as_str() {
+                "total" => agg.total = count,
+                "bots" => agg.bots = count,
+                "day" => {
+                    agg.per_day.insert(bucket, count);
+                }
+                "country" => {
+                    agg.per_country.insert(bucket, count);
+                }
+                "device" => {
+                    agg.per_device.insert(bucket, count);
+                }
+                "os" => {
+                    agg.per_os.insert(bucket, count);
+                }
+                "browser" => {
+                    agg.per_browser.insert(bucket, count);
+                }
+                "referer" => {
+                    agg.per_referer.insert(bucket, count);
+                }
+                "city" => {
+                    agg.per_city.insert(bucket, count);
+                }
+                "variant" => {
+                    agg.per_variant.insert(bucket, count);
+                }
+                _ => {}
+            }
+        }
+        // A plain aggregate query (no GROUP BY) always returns exactly one
+        // row, even over zero matching tenant rows — MIN/MAX just come back
+        // NULL, hence the `Option<i64>` binds below rather than `fetch_optional`.
+        let meta = sqlx::query(
+            "SELECT MIN(first_ts) AS first_ts, MAX(last_ts) AS last_ts FROM stats_meta \
+             WHERE tenant_id = $1",
+        )
+        .bind(tenant)
+        .fetch_one(&self.read)
+        .await
+        .map_err(StoreError::backend)?;
+        let first_ts: Option<i64> = meta.try_get("first_ts").map_err(StoreError::backend)?;
+        let last_ts: Option<i64> = meta.try_get("last_ts").map_err(StoreError::backend)?;
+        agg.first_ts = first_ts.unwrap_or(0) as u64;
+        agg.last_ts = last_ts.unwrap_or(0) as u64;
+        Ok(agg)
+    }
 }
 
 #[cfg(test)]

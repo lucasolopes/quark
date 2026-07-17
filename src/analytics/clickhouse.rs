@@ -354,6 +354,136 @@ impl AnalyticsSink for ClickHouseSink {
             recent,
         }))
     }
+
+    /// `clicks` has no `tenant_id` column yet — tagging ClickHouse rows by
+    /// tenant is P4b work (provisioning the server itself is a user action;
+    /// see the design doc's "ClickHouse sink" section). Until then every row
+    /// in the table is implicitly the OSS default tenant's, so
+    /// `stats_for_tenant(0)` aggregates the whole table (same queries as
+    /// `stats(id)`, minus the `WHERE id = ?`) and any other tenant gets
+    /// `Aggregates::default()` — never another tenant's data, since there is
+    /// no other tenant's data recorded here at all.
+    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError> {
+        if tenant != 0 {
+            return Ok(Aggregates::default());
+        }
+        let totals: Totals = self
+            .client
+            .query(
+                "SELECT count() AS total, min(ts) AS first_ts, max(ts) AS last_ts, \
+                 countIf(bot = 1) AS bots FROM clicks",
+            )
+            .fetch_one()
+            .await
+            .map_err(StoreError::backend)?;
+        if totals.total == 0 {
+            return Ok(Aggregates::default());
+        }
+
+        let mut agg = Aggregates {
+            total: totals.total,
+            first_ts: totals.first_ts,
+            last_ts: totals.last_ts,
+            bots: totals.bots,
+            ..Default::default()
+        };
+
+        let per_day: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT formatDateTime(toDateTime(ts,'UTC'),'%F') AS k, count() AS c FROM clicks WHERE bot = 0 GROUP BY k",
+            )
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_day {
+            agg.per_day.insert(kv.k, kv.c);
+        }
+
+        let per_country: Vec<Kv> = self
+            .client
+            .query("SELECT country AS k, count() AS c FROM clicks WHERE bot = 0 GROUP BY k")
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_country {
+            if !kv.k.is_empty() {
+                agg.per_country.insert(kv.k, kv.c);
+            }
+        }
+
+        let per_device: Vec<Kv> = self
+            .client
+            .query("SELECT device AS k, count() AS c FROM clicks WHERE bot = 0 GROUP BY k")
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_device {
+            agg.per_device.insert(kv.k, kv.c);
+        }
+
+        let per_os: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT if(os = '', 'Other', os) AS k, count() AS c FROM clicks WHERE bot = 0 GROUP BY k",
+            )
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_os {
+            agg.per_os.insert(kv.k, kv.c);
+        }
+
+        let per_browser: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT if(browser = '', 'Other', browser) AS k, count() AS c FROM clicks WHERE bot = 0 GROUP BY k",
+            )
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_browser {
+            agg.per_browser.insert(kv.k, kv.c);
+        }
+
+        let per_referer: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT if(referer_host = '', 'direct', referer_host) AS k, count() AS c FROM clicks WHERE bot = 0 GROUP BY k",
+            )
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_referer {
+            agg.per_referer.insert(kv.k, kv.c);
+        }
+
+        let per_city: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT city AS k, count() AS c FROM clicks WHERE city != '' AND bot = 0 GROUP BY k",
+            )
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_city {
+            agg.per_city.insert(kv.k, kv.c);
+        }
+
+        let per_variant: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT toString(variant) AS k, count() AS c FROM clicks WHERE variant >= 0 GROUP BY k",
+            )
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_variant {
+            agg.per_variant.insert(kv.k, kv.c);
+        }
+
+        Ok(agg)
+    }
 }
 
 #[cfg(test)]

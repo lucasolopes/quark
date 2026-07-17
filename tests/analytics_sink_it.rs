@@ -48,3 +48,46 @@ async fn retention_truncates_at_events_max() {
     assert_eq!(s.recent.len(), 1000);
     assert_eq!(s.recent.last().unwrap().ts, 1_752_300_000 + 11 * 100 + 99);
 }
+
+/// LMDB's `stats_for_tenant` (multi-tenancy P4a Task 2): this backend's
+/// analytics are single-tenant (every `stats` entry lives under
+/// `DEFAULT_TENANT` regardless of which tenant owns the link — see the
+/// comment on `LmdbStore::record_batch`), so `stats_for_tenant(0)` merges
+/// every link's aggregate into one tenant-wide total, matching OSS
+/// semantics ("tenant 0 aggregates everything").
+#[tokio::test]
+async fn stats_for_tenant_default_tenant_aggregates_every_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_store, sink) = open_backends(dir.path(), false).await.unwrap();
+    sink.record_batch(&[ev(1, 1_752_300_000), ev(1, 1_752_300_050)])
+        .await
+        .unwrap();
+    sink.record_batch(&[ev(2, 1_752_300_100)]).await.unwrap();
+
+    let agg = sink.stats_for_tenant(0).await.unwrap();
+    assert_eq!(agg.total, 3, "sums clicks across both links");
+    assert_eq!(agg.per_country.get("BR"), Some(&3));
+    assert_eq!(agg.first_ts, 1_752_300_000);
+    assert_eq!(agg.last_ts, 1_752_300_100);
+}
+
+/// A non-default tenant id has no data of its own on this backend (there is
+/// no per-link tenant to filter by) — it must get an empty aggregate, never
+/// tenant 0's data. This is the negative half of the isolation contract on
+/// LMDB: the only leak-proof answer when the backend can't filter is "empty",
+/// not "everything".
+#[tokio::test]
+async fn stats_for_tenant_non_default_tenant_is_empty_even_with_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_store, sink) = open_backends(dir.path(), false).await.unwrap();
+    sink.record_batch(&[ev(1, 1_752_300_000), ev(1, 1_752_300_050)])
+        .await
+        .unwrap();
+
+    let agg = sink.stats_for_tenant(7).await.unwrap();
+    assert_eq!(
+        agg.total, 0,
+        "non-default tenant must never see tenant 0's clicks"
+    );
+    assert!(agg.per_country.is_empty());
+}

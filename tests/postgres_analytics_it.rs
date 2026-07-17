@@ -370,3 +370,120 @@ async fn analytics_tenant_backfill_pg() {
     PostgresStore::open(&url, false).await.unwrap();
     assert_eq!(click_events_tenant_id(&pool, 60).await, tenant_b.0 as i64);
 }
+
+/// Multi-tenancy P4a Task 2: `stats_for_tenant` sums across every link owned
+/// by a tenant. Tenant A and tenant B each own a link; both get clicks;
+/// `stats_for_tenant` for either tenant counts ONLY that tenant's clicks —
+/// the isolation invariant, since `click_counters`/`stats_meta` are
+/// NOT_FORCED and the app-level `WHERE tenant_id = $1` is the only thing
+/// standing between this and a cross-tenant leak.
+#[tokio::test]
+#[serial(pg)]
+async fn stats_for_tenant_isolates_across_tenants_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let tenant_a = TenantId(10);
+    let tenant_b = TenantId(11);
+    s.put_link(tenant_a, 100, &rec_for(tenant_a, "https://example.com/a1"))
+        .await
+        .unwrap();
+    s.put_link(tenant_a, 101, &rec_for(tenant_a, "https://example.com/a2"))
+        .await
+        .unwrap();
+    s.put_link(tenant_b, 200, &rec_for(tenant_b, "https://example.com/b1"))
+        .await
+        .unwrap();
+
+    let mut a1 = ev_ua(100, 1_752_300_000, "BR", "Mozilla/5.0 (iPhone)");
+    a1.tenant_id = tenant_a.0;
+    let mut a2 = ev_ua(101, 1_752_300_050, "US", "Mozilla/5.0 (Windows NT 10.0)");
+    a2.tenant_id = tenant_a.0;
+    let mut b1 = ev_ua(200, 1_752_300_100, "JP", "Mozilla/5.0 (iPhone)");
+    b1.tenant_id = tenant_b.0;
+    let mut b2 = ev_ua(200, 1_752_300_150, "JP", "Mozilla/5.0 (iPhone)");
+    b2.tenant_id = tenant_b.0;
+
+    s.record_batch(&[a1, a2]).await.unwrap();
+    s.record_batch(&[b1, b2]).await.unwrap();
+
+    let agg_a = s.stats_for_tenant(tenant_a.0).await.unwrap();
+    assert_eq!(
+        agg_a.total, 2,
+        "tenant A's aggregate counts only A's clicks"
+    );
+    assert_eq!(agg_a.per_country.get("BR"), Some(&1));
+    assert_eq!(agg_a.per_country.get("US"), Some(&1));
+    assert!(
+        !agg_a.per_country.contains_key("JP"),
+        "tenant A must never see tenant B's country breakdown"
+    );
+
+    let agg_b = s.stats_for_tenant(tenant_b.0).await.unwrap();
+    assert_eq!(
+        agg_b.total, 2,
+        "tenant B's aggregate counts only B's clicks"
+    );
+    assert_eq!(agg_b.per_country.get("JP"), Some(&2));
+    assert!(
+        !agg_b.per_country.contains_key("BR") && !agg_b.per_country.contains_key("US"),
+        "tenant B must never see tenant A's country breakdown"
+    );
+}
+
+/// OSS/single-tenant parity: `stats_for_tenant(0)` (the default tenant)
+/// aggregates every click recorded under it, same as the pre-P4a behavior
+/// where there was only ever one tenant.
+#[tokio::test]
+#[serial(pg)]
+async fn stats_for_tenant_default_tenant_aggregates_all_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    s.record_batch(&[ev(300, 1_752_300_000), ev(300, 1_752_300_050)])
+        .await
+        .unwrap();
+    s.record_batch(&[ev(301, 1_752_300_100)]).await.unwrap();
+
+    let agg = s.stats_for_tenant(0).await.unwrap();
+    assert_eq!(agg.total, 3);
+    assert_eq!(agg.per_country.get("BR"), Some(&3));
+    assert_eq!(agg.first_ts, 1_752_300_000);
+    assert_eq!(agg.last_ts, 1_752_300_100);
+}
+
+/// Regression: `stats(id)` (the per-link view) is untouched by Task 2 —
+/// still keyed by `id` alone, unaffected by other tenants' or other links'
+/// clicks.
+#[tokio::test]
+#[serial(pg)]
+async fn stats_per_link_unchanged_by_tenant_aggregate_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let tenant_a = TenantId(20);
+    let tenant_b = TenantId(21);
+    s.put_link(tenant_a, 400, &rec_for(tenant_a, "https://example.com/a"))
+        .await
+        .unwrap();
+    s.put_link(tenant_b, 401, &rec_for(tenant_b, "https://example.com/b"))
+        .await
+        .unwrap();
+
+    let mut ea = ev(400, 1_752_300_000);
+    ea.tenant_id = tenant_a.0;
+    let mut eb = ev(401, 1_752_300_050);
+    eb.tenant_id = tenant_b.0;
+    s.record_batch(&[ea, eb]).await.unwrap();
+
+    let st_a = s.stats(400).await.unwrap().unwrap();
+    assert_eq!(
+        st_a.aggregates.total, 1,
+        "per-link stats(id) stays keyed by id"
+    );
+    let st_b = s.stats(401).await.unwrap().unwrap();
+    assert_eq!(st_b.aggregates.total, 1);
+}
