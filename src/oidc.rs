@@ -444,7 +444,7 @@ pub async fn ensure_user_and_membership(
         // OSS: single implicit tenant 0. Cloud: no membership until the user
         // creates or is invited to a workspace (P2b/P2c), unless this is a
         // per-tenant login (see `tenant_membership` below).
-        let role = if scopes.iter().any(|s| *s == Scope::Full) {
+        let role = if scopes.contains(&Scope::Full) {
             Role::Admin
         } else {
             Role::Viewer
@@ -1047,6 +1047,39 @@ mod tests {
 
         // Owner is never granted by a claim, no matter what the claim says.
         for claims in [&admin, &ro, &admin_str, &none, &missing] {
+            assert_ne!(claim_role(claims, &cfg), Role::Owner);
+        }
+    }
+
+    /// Security sweep (multi-tenancy P2e Task 4): `claim_role` against the
+    /// literal group names `provision_tenant_keycloak` writes into every
+    /// auto-provisioned tenant's `oidc_config` (`quark-admins`/
+    /// `quark-readers`, as opposed to the arbitrary `acme-*` names in
+    /// `claim_role_maps_admin_and_readonly_and_defaults_to_member` above) —
+    /// `quark-admins` maps to Admin, `quark-readers` to Viewer, and Owner is
+    /// never reachable through either.
+    #[test]
+    fn claim_role_with_provisioned_default_groups_never_grants_owner() {
+        let cfg = TenantOidcConfig {
+            tenant_id: TenantId(1),
+            issuer: "https://kc.example.com/realms/acme".into(),
+            client_id: "quark".into(),
+            client_secret: String::new(),
+            scopes: vec!["openid".into()],
+            admin_claim: "groups".into(),
+            admin_value: "quark-admins".into(),
+            readonly_value: "quark-readers".into(),
+            required_value: Some("quark-readers".into()),
+            post_login_url: None,
+        };
+
+        let admin = serde_json::json!({ "groups": ["quark-admins"] });
+        assert_eq!(claim_role(&admin, &cfg), Role::Admin);
+
+        let reader = serde_json::json!({ "groups": ["quark-readers"] });
+        assert_eq!(claim_role(&reader, &cfg), Role::Viewer);
+
+        for claims in [&admin, &reader] {
             assert_ne!(claim_role(claims, &cfg), Role::Owner);
         }
     }

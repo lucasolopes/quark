@@ -2964,7 +2964,11 @@ async fn admin_invites_accept(
     if st.keycloak.is_some() {
         let slug = match st.store.get_tenant(inv.tenant_id).await {
             Ok(Some(t)) => t.slug,
-            _ => String::new(),
+            // Data-integrity gap, not a backend failure: the invite points at
+            // a tenant that no longer exists. Fall back to an empty org hint
+            // rather than fail the whole accept.
+            Ok(None) => String::new(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
         return Json(serde_json::json!({
             "status": "login_required",

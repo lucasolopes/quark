@@ -346,7 +346,7 @@ async fn every_tenant_owned_entity_is_isolated() {
     assert_full_isolation(lmdb_store).await;
 
     // Postgres arm: only when a test database is configured.
-    if let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() {
+    if let Ok(url) = std::env::var("QUARK_TEST_DATABASE_URL") {
         let pg_store = quark::store::open_postgres(&url).await.unwrap();
         pg_store.reset_for_tests().await.unwrap();
         let dyn_store: Arc<dyn Store> = pg_store.clone();
