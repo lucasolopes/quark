@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { api, ApiError, setUnauthorizedHandler } from "./api";
+import { api, ApiError, oidcLoginUrl, setUnauthorizedHandler } from "./api";
 import { setToken } from "./auth";
 
 describe("api client", () => {
@@ -129,5 +129,40 @@ describe("invite endpoints", () => {
   it("acceptInvite throws ApiError(409) when the user is already a member", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 409 }));
     await expect(api.acceptInvite("inv_abc")).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("acceptInvite returns a model-B login_required body verbatim", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ status: "login_required", login_url: "/admin/login?org=acme" }), { status: 200 }),
+    );
+    const r = await api.acceptInvite("inv_abc");
+    expect(r).toEqual({ status: "login_required", login_url: "/admin/login?org=acme" });
+  });
+
+  it("acceptInvite returns the model-A body unchanged (no status field)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ tenant_id: 9, role: "member" }), { status: 200 }),
+    );
+    const r = await api.acceptInvite("inv_abc");
+    expect(r).toEqual({ tenant_id: 9, role: "member" });
+    expect((r as { status?: string }).status).toBeUndefined();
+  });
+});
+
+describe("oidcLoginUrl", () => {
+  it("with no org, points at /admin/login with no ?org", () => {
+    const url = oidcLoginUrl();
+    expect(url.endsWith("/admin/login")).toBe(true);
+    expect(url).not.toContain("?org");
+  });
+
+  it("with an org, appends ?org=<encoded org>", () => {
+    const url = oidcLoginUrl("acme");
+    expect(url).toContain("/admin/login?org=acme");
+  });
+
+  it("encodes an org slug with special characters", () => {
+    const url = oidcLoginUrl("a b");
+    expect(url).toContain(`/admin/login?org=${encodeURIComponent("a b")}`);
   });
 });

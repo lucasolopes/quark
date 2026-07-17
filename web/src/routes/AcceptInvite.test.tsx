@@ -103,4 +103,43 @@ describe("AcceptInvite", () => {
     await userEvent.click(await screen.findByRole("button", { name: /accept invite/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/expired/i);
   });
+
+  it("model-B login_required: redirects to the tenant SSO instead of navigating to /links", async () => {
+    const assignMock = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign: assignMock } as Location);
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes("/admin/me")) return Promise.resolve(jsonResponse({ authenticated: true, oidc_enabled: true }));
+      if (url.includes("/accept") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ status: "login_required", login_url: "/admin/login?org=acme" }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    render(wrap("tok_x"));
+    await userEvent.click(await screen.findByRole("button", { name: /accept invite/i }));
+
+    await waitFor(() => {
+      expect(assignMock).toHaveBeenCalledOnce();
+    });
+    expect(assignMock.mock.calls[0][0]).toContain("/admin/login?org=acme");
+    expect(screen.queryByText("LINKS PAGE")).not.toBeInTheDocument();
+  });
+
+  it("model-A body (no status): still navigates to /links (regression)", async () => {
+    const assignMock = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign: assignMock } as Location);
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes("/admin/me")) return Promise.resolve(jsonResponse({ authenticated: true, oidc_enabled: true }));
+      if (url.includes("/accept") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ tenant_id: 3, role: "member" }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    render(wrap("tok_x"));
+    await userEvent.click(await screen.findByRole("button", { name: /accept invite/i }));
+
+    expect(await screen.findByText("LINKS PAGE")).toBeInTheDocument();
+    expect(assignMock).not.toHaveBeenCalled();
+  });
 });

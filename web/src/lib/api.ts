@@ -46,8 +46,14 @@ async function req(path: string, opts: RequestInit = {}): Promise<Response> {
   return res;
 }
 
-/** Absolute URL to start the OIDC login (a full navigation, not fetch). */
-export function oidcLoginUrl(): string { return `${BASE}/admin/login`; }
+/**
+ * Absolute URL to start the OIDC login (a full navigation, not fetch). An
+ * optional `org` is a per-tenant SSO hint (untrusted UX convenience — the
+ * server decides what to do with it, we just forward it).
+ */
+export function oidcLoginUrl(org?: string): string {
+  return org ? `${BASE}/admin/login?org=${encodeURIComponent(org)}` : `${BASE}/admin/login`;
+}
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
@@ -214,8 +220,14 @@ export const api = {
     const res = await req(`/admin/invites/${id}`, { method: "DELETE" });
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
-  /** Accepts an invite by token, granting the current user membership in its workspace. 409 if already a member, 410/404 if expired or unknown. */
-  async acceptInvite(token: string): Promise<{ tenant_id: number; role: string }> {
+  /**
+   * Accepts an invite by token, granting the current user membership in its
+   * workspace. 409 if already a member, 410/404 if expired or unknown. The
+   * body is model-A membership (`{ tenant_id, role }`) or, for a tenant on
+   * model B, `{ status: "login_required", login_url }` — the caller decides
+   * what to do with either shape.
+   */
+  async acceptInvite(token: string): Promise<{ status?: string; login_url?: string }> {
     return jsonOrThrow(await req(`/admin/invites/${encodeURIComponent(token)}/accept`, { method: "POST" }));
   },
 };
