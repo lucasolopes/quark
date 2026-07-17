@@ -24,6 +24,9 @@ export const en = {
     orgButton: "Sign in to {org}",
     invalidToken: "Invalid token. Check it and try again.",
     connectionError: "Could not connect. Try again.",
+    emailLabel: "Email",
+    emailHint: "We'll check if your organization uses single sign-on.",
+    continue: "Continue",
   },
   shell: {
     navLinks: "Links",

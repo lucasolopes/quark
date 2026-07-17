@@ -26,6 +26,9 @@ export const ptBR: Messages = {
     orgButton: "Entrar em {org}",
     invalidToken: "Token inválido. Verifique e tente novamente.",
     connectionError: "Não foi possível conectar. Tente novamente.",
+    emailLabel: "E-mail",
+    emailHint: "Vamos checar se sua organização usa login único (SSO).",
+    continue: "Continuar",
   },
   shell: {
     navLinks: "Links",

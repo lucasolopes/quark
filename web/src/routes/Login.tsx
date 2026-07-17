@@ -16,12 +16,19 @@ export function Login() {
   const t = useT();
   const [value, setValue] = useState("");
   const [oidcEnabled, setOidcEnabled] = useState(false);
+  const [email, setEmail] = useState("");
+  // Set once email discovery comes back with no org: reveals the shared
+  // provider button instead of blocking the user behind the email step.
+  const [sharedLoginRevealed, setSharedLoginRevealed] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const [params] = useSearchParams();
   // Untrusted UX hint from the URL: only ever displayed and forwarded to
   // `oidcLoginUrl`, never validated here — the server decides what it means.
   const org = params.get("org")?.trim() || "";
+  // `?org=` always wins (LUC-53): it already picked the tenant, so the
+  // email-first discovery step would be redundant.
+  const showEmailStage = oidcEnabled && !org && !sharedLoginRevealed;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -60,6 +67,31 @@ export function Login() {
     const token = value.trim();
     if (!token || mutation.isPending) return;
     mutation.mutate(token);
+  }
+
+  const discoverMutation = useMutation({
+    mutationFn: (candidate: string) => api.discoverSso(candidate),
+    onSuccess: (result) => {
+      if (result.org) {
+        window.location.href = oidcLoginUrl(result.org);
+      } else {
+        // No SSO org for this domain: stop blocking on the email step and
+        // let the visitor reach the shared login options.
+        setSharedLoginRevealed(true);
+      }
+    },
+    onError: () => {
+      // Discovery is a convenience, not a gate: if it fails, fall back to
+      // the shared login options instead of stranding the visitor.
+      setSharedLoginRevealed(true);
+    },
+  });
+
+  function handleEmailSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const candidate = email.trim();
+    if (!candidate || discoverMutation.isPending) return;
+    discoverMutation.mutate(candidate);
   }
 
   return (
@@ -135,6 +167,27 @@ export function Login() {
                     {t("login.orgButton", { org })}
                   </Button>
                 </>
+              ) : showEmailStage ? (
+                <form onSubmit={handleEmailSubmit} className="flex flex-col gap-3" noValidate>
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="sso-email" className="text-sm font-medium">
+                      {t("login.emailLabel")}
+                    </label>
+                    <Input
+                      id="sso-email"
+                      type="email"
+                      autoComplete="email"
+                      placeholder="jane@acme.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">{t("login.emailHint")}</p>
+                  </div>
+                  <Button type="submit" variant="outline" disabled={!email.trim() || discoverMutation.isPending}>
+                    {discoverMutation.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+                    {t("login.continue")}
+                  </Button>
+                </form>
               ) : (
                 <Button
                   type="button"

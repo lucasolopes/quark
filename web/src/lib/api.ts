@@ -230,4 +230,13 @@ export const api = {
   async acceptInvite(token: string): Promise<{ status?: string; login_url?: string }> {
     return jsonOrThrow(await req(`/admin/invites/${encodeURIComponent(token)}/accept`, { method: "POST" }));
   },
+  /**
+   * Looks up the SSO org for an email's domain, for the email-first login
+   * step. Uniform 200 either way — `{org}` when the domain is a verified SSO
+   * domain of an oidc-configured tenant, else `{}`. The email is an untrusted
+   * UX hint we just forward; the server owns whether it means anything.
+   */
+  async discoverSso(email: string): Promise<{ org?: string }> {
+    return jsonOrThrow(await req(`/admin/sso/discover?email=${encodeURIComponent(email)}`));
+  },
 };

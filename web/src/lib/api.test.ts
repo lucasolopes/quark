@@ -149,6 +149,34 @@ describe("invite endpoints", () => {
   });
 });
 
+describe("api.discoverSso", () => {
+  beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+
+  it("returns the org when the email's domain is a verified SSO domain", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ org: "acme" }), { status: 200 }),
+    );
+    const r = await api.discoverSso("jane@acme.com");
+    expect(r).toEqual({ org: "acme" });
+    const [url] = spy.mock.calls[0];
+    expect(String(url)).toContain("/admin/sso/discover?email=");
+    expect(String(url)).toContain(encodeURIComponent("jane@acme.com"));
+  });
+
+  it("returns an empty object when the domain has no SSO org", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
+    const r = await api.discoverSso("jane@personal.com");
+    expect(r).toEqual({});
+  });
+
+  it("encodes special characters in the email", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
+    await api.discoverSso("jane+test@acme.com");
+    const [url] = spy.mock.calls[0];
+    expect(String(url)).toContain(`email=${encodeURIComponent("jane+test@acme.com")}`);
+  });
+});
+
 describe("oidcLoginUrl", () => {
   it("with no org, points at /admin/login with no ?org", () => {
     const url = oidcLoginUrl();
