@@ -47,4 +47,13 @@ describe("StatsView", () => {
     expect(screen.getByRole("heading", { name: "Stats" })).toBeInTheDocument();
     expect(screen.getByText(/6lB362J/)).toBeInTheDocument();
   });
+
+  it("error state shows a neutral message and retry, with no navigation link (LUC-61)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("boom", { status: 500 }));
+    render(wrap("6lB362J"));
+    expect(await screen.findByText("Could not load stats.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /back to links/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/back to links/i)).not.toBeInTheDocument();
+  });
 });

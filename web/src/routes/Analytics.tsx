@@ -1,5 +1,6 @@
 import { AlertTriangle, Link2, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StatsView } from "@/components/StatsView";
@@ -44,6 +45,12 @@ export function Analytics() {
 
   const isSearching = usingServerSearch && search.isFetching;
   const noResults = dq !== "" && !isSearching && !base.isPending && results.length === 0;
+
+  // Only the base browse list (no active search term) gets a "load more"
+  // affordance — client-side filtering and server-side search already work
+  // over what's loaded, and a fetched search page mirrors the base list's
+  // pagination anyway via the same `useLinks` hook.
+  const activeQuery = usingServerSearch ? search : base;
 
   return (
     <div className="flex flex-col gap-4">
@@ -106,6 +113,17 @@ export function Analytics() {
             </li>
           ))}
         </ul>
+      )}
+
+      {activeQuery.hasNextPage && (
+        <Button
+          variant="outline"
+          onClick={() => activeQuery.fetchNextPage()}
+          disabled={activeQuery.isFetchingNextPage}
+          className="self-center"
+        >
+          {activeQuery.isFetchingNextPage ? t("common.loadingMore") : t("common.loadMore")}
+        </Button>
       )}
 
       {selected ? (

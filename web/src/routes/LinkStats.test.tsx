@@ -113,4 +113,11 @@ describe("LinkStats", () => {
     render(wrap("6lB362J"));
     expect(await screen.findByText("Clicks per city")).toBeInTheDocument();
   });
+
+  it("keeps its own back-to-links button even when the stats fetch errors (LUC-61)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("boom", { status: 500 }));
+    render(wrap("6lB362J"));
+    expect(await screen.findByText(/could not load stats/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /back to links/i })).toBeInTheDocument();
+  });
 });
