@@ -2275,6 +2275,94 @@ async fn admin_invites_delete(
     StatusCode::OK.into_response()
 }
 
+#[derive(Serialize)]
+struct AcceptInviteResp {
+    tenant_id: u64,
+    role: crate::tenant::Role,
+}
+
+/// `POST /admin/invites/:token/accept` (cloud only): the invited user
+/// redeems the token, joining the invite's tenant at the invited role.
+///
+/// Reached via `session_user_id`, not `admin_guard`: a brand-new user with
+/// zero memberships anywhere must still be able to accept an invite (the
+/// same reasoning as `admin_tenants_create`). The tenant and role granted
+/// ALWAYS come from the invite row, never from the request: the token is
+/// the only thing the caller supplies.
+///
+/// Checks run in an order where no membership is ever granted on a failure
+/// path: cloud gate, session, rate limit, invite lookup (covers unknown,
+/// expired, and already-accepted tokens alike, since `get_invite_by_hash`
+/// hides all three), email match, then existing-membership conflict.
+async fn admin_invites_accept(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(user_id) = session_user_id(&st, &headers).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let ip = client_ip(&headers, &st.real_ip_header, None);
+    if !st.ratelimiter.check(&ip, now()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+    }
+    let inv = match st
+        .store
+        .get_invite_by_hash(&hash_token(&token), now())
+        .await
+    {
+        Ok(Some(inv)) => inv,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let user = match st.store.get_user_by_id(user_id).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    // The invite's email is already lowercased at creation time; the
+    // session's user email is normalized the same way here so casing alone
+    // never causes a false mismatch.
+    if user.email.to_ascii_lowercase() != inv.email {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match st.store.get_membership(user_id, inv.tenant_id).await {
+        Ok(Some(_)) => return StatusCode::CONFLICT.into_response(),
+        Ok(None) => {}
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    if st
+        .store
+        .put_membership(&crate::tenant::Membership {
+            user_id,
+            tenant_id: inv.tenant_id,
+            role: inv.role,
+            created: now(),
+        })
+        .await
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if st
+        .store
+        .mark_invite_accepted(inv.id, user_id, now())
+        .await
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    set_session_tenant(&st, &headers, inv.tenant_id).await;
+    Json(AcceptInviteResp {
+        tenant_id: inv.tenant_id.0,
+        role: inv.role,
+    })
+    .into_response()
+}
+
 /// Name of the short-lived cookie holding the signed Sheets OAuth `state`,
 /// binding the connect flow to the browser that started it (anti login-CSRF).
 const SHEETS_STATE_COOKIE: &str = "qk_sheets_state";
@@ -3810,6 +3898,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             "/admin/invites/:id",
             axum::routing::delete(admin_invites_delete),
         )
+        .route("/admin/invites/:token/accept", post(admin_invites_accept))
         .route("/admin/integrations/sheets/connect", get(sheets_connect))
         .route("/admin/integrations/sheets/callback", get(sheets_callback))
         .route("/admin/integrations/sheets/sync", post(sheets_sync))

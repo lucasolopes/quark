@@ -1892,6 +1892,29 @@ impl Store for PostgresStore {
         }
     }
 
+    async fn get_user_by_id(&self, id: u64) -> Result<Option<User>, StoreError> {
+        let row =
+            sqlx::query("SELECT id, subject, email, display, created FROM users WHERE id = $1")
+                .bind(id as i64)
+                .fetch_optional(&self.read)
+                .await
+                .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => {
+                let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+                let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+                Ok(Some(User {
+                    id: id as u64,
+                    subject: r.try_get("subject").map_err(StoreError::backend)?,
+                    email: r.try_get("email").map_err(StoreError::backend)?,
+                    display: r.try_get("display").map_err(StoreError::backend)?,
+                    created: created as u64,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
     async fn put_membership(&self, m: &Membership) -> Result<(), StoreError> {
         sqlx::query(
             "INSERT INTO memberships (user_id, tenant_id, role, created) VALUES ($1,$2,$3,$4) \

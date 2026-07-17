@@ -5,13 +5,13 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::analytics::AnalyticsSink;
 use quark::api::{router, AppState};
-use quark::auth::{hash_token, ApiToken, Scope};
+use quark::auth::{generate_token, hash_token, ApiToken, Scope, Session};
 use quark::cache::Cache;
 use quark::dns::NullDns;
 use quark::invite::Invite;
 use quark::store::postgres::PostgresStore;
 use quark::store::Store;
-use quark::tenant::{Role, Tenant, TenantId};
+use quark::tenant::{Membership, Role, Tenant, TenantId, User};
 use quark::webhooks::delivery::WebhookDispatcher;
 use serial_test::serial;
 use std::sync::Arc;
@@ -504,4 +504,290 @@ async fn invites_endpoints_404_in_oss() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+// --- Task 3: POST /admin/invites/:token/accept ---
+
+/// Builds a router over `store` with a session-based (OIDC) principal, the
+/// shape the accept endpoint reads via `session_user_id` rather than
+/// `admin_guard`'s `x-admin-token` path used by create/list/revoke above.
+fn session_app_over(store: Arc<PostgresStore>, multi_tenant: bool) -> axum::Router {
+    let store_dyn: Arc<dyn Store> = store.clone();
+    let sink_dyn: Arc<dyn AnalyticsSink> = store;
+    let cache = Cache::new(store_dyn.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store_dyn.clone(),
+        None,
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: true,
+        multi_tenant,
+        cache,
+        store: store_dyn,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink: sink_dyn,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    router(state)
+}
+
+/// Seeds a user + a session for it, returning `(user_id, raw_cookie_value)`.
+async fn seed_session(store: &PostgresStore, subject: &str, email: &str) -> (u64, String) {
+    let user_id = store.next_user_id().await.unwrap();
+    store
+        .put_user(&User {
+            id: user_id,
+            subject: subject.to_string(),
+            email: email.to_string(),
+            display: subject.to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    let raw = generate_token();
+    let session = Session {
+        token_hash: hash_token(&raw),
+        subject: subject.to_string(),
+        display: subject.to_string(),
+        scopes: vec![],
+        created: 0,
+        expires: quark::now() + 3600,
+        tenant_id: TenantId(0),
+        user_id,
+    };
+    store.put_session(TenantId(0), &session).await.unwrap();
+    (user_id, raw)
+}
+
+/// Runs `POST /admin/invites/:token/accept`, optionally with a session
+/// cookie, returning `(status, body_json)`.
+async fn accept_invite(
+    app: &axum::Router,
+    token: &str,
+    session_cookie: Option<&str>,
+) -> (StatusCode, serde_json::Value) {
+    let mut req = Request::post(format!("/admin/invites/{token}/accept"));
+    if let Some(raw) = session_cookie {
+        req = req.header("cookie", format!("qk_session={raw}"));
+    }
+    let resp = app
+        .clone()
+        .oneshot(req.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null)
+    };
+    (status, json)
+}
+
+/// Happy path: the session's user email matches the invite's target email,
+/// so accepting grants the invited role, marks the invite accepted (a
+/// second accept then 404s), and re-points the session's tenant.
+#[tokio::test]
+#[serial]
+async fn accept_invite_grants_membership_and_repoints_session() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-accept-http-a").await;
+    let (_user_id, raw) = seed_session(&store, "accept-happy", "new@acme.com").await;
+    make_invite(
+        &store,
+        tenant,
+        "new@acme.com",
+        "raw-accept-happy",
+        quark::now(),
+        quark::now() + 3600,
+    )
+    .await;
+
+    let app = session_app_over(store.clone(), true);
+    let (status, body) = accept_invite(&app, "raw-accept-happy", Some(&raw)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["tenant_id"], tenant.0);
+    assert_eq!(body["role"], "member");
+
+    let membership = store.get_membership(_user_id, tenant).await.unwrap();
+    assert_eq!(
+        membership.map(|m| m.role),
+        Some(Role::Member),
+        "accepting must grant the invited role"
+    );
+
+    // Single-use: accepting the same token again 404s (already accepted).
+    let (status2, _) = accept_invite(&app, "raw-accept-happy", Some(&raw)).await;
+    assert_eq!(status2, StatusCode::NOT_FOUND);
+}
+
+/// A wrong/unknown token 404s.
+#[tokio::test]
+#[serial]
+async fn accept_invite_wrong_token_is_404() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_user_id, raw) = seed_session(&store, "accept-wrong-token", "someone@acme.com").await;
+
+    let app = session_app_over(store.clone(), true);
+    let (status, _) = accept_invite(&app, "never-issued-token", Some(&raw)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// An expired invite 404s (never accepted, just past `expires`).
+#[tokio::test]
+#[serial]
+async fn accept_invite_expired_is_404() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-accept-http-expired").await;
+    let (_user_id, raw) = seed_session(&store, "accept-expired", "late@acme.com").await;
+    // expires in the past relative to `quark::now()`.
+    make_invite(&store, tenant, "late@acme.com", "raw-accept-expired", 1, 2).await;
+
+    let app = session_app_over(store.clone(), true);
+    let (status, _) = accept_invite(&app, "raw-accept-expired", Some(&raw)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// A session whose `User.email` does not match the invite's target email is
+/// rejected with 403, and no membership is granted.
+#[tokio::test]
+#[serial]
+async fn accept_invite_email_mismatch_is_403() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-accept-http-mismatch").await;
+    let (user_id, raw) = seed_session(&store, "accept-mismatch", "someone-else@acme.com").await;
+    make_invite(
+        &store,
+        tenant,
+        "intended@acme.com",
+        "raw-accept-mismatch",
+        quark::now(),
+        quark::now() + 3600,
+    )
+    .await;
+
+    let app = session_app_over(store.clone(), true);
+    let (status, _) = accept_invite(&app, "raw-accept-mismatch", Some(&raw)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(store
+        .get_membership(user_id, tenant)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+/// A user who already has a membership on the invite's tenant gets 409, and
+/// the existing membership's role is left untouched.
+#[tokio::test]
+#[serial]
+async fn accept_invite_already_member_is_409() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-accept-http-already").await;
+    let (user_id, raw) = seed_session(&store, "accept-already", "member@acme.com").await;
+    store
+        .put_membership(&Membership {
+            user_id,
+            tenant_id: tenant,
+            role: Role::Viewer,
+            created: 0,
+        })
+        .await
+        .unwrap();
+    make_invite(
+        &store,
+        tenant,
+        "member@acme.com",
+        "raw-accept-already",
+        quark::now(),
+        quark::now() + 3600,
+    )
+    .await;
+
+    let app = session_app_over(store.clone(), true);
+    let (status, _) = accept_invite(&app, "raw-accept-already", Some(&raw)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let membership = store.get_membership(user_id, tenant).await.unwrap();
+    assert_eq!(
+        membership.map(|m| m.role),
+        Some(Role::Viewer),
+        "an already-member's existing role must not be overwritten"
+    );
+}
+
+/// No session cookie at all -> 401, before the invite is even looked up.
+#[tokio::test]
+#[serial]
+async fn accept_invite_no_session_is_401() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-accept-http-nosession").await;
+    make_invite(
+        &store,
+        tenant,
+        "whoever@acme.com",
+        "raw-accept-nosession",
+        100,
+        1_000_000,
+    )
+    .await;
+
+    let app = session_app_over(store.clone(), true);
+    let (status, _) = accept_invite(&app, "raw-accept-nosession", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// `multi_tenant = false` (OSS) -> 404, same gate as create/list/revoke.
+#[tokio::test]
+#[serial]
+async fn accept_invite_404_in_oss() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_user_id, raw) = seed_session(&store, "accept-oss", "whoever@acme.com").await;
+
+    let app = session_app_over(store.clone(), false);
+    let (status, _) = accept_invite(&app, "raw-whatever", Some(&raw)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

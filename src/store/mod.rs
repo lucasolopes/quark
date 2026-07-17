@@ -542,6 +542,9 @@ pub trait Store: Send + Sync + 'static {
     async fn put_user(&self, u: &User) -> Result<(), StoreError>;
     /// Looks up a user by OIDC subject.
     async fn get_user_by_subject(&self, subject: &str) -> Result<Option<User>, StoreError>;
+    /// Looks up a user by its global id. Used by the invite accept flow to
+    /// check the accepting session's email against the invite's target email.
+    async fn get_user_by_id(&self, id: u64) -> Result<Option<User>, StoreError>;
     /// Upserts a membership (user <-> tenant, with role).
     async fn put_membership(&self, m: &Membership) -> Result<(), StoreError>;
     /// Reads a single membership for `(user_id, tenant)`.

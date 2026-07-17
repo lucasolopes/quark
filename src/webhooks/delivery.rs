@@ -1176,6 +1176,12 @@ mod tests {
         ) -> Result<Option<crate::tenant::User>, StoreError> {
             unimplemented!()
         }
+        async fn get_user_by_id(
+            &self,
+            _id: u64,
+        ) -> Result<Option<crate::tenant::User>, StoreError> {
+            unimplemented!()
+        }
         async fn put_membership(&self, _m: &crate::tenant::Membership) -> Result<(), StoreError> {
             unimplemented!()
         }

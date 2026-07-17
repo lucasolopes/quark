@@ -893,6 +893,22 @@ impl Store for LmdbStore {
         }
     }
 
+    async fn get_user_by_id(&self, id: u64) -> Result<Option<User>, StoreError> {
+        // `users` is keyed by subject (not id), so this is a linear scan. Fine
+        // in practice: multi-tenant is the only caller (invite accept), and
+        // the LMDB backend is single-tenant OSS, where that gate returns 404
+        // before this is ever reached.
+        let rtxn = self.env.read_txn()?;
+        for entry in self.users.iter(&rtxn)? {
+            let (_, bytes) = entry?;
+            let user: User = serde_json::from_slice(bytes)?;
+            if user.id == id {
+                return Ok(Some(user));
+            }
+        }
+        Ok(None)
+    }
+
     async fn put_membership(&self, m: &Membership) -> Result<(), StoreError> {
         let bytes = serde_json::to_vec(m)?;
         let mut wtxn = self.env.write_txn()?;

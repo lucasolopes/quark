@@ -452,6 +452,9 @@ mod tests {
         async fn get_user_by_subject(&self, _subject: &str) -> Result<Option<User>, StoreError> {
             unimplemented!()
         }
+        async fn get_user_by_id(&self, _id: u64) -> Result<Option<User>, StoreError> {
+            unimplemented!()
+        }
         async fn put_membership(&self, _m: &Membership) -> Result<(), StoreError> {
             unimplemented!()
         }
