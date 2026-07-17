@@ -2136,6 +2136,27 @@ impl Store for PostgresStore {
         rows.iter().map(row_to_membership).collect()
     }
 
+    async fn get_owner_user_id(&self, tenant: TenantId) -> Result<Option<u64>, StoreError> {
+        // Bare read (like `get_membership`): the backfill runs at boot before
+        // any request/tenant RLS context. `memberships` is a join table (not in
+        // TENANT_OWNED_TABLES), and the `WHERE tenant_id` predicate scopes it.
+        let row = sqlx::query(
+            "SELECT user_id FROM memberships WHERE tenant_id = $1 AND role = $2 ORDER BY user_id LIMIT 1",
+        )
+        .bind(tenant.0 as i64)
+        .bind(role_to_str(Role::Owner))
+        .fetch_optional(&self.read)
+        .await
+        .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => {
+                let uid: i64 = r.try_get("user_id").map_err(StoreError::backend)?;
+                Ok(Some(uid as u64))
+            }
+            None => Ok(None),
+        }
+    }
+
     // --- Custom domains (P3), cloud-only ---
     async fn next_domain_id(&self) -> Result<u64, StoreError> {
         let row = sqlx::query("SELECT nextval('quark_domain_id_seq') AS id")

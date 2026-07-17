@@ -1007,6 +1007,95 @@ async fn backfill_provisions_tenants_missing_oidc_config() {
     assert_eq!(provisioned_again, 0);
 }
 
+/// LUC-56: the boot backfill provisions the tenant's OWNER in the realm too.
+/// A tenant that predates Keycloak (Owner membership but no `oidc_config`) gets
+/// its Owner's realm user + set-password email on the backfill pass — via
+/// `get_owner_user_id` — so the Owner can SSO-log-in, not just realm/client.
+#[tokio::test]
+#[serial]
+async fn backfill_provisions_the_tenant_owner() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store: Arc<dyn Store> = Arc::new(store);
+
+    // Keep the seeded default tenant (id 0) out of scope: give it an
+    // oidc_config so the backfill skips it and only touches our tenant.
+    store
+        .put_oidc_config(&quark::oidc::TenantOidcConfig {
+            tenant_id: TenantId(0),
+            issuer: "https://kc.example.com/realms/default".to_string(),
+            client_id: "quark".to_string(),
+            client_secret: String::new(),
+            scopes: vec!["openid".to_string()],
+            admin_claim: "groups".to_string(),
+            admin_value: "quark-admins".to_string(),
+            readonly_value: "quark-readers".to_string(),
+            required_value: Some("quark-readers".to_string()),
+            post_login_url: None,
+        })
+        .await
+        .unwrap();
+
+    // A tenant with an Owner membership but no oidc_config (predates Keycloak).
+    let owner_id = store.next_user_id().await.unwrap();
+    store
+        .put_user(&User {
+            id: owner_id,
+            subject: "owner-sub".to_string(),
+            email: "owner@acme.com".to_string(),
+            display: "Owner".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    let t_id = store.next_tenant_id().await.unwrap();
+    store
+        .put_tenant(&quark::tenant::Tenant {
+            id: TenantId(t_id),
+            name: "Acme".to_string(),
+            slug: "backfill-owner".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    store
+        .put_membership(&quark::tenant::Membership {
+            user_id: owner_id,
+            tenant_id: TenantId(t_id),
+            role: quark::tenant::Role::Owner,
+            created: 0,
+        })
+        .await
+        .unwrap();
+
+    // Sanity: the new store lookup finds the Owner.
+    assert_eq!(
+        store.get_owner_user_id(TenantId(t_id)).await.unwrap(),
+        Some(owner_id)
+    );
+
+    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    mock.set_next_user_id("kc-owner-1");
+    let mock_dyn: Arc<dyn quark::keycloak::KeycloakAdmin> = mock.clone();
+    let provisioned =
+        quark::api::backfill_keycloak_provisioning(&store, &mock_dyn, "https://kc.example.com")
+            .await
+            .unwrap();
+    assert_eq!(provisioned, 1);
+
+    let calls = mock.calls();
+    assert!(
+        calls.contains(&"ensure_user(backfill-owner,owner@acme.com,quark-admins)".to_string()),
+        "the backfill must provision the tenant's Owner in the realm: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"send_set_password_email(backfill-owner,kc-owner-1)".to_string()),
+        "the backfill must send the Owner a set-password email: {calls:?}"
+    );
+}
+
 /// Security sweep: provisioning a tenant only ever touches that tenant's own
 /// slug. Two different users self-serve two different tenants against the
 /// same `KeycloakAdmin`; every recorded call carries exactly one of the two

@@ -477,6 +477,9 @@ mod tests {
         ) -> Result<Vec<Membership>, StoreError> {
             unimplemented!()
         }
+        async fn get_owner_user_id(&self, _tenant: TenantId) -> Result<Option<u64>, StoreError> {
+            unimplemented!()
+        }
         async fn next_domain_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }

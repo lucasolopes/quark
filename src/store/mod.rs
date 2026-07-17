@@ -561,6 +561,11 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<Option<Membership>, StoreError>;
     /// All memberships for a user, across tenants.
     async fn list_memberships_for_user(&self, user_id: u64) -> Result<Vec<Membership>, StoreError>;
+    /// The `user_id` of a tenant's Owner (the lowest, if several exist), or
+    /// `None` if the tenant has no Owner. Used by the Keycloak backfill to
+    /// provision the Owner's realm user for a tenant that predates Keycloak
+    /// (LUC-56).
+    async fn get_owner_user_id(&self, tenant: TenantId) -> Result<Option<u64>, StoreError>;
 
     // --- Custom domains (multi-tenancy P3), cloud-only ---
     /// Allocates the next global domain id. `0` is reserved (`SHARED_DOMAIN_ID`).

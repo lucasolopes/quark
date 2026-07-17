@@ -2146,13 +2146,13 @@ fn log_keycloak_step_error(tenant_id: u64, step: &str, err: impl std::fmt::Displ
 /// exactly how the boot backfill retries a tenant whose earlier attempt only
 /// got partway.
 ///
-/// `owner_user_id` is `Some` when the caller (`admin_tenants_create`) knows
-/// who just became Owner — their email drives `ensure_user`. It is `None`
-/// for the boot backfill, which has no way to look up "the tenant's Owner"
-/// outside of that request context; in that case the admin-user step (and its
-/// set-password email) is skipped, but the realm/client/groups/`oidc_config`
-/// still get provisioned. The same skip happens when the owner's `User` row
-/// has no email on file.
+/// `owner_user_id` is `Some` when the caller knows who the Owner is:
+/// `admin_tenants_create` passes the creator, and the boot backfill looks it
+/// up via `get_owner_user_id` (LUC-56). Their email drives `ensure_user`. It is
+/// `None` only when a tenant has no Owner or the lookup failed; in that case the
+/// admin-user step (and its set-password email) is skipped, but the
+/// realm/client/groups/`oidc_config` still get provisioned. The same skip
+/// happens when the owner's `User` row has no email on file.
 pub async fn provision_tenant_keycloak(
     store: &Arc<dyn Store>,
     kc: &dyn crate::keycloak::KeycloakAdmin,
@@ -2240,7 +2240,13 @@ pub async fn backfill_keycloak_provisioning(
         match store.get_oidc_config_bare(t.id).await {
             Ok(Some(_)) => {} // already provisioned
             Ok(None) => {
-                provision_tenant_keycloak(store, keycloak.as_ref(), base_url, t, None).await;
+                // Provision the tenant's Owner in the realm too (LUC-56): a
+                // tenant that predates Keycloak has an Owner membership but no
+                // realm user, so without this its Owner could never SSO-log-in.
+                // A lookup error/absent owner degrades to `None` (realm still
+                // provisioned; owner step skipped), never failing the backfill.
+                let owner = store.get_owner_user_id(t.id).await.unwrap_or(None);
+                provision_tenant_keycloak(store, keycloak.as_ref(), base_url, t, owner).await;
                 provisioned += 1;
             }
             Err(e) => eprintln!(
