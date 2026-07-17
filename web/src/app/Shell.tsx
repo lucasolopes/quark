@@ -1,4 +1,4 @@
-import { Blocks, KeyRound, Link2, LogOut, Moon, Radio, Smartphone, Sun, Upload, Webhook } from "lucide-react";
+import { Blocks, KeyRound, Link2, LogOut, Moon, Radio, Smartphone, Sun, Upload, Users, Webhook } from "lucide-react";
 import { useTheme } from "next-themes";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { QuarkMark } from "@/components/brand/QuarkMark";
@@ -8,7 +8,11 @@ import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import { useT } from "@/i18n";
 import { api } from "@/lib/api";
 import { clearToken } from "@/lib/auth";
+import { useMe } from "@/lib/queries";
 import { cn } from "@/lib/utils";
+
+/** Roles that can manage the workspace's team (create/revoke invites). */
+const MEMBERS_MANAGER_ROLES = new Set(["owner", "admin"]);
 
 export function Shell() {
   const t = useT();
@@ -16,6 +20,12 @@ export function Shell() {
   const { resolvedTheme, setTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const toggle = () => setTheme(isDark ? "light" : "dark");
+  const me = useMe();
+
+  // Members is cloud-only (`memberships` absent in OSS) and restricted to the
+  // current tenant's Owner/Admin — Member/Viewer never sees the nav item.
+  const currentRole = me.data?.memberships?.find((m) => m.tenant_id === me.data?.current_tenant)?.role;
+  const canManageMembers = me.data?.memberships !== undefined && currentRole != null && MEMBERS_MANAGER_ROLES.has(currentRole);
 
   const navGroups = [
     {
@@ -41,6 +51,7 @@ export function Shell() {
       items: [
         { to: "/tokens", label: t("shell.navTokens"), icon: KeyRound },
         { to: "/app-links", label: t("shell.navAppLinks"), icon: Smartphone },
+        ...(canManageMembers ? [{ to: "/members", label: t("shell.navMembers"), icon: Users }] : []),
       ],
     },
   ];
