@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AcceptInvite } from "@/routes/AcceptInvite";
+import { Analytics } from "@/routes/Analytics";
 import { AppLinks } from "@/routes/AppLinks";
 import { Extensions } from "@/routes/Extensions";
 import { Import } from "@/routes/Import";
@@ -35,6 +36,7 @@ export const router = createBrowserRouter([
       { path: "import", element: <Import /> },
       { path: "tokens", element: <Tokens /> },
       { path: "pixels", element: <Pixels /> },
+      { path: "analytics", element: <Analytics /> },
       { path: "members", element: <Members /> },
       { path: "sso-domains", element: <SsoDomains /> },
       { path: "app-links", element: <AppLinks /> },

@@ -40,6 +40,7 @@ export const ptBR: Messages = {
     navAppLinks: "App Links",
     navMembers: "Membros",
     navSsoDomains: "Domínios SSO",
+    navAnalytics: "Analytics",
     navGroupLinks: "Links",
     navGroupData: "Analytics",
     navGroupAuto: "Automação",
@@ -247,6 +248,13 @@ export const ptBR: Messages = {
     firstClick: "Primeiro clique",
     lastClick: "Último clique",
     recentEvents: "Eventos recentes",
+  },
+  analytics: {
+    heading: "Analytics",
+    searchPlaceholder: "Busque um link…",
+    searchAriaLabel: "Buscar links",
+    empty: "Selecione um link para ver as estatísticas",
+    noResults: "Nenhum link encontrado",
   },
   charts: {
     perDayTitle: "Cliques por dia",

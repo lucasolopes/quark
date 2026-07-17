@@ -1,4 +1,4 @@
-import { Blocks, KeyRound, Link2, LogOut, Moon, Radio, ShieldCheck, Smartphone, Sun, Upload, Users, Webhook } from "lucide-react";
+import { BarChart3, Blocks, KeyRound, Link2, LogOut, Moon, Radio, ShieldCheck, Smartphone, Sun, Upload, Users, Webhook } from "lucide-react";
 import { useTheme } from "next-themes";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { QuarkMark } from "@/components/brand/QuarkMark";
@@ -39,7 +39,10 @@ export function Shell() {
     },
     {
       label: t("shell.navGroupData"),
-      items: [{ to: "/pixels", label: t("shell.navPixels"), icon: Radio }],
+      items: [
+        { to: "/analytics", label: t("shell.navAnalytics"), icon: BarChart3 },
+        { to: "/pixels", label: t("shell.navPixels"), icon: Radio },
+      ],
     },
     {
       label: t("shell.navGroupAuto"),
