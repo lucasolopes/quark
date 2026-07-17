@@ -74,6 +74,11 @@ pub struct AppState {
     /// disables the whole subdomain-auto feature (no seed on create, no boot
     /// backfill, `/admin/me` reports `null`).
     pub tenant_domain_suffix: Option<String>,
+    /// Per-tenant `OidcRuntime` cache (multi-tenancy P2d): each cloud tenant's
+    /// own IdP config (`oidc_configs`) is built into a runtime lazily on first
+    /// login and cached here, keyed by tenant id. Invalidated (best-effort) by
+    /// `admin_oidc_config_put`/`_delete`; also self-expires via TTL.
+    pub oidc_tenants: crate::oidc::TenantOidcCache,
 }
 
 #[derive(Deserialize)]
@@ -1595,7 +1600,7 @@ async fn oidc_login(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Resp
     let nonce = crate::oidc::random_token();
     let (verifier, challenge) = crate::oidc::pkce_pair();
     let url = oidc.authorize_url(&state, &nonce, &challenge);
-    let value = crate::oidc::sign_login_state(&st.signing_key, &state, &verifier, &nonce);
+    let value = crate::oidc::sign_login_state(&st.signing_key, &state, &verifier, &nonce, None);
     let secure = if request_is_https(&headers) {
         "; Secure"
     } else {
@@ -1640,7 +1645,7 @@ async fn oidc_callback(
     }
     let login = cookie_value(&headers, LOGIN_COOKIE)
         .and_then(|c| crate::oidc::verify_login_state(&st.signing_key, c));
-    let Some((state, verifier, nonce)) = login else {
+    let Some((state, verifier, nonce, _tenant)) = login else {
         return (StatusCode::BAD_REQUEST, "missing or invalid login state").into_response();
     };
     // CSRF: the state echoed by the IdP must match the one we signed.
@@ -2467,10 +2472,10 @@ async fn admin_oidc_config_put(
         readonly_value: req.readonly_value,
         post_login_url: req.post_login_url,
     };
-    // TODO(T3): invalidate per-tenant oidc runtime cache
     if let Err(e) = st.store.put_oidc_config(&cfg).await {
         return conflict_or_503(e).into_response();
     }
+    st.oidc_tenants.invalidate(p.tenant).await;
     Json(OidcConfigView::from(&cfg)).into_response()
 }
 
@@ -2507,11 +2512,12 @@ async fn admin_oidc_config_delete(State(st): State<Arc<AppState>>, headers: Head
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
-    // TODO(T3): invalidate per-tenant oidc runtime cache
-    match st.store.delete_oidc_config(p.tenant).await {
+    let resp = match st.store.delete_oidc_config(p.tenant).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    }
+    };
+    st.oidc_tenants.invalidate(p.tenant).await;
+    resp
 }
 
 #[derive(Serialize)]
@@ -2638,7 +2644,7 @@ async fn sheets_connect(State(st): State<Arc<AppState>>, headers: HeaderMap) -> 
     // credential — learns the tenant).
     let state = crate::oidc::random_token();
     let signed =
-        crate::oidc::sign_login_state(&st.signing_key, &state, &p.tenant.0.to_string(), "");
+        crate::oidc::sign_login_state(&st.signing_key, &state, &p.tenant.0.to_string(), "", None);
     let url = crate::sheets::connect_url(cfg, &state);
     let secure = if request_is_https(&headers) {
         "; Secure"
@@ -2713,10 +2719,10 @@ async fn sheets_callback(
     // state itself, so it is exactly as trustworthy.
     let verified = cookie_value(&headers, SHEETS_STATE_COOKIE)
         .and_then(|c| crate::oidc::verify_login_state(&st.signing_key, c));
-    let cookie_state = verified.as_ref().map(|(state, _, _)| state.as_str());
+    let cookie_state = verified.as_ref().map(|(state, _, _, _)| state.as_str());
     let tenant = verified
         .as_ref()
-        .and_then(|(_, verifier, _)| verifier.parse::<u64>().ok())
+        .and_then(|(_, verifier, _, _)| verifier.parse::<u64>().ok())
         .map(crate::tenant::TenantId)
         .unwrap_or(crate::tenant::DEFAULT_TENANT);
     let matches = match (cookie_state, params.state.as_deref()) {
@@ -4312,6 +4318,7 @@ mod tests {
             host_router,
             dns: Arc::new(crate::dns::NullDns),
             tenant_domain_suffix: None,
+            oidc_tenants: crate::oidc::TenantOidcCache::new(),
         })
     }
 

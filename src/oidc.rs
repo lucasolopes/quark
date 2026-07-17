@@ -11,6 +11,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -406,6 +407,39 @@ pub struct OidcRuntime {
 impl OidcRuntime {
     /// Resolves discovery and the initial JWKS for `config`.
     pub async fn init(config: OidcConfig) -> Result<OidcRuntime, String> {
+        Self::build(config).await
+    }
+
+    /// Builds a runtime from a tenant's stored OIDC config (multi-tenancy
+    /// P2d): same discovery + JWKS init as `init`, from a `TenantOidcConfig`
+    /// instead of the env-sourced `OidcConfig`. The redirect URL is not part
+    /// of the stored per-tenant config — every tenant's IdP redirects to the
+    /// same `/admin/callback` route, which resolves the tenant from the
+    /// signed login-state cookie rather than from a per-tenant redirect
+    /// URI — so it still comes from `QUARK_OIDC_REDIRECT_URL`.
+    pub async fn from_config(cfg: &TenantOidcConfig) -> Result<OidcRuntime, String> {
+        let config = OidcConfig {
+            issuer: cfg.issuer.trim_end_matches('/').to_string(),
+            client_id: cfg.client_id.clone(),
+            client_secret: cfg.client_secret.clone(),
+            redirect_url: std::env::var("QUARK_OIDC_REDIRECT_URL").unwrap_or_default(),
+            scopes: if cfg.scopes.is_empty() {
+                "openid profile email".to_string()
+            } else {
+                cfg.scopes.join(" ")
+            },
+            admin_claim: cfg.admin_claim.clone(),
+            admin_value: cfg.admin_value.clone(),
+            readonly_value: (!cfg.readonly_value.is_empty()).then(|| cfg.readonly_value.clone()),
+            post_login_url: cfg
+                .post_login_url
+                .clone()
+                .unwrap_or_else(|| "/".to_string()),
+        };
+        Self::build(config).await
+    }
+
+    async fn build(config: OidcConfig) -> Result<OidcRuntime, String> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
@@ -470,30 +504,114 @@ impl OidcRuntime {
     }
 }
 
+/// Per-tenant `OidcRuntime` cache (multi-tenancy P2d): each tenant's own IdP
+/// gets its own discovery + JWKS, built lazily on first use (`get_or_build`)
+/// and cached for `TTL_SECS` so a reconfigured IdP is picked up within a
+/// bounded window even if the explicit `invalidate` call on `PUT`/`DELETE
+/// /admin/oidc-config` is missed (invalidation is best-effort by design — a
+/// miss just means the next login re-fetches the current stored config).
+pub struct TenantOidcCache {
+    cache: moka::future::Cache<TenantId, Arc<OidcRuntime>>,
+}
+
+/// How long a built runtime is trusted before a rebuild is forced, bounding
+/// how stale a tenant's cached IdP config (issuer, JWKS, claim mapping) can
+/// get after a reconfiguration that missed the explicit invalidation.
+const TENANT_OIDC_TTL_SECS: u64 = 300;
+
+impl TenantOidcCache {
+    pub fn new() -> TenantOidcCache {
+        TenantOidcCache {
+            cache: moka::future::Cache::builder()
+                .time_to_live(std::time::Duration::from_secs(TENANT_OIDC_TTL_SECS))
+                .build(),
+        }
+    }
+
+    /// Returns the cached runtime for `tenant`, building (discovery + JWKS,
+    /// via `OidcRuntime::from_config`) and caching it on a miss.
+    pub async fn get_or_build(
+        &self,
+        tenant: TenantId,
+        cfg: &TenantOidcConfig,
+    ) -> Result<Arc<OidcRuntime>, String> {
+        if let Some(rt) = self.cache.get(&tenant).await {
+            return Ok(rt);
+        }
+        let rt = Arc::new(OidcRuntime::from_config(cfg).await?);
+        self.cache.insert(tenant, rt.clone()).await;
+        Ok(rt)
+    }
+
+    /// Drops the cached runtime for `tenant`. Called (best-effort) by the
+    /// `PUT`/`DELETE /admin/oidc-config` handlers so a reconfigured or
+    /// removed IdP isn't served from a stale cache entry; a miss here is
+    /// harmless since the entry also expires via the TTL.
+    pub async fn invalidate(&self, tenant: TenantId) {
+        self.cache.invalidate(&tenant).await;
+    }
+}
+
+impl Default for TenantOidcCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Signs the login-attempt state (`state.verifier.nonce`, all base64url so they
 /// contain no `.`) with an HMAC, for the short-lived cookie that carries it from
-/// `/admin/login` to `/admin/callback`. Value: `"state.verifier.nonce.mac"`.
-pub fn sign_login_state(key: &[u8], state: &str, verifier: &str, nonce: &str) -> String {
-    let payload = format!("{state}.{verifier}.{nonce}");
+/// `/admin/login` to `/admin/callback`. `tenant` is `Some` for a per-tenant
+/// login (`?org=<slug>`, multi-tenancy P2d) and `None` for the global/OSS
+/// login; when present it rides in the HMAC-signed payload as a 4th field, so
+/// `verify_login_state` can trust it came from this login attempt and was not
+/// substituted in transit. Value: `"state.verifier.nonce.tenant.mac"` (tenant
+/// empty when absent, still covered by the MAC), back-compat with the old
+/// 3-field callers via `None`.
+pub fn sign_login_state(
+    key: &[u8],
+    state: &str,
+    verifier: &str,
+    nonce: &str,
+    tenant: Option<TenantId>,
+) -> String {
+    let tenant_field = tenant.map(|t| t.0.to_string()).unwrap_or_default();
+    let payload = format!("{state}.{verifier}.{nonce}.{tenant_field}");
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     format!("{payload}.{}", b64url.encode(mac.finalize().into_bytes()))
 }
 
 /// Verifies and unpacks a login-state cookie, returning `(state, verifier,
-/// nonce)` when the HMAC checks out.
-pub fn verify_login_state(key: &[u8], cookie: &str) -> Option<(String, String, String)> {
+/// nonce, tenant)` when the HMAC checks out. `tenant` is `None` when the login
+/// was global (no `?org`), `Some` when it was a per-tenant login — recomputed
+/// from the same payload the MAC was computed over, so a tampered tenant field
+/// fails verification rather than being silently accepted.
+pub fn verify_login_state(
+    key: &[u8],
+    cookie: &str,
+) -> Option<(String, String, String, Option<TenantId>)> {
     let parts: Vec<&str> = cookie.split('.').collect();
-    if parts.len() != 4 {
+    if parts.len() != 5 {
         return None;
     }
-    let (state, verifier, nonce, mac_b64) = (parts[0], parts[1], parts[2], parts[3]);
+    let (state, verifier, nonce, tenant_field, mac_b64) =
+        (parts[0], parts[1], parts[2], parts[3], parts[4]);
     let provided = b64url.decode(mac_b64).ok()?;
-    let payload = format!("{state}.{verifier}.{nonce}");
+    let payload = format!("{state}.{verifier}.{nonce}.{tenant_field}");
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     mac.verify_slice(&provided).ok()?;
-    Some((state.to_string(), verifier.to_string(), nonce.to_string()))
+    let tenant = if tenant_field.is_empty() {
+        None
+    } else {
+        Some(TenantId(tenant_field.parse::<u64>().ok()?))
+    };
+    Some((
+        state.to_string(),
+        verifier.to_string(),
+        nonce.to_string(),
+        tenant,
+    ))
 }
 
 #[cfg(test)]
@@ -547,10 +665,10 @@ mod tests {
     #[test]
     fn login_state_cookie_round_trip_and_tamper() {
         let key = b"login-state-signing-key-0123456789";
-        let cookie = sign_login_state(key, "st8", "verif", "nnc");
+        let cookie = sign_login_state(key, "st8", "verif", "nnc", None);
         assert_eq!(
             verify_login_state(key, &cookie),
-            Some(("st8".into(), "verif".into(), "nnc".into()))
+            Some(("st8".into(), "verif".into(), "nnc".into(), None))
         );
         // Wrong key rejected.
         assert!(verify_login_state(b"another-key-abcdefghijklmnopqrstuv", &cookie).is_none());
@@ -559,6 +677,89 @@ mod tests {
         assert!(verify_login_state(key, &tampered).is_none());
         // Malformed rejected.
         assert!(verify_login_state(key, "garbage").is_none());
+    }
+
+    #[test]
+    fn login_state_cookie_carries_tenant_and_tamper_is_rejected() {
+        let key = b"login-state-signing-key-0123456789";
+        let tenant = TenantId(42);
+        let cookie = sign_login_state(key, "st8", "verif", "nnc", Some(tenant));
+        assert_eq!(
+            verify_login_state(key, &cookie),
+            Some(("st8".into(), "verif".into(), "nnc".into(), Some(tenant)))
+        );
+
+        // Absent tenant (global login) round-trips as None.
+        let global_cookie = sign_login_state(key, "st8", "verif", "nnc", None);
+        assert_eq!(
+            verify_login_state(key, &global_cookie).unwrap().3,
+            None,
+            "absent tenant must mean global login"
+        );
+
+        // Tampering the tenant field (swap 42 for 43) must fail the MAC, not
+        // silently authenticate as a different tenant.
+        let tampered = cookie.replacen(".42.", ".43.", 1);
+        assert_ne!(tampered, cookie);
+        assert!(
+            verify_login_state(key, &tampered).is_none(),
+            "tampered tenant field must be rejected, not accepted as tenant 43"
+        );
+    }
+
+    #[tokio::test]
+    async fn tenant_oidc_cache_builds_once_and_invalidate_drops_it() {
+        // `from_config` requires network discovery, so this test exercises
+        // cache keying/reuse/invalidate directly against a pre-built runtime
+        // rather than going through `get_or_build` (which is exercised only
+        // by the ignored integration-style test below).
+        let cache = TenantOidcCache::new();
+        let tenant = TenantId(7);
+        assert!(cache.cache.get(&tenant).await.is_none());
+
+        // Simulate what `get_or_build` does on a miss.
+        let rt = Arc::new(fake_runtime());
+        cache.cache.insert(tenant, rt.clone()).await;
+        assert!(cache.cache.get(&tenant).await.is_some());
+
+        cache.invalidate(tenant).await;
+        assert!(
+            cache.cache.get(&tenant).await.is_none(),
+            "invalidate must drop the cached runtime"
+        );
+    }
+
+    /// Builds an `OidcRuntime` without any network access, for cache tests
+    /// that only need *a* runtime value, not a correctly-discovered one.
+    fn fake_runtime() -> OidcRuntime {
+        OidcRuntime {
+            config: cfg(),
+            client: reqwest::Client::new(),
+            discovery: Discovery {
+                authorization_endpoint: "https://idp.example/authorize".into(),
+                token_endpoint: "https://idp.example/token".into(),
+                jwks_uri: "https://idp.example/jwks".into(),
+            },
+            jwks: tokio::sync::RwLock::new(Jwks { keys: Vec::new() }),
+        }
+    }
+
+    #[ignore = "hits the network (discovery + JWKS); run explicitly against a real/test IdP"]
+    #[tokio::test]
+    async fn from_config_builds_runtime_from_tenant_config() {
+        let cfg = TenantOidcConfig {
+            tenant_id: TenantId(1),
+            issuer: "https://idp.example".into(),
+            client_id: "quark".into(),
+            client_secret: "secret".into(),
+            scopes: vec!["openid".into(), "profile".into()],
+            admin_claim: "groups".into(),
+            admin_value: "quark-admins".into(),
+            readonly_value: String::new(),
+            post_login_url: None,
+        };
+        let rt = OidcRuntime::from_config(&cfg).await.unwrap();
+        assert_eq!(rt.config.scopes, "openid profile");
     }
 
     #[test]

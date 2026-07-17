@@ -353,6 +353,7 @@ async fn main() {
         host_router,
         dns,
         tenant_domain_suffix,
+        oidc_tenants: quark::oidc::TenantOidcCache::new(),
     });
     match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {
