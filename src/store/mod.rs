@@ -7,6 +7,7 @@ use crate::domain::{Domain, DomainStatus};
 use crate::invite::Invite;
 use crate::oidc::TenantOidcConfig;
 use crate::pixel::PixelConfig;
+use crate::sso::SsoEmailDomain;
 use crate::tenant::{Membership, Tenant, TenantId, User};
 use crate::webhooks::WebhookSubscription;
 use serde::{Deserialize, Serialize};
@@ -585,6 +586,37 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<(), StoreError>;
     /// Deletes a domain, scoped to `tenant`.
     async fn delete_domain(&self, tenant: TenantId, id: u64) -> Result<(), StoreError>;
+
+    // --- SSO email-domain discovery (multi-tenancy LUC-57), cloud-only ---
+    /// Allocates the next global SSO email-domain id.
+    async fn next_sso_domain_id(&self) -> Result<u64, StoreError>;
+    /// Looks up an SSO email domain by its `domain` string, across all tenants,
+    /// on the bare pool: discovery only has the email's domain before it knows
+    /// the tenant, so this is the one deliberately public, cross-tenant lookup
+    /// (`sso_email_domains` is in `NOT_FORCED`, same reasoning as `domains`).
+    async fn get_sso_domain_bare(&self, domain: &str)
+        -> Result<Option<SsoEmailDomain>, StoreError>;
+    /// Reads an SSO email domain by id, scoped to `tenant`.
+    async fn get_sso_domain(
+        &self,
+        tenant: TenantId,
+        id: u64,
+    ) -> Result<Option<SsoEmailDomain>, StoreError>;
+    /// Lists all SSO email domains owned by `tenant`.
+    async fn list_sso_domains(&self, tenant: TenantId) -> Result<Vec<SsoEmailDomain>, StoreError>;
+    /// Upserts an SSO email domain row. The `domain` UNIQUE surfaces as
+    /// `StoreError::UniqueViolation` so the caller can map it to 409.
+    async fn put_sso_domain(&self, domain: &SsoEmailDomain) -> Result<(), StoreError>;
+    /// Updates an SSO email domain's verification status, scoped to `tenant`.
+    async fn set_sso_domain_status(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        status: DomainStatus,
+        verified_at: Option<u64>,
+    ) -> Result<(), StoreError>;
+    /// Deletes an SSO email domain, scoped to `tenant`.
+    async fn delete_sso_domain(&self, tenant: TenantId, id: u64) -> Result<(), StoreError>;
 
     // --- Team invites (multi-tenancy P2c), cloud-only ---
     /// Allocates the next global invite id.

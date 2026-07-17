@@ -18,6 +18,7 @@ pub mod password;
 pub mod permute;
 pub mod pixel;
 pub mod sheets;
+pub mod sso;
 pub mod store;
 pub mod tenant;
 pub mod webhooks;

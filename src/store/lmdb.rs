@@ -3,6 +3,7 @@ use crate::auth::ApiToken;
 use crate::domain::{Domain, DomainStatus};
 use crate::oidc::TenantOidcConfig;
 use crate::pixel::PixelConfig;
+use crate::sso::SsoEmailDomain;
 use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError};
 use crate::tenant::{Membership, Tenant, TenantId, User, DEFAULT_TENANT};
 use crate::webhooks::WebhookSubscription;
@@ -1006,6 +1007,50 @@ impl Store for LmdbStore {
     }
 
     async fn delete_domain(&self, _tenant: TenantId, _id: u64) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    // SSO email-domain discovery (LUC-57) is cloud-only, same reasoning as
+    // custom domains above: OSS is single-tenant, and the SSO-domain endpoints
+    // are gated behind `multi_tenant`, so these are never invoked here.
+    async fn next_sso_domain_id(&self) -> Result<u64, StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn get_sso_domain_bare(
+        &self,
+        _domain: &str,
+    ) -> Result<Option<SsoEmailDomain>, StoreError> {
+        Ok(None)
+    }
+
+    async fn get_sso_domain(
+        &self,
+        _tenant: TenantId,
+        _id: u64,
+    ) -> Result<Option<SsoEmailDomain>, StoreError> {
+        Ok(None)
+    }
+
+    async fn list_sso_domains(&self, _tenant: TenantId) -> Result<Vec<SsoEmailDomain>, StoreError> {
+        Ok(Vec::new())
+    }
+
+    async fn put_sso_domain(&self, _domain: &SsoEmailDomain) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn set_sso_domain_status(
+        &self,
+        _tenant: TenantId,
+        _id: u64,
+        _status: DomainStatus,
+        _verified_at: Option<u64>,
+    ) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn delete_sso_domain(&self, _tenant: TenantId, _id: u64) -> Result<(), StoreError> {
         Err(StoreError::Unsupported)
     }
 

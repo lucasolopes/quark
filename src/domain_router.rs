@@ -509,6 +509,46 @@ mod tests {
         async fn delete_domain(&self, _tenant: TenantId, _id: u64) -> Result<(), StoreError> {
             unimplemented!()
         }
+        async fn next_sso_domain_id(&self) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
+        async fn get_sso_domain_bare(
+            &self,
+            _domain: &str,
+        ) -> Result<Option<crate::sso::SsoEmailDomain>, StoreError> {
+            unimplemented!()
+        }
+        async fn get_sso_domain(
+            &self,
+            _tenant: TenantId,
+            _id: u64,
+        ) -> Result<Option<crate::sso::SsoEmailDomain>, StoreError> {
+            unimplemented!()
+        }
+        async fn list_sso_domains(
+            &self,
+            _tenant: TenantId,
+        ) -> Result<Vec<crate::sso::SsoEmailDomain>, StoreError> {
+            unimplemented!()
+        }
+        async fn put_sso_domain(
+            &self,
+            _domain: &crate::sso::SsoEmailDomain,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn set_sso_domain_status(
+            &self,
+            _tenant: TenantId,
+            _id: u64,
+            _status: crate::domain::DomainStatus,
+            _verified_at: Option<u64>,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn delete_sso_domain(&self, _tenant: TenantId, _id: u64) -> Result<(), StoreError> {
+            unimplemented!()
+        }
         async fn next_invite_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }
