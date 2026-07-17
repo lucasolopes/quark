@@ -1834,6 +1834,25 @@ impl Store for PostgresStore {
         }
     }
 
+    async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError> {
+        let rows = sqlx::query("SELECT id, name, slug, created FROM tenants ORDER BY id")
+            .fetch_all(&self.read)
+            .await
+            .map_err(StoreError::backend)?;
+        rows.iter()
+            .map(|r| {
+                let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+                let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+                Ok(Tenant {
+                    id: TenantId(id as u64),
+                    name: r.try_get("name").map_err(StoreError::backend)?,
+                    slug: r.try_get("slug").map_err(StoreError::backend)?,
+                    created: created as u64,
+                })
+            })
+            .collect()
+    }
+
     async fn next_user_id(&self) -> Result<u64, StoreError> {
         let row = sqlx::query("SELECT nextval('quark_user_id_seq') AS id")
             .fetch_one(&self.write)

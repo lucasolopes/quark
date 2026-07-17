@@ -75,6 +75,7 @@ fn bench(c: &mut Criterion) {
             sheets_api: None,
             oidc_configured: false,
             multi_tenant: false,
+            tenant_domain_suffix: None,
             cache,
             store: store.clone(),
             key,

@@ -72,6 +72,13 @@ async fn main() {
     if multi_tenant {
         eprintln!("multi-tenant mode ENABLED (FORCE RLS + per-tenant tx on Postgres)");
     }
+    // Base suffix for the auto per-tenant subdomain (multi-tenancy
+    // P3-completion), e.g. `quarkus.com.br`. Cloud-only; unset disables the
+    // whole feature (no seed on tenant creation, no boot backfill below).
+    let tenant_domain_suffix = std::env::var("QUARK_TENANT_DOMAIN_SUFFIX")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('.').to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
     let (store, sink) = open_backends(std::path::Path::new(&path), multi_tenant)
         .await
         .expect("open backends");
@@ -93,6 +100,51 @@ async fn main() {
             "lmdb(embedded)"
         }
     );
+
+    // Auto per-tenant subdomain boot backfill (multi-tenancy P3-completion):
+    // every existing tenant gets its `<slug>.<suffix>` `domains` row, same as
+    // a freshly created one (`admin_tenants_create`). Idempotent (skips
+    // tenants that already have the row) and cheap (few tenants, once per
+    // boot) — safe to run on every replica.
+    if multi_tenant {
+        if let Some(suffix) = &tenant_domain_suffix {
+            match store.list_tenants().await {
+                Ok(tenants) => {
+                    let mut seeded = 0usize;
+                    for t in &tenants {
+                        let host = quark::api::subdomain_host(&t.slug, suffix);
+                        match store.get_domain_by_host(&host).await {
+                            Ok(Some(_)) => {} // already seeded
+                            Ok(None) => {
+                                match quark::api::seed_tenant_subdomain(
+                                    &store, t.id, &t.slug, suffix,
+                                )
+                                .await
+                                {
+                                    Ok(()) => seeded += 1,
+                                    Err(e) => eprintln!(
+                                        "{}",
+                                        serde_json::json!({ "tenant_subdomain_backfill_error": e.to_string(), "tenant_id": t.id.0 })
+                                    ),
+                                }
+                            }
+                            Err(e) => eprintln!(
+                                "{}",
+                                serde_json::json!({ "tenant_subdomain_backfill_error": e.to_string(), "tenant_id": t.id.0 })
+                            ),
+                        }
+                    }
+                    eprintln!(
+                        "tenant subdomain backfill: {seeded} seeded, {} already present (suffix {suffix})",
+                        tenants.len() - seeded
+                    );
+                }
+                Err(e) => eprintln!(
+                    "WARNING: tenant subdomain backfill skipped (list_tenants failed: {e})"
+                ),
+            }
+        }
+    }
     match std::env::var("QUARK_NODE_ID") {
         Ok(n) if !n.is_empty() && std::env::var("QUARK_DATABASE_URL").is_ok() => {
             eprintln!(
@@ -300,6 +352,7 @@ async fn main() {
         multi_tenant,
         host_router,
         dns,
+        tenant_domain_suffix,
     });
     match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {

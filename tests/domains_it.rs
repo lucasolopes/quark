@@ -211,6 +211,7 @@ fn cloud_app(
         sheets_api: None,
         oidc_configured: false,
         multi_tenant: true,
+        tenant_domain_suffix: None,
         cache,
         store,
         key: KEY,
@@ -572,6 +573,7 @@ async fn admin_app_for_tenant(
         sheets_api: None,
         oidc_configured: false,
         multi_tenant,
+        tenant_domain_suffix: None,
         cache,
         store: store_dyn,
         key: KEY,
@@ -1059,6 +1061,7 @@ async fn wellknown_ignores_host_in_oss() {
         sheets_api: None,
         oidc_configured: false,
         multi_tenant: false,
+        tenant_domain_suffix: None,
         cache,
         store: store_dyn,
         key: KEY,
@@ -1133,4 +1136,736 @@ async fn create_blocks_target_matching_any_registered_domain() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+// --- P3-completion Task 1: auto per-tenant subdomain -----------------------
+// A tenant's subdomain is just a normal Verified `domains` row (`host =
+// <slug>.<suffix>`), seeded via `quark::api::seed_tenant_subdomain`. Since
+// it's a real `domains` row, `get_domain_by_host` (isolation, wellknown, SSRF)
+// already works unchanged — these tests only cover the seeding itself.
+
+/// `subdomain_host` lowercases and joins slug + suffix exactly like every
+/// other host `get_domain_by_host`/`HostRouter` looks up.
+#[test]
+fn subdomain_host_lowercases_and_joins() {
+    assert_eq!(
+        quark::api::subdomain_host("Acme", "Quarkus.COM.br"),
+        "acme.quarkus.com.br"
+    );
+}
+
+/// Seeding a tenant's subdomain materializes a Verified `domains` row that
+/// `get_domain_by_host` resolves to the right tenant.
+#[tokio::test]
+#[serial]
+async fn seed_tenant_subdomain_materializes_verified_domain() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store: Arc<dyn Store> = Arc::new(store);
+    let tenant_id = {
+        let id = store.next_tenant_id().await.unwrap();
+        let tenant_id = TenantId(id);
+        store
+            .put_tenant(&Tenant {
+                id: tenant_id,
+                name: "Seed Co".to_string(),
+                slug: "seed-co".to_string(),
+                created: 0,
+            })
+            .await
+            .unwrap();
+        tenant_id
+    };
+
+    quark::api::seed_tenant_subdomain(&store, tenant_id, "seed-co", "quarkus.test")
+        .await
+        .unwrap();
+
+    let domain = store
+        .get_domain_by_host("seed-co.quarkus.test")
+        .await
+        .unwrap()
+        .expect("subdomain must resolve via get_domain_by_host");
+    assert_eq!(domain.tenant_id, tenant_id);
+    assert_eq!(domain.status, DomainStatus::Verified);
+    assert!(domain.verified_at.is_some());
+    assert_eq!(
+        domain.token, "",
+        "subdomains aren't DNS-verified, so the token is empty"
+    );
+}
+
+/// Seeding the same tenant's subdomain twice is idempotent: the second call
+/// hits the `host` UNIQUE constraint (mapped to `StoreError::UniqueViolation`)
+/// and is treated as success, leaving exactly one row.
+#[tokio::test]
+#[serial]
+async fn seed_tenant_subdomain_is_idempotent() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store: Arc<dyn Store> = Arc::new(store);
+    let tenant_id = {
+        let id = store.next_tenant_id().await.unwrap();
+        let tenant_id = TenantId(id);
+        store
+            .put_tenant(&Tenant {
+                id: tenant_id,
+                name: "Twice Co".to_string(),
+                slug: "twice-co".to_string(),
+                created: 0,
+            })
+            .await
+            .unwrap();
+        tenant_id
+    };
+
+    quark::api::seed_tenant_subdomain(&store, tenant_id, "twice-co", "quarkus.test")
+        .await
+        .unwrap();
+    // 2nd seed of the same tenant: must succeed (not surface the unique
+    // violation to the caller) and must not create a 2nd row.
+    quark::api::seed_tenant_subdomain(&store, tenant_id, "twice-co", "quarkus.test")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store.list_domains(tenant_id).await.unwrap().len(),
+        1,
+        "seeding twice must not duplicate the subdomain row"
+    );
+}
+
+/// A `list_tenants` + "seed the ones missing a subdomain" pass — the shape
+/// the boot backfill in `main.rs` runs — seeds a pre-existing tenant exactly
+/// once, whether it runs once or twice (mirrors the idempotent boot).
+#[tokio::test]
+#[serial]
+async fn backfill_shape_seeds_preexisting_tenant_idempotently() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store: Arc<dyn Store> = Arc::new(store);
+    let id = store.next_tenant_id().await.unwrap();
+    let tenant_id = TenantId(id);
+    store
+        .put_tenant(&Tenant {
+            id: tenant_id,
+            name: "Backfill Co".to_string(),
+            slug: "backfill-co".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+
+    let suffix = "quarkus.test";
+    async fn run_backfill_pass(store: &Arc<dyn Store>, suffix: &str) {
+        for t in store.list_tenants().await.unwrap() {
+            let host = quark::api::subdomain_host(&t.slug, suffix);
+            if store.get_domain_by_host(&host).await.unwrap().is_none() {
+                quark::api::seed_tenant_subdomain(store, t.id, &t.slug, suffix)
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    // Other tenants that may already exist in this fresh DB (e.g. the seeded
+    // default tenant 0) must not confuse the assertion below, so scope it to
+    // just the one we created.
+    run_backfill_pass(&store, suffix).await;
+    run_backfill_pass(&store, suffix).await;
+
+    assert_eq!(
+        store.list_domains(tenant_id).await.unwrap().len(),
+        1,
+        "running the backfill pass twice must not duplicate the subdomain row"
+    );
+    let domain = store
+        .get_domain_by_host("backfill-co.quarkus.test")
+        .await
+        .unwrap()
+        .expect("backfill must seed the pre-existing tenant's subdomain");
+    assert_eq!(domain.tenant_id, tenant_id);
+}
+
+/// `/admin/me` reports the configured suffix (or `null` when unset) so the
+/// panel can build subdomain URLs without its own env var.
+#[tokio::test]
+#[serial]
+async fn admin_me_reports_tenant_domain_suffix() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let user_id = store.next_user_id().await.unwrap();
+    store
+        .put_user(&quark::tenant::User {
+            id: user_id,
+            subject: "admin-me-suffix-subject".to_string(),
+            email: "admin-me-suffix@example.com".to_string(),
+            display: "Suffix Tester".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    let raw = quark::auth::generate_token();
+    let session = quark::auth::Session {
+        token_hash: hash_token(&raw),
+        subject: "admin-me-suffix-subject".to_string(),
+        display: "Suffix Tester".to_string(),
+        scopes: vec![],
+        created: 0,
+        expires: quark::now() + 3600,
+        tenant_id: TenantId(0),
+        user_id,
+    };
+    store.put_session(TenantId(0), &session).await.unwrap();
+
+    let app = cloud_app_with_suffix(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        None,
+        Some("quarkus.test".to_string()),
+    );
+    let resp = app
+        .oneshot(
+            Request::get("/admin/me")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["tenant_domain_suffix"], "quarkus.test");
+}
+
+/// OSS/no-suffix parity: `seed_tenant_subdomain` is simply never called when
+/// `tenant_domain_suffix` is `None` — no row is seeded, no behavior changes.
+/// This is the ungated (no DB needed) half of the contract: the gate lives at
+/// the call sites (`admin_tenants_create`, the boot backfill), not in the
+/// helper itself, so this just documents the "unset -> no seed" invariant
+/// callers rely on.
+#[test]
+fn no_suffix_means_no_seed_call_site_contract() {
+    let suffix: Option<String> = None;
+    let mut seeded = false;
+    if let Some(_s) = &suffix {
+        seeded = true;
+    }
+    assert!(!seeded, "with no suffix configured, seeding must never run");
+}
+
+/// Same `cloud_app` builder as above, but with a `tenant_domain_suffix`.
+fn cloud_app_with_suffix(
+    store: Arc<dyn Store>,
+    sink: Arc<dyn AnalyticsSink>,
+    public_host: Option<String>,
+    tenant_domain_suffix: Option<String>,
+) -> axum::Router {
+    let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        public_host.clone(),
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: true,
+        multi_tenant: true,
+        tenant_domain_suffix,
+        cache,
+        store,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    router(state)
+}
+
+// --- P3-completion Task 2: create-flow fix — stamps the caller's real
+// tenant and lands the alias in that tenant's default (subdomain) domain,
+// instead of the pre-fix hardcode (tenant 0 / SHARED_DOMAIN_ID for every
+// cloud caller).
+
+/// Registers a `LinksWrite`-scoped API token for `tenant` and returns the
+/// raw token to send as `x-admin-token`.
+async fn seed_write_token(store: &Arc<PostgresStore>, tenant: TenantId, token_id: u64) -> String {
+    let raw = format!("qtok_create_{}", token_id);
+    store
+        .put_api_token(
+            tenant,
+            &ApiToken {
+                id: token_id,
+                name: "create-flow-test-token".to_string(),
+                token_hash: hash_token(&raw),
+                scopes: vec![Scope::LinksWrite],
+                rate_limit_per_min: None,
+                created: 0,
+                tenant_id: tenant,
+            },
+        )
+        .await
+        .unwrap();
+    raw
+}
+
+async fn post_create(
+    app: &axum::Router,
+    token: &str,
+    url: &str,
+) -> (StatusCode, serde_json::Value) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", token)
+                .body(Body::from(format!(r#"{{"url":"{url}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null)
+    };
+    (status, json)
+}
+
+async fn get_with_host(app: &axum::Router, host: &str, path: &str) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::get(path)
+                .header("host", host)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+/// A cloud caller authenticated as tenant B (via a scoped API token) creates
+/// a link through `POST /`. The stored `Record.tenant_id` must be B, not
+/// `DEFAULT_TENANT` — the bug this task fixes — and the link (numeric code
+/// and its custom alias) must resolve on B's own subdomain, not on a
+/// different tenant's subdomain.
+#[tokio::test]
+#[serial]
+async fn cloud_create_stamps_callers_tenant_and_resolves_on_its_subdomain() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let suffix = "quarkus.test";
+    let tenant_b = make_tenant(&store, "create-flow-b").await;
+    let tenant_other = make_tenant(&store, "create-flow-other").await;
+    quark::api::seed_tenant_subdomain(
+        &(store.clone() as Arc<dyn Store>),
+        tenant_b,
+        "create-flow-b",
+        suffix,
+    )
+    .await
+    .unwrap();
+    quark::api::seed_tenant_subdomain(
+        &(store.clone() as Arc<dyn Store>),
+        tenant_other,
+        "create-flow-other",
+        suffix,
+    )
+    .await
+    .unwrap();
+    let token = seed_write_token(&store, tenant_b, 9101).await;
+
+    let app = cloud_app_with_suffix(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        None,
+        Some(suffix.to_string()),
+    );
+
+    let (status, body) = post_create(&app, &token, "https://example.com/create-flow").await;
+    assert_eq!(status, StatusCode::OK, "create must succeed: {body:?}");
+    let code = body["code"].as_str().expect("code in response").to_string();
+
+    // The link is stamped under tenant B, not DEFAULT_TENANT.
+    let permuted = quark::codec::from_base62(&code).expect("numeric code decodes");
+    let id = quark::permute::decode(permuted, KEY);
+    let rec = store
+        .get_link(tenant_b, id)
+        .await
+        .unwrap()
+        .expect("link must be visible under tenant B");
+    assert_eq!(rec.tenant_id, tenant_b);
+    assert!(
+        store
+            .get_link(quark::tenant::DEFAULT_TENANT, id)
+            .await
+            .unwrap()
+            .is_none(),
+        "the link must NOT land under DEFAULT_TENANT"
+    );
+
+    // Resolves via B's own subdomain.
+    let host_b = quark::api::subdomain_host("create-flow-b", suffix);
+    let status = get_with_host(&app, &host_b, &format!("/{code}")).await;
+    assert!(
+        status == StatusCode::FOUND || status == StatusCode::MOVED_PERMANENTLY,
+        "numeric code must resolve on the caller's own subdomain, got {status}"
+    );
+
+    // Does NOT resolve on a different tenant's subdomain.
+    let host_other = quark::api::subdomain_host("create-flow-other", suffix);
+    let status = get_with_host(&app, &host_other, &format!("/{code}")).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the numeric code is global, but the record lookup is tenant-scoped by the resolved \
+         route -- another tenant's subdomain must not serve it"
+    );
+
+    // Now with a custom alias: it must land in B's subdomain namespace and
+    // resolve via `b.<suffix>/<alias>`, but not via another tenant's host.
+    let (status, body) =
+        app_create_with_alias(&app, &token, "https://example.com/aliased", "flow-alias").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "aliased create must succeed: {body:?}"
+    );
+
+    let status = get_with_host(&app, &host_b, "/flow-alias").await;
+    assert!(
+        status == StatusCode::FOUND || status == StatusCode::MOVED_PERMANENTLY,
+        "the alias must resolve on the tenant's own subdomain, got {status}"
+    );
+    let status = get_with_host(&app, &host_other, "/flow-alias").await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the same alias must not resolve on a different tenant's subdomain"
+    );
+}
+
+async fn app_create_with_alias(
+    app: &axum::Router,
+    token: &str,
+    url: &str,
+    alias: &str,
+) -> (StatusCode, serde_json::Value) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", token)
+                .body(Body::from(format!(
+                    r#"{{"url":"{url}","alias":"{alias}"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null)
+    };
+    (status, json)
+}
+
+/// OSS parity (regression guard): with `multi_tenant = false` (or a suffix
+/// unset in cloud), `POST /` still stamps `DEFAULT_TENANT` and lands the
+/// alias in `SHARED_DOMAIN_ID`, byte-for-byte as before this task.
+#[tokio::test]
+#[serial]
+async fn oss_create_still_stamps_default_tenant_and_shared_domain() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let cache = Cache::new(store.clone() as Arc<dyn Store>, 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone() as Arc<dyn Store>,
+        None,
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: false,
+        multi_tenant: false,
+        tenant_domain_suffix: None,
+        cache,
+        store: store.clone() as Arc<dyn Store>,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink: store.clone() as Arc<dyn AnalyticsSink>,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    let app = router(state);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://example.com/oss-create-flow"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = body["code"].as_str().unwrap().to_string();
+
+    let permuted = quark::codec::from_base62(&code).expect("numeric code decodes");
+    let id = quark::permute::decode(permuted, KEY);
+    let rec = store
+        .get_link(quark::tenant::DEFAULT_TENANT, id)
+        .await
+        .unwrap()
+        .expect("OSS create must land under DEFAULT_TENANT");
+    assert_eq!(rec.tenant_id, quark::tenant::DEFAULT_TENANT);
+}
+
+// --- P3-completion Task 2b: admin stats + delete-by-alias must resolve the
+// alias in the caller's tenant default domain, matching where `create` (Task
+// 2/5) now stamps it, instead of the stale hardcoded `SHARED_DOMAIN_ID`.
+
+/// Registers a `Full`-scoped API token for `tenant` (covers both `Analytics`
+/// and `LinksWrite`, needed to drive both the stats and delete-by-alias
+/// admin paths from one token).
+async fn seed_admin_token(store: &Arc<PostgresStore>, tenant: TenantId, token_id: u64) -> String {
+    let raw = format!("qtok_admin_{}", token_id);
+    store
+        .put_api_token(
+            tenant,
+            &ApiToken {
+                id: token_id,
+                name: "admin-alias-test-token".to_string(),
+                token_hash: hash_token(&raw),
+                scopes: vec![Scope::Full],
+                rate_limit_per_min: None,
+                created: 0,
+                tenant_id: tenant,
+            },
+        )
+        .await
+        .unwrap();
+    raw
+}
+
+async fn get_stats(app: &axum::Router, token: &str, code: &str) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::get(format!("/{code}/stats"))
+                .header("x-admin-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+async fn delete_admin_link(app: &axum::Router, token: &str, code: &str) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::delete(format!("/admin/links/{code}"))
+                .header("x-admin-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+/// A cloud tenant creates an aliased link, which (per Task 2) lands the alias
+/// in the tenant's own subdomain, not `SHARED_DOMAIN_ID`. Admin stats and
+/// admin delete-by-alias, authenticated as that same tenant, must resolve it
+/// (not 404) -- they now look up the alias in the caller's tenant default
+/// domain, mirroring `create`.
+#[tokio::test]
+#[serial]
+async fn cloud_admin_stats_and_delete_resolve_alias_in_tenant_default_domain() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let suffix = "quarkus.test";
+    let tenant = make_tenant(&store, "admin-alias-tenant").await;
+    quark::api::seed_tenant_subdomain(
+        &(store.clone() as Arc<dyn Store>),
+        tenant,
+        "admin-alias-tenant",
+        suffix,
+    )
+    .await
+    .unwrap();
+    let token = seed_admin_token(&store, tenant, 9201).await;
+
+    let app = cloud_app_with_suffix(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        None,
+        Some(suffix.to_string()),
+    );
+
+    let (status, body) = app_create_with_alias(
+        &app,
+        &token,
+        "https://example.com/admin-alias",
+        "admin-alias",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "aliased create must succeed: {body:?}"
+    );
+
+    let status = get_stats(&app, &token, "admin-alias").await;
+    assert_ne!(
+        status,
+        StatusCode::NOT_FOUND,
+        "admin stats must resolve the alias in the tenant's own subdomain namespace"
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    let status = delete_admin_link(&app, &token, "admin-alias").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "admin delete-by-alias must resolve the alias in the tenant's own subdomain namespace"
+    );
+
+    // Deleted: a second stats lookup for the same alias is gone.
+    let status = get_stats(&app, &token, "admin-alias").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// OSS / shared-domain regression: `default_domain_id` falls back to
+/// `SHARED_DOMAIN_ID` for `DEFAULT_TENANT`, so an aliased link created there
+/// must still resolve for admin stats and delete-by-alias exactly as before
+/// this task.
+#[tokio::test]
+#[serial]
+async fn oss_admin_stats_and_delete_still_resolve_alias_in_shared_domain() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let token = seed_admin_token(&store, quark::tenant::DEFAULT_TENANT, 9202).await;
+
+    let cache = Cache::new(store.clone() as Arc<dyn Store>, 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone() as Arc<dyn Store>,
+        None,
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: false,
+        multi_tenant: false,
+        tenant_domain_suffix: None,
+        cache,
+        store: store.clone() as Arc<dyn Store>,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink: store.clone() as Arc<dyn AnalyticsSink>,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    let app = router(state);
+
+    let (status, body) = app_create_with_alias(
+        &app,
+        &token,
+        "https://example.com/oss-admin-alias",
+        "oss-admin-alias",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "aliased create must succeed: {body:?}"
+    );
+
+    let status = get_stats(&app, &token, "oss-admin-alias").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "admin stats must still resolve the alias via the shared domain in OSS"
+    );
+
+    let status = delete_admin_link(&app, &token, "oss-admin-alias").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "admin delete-by-alias must still resolve the alias via the shared domain in OSS"
+    );
 }

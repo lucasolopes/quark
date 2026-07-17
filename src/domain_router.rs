@@ -440,6 +440,9 @@ mod tests {
         async fn get_tenant(&self, _id: TenantId) -> Result<Option<Tenant>, StoreError> {
             unimplemented!()
         }
+        async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError> {
+            unimplemented!()
+        }
         async fn next_user_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }

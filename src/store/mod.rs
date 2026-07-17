@@ -534,6 +534,10 @@ pub trait Store: Send + Sync + 'static {
     async fn put_tenant(&self, t: &Tenant) -> Result<(), StoreError>;
     /// Reads a tenant by id.
     async fn get_tenant(&self, id: TenantId) -> Result<Option<Tenant>, StoreError>;
+    /// Lists every tenant. Cloud-only caller: the boot-time subdomain backfill
+    /// (multi-tenancy P3), which needs to ensure every existing tenant has its
+    /// `<slug>.<suffix>` `domains` row. Small table, no pagination.
+    async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError>;
     /// Allocates the next global user id.
     async fn next_user_id(&self) -> Result<u64, StoreError>;
     /// Allocates the next global tenant id. Starts at 1 — 0 is the seeded default tenant.

@@ -69,6 +69,11 @@ pub struct AppState {
     /// TXT lookup seam for custom-domain verification (multi-tenancy P3).
     /// Only `admin_domains_verify` calls it; never on the redirect path.
     pub dns: Arc<dyn Dns>,
+    /// Base suffix for the auto per-tenant subdomain (multi-tenancy P3-completion),
+    /// e.g. `quarkus.com.br` from `QUARK_TENANT_DOMAIN_SUFFIX`. Cloud-only; `None`
+    /// disables the whole subdomain-auto feature (no seed on create, no boot
+    /// backfill, `/admin/me` reports `null`).
+    pub tenant_domain_suffix: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -335,17 +340,22 @@ fn cache_control_for(expiry: Option<u64>, now: u64) -> String {
 
 /// Requires the admin token to create — but only when a token is configured.
 /// Without QUARK_ADMIN_TOKEN, create remains public (open shortener).
-async fn require_admin_for_create(st: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
+async fn require_admin_for_create(
+    st: &AppState,
+    headers: &HeaderMap,
+) -> Result<Principal, StatusCode> {
     // Open shortener: create stays public ONLY when no auth mechanism is
     // configured. When either a token or OIDC is set, create requires a
     // credential covering LinksWrite (env token / API token / OIDC session),
     // reusing the same authorization as every other write.
     if st.admin_token.is_none() && !st.oidc_configured {
-        return Ok(());
+        return Ok(Principal {
+            tenant: crate::tenant::DEFAULT_TENANT,
+            user_id: None,
+            scopes: vec![Scope::Full],
+        });
     }
-    admin_guard(st, headers, Scope::LinksWrite)
-        .await
-        .map(|_| ())
+    admin_guard(st, headers, Scope::LinksWrite).await
 }
 
 /// Reasons `create_link_core` can fail. The `create` handler and the
@@ -378,6 +388,7 @@ pub enum CreateError {
 pub async fn create_link_core(
     st: &AppState,
     tenant: crate::tenant::TenantId,
+    domain_id: u64,
     url: &str,
     alias: Option<&str>,
     ttl: Option<u64>,
@@ -450,7 +461,7 @@ pub async fn create_link_core(
         let rows = st.webhooks.lifecycle_deliveries(tenant, &ev).await;
         match st
             .store
-            .put_alias_and_link_tx(tenant, SHARED_DOMAIN_ID, alias, id, &rec, &rows)
+            .put_alias_and_link_tx(tenant, domain_id, alias, id, &rec, &rows)
             .await
         {
             Ok(true) => {}
@@ -526,15 +537,38 @@ fn create_error_reason(err: &CreateError) -> &'static str {
     }
 }
 
+/// The `domains` row a newly created link's alias should land in: on cloud,
+/// with a suffix configured and a real (non-default) tenant, the tenant's
+/// own subdomain — so `<slug>.<suffix>/<alias>` resolves. Any miss (OSS,
+/// suffix unset, `DEFAULT_TENANT`, tenant/domain row not found) falls back
+/// to `SHARED_DOMAIN_ID`, which is also the OSS byte-for-byte behavior.
+async fn default_domain_id(st: &AppState, tenant: crate::tenant::TenantId) -> u64 {
+    if !st.multi_tenant || tenant == crate::tenant::DEFAULT_TENANT {
+        return SHARED_DOMAIN_ID;
+    }
+    let Some(suffix) = st.tenant_domain_suffix.as_deref() else {
+        return SHARED_DOMAIN_ID;
+    };
+    let Ok(Some(t)) = st.store.get_tenant(tenant).await else {
+        return SHARED_DOMAIN_ID;
+    };
+    let host = subdomain_host(&t.slug, suffix);
+    match st.store.get_domain_by_host(&host).await {
+        Ok(Some(domain)) => domain.id,
+        _ => SHARED_DOMAIN_ID,
+    }
+}
+
 async fn create(
     State(st): State<Arc<AppState>>,
     conn: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
     Json(req): Json<CreateReq>,
 ) -> Response {
-    if let Err(status) = require_admin_for_create(&st, &headers).await {
-        return status.into_response();
-    }
+    let p = match require_admin_for_create(&st, &headers).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     let ip = client_ip(&headers, &st.real_ip_header, conn.as_ref());
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
@@ -590,9 +624,11 @@ async fn create(
         }
         None => None,
     };
+    let domain_id = default_domain_id(&st, p.tenant).await;
     match create_link_core(
         &st,
-        crate::tenant::DEFAULT_TENANT,
+        p.tenant,
+        domain_id,
         &req.url,
         req.alias.as_deref(),
         req.ttl,
@@ -660,12 +696,14 @@ async fn admin_import(
         return (StatusCode::BAD_REQUEST, "too many rows").into_response();
     }
 
+    let domain_id = default_domain_id(&st, p.tenant).await;
     let mut imported = 0usize;
     let mut failed = Vec::new();
     for (index, row) in rows.into_iter().enumerate() {
         match create_link_core(
             &st,
             p.tenant,
+            domain_id,
             &row.url,
             row.alias.as_deref(),
             row.ttl,
@@ -1329,10 +1367,12 @@ async fn stats(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
-    // Admin `stats` resolves aliases through the shared domain, same as
-    // before `resolve_code` took a `domain_id` (custom-domain admin lookup is
-    // not wired yet).
-    let id = match resolve_code(&st, SHARED_DOMAIN_ID, &code).await {
+    // Admin `stats` resolves aliases through the caller's tenant default
+    // domain, matching where `create` stamps the alias (subdomain on cloud,
+    // `SHARED_DOMAIN_ID` on OSS/default tenant). Numeric codes decode
+    // globally regardless, via `resolve_code`'s base62 fast path.
+    let domain_id = default_domain_id(&st, p.tenant).await;
+    let id = match resolve_code(&st, domain_id, &code).await {
         Ok(Some(id)) => id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -1769,12 +1809,17 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
                 "oidc_enabled": oidc_enabled,
                 "memberships": memberships,
                 "current_tenant": current_tenant,
+                "tenant_domain_suffix": st.tenant_domain_suffix,
             }))
             .into_response();
         }
     }
-    Json(serde_json::json!({ "authenticated": false, "oidc_enabled": oidc_enabled }))
-        .into_response()
+    Json(serde_json::json!({
+        "authenticated": false,
+        "oidc_enabled": oidc_enabled,
+        "tenant_domain_suffix": st.tenant_domain_suffix,
+    }))
+    .into_response()
 }
 
 /// Resolves the session cookie to its `user_id`, independent of scopes. Used
@@ -1820,6 +1865,49 @@ fn conflict_or_503(e: StoreError) -> StatusCode {
     match e {
         StoreError::UniqueViolation => StatusCode::CONFLICT,
         _ => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+/// The host of a tenant's automatic subdomain (multi-tenancy P3-completion),
+/// e.g. `subdomain_host("acme", "quarkus.com.br") == "acme.quarkus.com.br"`.
+/// Lowercased so it matches the lookup convention every other host in
+/// `domains` follows (`get_domain_by_host`/`HostRouter` always query lowercase).
+pub fn subdomain_host(slug: &str, suffix: &str) -> String {
+    format!("{slug}.{suffix}").to_ascii_lowercase()
+}
+
+/// Ensures the tenant's automatic subdomain exists as a Verified `domains`
+/// row (multi-tenancy P3-completion). Called both on tenant creation and by
+/// the boot-time backfill (`main.rs`) for pre-existing tenants.
+///
+/// Deliberately blind-inserts via `next_domain_id()` + `put_domain` rather
+/// than checking `get_domain_by_host` first: the id comes from the same
+/// sequence real custom domains use, so a fresh id never collides, and the
+/// `host` UNIQUE constraint is the actual idempotency guard — a second seed
+/// attempt hits `StoreError::UniqueViolation`, which is treated as success
+/// (the row already exists, nothing left to do). Subdomains aren't
+/// DNS-verified (there's no TXT record to check — the app itself owns
+/// `*.<suffix>`), so `token` is empty and `status` starts `Verified`.
+pub async fn seed_tenant_subdomain(
+    store: &Arc<dyn Store>,
+    tenant_id: crate::tenant::TenantId,
+    slug: &str,
+    suffix: &str,
+) -> Result<(), StoreError> {
+    let id = store.next_domain_id().await?;
+    let ts = now();
+    let domain = Domain {
+        id,
+        tenant_id,
+        host: subdomain_host(slug, suffix),
+        token: String::new(),
+        status: DomainStatus::Verified,
+        created: ts,
+        verified_at: Some(ts),
+    };
+    match store.put_domain(&domain).await {
+        Ok(()) | Err(StoreError::UniqueViolation) => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
@@ -1874,6 +1962,23 @@ async fn admin_tenants_create(
         .is_err()
     {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    // Auto per-tenant subdomain (multi-tenancy P3-completion): best-effort —
+    // a failure here must not fail the tenant creation itself, since the
+    // tenant and its Owner membership are already committed. The panel falls
+    // back to the shared host until this is retried (boot backfill covers it).
+    if let Some(suffix) = &st.tenant_domain_suffix {
+        match seed_tenant_subdomain(&st.store, tenant.id, &tenant.slug, suffix).await {
+            Ok(()) => {
+                st.host_router
+                    .invalidate(&subdomain_host(&tenant.slug, suffix))
+                    .await
+            }
+            Err(e) => eprintln!(
+                "{}",
+                serde_json::json!({ "tenant_subdomain_seed_error": e.to_string(), "tenant_id": id })
+            ),
+        }
     }
     set_session_tenant(&st, &headers, crate::tenant::TenantId(id)).await;
     Json(tenant).into_response()
@@ -2929,19 +3034,23 @@ async fn admin_folders_list(State(st): State<Arc<AppState>>, headers: HeaderMap)
 /// Resolves the code into (id, optional_alias). If the code is numeric, there's no
 /// alias to remove; if it's an alias string, returns the alias to delete alongside it.
 ///
-/// `tenant` is currently unused: alias lookup is scoped by domain
-/// (`SHARED_DOMAIN_ID` for now), not by tenant. See `resolve_code`.
+/// Alias lookup is scoped by the caller's tenant default domain (subdomain on
+/// cloud, `SHARED_DOMAIN_ID` on OSS/default tenant) — the same namespace
+/// `create` stamps the alias into. See `default_domain_id`, `resolve_code`.
 async fn resolve_for_admin(
     st: &AppState,
-    _tenant: crate::tenant::TenantId,
+    tenant: crate::tenant::TenantId,
     code: &str,
 ) -> Result<Option<(u64, Option<String>)>, StoreError> {
     match codec::from_base62(code) {
         Some(c) if c <= permute::MAX_ID => Ok(Some((permute::decode(c, st.key), None))),
-        _ => match st.store.get_alias(SHARED_DOMAIN_ID, code).await? {
-            Some(id) => Ok(Some((id, Some(code.to_string())))),
-            None => Ok(None),
-        },
+        _ => {
+            let domain_id = default_domain_id(st, tenant).await;
+            match st.store.get_alias(domain_id, code).await? {
+                Some(id) => Ok(Some((id, Some(code.to_string())))),
+                None => Ok(None),
+            }
+        }
     }
 }
 
@@ -4065,6 +4174,7 @@ mod tests {
             multi_tenant: false,
             host_router,
             dns: Arc::new(crate::dns::NullDns),
+            tenant_domain_suffix: None,
         })
     }
 
@@ -4240,6 +4350,7 @@ mod tests {
         let code = create_link_core(
             &st,
             tenant,
+            SHARED_DOMAIN_ID,
             "https://example.com/numeric",
             None,
             None,
@@ -4287,6 +4398,7 @@ mod tests {
         let code = create_link_core(
             &st,
             tenant,
+            SHARED_DOMAIN_ID,
             "https://example.com/alias",
             Some("my-alias"),
             None,
