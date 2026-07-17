@@ -139,7 +139,7 @@ async fn validate_rules(
         let Some(host) = extract_host(&rule.to) else {
             return Err((StatusCode::BAD_REQUEST, "rule destination without host").into_response());
         };
-        if st.block_private && is_blocked_target(&host, headers, st) {
+        if st.block_private && is_blocked_target(&host, headers, st).await {
             return Err((StatusCode::FORBIDDEN, "rule destination not allowed").into_response());
         }
         out.push(rule);
@@ -307,7 +307,7 @@ async fn validate_variants(
         let Some(host) = extract_host(&variant.url) else {
             return Err((StatusCode::BAD_REQUEST, "variant url without host").into_response());
         };
-        if st.block_private && is_blocked_target(&host, headers, st) {
+        if st.block_private && is_blocked_target(&host, headers, st).await {
             return Err((StatusCode::FORBIDDEN, "variant destination not allowed").into_response());
         }
     }
@@ -398,7 +398,7 @@ pub async fn create_link_core(
     let Some(host) = extract_host(url) else {
         return Err(CreateError::NoHost);
     };
-    if st.block_private && is_blocked_target(&host, headers, st) {
+    if st.block_private && is_blocked_target(&host, headers, st).await {
         return Err(CreateError::Blocked);
     }
 
@@ -744,8 +744,11 @@ fn app_destination<'a>(rec: &'a Record, ua: Option<&str>) -> Option<&'a str> {
     }
 }
 
-/// Built-in guard: internal network destination, or a loop back to quark's own host.
-fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
+/// Built-in guard: internal network destination, or a loop back to any host
+/// quark itself serves (the shared `public_host`, or in multi-tenant mode
+/// any verified custom domain — a self-loop through a custom domain is still
+/// a self-loop).
+async fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
     if is_internal_host(host) {
         return true;
     }
@@ -755,7 +758,13 @@ fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
             .and_then(|v| v.to_str().ok())
             .map(|h| h.split(':').next().unwrap_or(h).to_ascii_lowercase())
     });
-    matches!(self_host, Some(sh) if sh == host)
+    if matches!(self_host, Some(sh) if sh == host) {
+        return true;
+    }
+    if st.multi_tenant && st.host_router.resolve(host).await.is_some() {
+        return true;
+    }
+    false
 }
 
 /// Validates an app destination URL with the same rules — and the same status
@@ -773,7 +782,7 @@ async fn app_destination_ok(
     let Some(host) = extract_host(url) else {
         return Err(StatusCode::BAD_REQUEST);
     };
-    if st.block_private && is_blocked_target(&host, headers, st) {
+    if st.block_private && is_blocked_target(&host, headers, st).await {
         return Err(StatusCode::FORBIDDEN);
     }
     Ok(())
@@ -2764,7 +2773,7 @@ async fn admin_link_patch(
         let Some(host) = extract_host(s) else {
             return (StatusCode::BAD_REQUEST, "url without host").into_response();
         };
-        if st.block_private && is_blocked_target(&host, &headers, &st) {
+        if st.block_private && is_blocked_target(&host, &headers, &st).await {
             return (StatusCode::FORBIDDEN, "destination not allowed").into_response();
         }
         rec.url = s.to_string();
@@ -2977,13 +2986,17 @@ async fn admin_webhooks_list(State(st): State<Arc<AppState>>, headers: HeaderMap
 }
 
 /// Serves a stored well-known document as `application/json`. Public, no auth.
+/// Tenant is picked by the incoming `Host` header via `resolve_host_route`,
+/// the same resolution the redirect hot path uses: the shared host (or OSS,
+/// where `multi_tenant` is off) always lands on `DEFAULT_TENANT`; a verified
+/// custom domain serves its own tenant's document; an unknown/unverified
+/// host has no route, so this 404s before ever touching the store.
 /// `Some(body)` -> 200 verbatim; `None` -> 404; store error -> 503.
-async fn serve_wellknown(st: &AppState, name: &str) -> Response {
-    match st
-        .store
-        .get_wellknown(crate::tenant::DEFAULT_TENANT, name)
-        .await
-    {
+async fn serve_wellknown(st: &AppState, name: &str, headers: &HeaderMap) -> Response {
+    let Some(route) = resolve_host_route(st, headers).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match st.store.get_wellknown(route.tenant_id, name).await {
         Ok(Some(body)) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -3207,12 +3220,12 @@ async fn admin_webhooks_patch(
     StatusCode::OK.into_response()
 }
 
-async fn wellknown_aasa(State(st): State<Arc<AppState>>) -> Response {
-    serve_wellknown(&st, "apple-app-site-association").await
+async fn wellknown_aasa(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    serve_wellknown(&st, "apple-app-site-association", &headers).await
 }
 
-async fn wellknown_assetlinks(State(st): State<Arc<AppState>>) -> Response {
-    serve_wellknown(&st, "assetlinks.json").await
+async fn wellknown_assetlinks(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    serve_wellknown(&st, "assetlinks.json", &headers).await
 }
 
 async fn admin_wellknown_get(

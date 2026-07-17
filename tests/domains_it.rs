@@ -951,3 +951,186 @@ async fn domains_endpoints_404_in_oss() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+// --- P3 Task 7: wellknown-by-Host, SSRF covers all registered hosts, OSS
+// parity ---
+
+async fn get_wellknown(app: &axum::Router, host: &str) -> (StatusCode, String) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/.well-known/apple-app-site-association")
+                .header("host", host)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// `serve_wellknown` picks the tenant by the incoming `Host`: a verified
+/// custom domain gets its own tenant's document, the shared host gets
+/// `DEFAULT_TENANT`'s, and an unrecognized host gets nothing (404) even
+/// though a document exists for some other tenant.
+#[tokio::test]
+#[serial]
+async fn wellknown_is_resolved_by_host() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant_a = make_tenant(&store, "wellknown-host-a").await;
+    make_domain(&store, tenant_a, "go.wellknown-a.com").await;
+
+    store
+        .put_wellknown(
+            tenant_a,
+            "apple-app-site-association",
+            r#"{"owner":"tenant-a"}"#,
+        )
+        .await
+        .unwrap();
+    store
+        .put_wellknown(
+            quark::tenant::DEFAULT_TENANT,
+            "apple-app-site-association",
+            r#"{"owner":"shared"}"#,
+        )
+        .await
+        .unwrap();
+
+    let store_dyn: Arc<dyn Store> = store.clone();
+    let sink_dyn: Arc<dyn AnalyticsSink> = store;
+    let app = cloud_app(store_dyn, sink_dyn, Some("quark.example.com".to_string()));
+
+    let (status, body) = get_wellknown(&app, "go.wellknown-a.com").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, r#"{"owner":"tenant-a"}"#);
+
+    let (status, body) = get_wellknown(&app, "quark.example.com").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, r#"{"owner":"shared"}"#);
+
+    let (status, _) = get_wellknown(&app, "unknown.example.com").await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "an unrecognized host must 404, never fall back to another tenant's document"
+    );
+}
+
+/// OSS parity: with `multi_tenant = false`, `serve_wellknown` behaves exactly
+/// as pre-P3 — tenant 0, Host header ignored entirely.
+#[tokio::test]
+#[serial]
+async fn wellknown_ignores_host_in_oss() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    store
+        .put_wellknown(
+            quark::tenant::DEFAULT_TENANT,
+            "apple-app-site-association",
+            r#"{"owner":"default"}"#,
+        )
+        .await
+        .unwrap();
+
+    let cache = Cache::new(store.clone() as Arc<dyn Store>, 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone() as Arc<dyn Store>,
+        None,
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let store_dyn: Arc<dyn Store> = store.clone();
+    let sink_dyn: Arc<dyn AnalyticsSink> = store;
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: false,
+        multi_tenant: false,
+        cache,
+        store: store_dyn,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink: sink_dyn,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    let app = router(state);
+
+    // Any arbitrary Host header, even one that would resolve to something
+    // real in cloud mode, is entirely ignored in OSS.
+    let (status, body) = get_wellknown(&app, "whatever.example.com").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, r#"{"owner":"default"}"#);
+}
+
+/// SSRF guard extended to all registered quark hosts (P3 Task 7): creating a
+/// link whose target is a verified custom domain of quark itself is a
+/// self-loop and must be blocked, exactly like the shared `public_host`
+/// always was. An unrelated external host is unaffected.
+#[tokio::test]
+#[serial]
+async fn create_blocks_target_matching_any_registered_domain() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "ssrf-all-hosts-a").await;
+    make_domain(&store, tenant, "go.ssrf-victim.com").await;
+
+    let (app, token) = admin_app_for_tenant(store, Arc::new(NullDns), true, tenant, 9012).await;
+
+    // Target host is a verified quark custom domain (not the shared
+    // public_host the app was built with) -> blocked as a self-loop.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", &token)
+                .body(Body::from(r#"{"url":"https://go.ssrf-victim.com/x"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "a target host that is itself a registered quark domain must be blocked"
+    );
+
+    // An unrelated external host is unaffected.
+    let resp = app
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", &token)
+                .body(Body::from(
+                    r#"{"url":"https://totally-unrelated.example.com/x"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
