@@ -5,6 +5,7 @@ use crate::analytics::AnalyticsSink;
 use crate::auth::ApiToken;
 use crate::domain::{Domain, DomainStatus};
 use crate::invite::Invite;
+use crate::oidc::TenantOidcConfig;
 use crate::pixel::PixelConfig;
 use crate::tenant::{Membership, Tenant, TenantId, User};
 use crate::webhooks::WebhookSubscription;
@@ -623,6 +624,32 @@ pub trait Store: Send + Sync + 'static {
     /// Deletes an invite, scoped to `tenant`.
     async fn delete_invite(&self, tenant: TenantId, id: u64) -> Result<(), StoreError>;
 
+    // --- Per-tenant OIDC config (multi-tenancy P2d), cloud-only ---
+    /// Allocates the next global oidc-config id.
+    async fn next_oidc_config_id(&self) -> Result<u64, StoreError>;
+    /// Upserts the tenant's OIDC config (one per tenant: UNIQUE `tenant_id`).
+    /// Tenant-scoped write; the tenant to write is `cfg.tenant_id`.
+    async fn put_oidc_config(&self, cfg: &TenantOidcConfig) -> Result<(), StoreError>;
+    /// Reads a tenant's OIDC config, tenant-scoped (the admin CRUD path).
+    async fn get_oidc_config(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Option<TenantOidcConfig>, StoreError>;
+    /// Reads a tenant's OIDC config on the bare pool, with no `app.tenant_id`
+    /// set: the login/callback path resolves the tenant from the URL slug
+    /// before there is any session/RLS context to scope through.
+    async fn get_oidc_config_bare(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Option<TenantOidcConfig>, StoreError>;
+    /// Deletes a tenant's OIDC config, tenant-scoped; a missing config is not
+    /// an error.
+    async fn delete_oidc_config(&self, tenant: TenantId) -> Result<(), StoreError>;
+    /// Looks up a tenant by its (UNIQUE) slug. Runs on the bare pool: this is
+    /// how `/admin/login?org=<slug>` resolves which tenant's OIDC config to
+    /// use, before any tenant context exists.
+    async fn get_tenant_by_slug(&self, slug: &str) -> Result<Option<Tenant>, StoreError>;
+
     /// Durable webhook outbox (scale-audit #3), Postgres-only. Inserts one
     /// delivery row per (event, subscription) with `ON CONFLICT (delivery_key)
     /// DO NOTHING`, so a duplicate enqueue of the same (event, sub) is a no-op.
@@ -841,6 +868,17 @@ impl ScopedStore {
     }
     pub async fn delete_sheets_connection(&self) -> Result<(), StoreError> {
         self.inner.delete_sheets_connection(self.tenant).await
+    }
+    /// `cfg.tenant_id` must be this handle's tenant; the underlying store
+    /// method takes it from the config, not from a separate parameter.
+    pub async fn put_oidc_config(&self, cfg: &TenantOidcConfig) -> Result<(), StoreError> {
+        self.inner.put_oidc_config(cfg).await
+    }
+    pub async fn get_oidc_config(&self) -> Result<Option<TenantOidcConfig>, StoreError> {
+        self.inner.get_oidc_config(self.tenant).await
+    }
+    pub async fn delete_oidc_config(&self) -> Result<(), StoreError> {
+        self.inner.delete_oidc_config(self.tenant).await
     }
     pub async fn next_pixel_id(&self) -> Result<u64, StoreError> {
         self.inner.next_pixel_id(self.tenant).await

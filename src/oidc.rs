@@ -5,11 +5,11 @@
 
 use crate::auth::Scope;
 use crate::store::{Store, StoreError};
-use crate::tenant::{Membership, Role, User, DEFAULT_TENANT};
+use crate::tenant::{Membership, Role, TenantId, User, DEFAULT_TENANT};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as b64url, Engine as _};
 use hmac::{Hmac, KeyInit, Mac};
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -58,6 +58,25 @@ impl OidcConfig {
                 .unwrap_or_else(|| "/".to_string()),
         })
     }
+}
+
+/// A tenant's own OIDC IdP (multi-tenancy P2d, cloud-only). One per tenant
+/// (`oidc_configs.tenant_id` is UNIQUE); `issuer` is a plain column, the rest
+/// rides in the `blob` (see `Store::put_oidc_config`/`get_oidc_config`).
+/// `client_secret` is stored plaintext at rest, mirroring the `sheets_connection`
+/// precedent (refresh token); encrypting it is a separate hardening follow-up.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TenantOidcConfig {
+    pub tenant_id: TenantId,
+    pub issuer: String,
+    pub client_id: String,
+    pub client_secret: String,
+    /// Space-separated-at-request-time scopes, kept as a list here.
+    pub scopes: Vec<String>,
+    pub admin_claim: String,
+    pub admin_value: String,
+    pub readonly_value: String,
+    pub post_login_url: Option<String>,
 }
 
 /// The subset of the IdP's `.well-known/openid-configuration` we use.

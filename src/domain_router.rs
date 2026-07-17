@@ -443,6 +443,9 @@ mod tests {
         async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError> {
             unimplemented!()
         }
+        async fn get_tenant_by_slug(&self, _slug: &str) -> Result<Option<Tenant>, StoreError> {
+            unimplemented!()
+        }
         async fn next_user_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }
@@ -534,6 +537,30 @@ mod tests {
             unimplemented!()
         }
         async fn delete_invite(&self, _tenant: TenantId, _id: u64) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn next_oidc_config_id(&self) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
+        async fn put_oidc_config(
+            &self,
+            _cfg: &crate::oidc::TenantOidcConfig,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn get_oidc_config(
+            &self,
+            _tenant: TenantId,
+        ) -> Result<Option<crate::oidc::TenantOidcConfig>, StoreError> {
+            unimplemented!()
+        }
+        async fn get_oidc_config_bare(
+            &self,
+            _tenant: TenantId,
+        ) -> Result<Option<crate::oidc::TenantOidcConfig>, StoreError> {
+            unimplemented!()
+        }
+        async fn delete_oidc_config(&self, _tenant: TenantId) -> Result<(), StoreError> {
             unimplemented!()
         }
         async fn enqueue_deliveries(&self, _rows: &[OutboxRow]) -> Result<(), StoreError> {

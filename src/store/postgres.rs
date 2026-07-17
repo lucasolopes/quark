@@ -2,6 +2,7 @@ use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVE
 use crate::auth::ApiToken;
 use crate::domain::{Domain, DomainStatus};
 use crate::invite::Invite;
+use crate::oidc::TenantOidcConfig;
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant};
 use crate::tenant::{Membership, Role, Tenant, TenantId, User};
@@ -87,7 +88,7 @@ const CLAIM_LEASE_SECS: u64 = 60;
 
 /// Every tenant-owned table: gets a `tenant_id` column and an RLS policy.
 /// (Global counters/sequences and lease tables are intentionally absent.)
-const TENANT_OWNED_TABLES: [&str; 15] = [
+const TENANT_OWNED_TABLES: [&str; 16] = [
     "links",
     "aliases",
     "link_health",
@@ -103,6 +104,7 @@ const TENANT_OWNED_TABLES: [&str; 15] = [
     "sheets_connection",
     "domains",
     "invites",
+    "oidc_configs",
 ];
 
 /// Maps a Postgres unique-constraint violation (SQLSTATE 23505) to
@@ -216,6 +218,53 @@ fn row_to_domain(r: &PgRow) -> Result<Domain, StoreError> {
         status,
         created: created as u64,
         verified_at: verified_at.map(|v| v as u64),
+    })
+}
+
+/// The shape of `oidc_configs.blob`: every `TenantOidcConfig` field except the
+/// two that ride as their own columns (`tenant_id`, `issuer`). Mirrors the
+/// `sheets_connection` precedent — `client_secret` included, plaintext.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct OidcConfigBlob {
+    client_id: String,
+    client_secret: String,
+    scopes: Vec<String>,
+    admin_claim: String,
+    admin_value: String,
+    readonly_value: String,
+    post_login_url: Option<String>,
+}
+
+fn oidc_config_blob(cfg: &TenantOidcConfig) -> serde_json::Value {
+    serde_json::to_value(OidcConfigBlob {
+        client_id: cfg.client_id.clone(),
+        client_secret: cfg.client_secret.clone(),
+        scopes: cfg.scopes.clone(),
+        admin_claim: cfg.admin_claim.clone(),
+        admin_value: cfg.admin_value.clone(),
+        readonly_value: cfg.readonly_value.clone(),
+        post_login_url: cfg.post_login_url.clone(),
+    })
+    .expect("OidcConfigBlob has no non-serializable fields")
+}
+
+/// Maps an `oidc_configs` row (`tenant_id, issuer, blob`) into a
+/// `TenantOidcConfig`.
+fn row_to_oidc_config(r: &PgRow) -> Result<TenantOidcConfig, StoreError> {
+    let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
+    let issuer: String = r.try_get("issuer").map_err(StoreError::backend)?;
+    let blob: serde_json::Value = r.try_get("blob").map_err(StoreError::backend)?;
+    let b: OidcConfigBlob = serde_json::from_value(blob)?;
+    Ok(TenantOidcConfig {
+        tenant_id: crate::tenant::TenantId(tenant_id as u64),
+        issuer,
+        client_id: b.client_id,
+        client_secret: b.client_secret,
+        scopes: b.scopes,
+        admin_claim: b.admin_claim,
+        admin_value: b.admin_value,
+        readonly_value: b.readonly_value,
+        post_login_url: b.post_login_url,
     })
 }
 
@@ -578,6 +627,10 @@ impl PostgresStore {
                 "CREATE SEQUENCE IF NOT EXISTS quark_invite_id_seq START WITH 1",
                 "CREATE TABLE IF NOT EXISTS invites (id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL DEFAULT 0, email TEXT NOT NULL, role TEXT NOT NULL, token_hash TEXT NOT NULL, invited_by BIGINT NOT NULL, created BIGINT NOT NULL, expires BIGINT NOT NULL, accepted_at BIGINT, accepted_by BIGINT)",
                 "CREATE INDEX IF NOT EXISTS invites_token_hash_idx ON invites (token_hash)",
+                // --- Multi-tenancy (P2d): per-tenant OIDC config ---
+                "CREATE SEQUENCE IF NOT EXISTS quark_oidc_config_id_seq START WITH 1",
+                "CREATE TABLE IF NOT EXISTS oidc_configs (id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL DEFAULT 0, issuer TEXT NOT NULL, blob JSONB NOT NULL, created BIGINT NOT NULL)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS oidc_configs_tenant_idx ON oidc_configs (tenant_id)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -786,7 +839,7 @@ impl PostgresStore {
             // `WHERE tenant_id`/`WHERE domain_id` predicate remains the
             // isolation layer for their scoped methods and for the bare-pool
             // accessors above.
-            const NOT_FORCED: [&str; 9] = [
+            const NOT_FORCED: [&str; 10] = [
                 "api_tokens",
                 "sessions",
                 "click_counters",
@@ -796,6 +849,11 @@ impl PostgresStore {
                 "domains",
                 "aliases",
                 "invites",
+                // Login/callback resolves the tenant from the URL slug (via
+                // `get_tenant_by_slug`) and reads the config on the bare pool
+                // (`get_oidc_config_bare`) before there is any `app.tenant_id`
+                // RLS context — same reasoning as `domains`/`invites` above.
+                "oidc_configs",
             ];
             if self.multi_tenant {
                 for table in TENANT_OWNED_TABLES
@@ -825,7 +883,7 @@ impl PostgresStore {
     /// OSS/default-tenant path keeps working after a reset).
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships, domains, invites RESTART IDENTITY",
+            "TRUNCATE links, aliases, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships, domains, invites, oidc_configs RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
@@ -834,6 +892,7 @@ impl PostgresStore {
             "ALTER SEQUENCE quark_tenant_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_domain_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_invite_id_seq RESTART WITH 1",
+            "ALTER SEQUENCE quark_oidc_config_id_seq RESTART WITH 1",
             "INSERT INTO tenants (id, name, slug, created) VALUES (0, 'default', 'default', 0) ON CONFLICT (id) DO NOTHING",
         ] {
             sqlx::query(q)
@@ -1834,6 +1893,30 @@ impl Store for PostgresStore {
         }
     }
 
+    async fn get_tenant_by_slug(&self, slug: &str) -> Result<Option<Tenant>, StoreError> {
+        // Bare pool, deliberately: `/admin/login?org=<slug>` resolves the
+        // tenant before any session/RLS context exists, mirroring
+        // `get_domain_by_host`.
+        let row = sqlx::query("SELECT id, name, slug, created FROM tenants WHERE slug = $1")
+            .bind(slug)
+            .fetch_optional(&self.read)
+            .await
+            .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => {
+                let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+                let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+                Ok(Some(Tenant {
+                    id: TenantId(id as u64),
+                    name: r.try_get("name").map_err(StoreError::backend)?,
+                    slug: r.try_get("slug").map_err(StoreError::backend)?,
+                    created: created as u64,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
     async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError> {
         let rows = sqlx::query("SELECT id, name, slug, created FROM tenants ORDER BY id")
             .fetch_all(&self.read)
@@ -2213,6 +2296,87 @@ impl Store for PostgresStore {
             sqlx::query("DELETE FROM invites WHERE tenant_id = $1 AND id = $2")
                 .bind(tenant.0 as i64)
                 .bind(id as i64)
+                .execute(&mut *c)
+                .await
+        });
+        Ok(())
+    }
+
+    // --- Per-tenant OIDC config (multi-tenancy P2d), cloud-only ---
+    async fn next_oidc_config_id(&self) -> Result<u64, StoreError> {
+        let row = sqlx::query("SELECT nextval('quark_oidc_config_id_seq') AS id")
+            .fetch_one(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
+        Ok(id as u64)
+    }
+
+    async fn put_oidc_config(&self, cfg: &TenantOidcConfig) -> Result<(), StoreError> {
+        // `id` is a fresh sequence value used only on first insert for this
+        // tenant: the upsert conflicts on the UNIQUE `tenant_id`, so a
+        // pre-existing row keeps its original `id`/`created` and only
+        // `issuer`/`blob` are replaced.
+        let id = self.next_oidc_config_id().await?;
+        let blob = oidc_config_blob(cfg);
+        let created = crate::now() as i64;
+        with_write!(self, cfg.tenant_id, |c| {
+            sqlx::query(
+                "INSERT INTO oidc_configs (id, tenant_id, issuer, blob, created) \
+                 VALUES ($1,$2,$3,$4,$5) \
+                 ON CONFLICT (tenant_id) DO UPDATE SET issuer = EXCLUDED.issuer, blob = EXCLUDED.blob",
+            )
+            .bind(id as i64)
+            .bind(cfg.tenant_id.0 as i64)
+            .bind(&cfg.issuer)
+            .bind(&blob)
+            .bind(created)
+            .execute(&mut *c)
+            .await
+        });
+        Ok(())
+    }
+
+    async fn get_oidc_config(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Option<TenantOidcConfig>, StoreError> {
+        let row = with_read!(self, tenant, |c| {
+            sqlx::query("SELECT tenant_id, issuer, blob FROM oidc_configs WHERE tenant_id = $1")
+                .bind(tenant.0 as i64)
+                .fetch_optional(&mut *c)
+                .await
+        });
+        match row {
+            Some(r) => Ok(Some(row_to_oidc_config(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_oidc_config_bare(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Option<TenantOidcConfig>, StoreError> {
+        // Deliberately bare: the login/callback path resolves the tenant from
+        // the URL slug (`get_tenant_by_slug`) before there is any
+        // `app.tenant_id` RLS context to scope through (`oidc_configs` is in
+        // `NOT_FORCED` for exactly this reason).
+        let row =
+            sqlx::query("SELECT tenant_id, issuer, blob FROM oidc_configs WHERE tenant_id = $1")
+                .bind(tenant.0 as i64)
+                .fetch_optional(&self.read)
+                .await
+                .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => Ok(Some(row_to_oidc_config(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_oidc_config(&self, tenant: TenantId) -> Result<(), StoreError> {
+        with_write!(self, tenant, |c| {
+            sqlx::query("DELETE FROM oidc_configs WHERE tenant_id = $1")
+                .bind(tenant.0 as i64)
                 .execute(&mut *c)
                 .await
         });

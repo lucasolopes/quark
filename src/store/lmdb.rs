@@ -1,6 +1,7 @@
 use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::auth::ApiToken;
 use crate::domain::{Domain, DomainStatus};
+use crate::oidc::TenantOidcConfig;
 use crate::pixel::PixelConfig;
 use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError};
 use crate::tenant::{Membership, Tenant, TenantId, User, DEFAULT_TENANT};
@@ -869,6 +870,20 @@ impl Store for LmdbStore {
         Ok(out)
     }
 
+    async fn get_tenant_by_slug(&self, slug: &str) -> Result<Option<Tenant>, StoreError> {
+        // No slug index on this backend (OSS is single-tenant); a linear scan
+        // over the small `tenants` table is fine.
+        let rtxn = self.env.read_txn()?;
+        for entry in self.tenants.iter(&rtxn)? {
+            let (_, bytes) = entry?;
+            let t: Tenant = serde_json::from_slice(bytes)?;
+            if t.slug == slug {
+                return Ok(Some(t));
+            }
+        }
+        Ok(None)
+    }
+
     async fn next_user_id(&self) -> Result<u64, StoreError> {
         let mut wtxn = self.env.write_txn()?;
         let cur = self.meta.get(&wtxn, "next_user_id")?.unwrap_or(0);
@@ -1031,6 +1046,37 @@ impl Store for LmdbStore {
     }
 
     async fn delete_invite(&self, _tenant: TenantId, _id: u64) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    // Per-tenant OIDC config (P2d) is cloud-only: OSS logs in via the single
+    // global env `OidcConfig` (`st.oidc`), never a per-tenant one, and the
+    // admin CRUD endpoints are gated behind `multi_tenant`, so these are
+    // never actually invoked on this backend. Kept as clear "unsupported"
+    // stubs instead of `unimplemented!()` so the trait stays total.
+    async fn next_oidc_config_id(&self) -> Result<u64, StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn put_oidc_config(&self, _cfg: &TenantOidcConfig) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn get_oidc_config(
+        &self,
+        _tenant: TenantId,
+    ) -> Result<Option<TenantOidcConfig>, StoreError> {
+        Ok(None)
+    }
+
+    async fn get_oidc_config_bare(
+        &self,
+        _tenant: TenantId,
+    ) -> Result<Option<TenantOidcConfig>, StoreError> {
+        Ok(None)
+    }
+
+    async fn delete_oidc_config(&self, _tenant: TenantId) -> Result<(), StoreError> {
         Err(StoreError::Unsupported)
     }
 
