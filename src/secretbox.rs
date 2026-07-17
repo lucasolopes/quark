@@ -202,4 +202,39 @@ mod tests {
         assert_ne!(sealed, "x");
         assert_eq!(open_opt(&some, &sealed).unwrap(), "x");
     }
+
+    #[test]
+    fn open_of_a_too_short_base64_payload_is_truncated_error() {
+        let sb = SecretBox::from_key(KEY_A);
+        // 8 base64-encoded bytes, well short of the 24-byte nonce.
+        let short = format!("{PREFIX}{}", b64.encode([0u8; 8]));
+        assert!(matches!(sb.open(&short), Err(SecretBoxError::Truncated)));
+    }
+
+    #[test]
+    fn open_of_non_base64_garbage_is_invalid_encoding_error() {
+        let sb = SecretBox::from_key(KEY_A);
+        let garbage = format!("{PREFIX}not-valid-base64!!!");
+        assert!(matches!(
+            sb.open(&garbage),
+            Err(SecretBoxError::InvalidEncoding)
+        ));
+    }
+
+    #[test]
+    fn open_of_a_tampered_ciphertext_is_decrypt_failed_error() {
+        let sb = SecretBox::from_key(KEY_A);
+        let sealed = sb.seal("top secret");
+        let encoded = sealed.strip_prefix(PREFIX).unwrap();
+        let mut payload = b64.decode(encoded).unwrap();
+        // Flip one byte past the nonce, inside the ciphertext, so the
+        // AEAD authentication tag no longer matches.
+        let last = payload.len() - 1;
+        payload[last] ^= 0xFF;
+        let tampered = format!("{PREFIX}{}", b64.encode(payload));
+        assert!(matches!(
+            sb.open(&tampered),
+            Err(SecretBoxError::DecryptFailed)
+        ));
+    }
 }
