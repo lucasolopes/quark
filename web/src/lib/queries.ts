@@ -387,12 +387,17 @@ export function useAcceptInvite() {
  * Whether the current workspace has its own OIDC provider configured, for
  * the SSO domains screen's gate. `retry: false` so an unconfigured workspace
  * (a normal `false`, not an error) resolves at once.
+ *
+ * `enabled` defaults to `true`; pass the page's cloud guard (`false` on OSS)
+ * so the request isn't issued at all when the screen is about to render
+ * nothing anyway.
  */
-export function useOidcConfigured() {
+export function useOidcConfigured(enabled = true) {
   return useQuery({
     queryKey: OIDC_CONFIGURED_QUERY_KEY,
     queryFn: () => api.oidcConfigured(),
     retry: false,
+    enabled,
   });
 }
 

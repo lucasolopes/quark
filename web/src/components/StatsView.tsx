@@ -1,6 +1,5 @@
 import { AlertTriangle, Bot, MousePointerClick, RotateCw, Timer, TimerReset } from "lucide-react";
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -38,9 +37,6 @@ export function StatsView({ code }: { code: string }) {
               <Button variant="outline" onClick={() => query.refetch()}>
                 <RotateCw className="size-4" />
                 {t("common.retry")}
-              </Button>
-              <Button variant="outline" nativeButton={false} render={<Link to="/links" />}>
-                {t("stats.backToLinks")}
               </Button>
             </div>
           </CardContent>

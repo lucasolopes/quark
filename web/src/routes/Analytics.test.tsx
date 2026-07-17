@@ -146,4 +146,23 @@ describe("Analytics", () => {
     await userEvent.type(screen.getByRole("searchbox"), "zzz");
     expect(await screen.findByText(/no links found/i)).toBeInTheDocument();
   });
+
+  it("shows a load-more control for the base browse list when another page is available, and fetches it on click (LUC-61)", async () => {
+    const page1 = {
+      links: [{ id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1, rules: [], variants: [] }],
+      next_after: 1,
+    };
+    const page2 = {
+      links: [{ id: 2, code: "BBB1111", url: "https://dog.com", expiry: null, created: 2, rules: [], variants: [] }],
+      next_after: null,
+    };
+    mockFetchByUrl((url) => (url.includes("after=1") ? jsonResponse(page2) : jsonResponse(page1)));
+    render(withProviders(<Analytics />));
+    await screen.findByText("AAA0000");
+
+    const loadMore = await screen.findByRole("button", { name: /load more/i });
+    await userEvent.click(loadMore);
+
+    expect(await screen.findByText("BBB1111")).toBeInTheDocument();
+  });
 });

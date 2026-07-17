@@ -45,9 +45,9 @@ const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])
 export function SsoDomains() {
   const t = useT();
   const me = useMe();
-  const oidcConfigured = useOidcConfigured();
-
   const cloud = me.data?.memberships !== undefined;
+  const oidcConfigured = useOidcConfigured(cloud);
+
   if (!cloud) return null;
 
   if (oidcConfigured.isPending) {

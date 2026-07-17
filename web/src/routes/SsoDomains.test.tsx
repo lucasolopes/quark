@@ -83,6 +83,13 @@ describe("SsoDomains", () => {
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 
+  it("OSS (no memberships) never fetches the oidc-config endpoint (LUC-60)", async () => {
+    const fetchMock = mockFetch({ me: OSS_ME });
+    const { container } = render(withProviders(<SsoDomains />, { withRouter: false }));
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/admin/oidc-config"))).toBe(false);
+  });
+
   it("cloud without an SSO provider configured shows the not-configured message, no domain list", async () => {
     mockFetch({ oidcConfigured: false, domains: [PENDING_DOMAIN] });
     render(withProviders(<SsoDomains />, { withRouter: false }));
