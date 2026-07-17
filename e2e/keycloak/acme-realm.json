@@ -1,0 +1,69 @@
+{
+  "realm": "acme",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "groups": [
+    { "name": "quark-admins" },
+    { "name": "quark-readers" }
+  ],
+  "clients": [
+    {
+      "clientId": "quark",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "secret": "acme-e2e-secret",
+      "redirectUris": [
+        "http://localhost:8082/admin/callback"
+      ],
+      "webOrigins": ["http://localhost:8082"],
+      "attributes": { "post.logout.redirect.uris": "+" },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "owner@acme.test",
+      "email": "owner@acme.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Acme",
+      "lastName": "Owner",
+      "credentials": [
+        { "type": "password", "value": "password", "temporary": false }
+      ],
+      "groups": ["/quark-admins"]
+    },
+    {
+      "username": "outsider@acme.test",
+      "email": "outsider@acme.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Acme",
+      "lastName": "Outsider",
+      "credentials": [
+        { "type": "password", "value": "password", "temporary": false }
+      ],
+      "groups": []
+    }
+  ]
+}
