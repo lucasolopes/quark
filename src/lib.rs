@@ -17,6 +17,7 @@ pub mod oidc;
 pub mod password;
 pub mod permute;
 pub mod pixel;
+pub mod secretbox;
 pub mod sheets;
 pub mod sso;
 pub mod store;

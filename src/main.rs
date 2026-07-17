@@ -101,6 +101,18 @@ async fn main() {
         }
     );
 
+    // Secret-at-rest re-encryption boot backfill (LUC-48 Task 3): once
+    // QUARK_ENCRYPTION_KEY is turned on, every legacy plaintext oidc
+    // client_secret / sheets refresh_token gets sealed. Idempotent (already-
+    // sealed rows are skipped) and a no-op on every other backend/config —
+    // safe to run on every replica, every boot.
+    if std::env::var("QUARK_ENCRYPTION_KEY").is_ok() {
+        match store.reencrypt_legacy_secrets().await {
+            Ok(n) => eprintln!("secret re-encryption backfill: {n} re-encrypted"),
+            Err(e) => eprintln!("WARNING: secret re-encryption backfill failed: {e}"),
+        }
+    }
+
     // Auto per-tenant subdomain boot backfill (multi-tenancy P3-completion):
     // every existing tenant gets its `<slug>.<suffix>` `domains` row, same as
     // a freshly created one (`admin_tenants_create`). Idempotent (skips

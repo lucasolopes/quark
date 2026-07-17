@@ -64,8 +64,8 @@ impl OidcConfig {
 /// A tenant's own OIDC IdP (multi-tenancy P2d, cloud-only). One per tenant
 /// (`oidc_configs.tenant_id` is UNIQUE); `issuer` is a plain column, the rest
 /// rides in the `blob` (see `Store::put_oidc_config`/`get_oidc_config`).
-/// `client_secret` is stored plaintext at rest, mirroring the `sheets_connection`
-/// precedent (refresh token); encrypting it is a separate hardening follow-up.
+/// `client_secret` is encrypted at rest when `QUARK_ENCRYPTION_KEY` is set
+/// (LUC-48, opt-in via `secretbox`); unset, it is stored plaintext.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TenantOidcConfig {
     pub tenant_id: TenantId,

@@ -4,6 +4,7 @@ use crate::domain::{Domain, DomainStatus};
 use crate::invite::Invite;
 use crate::oidc::TenantOidcConfig;
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
+use crate::secretbox::{self, SecretBox};
 use crate::sso::SsoEmailDomain;
 use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant};
 use crate::tenant::{Membership, Role, Tenant, TenantId, User};
@@ -248,8 +249,9 @@ fn row_to_sso_domain(r: &PgRow) -> Result<SsoEmailDomain, StoreError> {
 }
 
 /// The shape of `oidc_configs.blob`: every `TenantOidcConfig` field except the
-/// two that ride as their own columns (`tenant_id`, `issuer`). Mirrors the
-/// `sheets_connection` precedent — `client_secret` included, plaintext.
+/// two that ride as their own columns (`tenant_id`, `issuer`). `client_secret`
+/// is sealed via `secretbox` when `QUARK_ENCRYPTION_KEY` is set (LUC-48),
+/// plaintext otherwise.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct OidcConfigBlob {
     client_id: String,
@@ -265,10 +267,10 @@ struct OidcConfigBlob {
     post_login_url: Option<String>,
 }
 
-fn oidc_config_blob(cfg: &TenantOidcConfig) -> serde_json::Value {
+fn oidc_config_blob(cfg: &TenantOidcConfig, sb: &Option<SecretBox>) -> serde_json::Value {
     serde_json::to_value(OidcConfigBlob {
         client_id: cfg.client_id.clone(),
-        client_secret: cfg.client_secret.clone(),
+        client_secret: secretbox::seal_opt(sb, &cfg.client_secret),
         scopes: cfg.scopes.clone(),
         admin_claim: cfg.admin_claim.clone(),
         admin_value: cfg.admin_value.clone(),
@@ -280,17 +282,19 @@ fn oidc_config_blob(cfg: &TenantOidcConfig) -> serde_json::Value {
 }
 
 /// Maps an `oidc_configs` row (`tenant_id, issuer, blob`) into a
-/// `TenantOidcConfig`.
-fn row_to_oidc_config(r: &PgRow) -> Result<TenantOidcConfig, StoreError> {
+/// `TenantOidcConfig`. `sb` opens `client_secret` (encrypted-at-rest, opt-in
+/// via `QUARK_ENCRYPTION_KEY`; legacy plaintext passes through unchanged).
+fn row_to_oidc_config(r: &PgRow, sb: &Option<SecretBox>) -> Result<TenantOidcConfig, StoreError> {
     let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
     let issuer: String = r.try_get("issuer").map_err(StoreError::backend)?;
     let blob: serde_json::Value = r.try_get("blob").map_err(StoreError::backend)?;
     let b: OidcConfigBlob = serde_json::from_value(blob)?;
+    let client_secret = secretbox::open_opt(sb, &b.client_secret).map_err(StoreError::backend)?;
     Ok(TenantOidcConfig {
         tenant_id: crate::tenant::TenantId(tenant_id as u64),
         issuer,
         client_id: b.client_id,
-        client_secret: b.client_secret,
+        client_secret,
         scopes: b.scopes,
         admin_claim: b.admin_claim,
         admin_value: b.admin_value,
@@ -298,6 +302,16 @@ fn row_to_oidc_config(r: &PgRow) -> Result<TenantOidcConfig, StoreError> {
         required_value: b.required_value,
         post_login_url: b.post_login_url,
     })
+}
+
+/// True when `secret` is a legacy plaintext value worth re-encrypting: present,
+/// non-empty, and not already carrying the `enc:v1:` seal. Used by
+/// `reencrypt_legacy_secrets` to skip rows that are empty or already sealed.
+fn is_legacy_plaintext(secret: &Option<String>) -> bool {
+    match secret {
+        Some(s) => !s.is_empty() && !s.starts_with("enc:v1:"),
+        None => false,
+    }
 }
 
 /// Maps a `webhooks` row into a `WebhookSubscription`.
@@ -508,6 +522,11 @@ pub struct PostgresStore {
     /// `SET LOCAL app.tenant_id` transaction (via `with_read!`/`with_write!`).
     /// In OSS mode this is false and queries run directly on the pool as before.
     multi_tenant: bool,
+    /// Encryption-at-rest for secrets stored in this backend (OIDC
+    /// `client_secret`, Sheets `refresh_token`), opt-in via
+    /// `QUARK_ENCRYPTION_KEY`. `None` keeps every secret plaintext, byte-for-byte
+    /// today's behavior.
+    secretbox: Option<SecretBox>,
 }
 
 impl PostgresStore {
@@ -524,6 +543,7 @@ impl PostgresStore {
             read: pool.clone(),
             write: pool,
             multi_tenant,
+            secretbox: SecretBox::from_env(),
         };
         s.init_schema().await?;
         Ok(s)
@@ -552,6 +572,7 @@ impl PostgresStore {
             write,
             read,
             multi_tenant,
+            secretbox: SecretBox::from_env(),
         };
         s.init_schema().await?;
         Ok(s)
@@ -1694,7 +1715,13 @@ impl Store for PostgresStore {
     ) -> Result<(), StoreError> {
         // The connection is keyed per tenant (P1b Task 5: `tenant_id` is now
         // the primary key; the legacy `singleton` column is gone).
-        let blob = serde_json::to_value(c)?;
+        // `refresh_token` is sealed at rest (opt-in via `QUARK_ENCRYPTION_KEY`);
+        // every other field stays plaintext.
+        let sealed = crate::sheets::SheetsConnection {
+            refresh_token: secretbox::seal_opt(&self.secretbox, &c.refresh_token),
+            ..c.clone()
+        };
+        let blob = serde_json::to_value(sealed)?;
         with_write!(self, tenant, |conn| {
             sqlx::query(
                 "INSERT INTO sheets_connection (tenant_id, blob) VALUES ($1, $2) \
@@ -1725,7 +1752,10 @@ impl Store for PostgresStore {
         match row {
             Some(r) => {
                 let blob: serde_json::Value = r.try_get("blob").map_err(StoreError::backend)?;
-                Ok(Some(serde_json::from_value(blob)?))
+                let c: crate::sheets::SheetsConnection = serde_json::from_value(blob)?;
+                let refresh_token = secretbox::open_opt(&self.secretbox, &c.refresh_token)
+                    .map_err(StoreError::backend)?;
+                Ok(Some(crate::sheets::SheetsConnection { refresh_token, ..c }))
             }
             None => Ok(None),
         }
@@ -1989,6 +2019,68 @@ impl Store for PostgresStore {
             }
             None => Ok(None),
         }
+    }
+
+    async fn reencrypt_legacy_secrets(&self) -> Result<usize, StoreError> {
+        // No key configured: nothing to do, and no round-trip worth paying for.
+        if self.secretbox.is_none() {
+            return Ok(0);
+        }
+        let mut count = 0usize;
+
+        // oidc_configs: `NOT_FORCED` (see the const above), so a bare scan on
+        // the read pool sees every tenant's row regardless of RLS context —
+        // same reasoning `get_oidc_config_bare`/`get_tenant_by_slug` rely on.
+        let rows =
+            sqlx::query("SELECT tenant_id, blob->>'client_secret' AS secret FROM oidc_configs")
+                .fetch_all(&self.read)
+                .await
+                .map_err(StoreError::backend)?;
+        for r in rows {
+            let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
+            let secret: Option<String> = r.try_get("secret").map_err(StoreError::backend)?;
+            if !is_legacy_plaintext(&secret) {
+                continue;
+            }
+            let tenant = TenantId(tenant_id as u64);
+            // get→put round-trip: `get_oidc_config_bare` opens (passes legacy
+            // plaintext through unchanged), `put_oidc_config` seals it fresh.
+            // No hand-rolled crypto here, just the existing seal/open path.
+            if let Some(config) = self.get_oidc_config_bare(tenant).await? {
+                self.put_oidc_config(&config).await?;
+                count += 1;
+            }
+        }
+
+        // sheets_connection IS force-RLS'd in multi-tenant mode (it is not in
+        // `NOT_FORCED`), so a bare scan would silently miss every tenant's row
+        // there. Enumerate tenants instead and check each one inside its own
+        // tenant-scoped transaction, mirroring `get_sheets_connection`'s own
+        // read path (`with_write!`, for read-your-writes).
+        let tenants = self.list_tenants().await?;
+        for t in &tenants {
+            let row = with_write!(self, t.id, |c| {
+                sqlx::query(
+                    "SELECT blob->>'refresh_token' AS secret FROM sheets_connection WHERE tenant_id = $1",
+                )
+                .bind(t.id.0 as i64)
+                .fetch_optional(&mut *c)
+                .await
+            });
+            let Some(row) = row else {
+                continue;
+            };
+            let secret: Option<String> = row.try_get("secret").map_err(StoreError::backend)?;
+            if !is_legacy_plaintext(&secret) {
+                continue;
+            }
+            if let Some(conn) = self.get_sheets_connection(t.id).await? {
+                self.put_sheets_connection(t.id, &conn).await?;
+                count += 1;
+            }
+        }
+
+        Ok(count)
     }
 
     async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError> {
@@ -2559,7 +2651,7 @@ impl Store for PostgresStore {
         // pre-existing row keeps its original `id`/`created` and only
         // `issuer`/`blob` are replaced.
         let id = self.next_oidc_config_id().await?;
-        let blob = oidc_config_blob(cfg);
+        let blob = oidc_config_blob(cfg, &self.secretbox);
         let created = crate::now() as i64;
         with_write!(self, cfg.tenant_id, |c| {
             sqlx::query(
@@ -2589,7 +2681,7 @@ impl Store for PostgresStore {
                 .await
         });
         match row {
-            Some(r) => Ok(Some(row_to_oidc_config(&r)?)),
+            Some(r) => Ok(Some(row_to_oidc_config(&r, &self.secretbox)?)),
             None => Ok(None),
         }
     }
@@ -2609,7 +2701,7 @@ impl Store for PostgresStore {
                 .await
                 .map_err(StoreError::backend)?;
         match row {
-            Some(r) => Ok(Some(row_to_oidc_config(&r)?)),
+            Some(r) => Ok(Some(row_to_oidc_config(&r, &self.secretbox)?)),
             None => Ok(None),
         }
     }
@@ -3015,6 +3107,7 @@ mod tests {
                 write: PgPool::connect_lazy("postgres://unused").unwrap(),
                 read: PgPool::connect_lazy("postgres://unused").unwrap(),
                 multi_tenant,
+                secretbox: None,
             }
         }
         assert!(!make(false).is_multi_tenant());

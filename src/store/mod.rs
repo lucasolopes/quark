@@ -687,6 +687,17 @@ pub trait Store: Send + Sync + 'static {
     /// use, before any tenant context exists.
     async fn get_tenant_by_slug(&self, slug: &str) -> Result<Option<Tenant>, StoreError>;
 
+    /// Boot backfill (LUC-48 Task 3): re-encrypts any legacy plaintext secret
+    /// (oidc `client_secret`, sheets `refresh_token`) once encryption at rest
+    /// is turned on. Returns how many rows were re-encrypted this pass;
+    /// running it again after a full pass returns 0 (already-`enc:v1:` rows
+    /// are left alone). The default here is a no-op — only `PostgresStore`
+    /// carries a `SecretBox`, so every other backend (LMDB, or Postgres with
+    /// no key configured) has nothing to backfill.
+    async fn reencrypt_legacy_secrets(&self) -> Result<usize, StoreError> {
+        Ok(0)
+    }
+
     /// Durable webhook outbox (scale-audit #3), Postgres-only. Inserts one
     /// delivery row per (event, subscription) with `ON CONFLICT (delivery_key)
     /// DO NOTHING`, so a duplicate enqueue of the same (event, sub) is a no-op.
