@@ -1,92 +1,49 @@
-# P2b-backend Task 5 report
+# LUC-57 Task 5 report: admin UI for SSO email domains
 
-## Status: DONE
-
-Commit: `3b55e7428cb305771470e730a59db22356392fae` on `feat/multi-tenant-p2b`
-(parent `0a2ae67`).
+Commit: `b4092f8` on `feat/sso-email-discovery` (frontend-only, no backend changes).
 
 ## What changed
 
-`admin_guard`'s OIDC-session branch in `src/api.rs` (the `Ok(Some(session))`
-arm). The covering-check now sources scopes by deployment mode:
+- `web/src/lib/types.ts`: `DomainStatus` (`"pending" | "verified"`) and `SsoDomainView` (`id, domain, status, created, verified_at, txt_name, txt_value`), matching `SsoDomainView`/`sso_domain_view` in `src/api.rs`.
+- `web/src/lib/api.ts`: `listSsoDomains()`, `createSsoDomain(domain)`, `verifySsoDomain(id)`, `deleteSsoDomain(id)` next to the existing CRUD-style methods. Also `oidcConfigured(): Promise<boolean>` — a plain (non-throwing) fetch to `GET /admin/oidc-config`, mapping 200→true / 404→false, mirroring the existing `sheetsStatus` pattern (a workspace with no OIDC provider yet is a normal `false`, not a 401 to bounce the panel on).
+- `web/src/lib/queries.ts`: `useSsoDomains` (list query), `useCreateSsoDomain`, `useVerifySsoDomain`, `useDeleteSsoDomain` (mutations invalidating the list), and `useOidcConfigured` (the gating query, `retry: false`).
+- `web/src/routes/SsoDomains.tsx` (new): the admin screen.
+  - Gate: renders `null` when `me().memberships === undefined` (OSS — mirrors `RequireAuth`/`Shell`'s existing cloud-detection). When cloud, calls `GET /admin/oidc-config` via `useOidcConfigured`; while pending shows a skeleton, when `false` shows a short "set up an SSO provider first" message with no domain list, when `true` renders the full panel. This satisfies "cloud + SSO-configured" using the real backend signal (`GET /admin/oidc-config`, already shipped in Task 2/P2d, just not previously wired to the frontend) rather than approximating it — there was no existing P2d admin UI in `web/src/` to mirror, so I used the endpoint itself as the more precise precedent per the brief's fallback guidance ("mirror whatever the OIDC-config admin UI does, OR gate on cloud and let calls 409 gracefully").
+  - Panel: list of domains as cards (domain, status badge, created date, Verify button for pending rows, Remove button always); a pending domain's card also shows its `_quark-sso.<domain>` TXT name/value inline (plain JSX text, no `dangerouslySetInnerHTML`); an "Add domain" dialog (mirrors `Members`'/`Webhooks`' create-dialog pattern) with client-side domain-shape validation and 409/400/429 error mapping; a remove confirmation `AlertDialog` (mirrors `Members`' revoke flow).
+- `web/src/app/router.tsx`: route `sso-domains` → `<SsoDomains />`, alongside the existing `members` route.
+- `web/src/app/Shell.tsx`: nav item "SSO domains" (`ShieldCheck` icon) in the Dev group, gated the same way as the existing Members item (`canManageSsoDomains = canManageMembers`, i.e. cloud + Owner/Admin) — the SSO-domains screen's own internal gate (above) is what enforces "SSO configured".
+- i18n: `shell.navSsoDomains` + a new `ssoDomains` namespace (title, subtitle, not-configured message, empty state, add form, column headers, status labels, TXT-record instructions/labels, verify/remove actions and their toasts, error mappings for 400/409/429) added to both `web/src/i18n/en.ts` and `web/src/i18n/pt-BR.ts`.
+- Tests:
+  - `web/src/lib/api.test.ts` (+8 tests): `oidcConfigured` true (200) / false (404); `listSsoDomains` GETs `/admin/sso-domains`; `createSsoDomain` POSTs `{domain}` to `/admin/sso-domains`; `verifySsoDomain` POSTs to `/admin/sso-domains/:id/verify`; `deleteSsoDomain` DELETEs `/admin/sso-domains/:id` + throws `ApiError` on a non-ok response.
+  - `web/src/routes/SsoDomains.test.tsx` (new, 7 tests): OSS (no `memberships`) renders nothing; cloud without an SSO provider configured shows the not-configured message and no domain list; cloud+configured lists a pending and a verified domain, with the TXT record shown only for the pending one; empty state; clicking Verify calls the verify endpoint and the list refetches; the add form posts the trimmed domain; Remove asks for confirmation then DELETEs.
 
-- **Cloud (`st.multi_tenant == true`)**: `get_membership(session.user_id,
-  session.tenant_id)` → `Ok(Some(m))` uses `role_scopes(m.role)`; `Ok(None)`
-  (no membership in the current tenant) sets `saw_insufficient` and yields no
-  scopes → 403; `Err(_)` sets `saw_store_error` → 503-if-nothing-else-covers.
-- **OSS (`multi_tenant == false`)**: unchanged — `session.scopes.clone()` (the
-  group→scope map), byte-for-byte the old behavior.
+## Test command + output
 
-The success return still carries `Principal { tenant: session.tenant_id,
-user_id: Some(session.user_id), scopes: effective_scopes }`. The
-`saw_insufficient / saw_rate_limited / saw_store_error / not_found_status` tail
-and the "try every credential, any covering one wins" ordering are untouched;
-only the scope SOURCE inside the OIDC-session covering-check moved. Env-admin-token
-and API-token branches are byte-for-byte identical.
+```
+cd web
+npx vitest run
+```
 
-## Tests
+Full-suite result: **2 failed | 190 passed (192)**, both failures in `src/routes/Extensions.test.tsx` ("create flow calls the API" / a setup-Zapier click assertion) — confirmed pre-existing and unrelated to this change:
+- A first full run (accidentally concurrent with a separate `tsc --noEmit` invocation) also transiently failed `Webhooks.test.tsx` on a timeout; re-ran `Webhooks.test.tsx` + `Extensions.test.tsx` together and `Webhooks.test.tsx` alone — it passed cleanly every time in isolation, confirming that failure was resource contention from running two heavy processes in parallel, not a real regression.
+- Re-ran the full suite alone (no other process running): consistently 190/192, the same 2 `Extensions.test.tsx` failures, matching the documented pre-existing flake.
+- `SsoDomains.test.tsx` and `api.test.ts` on their own: 7/7 and 29/29 green, including a final standalone run after the last Shell.tsx cleanup.
 
-Full run green: **228 lib + 89 api_it + 4 tenant_enforcement** (the tenant
-suite run against real Postgres, superuser). `cargo fmt --check` clean. The
-existing OSS status-contract unit test `admin_guard_resolves_principal_per_credential`
-stays green (OSS path unchanged).
+```
+npx tsc --noEmit
+```
+No output (clean).
 
-New gated test `admin_guard_role_scopes_in_cloud` in `tests/tenant_enforcement.rs`
-drives the real HTTP router (cloud AppState: `multi_tenant=true`,
-`oidc_configured=true`, no env token) over a Postgres store:
-- Viewer membership + session (whose stored `session.scopes` is deliberately
-  `Full`): `GET /admin/links` (LinksRead) → 200; `POST /` create (LinksWrite) →
-  403. Proves stored session scopes are ignored in cloud.
-- Session whose user has NO membership in `session.tenant_id`: `GET /admin/links`
-  → 403 (never authorizes).
-- Early-returns when `QUARK_TEST_DATABASE_URL` is unset (controller runs the
-  gated arm).
+```
+npx oxlint
+```
+One pre-existing warning, unrelated to this change (`vite.config.ts:1:1: triple-slash-reference`). My test file's own transient warning (`method` declared but unused in an overridden mock) was fixed before the final run — final `oxlint` run shows only the pre-existing warning.
 
-TDD verified against live Postgres: with `src/api.rs` stashed the test FAILS
-(Viewer write returns 200; orphan authorizes), and PASSES with the fix. NO
-CONCURRENTLY used; codec/permute untouched; `/admin/me` (Task 6) not touched.
+## Design decision worth flagging
+
+The brief's "gate to cloud + SSO-configured" left the exact signal open (no P2d admin UI existed to mirror in `web/src/`). I found the backend already exposes `GET /admin/oidc-config` (404 when unset, 200 otherwise, cloud-only, `Scope::Full`) — unused by any existing frontend code — and used it directly as the gating signal instead of approximating with cloud-only + graceful 409 handling. This is a small, self-contained addition (`api.oidcConfigured()` + `useOidcConfigured()`), reuses an existing endpoint rather than inventing a signal, and gives an exact answer instead of a heuristic. Flagging in case the reviewer would rather see the simpler cloud-only + 409-toast approach the brief also explicitly permitted.
 
 ## Concerns
 
-- `admin_guard` is private, so the gated test exercises it end-to-end through
-  the public `router()` HTTP surface (session cookie → `GET /admin/links` /
-  `POST /`) rather than calling it directly. Stronger (real wiring) but coupled
-  to those two routes' scope requirements (LinksRead / LinksWrite via
-  `require_admin_for_create`).
-- Test note: `Session.expires` must stay within i64 (the BIGINT column);
-  `u64::MAX` wraps to -1 and reads back as expired. The helper uses
-  `4_000_000_000`.
-
-## Follow-up: Minor status-contract divergence fixed (2026-07-16)
-
-**Finding:** the post-covering-check flag-set in the OIDC-session branch had
-drifted to `if !effective_scopes.is_empty() { saw_insufficient = true; }`
-(`src/api.rs` ~line 1425). An OSS session with EMPTY `session.scopes` left the
-flag unset, falling through to `not_found_status` (401) instead of the
-original 403. Masked today because the OIDC callback rejects empty-scope
-logins, but it coupled the guard's own status contract to an invariant living
-in another function — a latent 403→401 divergence.
-
-**Fix:** restored the unconditional form — `saw_insufficient = true;`
-unconditionally after the covering check fails, matching the original
-byte-for-byte behavior. Verified correct for all four paths:
-- OSS covering: unaffected (early return before this line).
-- OSS empty-scope: now 403 again (was silently 401).
-- Cloud no-membership (`Ok(None)`): already set `saw_insufficient=true`;
-  setting it again is a no-op.
-- Cloud store-error (`Err(_)`): sets `saw_store_error=true`; the tail checks
-  `saw_store_error` before `saw_insufficient`, so 503 still wins.
-
-Added unit test `admin_guard_oss_empty_scope_session_is_forbidden_not_unauthorized`
-in `src/api.rs` `#[cfg(test)]`: seeds an OSS session (`multi_tenant=false`,
-`oidc_configured=true`) with `scopes: Vec::new()` and asserts `admin_guard`
-returns `Err(StatusCode::FORBIDDEN)`, locking the invariant directly at the
-unit level (no gated harness needed).
-
-Verification: `cargo fmt --check` clean; full non-gated suite green (229
-passed, up from 228 — the new test — 0 failed); `admin_guard_resolves_principal_per_credential`
-and `admin_guard_role_scopes_in_cloud` (tenant_enforcement, Postgres-gated)
-both still green. No other lines in the branches or the tail touched;
-codec/permute untouched.
-
-Status: DONE.
+- No existing P3 custom-domains admin UI was found in `web/src/` (confirmed by grep for `domains`/`Domains` across `web/src`) — I mirrored `Members.tsx`/`Webhooks.tsx` instead, per the brief's fallback instruction.
+- The nav item's role gate (Owner/Admin only) reuses `Members`' `MEMBERS_MANAGER_ROLES` set. I confirmed `admin_guard` in `src/api.rs` checks scope, not role, directly for `Scope::Full`; I did not trace how OIDC-session roles map to scopes for every possible role. This mirrors the exact same (pre-existing) assumption `Shell.tsx` already makes for the Members nav item, so it is not a new risk introduced by this task — worth a second look together with Members' gating, not in isolation.

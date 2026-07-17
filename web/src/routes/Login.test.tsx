@@ -46,6 +46,17 @@ describe("Login", () => {
     expect(screen.queryByLabelText(/^email$/i)).not.toBeInTheDocument();
   });
 
+  it("hides the email step on OSS even when a shared OIDC provider is configured", async () => {
+    // Single-tenant OSS with a global OIDC provider: home-realm discovery is
+    // meaningless, so the email-first step must not appear (it would only fire
+    // a discover request that 404s). The shared provider button still shows.
+    mockFetchByUrl({ authenticated: false, oidc_enabled: true, multi_tenant: false });
+    render(withProviders(<Login />, { initialEntries: ["/login"] }));
+    expect(await screen.findByRole("button", { name: /provider/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^email$/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/token/i)).toBeInTheDocument();
+  });
+
   it("invalid token (401) shows a specific error", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 401 }));
     render(withProviders(<Login />));
@@ -64,7 +75,7 @@ describe("Login", () => {
   });
 
   it("with ?org= and OIDC enabled, shows the org header and a per-tenant sign-in button (skips the email step)", async () => {
-    mockFetchByUrl({ authenticated: false, oidc_enabled: true });
+    mockFetchByUrl({ authenticated: false, oidc_enabled: true, multi_tenant: true });
     render(withProviders(<Login />, { initialEntries: ["/login?org=acme"] }));
     expect(await screen.findByText(/organization: acme/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /sign in to acme/i })).toBeInTheDocument();
@@ -75,7 +86,7 @@ describe("Login", () => {
   });
 
   it("clicking the per-tenant button navigates to /admin/login?org=acme", async () => {
-    mockFetchByUrl({ authenticated: false, oidc_enabled: true });
+    mockFetchByUrl({ authenticated: false, oidc_enabled: true, multi_tenant: true });
     const originalLocation = window.location;
     // @ts-expect-error -- replacing window.location for assertion, restored below.
     delete window.location;
@@ -87,7 +98,7 @@ describe("Login", () => {
   });
 
   it("with no ?org= and OIDC enabled, shows the email-first step instead of the provider button", async () => {
-    mockFetchByUrl({ authenticated: false, oidc_enabled: true });
+    mockFetchByUrl({ authenticated: false, oidc_enabled: true, multi_tenant: true });
     render(withProviders(<Login />, { initialEntries: ["/login"] }));
     expect(await screen.findByLabelText(/^email$/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /continue/i })).toBeInTheDocument();
@@ -97,7 +108,7 @@ describe("Login", () => {
   });
 
   it("submitting an email whose domain resolves to an org routes straight to that tenant's SSO", async () => {
-    mockFetchByUrl({ authenticated: false, oidc_enabled: true }, { org: "acme" });
+    mockFetchByUrl({ authenticated: false, oidc_enabled: true, multi_tenant: true }, { org: "acme" });
     const originalLocation = window.location;
     // @ts-expect-error -- replacing window.location for assertion, restored below.
     delete window.location;
@@ -110,7 +121,7 @@ describe("Login", () => {
   });
 
   it("submitting an email with no SSO org falls back to the shared provider button and token field (no redirect)", async () => {
-    mockFetchByUrl({ authenticated: false, oidc_enabled: true }, {});
+    mockFetchByUrl({ authenticated: false, oidc_enabled: true, multi_tenant: true }, {});
     const originalLocation = window.location;
     // @ts-expect-error -- replacing window.location for assertion, restored below.
     delete window.location;
@@ -126,7 +137,7 @@ describe("Login", () => {
   });
 
   it("without ?org=, the shared provider button (revealed after the email fallback) still navigates to /admin/login with no org (regression)", async () => {
-    mockFetchByUrl({ authenticated: false, oidc_enabled: true }, {});
+    mockFetchByUrl({ authenticated: false, oidc_enabled: true, multi_tenant: true }, {});
     const originalLocation = window.location;
     // @ts-expect-error -- replacing window.location for assertion, restored below.
     delete window.location;

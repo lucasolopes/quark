@@ -16,6 +16,7 @@ export function Login() {
   const t = useT();
   const [value, setValue] = useState("");
   const [oidcEnabled, setOidcEnabled] = useState(false);
+  const [multiTenant, setMultiTenant] = useState(false);
   const [email, setEmail] = useState("");
   // Set once email discovery comes back with no org: reveals the shared
   // provider button instead of blocking the user behind the email step.
@@ -27,8 +28,10 @@ export function Login() {
   // `oidcLoginUrl`, never validated here — the server decides what it means.
   const org = params.get("org")?.trim() || "";
   // `?org=` always wins (LUC-53): it already picked the tenant, so the
-  // email-first discovery step would be redundant.
-  const showEmailStage = oidcEnabled && !org && !sharedLoginRevealed;
+  // email-first discovery step would be redundant. The step is cloud-only:
+  // home-realm discovery is meaningless in single-tenant OSS, so it never
+  // shows there even when a shared OIDC provider is configured.
+  const showEmailStage = oidcEnabled && multiTenant && !org && !sharedLoginRevealed;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -40,7 +43,10 @@ export function Login() {
       .then((me) => {
         if (!alive) return;
         if (me.authenticated) navigate("/links", { replace: true });
-        else setOidcEnabled(me.oidc_enabled);
+        else {
+          setOidcEnabled(me.oidc_enabled);
+          setMultiTenant(me.multi_tenant ?? false);
+        }
       })
       .catch(() => {});
     return () => {

@@ -75,6 +75,10 @@ export interface Membership { tenant_id: number; name: string; slug: string; rol
 export interface MeResponse {
   authenticated: boolean;
   oidc_enabled: boolean;
+  /** True when the server runs in cloud (multi-tenant) mode. Present pre-auth,
+   * so the login screen can gate cloud-only affordances like email-first SSO
+   * discovery (meaningless in single-tenant OSS). */
+  multi_tenant?: boolean;
   display?: string;
   scopes?: string[];
   memberships?: Membership[];

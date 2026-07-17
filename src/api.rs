@@ -2005,6 +2005,7 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
                 "display": session.display,
                 "scopes": session.scopes,
                 "oidc_enabled": oidc_enabled,
+                "multi_tenant": st.multi_tenant,
                 "memberships": memberships,
                 "current_tenant": current_tenant,
                 "tenant_domain_suffix": st.tenant_domain_suffix,
@@ -2015,6 +2016,7 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
     Json(serde_json::json!({
         "authenticated": false,
         "oidc_enabled": oidc_enabled,
+        "multi_tenant": st.multi_tenant,
         "tenant_domain_suffix": st.tenant_domain_suffix,
     }))
     .into_response()

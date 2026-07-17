@@ -1008,6 +1008,43 @@ async fn discover_malformed_email_returns_empty() {
     assert!(!raw.contains("tenant_id"));
 }
 
+/// No `email` query param at all returns the same uniform empty body as a
+/// malformed email -- the missing-param branch must not 400 or diverge.
+#[tokio::test]
+#[serial]
+async fn discover_without_email_param_returns_empty() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let app = discover_app(
+        store,
+        true,
+        quark::abuse::ratelimit::RateLimiter::disabled(),
+    );
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/sso/discover")
+                .header("cf-connecting-ip", "5.5.5.5")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let raw = String::from_utf8_lossy(&body).to_string();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({})
+    );
+    assert!(!raw.contains("tenant_id"));
+}
+
 /// OSS (`multi_tenant = false`) 404s the discovery endpoint entirely.
 #[tokio::test]
 #[serial]
