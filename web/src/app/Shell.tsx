@@ -4,6 +4,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { QuarkMark } from "@/components/brand/QuarkMark";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
+import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import { useT } from "@/i18n";
 import { api } from "@/lib/api";
 import { clearToken } from "@/lib/auth";
@@ -102,7 +103,9 @@ export function Shell() {
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-end gap-2 border-b border-border px-4">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
+          <WorkspaceSwitcher />
+          <div className="flex-1" />
           <LanguageSwitcher />
           <Button
             variant="ghost"
