@@ -37,4 +37,16 @@ describe("CreateWorkspaceForm", () => {
     await userEvent.click(screen.getByRole("button", { name: /create workspace/i }));
     expect(await screen.findByText(/too many requests/i)).toBeInTheDocument();
   });
+
+  it("links the error to the slug input via aria-describedby", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 409 }));
+    render(withProviders(<CreateWorkspaceForm />));
+    const slugInput = screen.getByLabelText(/slug/i);
+    expect(slugInput).not.toHaveAttribute("aria-invalid", "true");
+    await userEvent.type(screen.getByLabelText(/workspace name/i), "Acme");
+    await userEvent.click(screen.getByRole("button", { name: /create workspace/i }));
+    const error = await screen.findByRole("alert");
+    expect(slugInput).toHaveAttribute("aria-invalid", "true");
+    expect(slugInput).toHaveAttribute("aria-describedby", error.id);
+  });
 });

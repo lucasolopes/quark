@@ -1235,11 +1235,13 @@ async fn redirect(
                 }
             }
             if let Some(max) = rec.max_visits {
-                let n = match st
-                    .store
-                    .bump_visits(crate::tenant::DEFAULT_TENANT, id)
-                    .await
-                {
+                // Count the visit against the tenant the link was resolved
+                // under (`route.tenant_id`, the same scope `cache.get` used
+                // above), not a hardcoded `DEFAULT_TENANT`: on a cloud
+                // subdomain the counter must land on the owning tenant. On the
+                // shared host / OSS `route.tenant_id` is already
+                // `DEFAULT_TENANT`, so this is byte-for-byte the old behavior.
+                let n = match st.store.bump_visits(route.tenant_id, id).await {
                     Ok(n) => n,
                     Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
                 };
@@ -1661,6 +1663,14 @@ async fn oidc_login(
                     "organization login requires a cloud deployment",
                 )
                     .into_response();
+            }
+            // Rate-limit the org-login start by IP (LUC-51): the generic 404
+            // already hides slug existence by body, but an unthrottled caller
+            // could still probe slugs by response timing (unknown = 1 query vs
+            // configured = more). A per-IP brake closes that side channel.
+            let ip = client_ip(&headers, &st.real_ip_header, None);
+            if !st.ratelimiter.check(&ip, now()).await {
+                return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
             }
             // Both "unknown slug" and "known tenant, no IdP of its own" return
             // the exact same 404 body: an unauthenticated caller must not be
@@ -3012,7 +3022,8 @@ async fn admin_invites_delete(
     if st.store.delete_invite(p.tenant, id).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    StatusCode::OK.into_response()
+    // 204 to match the other admin deletes (LUC-51): a successful delete has no body.
+    StatusCode::NO_CONTENT.into_response()
 }
 
 // --- Per-tenant OIDC config CRUD (multi-tenancy P2d Task 2), cloud-only ---
@@ -3890,7 +3901,8 @@ async fn admin_link_delete(
     }
     st.cache.invalidate(id).await;
     st.webhooks.emit_if_in_memory(ev);
-    StatusCode::OK.into_response()
+    // 204 to match the other admin deletes (LUC-51): a successful delete has no body.
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn admin_link_patch(

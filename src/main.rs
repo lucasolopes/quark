@@ -329,8 +329,14 @@ async fn main() {
         public_host.clone(),
         None,
     ));
-    let dns: Arc<dyn quark::dns::Dns> =
-        Arc::new(quark::dns::HickoryDns::new().expect("failed to build DNS resolver"));
+    // DNS is used only by custom-domain / SSO-domain TXT verification, both
+    // cloud-only. In OSS (`!multi_tenant`) nothing calls it, so skip building
+    // the system resolver and use the inert `NullDns` (LUC-51).
+    let dns: Arc<dyn quark::dns::Dns> = if multi_tenant {
+        Arc::new(quark::dns::HickoryDns::new().expect("failed to build DNS resolver"))
+    } else {
+        Arc::new(quark::dns::NullDns)
+    };
 
     // Keycloak-hosted auth (multi-tenancy P2e, opt-in via
     // QUARK_KEYCLOAK_BASE_URL). Foundation only here: the trait + HTTP client +

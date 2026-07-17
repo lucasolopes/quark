@@ -65,6 +65,7 @@ export const ptBR: Messages = {
     creating: "Criando…",
     slugTaken: "Esse slug já está em uso. Escolha outro.",
     createError: "Não deu pra criar o workspace. Tente de novo.",
+    switchError: "Não deu pra mudar de workspace. Tente de novo.",
   },
   links: {
     heading: "Links",
@@ -613,6 +614,7 @@ export const ptBR: Messages = {
     columnExpires: "Expira",
     columnCreated: "Criado",
     loadError: "Não foi possível carregar os convites.",
+    forbidden: "Você não tem permissão para ver os membros.",
     createdSuccess: "Convite enviado.",
     createGenericError: "Não foi possível enviar o convite. Tente de novo.",
     revokedSuccess: "Convite revogado.",

@@ -63,6 +63,7 @@ export const en = {
     creating: "Creating…",
     slugTaken: "That slug is already taken. Pick another.",
     createError: "Could not create the workspace. Try again.",
+    switchError: "Could not switch workspaces. Try again.",
   },
   links: {
     heading: "Links",
@@ -611,6 +612,7 @@ export const en = {
     columnExpires: "Expires",
     columnCreated: "Created",
     loadError: "Could not load the invites.",
+    forbidden: "You don't have permission to view members.",
     createdSuccess: "Invite sent.",
     createGenericError: "Could not send the invite. Try again.",
     revokedSuccess: "Invite revoked.",

@@ -530,7 +530,7 @@ async fn delete_invite_http_removes_it() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     assert!(store.list_invites(tenant).await.unwrap().is_empty());
 
     // Deleting again (already gone) -> 404.

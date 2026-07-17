@@ -4,6 +4,7 @@ import { QuarkMark } from "@/components/brand/QuarkMark";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useT } from "@/i18n";
+import { ApiError } from "@/lib/api";
 import { useSwitchWorkspace } from "@/lib/queries";
 import type { Membership } from "@/lib/types";
 
@@ -16,6 +17,13 @@ export function Onboarding({ memberships }: { memberships: Membership[] }) {
   const t = useT();
   const switchWs = useSwitchWorkspace();
   const hasExisting = memberships.length > 0;
+
+  const switchErrorText =
+    switchWs.error instanceof ApiError && switchWs.error.status === 429
+      ? t("common.rateLimited")
+      : switchWs.isError
+        ? t("onboarding.switchError")
+        : null;
 
   return (
     <div className="flex min-h-svh items-center justify-center bg-background p-4">
@@ -45,6 +53,9 @@ export function Onboarding({ memberships }: { memberships: Membership[] }) {
                   <span className="font-mono text-xs text-muted-foreground">{m.role}</span>
                 </Button>
               ))}
+              {switchErrorText && (
+                <p role="alert" className="text-sm text-destructive">{switchErrorText}</p>
+              )}
               <div className="my-1 flex items-center gap-3 text-xs text-muted-foreground">
                 <span className="h-px flex-1 bg-border" />
                 {t("onboarding.orCreate")}

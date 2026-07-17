@@ -63,10 +63,12 @@ export function CreateWorkspaceForm({ onCreated }: { onCreated?: () => void }) {
           value={effectiveSlug}
           onChange={(e) => { setSlugEdited(true); setSlug(slugify(e.target.value)); }}
           className="font-mono"
+          aria-invalid={mutation.isError}
+          aria-describedby={mutation.isError ? "ws-slug-error" : undefined}
         />
         <p className="text-xs text-muted-foreground">{t("onboarding.slugHint")}</p>
       </div>
-      {errorText && <p role="alert" className="text-sm text-destructive">{errorText}</p>}
+      {errorText && <p id="ws-slug-error" role="alert" className="text-sm text-destructive">{errorText}</p>}
       <Button type="submit" disabled={!name.trim() || !effectiveSlug || mutation.isPending} className="mt-1">
         {mutation.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
         {mutation.isPending ? t("onboarding.creating") : t("onboarding.submit")}
