@@ -17,7 +17,15 @@ pub const DEFAULT_TENANT: TenantId = TenantId(0);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tenant {
     pub id: TenantId,
+    /// Human-friendly display name; freely mutable.
     pub name: String,
+    /// URL/realm-safe identifier, validated at create (`is_valid_slug`).
+    /// IMMUTABLE by contract (LUC-51): no endpoint changes a tenant's slug
+    /// after creation. It is baked into the auto-provisioned subdomain
+    /// (`<slug>.<suffix>`, materialized as a `domains` row), the Keycloak realm
+    /// name, and the derived OIDC issuer — renaming it would orphan the
+    /// subdomain `domains` row and break login. A future rename feature MUST
+    /// migrate those together; do not add a bare slug-update path.
     pub slug: String,
     pub created: u64,
 }

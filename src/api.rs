@@ -3022,7 +3022,8 @@ async fn admin_invites_delete(
     if st.store.delete_invite(p.tenant, id).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    StatusCode::OK.into_response()
+    // 204 to match the other admin deletes (LUC-51): a successful delete has no body.
+    StatusCode::NO_CONTENT.into_response()
 }
 
 // --- Per-tenant OIDC config CRUD (multi-tenancy P2d Task 2), cloud-only ---
@@ -3900,7 +3901,8 @@ async fn admin_link_delete(
     }
     st.cache.invalidate(id).await;
     st.webhooks.emit_if_in_memory(ev);
-    StatusCode::OK.into_response()
+    // 204 to match the other admin deletes (LUC-51): a successful delete has no body.
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn admin_link_patch(

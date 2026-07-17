@@ -1330,7 +1330,7 @@ async fn admin_delete_link_becomes_404_on_redirect() {
         )
         .await
         .unwrap();
-    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
     let r = app
         .oneshot(
             Request::get(format!("/{code}"))
