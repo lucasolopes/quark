@@ -1,5 +1,6 @@
 use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::auth::ApiToken;
+use crate::domain::{Domain, DomainStatus};
 use crate::pixel::PixelConfig;
 use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError};
 use crate::tenant::{Membership, Tenant, TenantId, User, DEFAULT_TENANT};
@@ -908,6 +909,44 @@ impl Store for LmdbStore {
             out.push(serde_json::from_slice(bytes)?);
         }
         Ok(out)
+    }
+
+    // Custom domains (P3) are cloud-only: OSS never routes to a custom host,
+    // and the admin CRUD endpoints are gated behind `multi_tenant`, so these
+    // are never actually invoked on this backend. Kept as clear "unsupported"
+    // stubs instead of `unimplemented!()` so the trait stays total.
+    async fn next_domain_id(&self) -> Result<u64, StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn get_domain_by_host(&self, _host: &str) -> Result<Option<Domain>, StoreError> {
+        Ok(None)
+    }
+
+    async fn get_domain(&self, _tenant: TenantId, _id: u64) -> Result<Option<Domain>, StoreError> {
+        Ok(None)
+    }
+
+    async fn list_domains(&self, _tenant: TenantId) -> Result<Vec<Domain>, StoreError> {
+        Ok(Vec::new())
+    }
+
+    async fn put_domain(&self, _domain: &Domain) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn set_domain_status(
+        &self,
+        _tenant: TenantId,
+        _id: u64,
+        _status: DomainStatus,
+        _verified_at: Option<u64>,
+    ) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn delete_domain(&self, _tenant: TenantId, _id: u64) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
     }
 
     // The durable webhook outbox is Postgres-only. On the single-node LMDB

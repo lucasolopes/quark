@@ -1,5 +1,6 @@
 use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::auth::ApiToken;
+use crate::domain::{Domain, DomainStatus};
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant};
 use crate::tenant::{Membership, Role, Tenant, TenantId, User};
@@ -85,7 +86,7 @@ const CLAIM_LEASE_SECS: u64 = 60;
 
 /// Every tenant-owned table: gets a `tenant_id` column and an RLS policy.
 /// (Global counters/sequences and lease tables are intentionally absent.)
-const TENANT_OWNED_TABLES: [&str; 13] = [
+const TENANT_OWNED_TABLES: [&str; 14] = [
     "links",
     "aliases",
     "link_health",
@@ -99,6 +100,7 @@ const TENANT_OWNED_TABLES: [&str; 13] = [
     "click_events",
     "webhook_deliveries",
     "sheets_connection",
+    "domains",
 ];
 
 /// Escapes `LIKE`/`ILIKE` wildcards (default escape char = `\`) so that the
@@ -146,6 +148,30 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
             password_hash,
         },
     ))
+}
+
+/// Maps a `domains` row into a `Domain`.
+fn row_to_domain(r: &PgRow) -> Result<Domain, StoreError> {
+    let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+    let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
+    let host: String = r.try_get("host").map_err(StoreError::backend)?;
+    let token: String = r.try_get("token").map_err(StoreError::backend)?;
+    let status: String = r.try_get("status").map_err(StoreError::backend)?;
+    let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    let verified_at: Option<i64> = r.try_get("verified_at").map_err(StoreError::backend)?;
+    let status = match status.as_str() {
+        "verified" => DomainStatus::Verified,
+        _ => DomainStatus::Pending,
+    };
+    Ok(Domain {
+        id: id as u64,
+        tenant_id: crate::tenant::TenantId(tenant_id as u64),
+        host,
+        token,
+        status,
+        created: created as u64,
+        verified_at: verified_at.map(|v| v as u64),
+    })
 }
 
 /// Maps a `webhooks` row into a `WebhookSubscription`.
@@ -495,6 +521,10 @@ impl PostgresStore {
                 "CREATE INDEX IF NOT EXISTS memberships_by_tenant ON memberships (tenant_id)",
                 // --- Multi-tenancy (P1b): sessions carry the authenticated user ---
                 "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 0",
+                // --- Multi-tenancy (P3): custom domains ---
+                // Starts at 1 so it never collides with the reserved shared-domain sentinel (0).
+                "CREATE SEQUENCE IF NOT EXISTS quark_domain_id_seq START WITH 1",
+                "CREATE TABLE IF NOT EXISTS domains (id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL DEFAULT 0, host TEXT NOT NULL UNIQUE, token TEXT NOT NULL, status TEXT NOT NULL, created BIGINT NOT NULL, verified_at BIGINT)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -594,6 +624,7 @@ impl PostgresStore {
                 "CREATE INDEX IF NOT EXISTS pixels_by_tenant ON pixels (tenant_id, id)",
                 "CREATE INDEX IF NOT EXISTS api_tokens_by_tenant ON api_tokens (tenant_id, id)",
                 "CREATE INDEX IF NOT EXISTS click_counters_by_tenant ON click_counters (tenant_id, id, dimension, bucket)",
+                "CREATE INDEX IF NOT EXISTS domains_by_tenant_id ON domains (tenant_id)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -653,17 +684,24 @@ impl PostgresStore {
             // itself carries the *subscription's* tenant, so a mismatched
             // `WITH CHECK` would reject legitimate enqueues.
             //
-            // RLS stays merely ENABLED (not FORCED) on all six; the app-level
+            // Also excepted: `domains` (P3 custom domains). The public redirect
+            // looks a domain up by `Host` before the tenant is known at all
+            // (`get_domain_by_host`), on the bare pool with no `app.tenant_id`
+            // set — FORCE would make that lookup fail closed and break every
+            // custom-domain redirect.
+            //
+            // RLS stays merely ENABLED (not FORCED) on all seven; the app-level
             // `WHERE tenant_id` predicate remains the isolation layer for their
             // tenant-scoped methods (`list_api_tokens`, `put_session`, ...) and
             // for the bare-pool accessors above.
-            const NOT_FORCED: [&str; 6] = [
+            const NOT_FORCED: [&str; 7] = [
                 "api_tokens",
                 "sessions",
                 "click_counters",
                 "stats_meta",
                 "click_events",
                 "webhook_deliveries",
+                "domains",
             ];
             if self.multi_tenant {
                 for table in TENANT_OWNED_TABLES
@@ -693,13 +731,14 @@ impl PostgresStore {
     /// OSS/default-tenant path keeps working after a reset).
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships RESTART IDENTITY",
+            "TRUNCATE links, aliases, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships, domains RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_pixel_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_user_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_tenant_id_seq RESTART WITH 1",
+            "ALTER SEQUENCE quark_domain_id_seq RESTART WITH 1",
             "INSERT INTO tenants (id, name, slug, created) VALUES (0, 'default', 'default', 0) ON CONFLICT (id) DO NOTHING",
         ] {
             sqlx::query(q)
@@ -1801,6 +1840,124 @@ impl Store for PostgresStore {
         .await
         .map_err(StoreError::backend)?;
         rows.iter().map(row_to_membership).collect()
+    }
+
+    // --- Custom domains (P3), cloud-only ---
+    async fn next_domain_id(&self) -> Result<u64, StoreError> {
+        let row = sqlx::query("SELECT nextval('quark_domain_id_seq') AS id")
+            .fetch_one(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
+        Ok(id as u64)
+    }
+
+    async fn get_domain_by_host(&self, host: &str) -> Result<Option<Domain>, StoreError> {
+        // Deliberately bare: no tenant transaction, no `app.tenant_id`. The
+        // redirect path only has a `Host` header before it knows the tenant,
+        // so this runs on the read pool directly (`domains` is in
+        // `NOT_FORCED` for exactly this reason).
+        let row = sqlx::query(
+            "SELECT id, tenant_id, host, token, status, created, verified_at FROM domains WHERE host = $1",
+        )
+        .bind(host)
+        .fetch_optional(&self.read)
+        .await
+        .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => Ok(Some(row_to_domain(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_domain(&self, tenant: TenantId, id: u64) -> Result<Option<Domain>, StoreError> {
+        let row = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, tenant_id, host, token, status, created, verified_at FROM domains WHERE tenant_id = $1 AND id = $2",
+            )
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .fetch_optional(&mut *c)
+            .await
+        });
+        match row {
+            Some(r) => Ok(Some(row_to_domain(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_domains(&self, tenant: TenantId) -> Result<Vec<Domain>, StoreError> {
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, tenant_id, host, token, status, created, verified_at FROM domains WHERE tenant_id = $1 ORDER BY id",
+            )
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
+        rows.iter().map(row_to_domain).collect()
+    }
+
+    async fn put_domain(&self, domain: &Domain) -> Result<(), StoreError> {
+        let status = match domain.status {
+            DomainStatus::Pending => "pending",
+            DomainStatus::Verified => "verified",
+        };
+        with_write!(self, domain.tenant_id, |c| {
+            sqlx::query(
+                "INSERT INTO domains (id, tenant_id, host, token, status, created, verified_at) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7) \
+                 ON CONFLICT (id) DO UPDATE SET \
+                   tenant_id = EXCLUDED.tenant_id, host = EXCLUDED.host, token = EXCLUDED.token, \
+                   status = EXCLUDED.status, created = EXCLUDED.created, verified_at = EXCLUDED.verified_at",
+            )
+            .bind(domain.id as i64)
+            .bind(domain.tenant_id.0 as i64)
+            .bind(&domain.host)
+            .bind(&domain.token)
+            .bind(status)
+            .bind(domain.created as i64)
+            .bind(domain.verified_at.map(|v| v as i64))
+            .execute(&mut *c)
+            .await
+        });
+        Ok(())
+    }
+
+    async fn set_domain_status(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        status: DomainStatus,
+        verified_at: Option<u64>,
+    ) -> Result<(), StoreError> {
+        let status = match status {
+            DomainStatus::Pending => "pending",
+            DomainStatus::Verified => "verified",
+        };
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "UPDATE domains SET status = $1, verified_at = $2 WHERE tenant_id = $3 AND id = $4",
+            )
+            .bind(status)
+            .bind(verified_at.map(|v| v as i64))
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .execute(&mut *c)
+            .await
+        });
+        Ok(())
+    }
+
+    async fn delete_domain(&self, tenant: TenantId, id: u64) -> Result<(), StoreError> {
+        with_write!(self, tenant, |c| {
+            sqlx::query("DELETE FROM domains WHERE tenant_id = $1 AND id = $2")
+                .bind(tenant.0 as i64)
+                .bind(id as i64)
+                .execute(&mut *c)
+                .await
+        });
+        Ok(())
     }
 
     async fn enqueue_deliveries(&self, rows: &[OutboxRow]) -> Result<(), StoreError> {

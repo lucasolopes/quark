@@ -1190,6 +1190,47 @@ mod tests {
         ) -> Result<Vec<crate::tenant::Membership>, StoreError> {
             unimplemented!()
         }
+        async fn next_domain_id(&self) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
+        async fn get_domain_by_host(
+            &self,
+            _host: &str,
+        ) -> Result<Option<crate::domain::Domain>, StoreError> {
+            unimplemented!()
+        }
+        async fn get_domain(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+        ) -> Result<Option<crate::domain::Domain>, StoreError> {
+            unimplemented!()
+        }
+        async fn list_domains(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Vec<crate::domain::Domain>, StoreError> {
+            unimplemented!()
+        }
+        async fn put_domain(&self, _domain: &crate::domain::Domain) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn set_domain_status(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+            _status: crate::domain::DomainStatus,
+            _verified_at: Option<u64>,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn delete_domain(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
         async fn enqueue_deliveries(&self, _rows: &[OutboxRow]) -> Result<(), StoreError> {
             unimplemented!()
         }

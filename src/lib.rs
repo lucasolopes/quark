@@ -5,6 +5,7 @@ pub mod auth;
 pub mod cache;
 pub mod cluster;
 pub mod codec;
+pub mod domain;
 pub mod health;
 pub mod import;
 pub mod invalidate;

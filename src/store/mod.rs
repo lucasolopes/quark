@@ -3,6 +3,7 @@ pub mod postgres;
 
 use crate::analytics::AnalyticsSink;
 use crate::auth::ApiToken;
+use crate::domain::{Domain, DomainStatus};
 use crate::pixel::PixelConfig;
 use crate::tenant::{Membership, Tenant, TenantId, User};
 use crate::webhooks::WebhookSubscription;
@@ -533,6 +534,31 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<Option<Membership>, StoreError>;
     /// All memberships for a user, across tenants.
     async fn list_memberships_for_user(&self, user_id: u64) -> Result<Vec<Membership>, StoreError>;
+
+    // --- Custom domains (multi-tenancy P3), cloud-only ---
+    /// Allocates the next global domain id. `0` is reserved (`SHARED_DOMAIN_ID`).
+    async fn next_domain_id(&self) -> Result<u64, StoreError>;
+    /// Looks up a domain by host, across all tenants. Runs on the bare pool
+    /// with no tenant scoping: the redirect handler only has a `Host` header
+    /// before it knows which tenant owns it, so this is the one deliberately
+    /// public, cross-tenant domain lookup.
+    async fn get_domain_by_host(&self, host: &str) -> Result<Option<Domain>, StoreError>;
+    /// Reads a domain by id, scoped to `tenant`.
+    async fn get_domain(&self, tenant: TenantId, id: u64) -> Result<Option<Domain>, StoreError>;
+    /// Lists all domains owned by `tenant`.
+    async fn list_domains(&self, tenant: TenantId) -> Result<Vec<Domain>, StoreError>;
+    /// Upserts a domain row.
+    async fn put_domain(&self, domain: &Domain) -> Result<(), StoreError>;
+    /// Updates a domain's verification status, scoped to `tenant`.
+    async fn set_domain_status(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        status: DomainStatus,
+        verified_at: Option<u64>,
+    ) -> Result<(), StoreError>;
+    /// Deletes a domain, scoped to `tenant`.
+    async fn delete_domain(&self, tenant: TenantId, id: u64) -> Result<(), StoreError>;
 
     /// Durable webhook outbox (scale-audit #3), Postgres-only. Inserts one
     /// delivery row per (event, subscription) with `ON CONFLICT (delivery_key)
