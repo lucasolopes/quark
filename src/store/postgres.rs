@@ -303,6 +303,16 @@ fn row_to_oidc_config(r: &PgRow, sb: &Option<SecretBox>) -> Result<TenantOidcCon
     })
 }
 
+/// True when `secret` is a legacy plaintext value worth re-encrypting: present,
+/// non-empty, and not already carrying the `enc:v1:` seal. Used by
+/// `reencrypt_legacy_secrets` to skip rows that are empty or already sealed.
+fn is_legacy_plaintext(secret: &Option<String>) -> bool {
+    match secret {
+        Some(s) => !s.is_empty() && !s.starts_with("enc:v1:"),
+        None => false,
+    }
+}
+
 /// Maps a `webhooks` row into a `WebhookSubscription`.
 fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
     let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
@@ -2008,6 +2018,68 @@ impl Store for PostgresStore {
             }
             None => Ok(None),
         }
+    }
+
+    async fn reencrypt_legacy_secrets(&self) -> Result<usize, StoreError> {
+        // No key configured: nothing to do, and no round-trip worth paying for.
+        if self.secretbox.is_none() {
+            return Ok(0);
+        }
+        let mut count = 0usize;
+
+        // oidc_configs: `NOT_FORCED` (see the const above), so a bare scan on
+        // the read pool sees every tenant's row regardless of RLS context —
+        // same reasoning `get_oidc_config_bare`/`get_tenant_by_slug` rely on.
+        let rows =
+            sqlx::query("SELECT tenant_id, blob->>'client_secret' AS secret FROM oidc_configs")
+                .fetch_all(&self.read)
+                .await
+                .map_err(StoreError::backend)?;
+        for r in rows {
+            let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
+            let secret: Option<String> = r.try_get("secret").map_err(StoreError::backend)?;
+            if !is_legacy_plaintext(&secret) {
+                continue;
+            }
+            let tenant = TenantId(tenant_id as u64);
+            // get→put round-trip: `get_oidc_config_bare` opens (passes legacy
+            // plaintext through unchanged), `put_oidc_config` seals it fresh.
+            // No hand-rolled crypto here, just the existing seal/open path.
+            if let Some(config) = self.get_oidc_config_bare(tenant).await? {
+                self.put_oidc_config(&config).await?;
+                count += 1;
+            }
+        }
+
+        // sheets_connection IS force-RLS'd in multi-tenant mode (it is not in
+        // `NOT_FORCED`), so a bare scan would silently miss every tenant's row
+        // there. Enumerate tenants instead and check each one inside its own
+        // tenant-scoped transaction, mirroring `get_sheets_connection`'s own
+        // read path (`with_write!`, for read-your-writes).
+        let tenants = self.list_tenants().await?;
+        for t in &tenants {
+            let row = with_write!(self, t.id, |c| {
+                sqlx::query(
+                    "SELECT blob->>'refresh_token' AS secret FROM sheets_connection WHERE tenant_id = $1",
+                )
+                .bind(t.id.0 as i64)
+                .fetch_optional(&mut *c)
+                .await
+            });
+            let Some(row) = row else {
+                continue;
+            };
+            let secret: Option<String> = row.try_get("secret").map_err(StoreError::backend)?;
+            if !is_legacy_plaintext(&secret) {
+                continue;
+            }
+            if let Some(conn) = self.get_sheets_connection(t.id).await? {
+                self.put_sheets_connection(t.id, &conn).await?;
+                count += 1;
+            }
+        }
+
+        Ok(count)
     }
 
     async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError> {

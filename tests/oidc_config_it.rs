@@ -640,6 +640,7 @@ async fn non_full_caller_is_403_on_all_three_oidc_config_endpoints() {
 /// gate runs before authentication. Mirrors
 /// `invites_it::oss_invites_endpoints_are_404_without_postgres`.
 #[tokio::test]
+#[serial]
 async fn oidc_config_endpoints_404_in_oss_without_postgres() {
     let dir = tempfile::tempdir().unwrap();
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
@@ -695,6 +696,7 @@ async fn oidc_config_endpoints_404_in_oss_without_postgres() {
 /// proves the actual routes wired into `router()` carry the gate, not just
 /// the functions behind them.
 #[tokio::test]
+#[serial]
 async fn oss_login_and_callback_404_without_oidc_configured_or_postgres() {
     let dir = tempfile::tempdir().unwrap();
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
@@ -756,6 +758,7 @@ async fn oss_login_and_callback_404_without_oidc_configured_or_postgres() {
 /// in the `api.rs` unit tests (which calls the handler directly) but through
 /// the actual route.
 #[tokio::test]
+#[serial]
 async fn oss_org_login_404_at_router_level() {
     let dir = tempfile::tempdir().unwrap();
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
@@ -1171,4 +1174,110 @@ async fn legacy_plaintext_refresh_token_is_read_then_upgraded_on_repeat_write() 
         raw.starts_with("enc:v1:"),
         "raw refresh_token column must be sealed after the re-put, got: {raw}"
     );
+}
+
+// --- LUC-48 Task 3: boot backfill re-encrypts legacy plaintext secrets -----
+
+/// A legacy `client_secret` (written before the key existed) is found and
+/// sealed by `reencrypt_legacy_secrets` once a store is opened with the key;
+/// the decrypted value is unchanged, and a second pass finds nothing left to
+/// do (idempotent).
+#[tokio::test]
+#[serial]
+async fn backfill_reencrypts_legacy_oidc_client_secret_and_is_idempotent() {
+    let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+
+    // Phase 1: no key. Write a plaintext secret.
+    let store1 = PostgresStore::open(&url, true).await.unwrap();
+    store1.reset_for_tests().await.unwrap();
+    let a = make_tenant(&store1, "oidc-backfill-a").await;
+    let config = cfg(a, "https://idp.acme.example");
+    store1.put_oidc_config(&config).await.unwrap();
+
+    // Phase 2: a NEW store opened WITH the key.
+    std::env::set_var("QUARK_ENCRYPTION_KEY", test_key());
+    let store2 = PostgresStore::open(&url, true).await.unwrap();
+    std::env::remove_var("QUARK_ENCRYPTION_KEY");
+
+    let n = store2.reencrypt_legacy_secrets().await.unwrap();
+    assert_eq!(n, 1, "exactly the one legacy row must be re-encrypted");
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
+    let raw = raw_oidc_client_secret(&pool, a).await;
+    assert!(
+        raw.starts_with("enc:v1:"),
+        "raw client_secret column must be sealed after the backfill, got: {raw}"
+    );
+    let got = store2.get_oidc_config_bare(a).await.unwrap().unwrap();
+    assert_eq!(got.client_secret, config.client_secret);
+
+    // Running again finds nothing left to re-encrypt.
+    let n2 = store2.reencrypt_legacy_secrets().await.unwrap();
+    assert_eq!(n2, 0, "already-sealed rows must be skipped (idempotent)");
+}
+
+/// Same shape as the oidc case above, for the sheets `refresh_token`.
+#[tokio::test]
+#[serial]
+async fn backfill_reencrypts_legacy_sheets_refresh_token_and_is_idempotent() {
+    let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+
+    let store1 = PostgresStore::open(&url, true).await.unwrap();
+    store1.reset_for_tests().await.unwrap();
+    let a = make_tenant(&store1, "sheets-backfill-a").await;
+    let conn = sheets_connection("refresh-tok-backfill");
+    store1.put_sheets_connection(a, &conn).await.unwrap();
+
+    std::env::set_var("QUARK_ENCRYPTION_KEY", test_key());
+    let store2 = PostgresStore::open(&url, true).await.unwrap();
+    std::env::remove_var("QUARK_ENCRYPTION_KEY");
+
+    let n = store2.reencrypt_legacy_secrets().await.unwrap();
+    assert_eq!(n, 1, "exactly the one legacy row must be re-encrypted");
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
+    let raw = raw_sheets_refresh_token(&pool, a).await;
+    assert!(
+        raw.starts_with("enc:v1:"),
+        "raw refresh_token column must be sealed after the backfill, got: {raw}"
+    );
+    let got = store2.get_sheets_connection(a).await.unwrap().unwrap();
+    assert_eq!(got.refresh_token, conn.refresh_token);
+
+    let n2 = store2.reencrypt_legacy_secrets().await.unwrap();
+    assert_eq!(n2, 0, "already-sealed rows must be skipped (idempotent)");
+}
+
+/// Without a key (`secretbox` is `None`), the backfill is a no-op: returns 0
+/// and leaves the plaintext column exactly as it was.
+#[tokio::test]
+#[serial]
+async fn backfill_is_noop_without_a_key() {
+    let Some((store, pool)) = fresh_with_pool().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let a = make_tenant(&store, "oidc-backfill-nokey-a").await;
+    let config = cfg(a, "https://idp.acme.example");
+    store.put_oidc_config(&config).await.unwrap();
+
+    let n = store.reencrypt_legacy_secrets().await.unwrap();
+    assert_eq!(n, 0, "no key configured means nothing to backfill");
+
+    let raw = raw_oidc_client_secret(&pool, a).await;
+    assert_eq!(raw, config.client_secret);
 }
