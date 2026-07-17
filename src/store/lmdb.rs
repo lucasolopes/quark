@@ -34,6 +34,18 @@ fn tprefix(tenant: TenantId) -> [u8; 8] {
     tenant.0.to_be_bytes()
 }
 
+/// Prefixes a big-endian domain id onto a key, the same shape as `tkey` but
+/// for the domain-scoped `aliases` sub-db (P3 Task 2: alias namespaces are
+/// per-domain, not per-tenant). `DEFAULT_TENANT` and `SHARED_DOMAIN_ID` are
+/// both numerically `0`, so this is byte-compatible with alias entries
+/// written before this change (single-tenant OSS never notices the rework).
+fn dkey(domain_id: u64, key: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + key.len());
+    out.extend_from_slice(&domain_id.to_be_bytes());
+    out.extend_from_slice(key);
+    out
+}
+
 /// Decodes the `u64` id stored in the low 8 bytes of a tenant-prefixed key.
 fn id_from_tkey(key: &[u8]) -> u64 {
     let mut buf = [0u8; 8];
@@ -281,23 +293,28 @@ impl Store for LmdbStore {
         Ok(())
     }
 
-    async fn get_alias(&self, tenant: TenantId, alias: &str) -> Result<Option<u64>, StoreError> {
+    async fn get_alias(&self, domain_id: u64, alias: &str) -> Result<Option<u64>, StoreError> {
         let rtxn = self.env.read_txn()?;
-        Ok(self.aliases.get(&rtxn, &tkey(tenant, alias.as_bytes()))?)
+        Ok(self
+            .aliases
+            .get(&rtxn, &dkey(domain_id, alias.as_bytes()))?)
     }
 
     /// Writes alias + link in a single transaction: either both or neither.
     /// Avoids an orphaned link if the process fails between the two writes.
+    /// The alias is keyed by `domain_id` (per-domain namespace); the link
+    /// stays keyed by `tenant` (link ownership is unaffected by this task).
     async fn put_alias_and_link(
         &self,
         tenant: TenantId,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
     ) -> Result<bool, StoreError> {
         let bytes = serde_json::to_vec(rec)?;
         let mut wtxn = self.env.write_txn()?;
-        let akey = tkey(tenant, alias.as_bytes());
+        let akey = dkey(domain_id, alias.as_bytes());
         if self.aliases.get(&wtxn, &akey)?.is_some() {
             return Ok(false);
         }
@@ -325,12 +342,14 @@ impl Store for LmdbStore {
     async fn put_alias_and_link_tx(
         &self,
         tenant: TenantId,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
         _deliveries: &[OutboxRow],
     ) -> Result<bool, StoreError> {
-        self.put_alias_and_link(tenant, alias, id, rec).await
+        self.put_alias_and_link(tenant, domain_id, alias, id, rec)
+            .await
     }
 
     async fn delete_link_tx(
@@ -1252,6 +1271,7 @@ mod tests {
         }
         s.put_alias_and_link(
             crate::tenant::DEFAULT_TENANT,
+            crate::domain::SHARED_DOMAIN_ID,
             "promo",
             10,
             &rec("https://promo.com"),
@@ -1291,7 +1311,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            s.get_alias(crate::tenant::DEFAULT_TENANT, "promo")
+            s.get_alias(crate::domain::SHARED_DOMAIN_ID, "promo")
                 .await
                 .unwrap(),
             None

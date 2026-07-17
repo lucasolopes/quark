@@ -317,15 +317,27 @@ async fn alias_is_atomic_no_orphan_pg() {
         password_hash: None,
     };
     assert!(s
-        .put_alias_and_link(quark::tenant::DEFAULT_TENANT, "promo", 5, &rec)
+        .put_alias_and_link(
+            quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
+            "promo",
+            5,
+            &rec
+        )
         .await
         .unwrap());
     assert!(!s
-        .put_alias_and_link(quark::tenant::DEFAULT_TENANT, "promo", 9, &rec)
+        .put_alias_and_link(
+            quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
+            "promo",
+            9,
+            &rec
+        )
         .await
         .unwrap());
     assert_eq!(
-        s.get_alias(quark::tenant::DEFAULT_TENANT, "promo")
+        s.get_alias(quark::domain::SHARED_DOMAIN_ID, "promo")
             .await
             .unwrap(),
         Some(5)
@@ -758,6 +770,7 @@ async fn put_alias_and_link_tx_writes_all_atomically() {
     let claimed = s
         .put_alias_and_link_tx(
             quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
             "promo",
             5,
             &rec,
@@ -767,7 +780,7 @@ async fn put_alias_and_link_tx_writes_all_atomically() {
         .unwrap();
     assert!(claimed);
     assert_eq!(
-        s.get_alias(quark::tenant::DEFAULT_TENANT, "promo")
+        s.get_alias(quark::domain::SHARED_DOMAIN_ID, "promo")
             .await
             .unwrap(),
         Some(5)
@@ -796,6 +809,7 @@ async fn put_alias_and_link_tx_conflict_rolls_back_link_and_deliveries() {
     assert!(s
         .put_alias_and_link_tx(
             quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
             "promo",
             5,
             &plain_rec("https://first.com"),
@@ -808,6 +822,7 @@ async fn put_alias_and_link_tx_conflict_rolls_back_link_and_deliveries() {
     let claimed = s
         .put_alias_and_link_tx(
             quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
             "promo",
             9,
             &plain_rec("https://second.com"),
@@ -829,7 +844,7 @@ async fn put_alias_and_link_tx_conflict_rolls_back_link_and_deliveries() {
     );
     // The original alias still points at id 5.
     assert_eq!(
-        s.get_alias(quark::tenant::DEFAULT_TENANT, "promo")
+        s.get_alias(quark::domain::SHARED_DOMAIN_ID, "promo")
             .await
             .unwrap(),
         Some(5)

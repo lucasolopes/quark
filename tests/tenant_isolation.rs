@@ -174,16 +174,21 @@ async fn assert_full_isolation(store: Arc<dyn Store>) {
     );
 
     // --- alias ---
-    a.put_alias_and_link("full-sweep-alias", 9001, &r)
+    // P3 Task 2: the alias namespace moved from per-tenant to per-domain, so
+    // isolation here is asserted across two different `domain_id`s (11, 22)
+    // rather than across tenant A/B (the shared domain, `SHARED_DOMAIN_ID`,
+    // is deliberately NOT isolated: see `alias_namespace_is_per_domain` in
+    // `tests/domains_it.rs`).
+    a.put_alias_and_link(11, "full-sweep-alias", 9001, &r)
         .await
         .unwrap();
     assert!(
-        a.get_alias("full-sweep-alias").await.unwrap().is_some(),
-        "A must see its own alias"
+        a.get_alias(11, "full-sweep-alias").await.unwrap().is_some(),
+        "A must see its own alias in its own domain"
     );
     assert!(
-        b.get_alias("full-sweep-alias").await.unwrap().is_none(),
-        "B must not see A's alias"
+        a.get_alias(22, "full-sweep-alias").await.unwrap().is_none(),
+        "the same alias must not resolve in a different domain"
     );
 
     // --- webhook ---

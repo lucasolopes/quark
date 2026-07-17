@@ -34,12 +34,18 @@ async fn round_trip_via_trait_object() {
     assert_eq!(got.url, "https://example.com/dyn");
 
     assert!(store
-        .put_alias_and_link(quark::tenant::DEFAULT_TENANT, "promo-dyn", 999, &rec)
+        .put_alias_and_link(
+            quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
+            "promo-dyn",
+            999,
+            &rec
+        )
         .await
         .unwrap());
     assert_eq!(
         store
-            .get_alias(quark::tenant::DEFAULT_TENANT, "promo-dyn")
+            .get_alias(quark::domain::SHARED_DOMAIN_ID, "promo-dyn")
             .await
             .unwrap(),
         Some(999)

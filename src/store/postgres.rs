@@ -464,6 +464,10 @@ impl PostgresStore {
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS fallback_url TEXT",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS password_hash TEXT",
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
+                // P3 Task 2: alias namespace becomes per-domain instead of
+                // global. Existing rows have no domain opinion, so they
+                // default into the shared namespace (`SHARED_DOMAIN_ID` = 0).
+                "ALTER TABLE aliases ADD COLUMN IF NOT EXISTS domain_id BIGINT NOT NULL DEFAULT 0",
                 "CREATE TABLE IF NOT EXISTS link_health (id BIGINT PRIMARY KEY, checked_at BIGINT NOT NULL, status INT, healthy BOOLEAN NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS health_lease (id INT PRIMARY KEY, holder TEXT NOT NULL, expires_at BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, subject TEXT NOT NULL, display TEXT NOT NULL, scopes JSONB NOT NULL, created BIGINT NOT NULL, expires BIGINT NOT NULL)",
@@ -601,6 +605,28 @@ impl PostgresStore {
                     ALTER TABLE wellknown_documents ADD PRIMARY KEY (tenant_id, name); \
                   END IF; \
                 END $$",
+                // aliases: PK was `alias` alone (a single global namespace).
+                // Rework to `(domain_id, alias)` so the same alias string can
+                // exist once per domain (P3 Task 2). `array_agg(... ORDER BY
+                // attname)` sorts alphabetically, so the target is
+                // `['alias', 'domain_id']`.
+                "DO $$ \
+                BEGIN \
+                  IF NOT EXISTS ( \
+                    SELECT 1 \
+                    FROM pg_index i \
+                    JOIN pg_class c ON c.oid = i.indrelid \
+                    WHERE c.relname = 'aliases' AND i.indisprimary \
+                      AND ( \
+                        SELECT array_agg(a.attname::text ORDER BY a.attname) \
+                        FROM pg_attribute a \
+                        WHERE a.attrelid = c.oid AND a.attnum = ANY(i.indkey) \
+                      ) = ARRAY['alias', 'domain_id'] \
+                  ) THEN \
+                    ALTER TABLE aliases DROP CONSTRAINT IF EXISTS aliases_pkey; \
+                    ALTER TABLE aliases ADD PRIMARY KEY (domain_id, alias); \
+                  END IF; \
+                END $$",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -690,11 +716,20 @@ impl PostgresStore {
             // set — FORCE would make that lookup fail closed and break every
             // custom-domain redirect.
             //
-            // RLS stays merely ENABLED (not FORCED) on all seven; the app-level
-            // `WHERE tenant_id` predicate remains the isolation layer for their
-            // tenant-scoped methods (`list_api_tokens`, `put_session`, ...) and
-            // for the bare-pool accessors above.
-            const NOT_FORCED: [&str; 7] = [
+            // Also excepted: `aliases` (P3 Task 2). The alias namespace is now
+            // scoped by `domain_id`, not by tenant: `get_alias` runs on the
+            // bare pool the same way `get_domain_by_host` does, and the shared
+            // namespace (`SHARED_DOMAIN_ID` = 0) is deliberately visible across
+            // every tenant. `put_alias_and_link`/`put_alias_and_link_tx` still
+            // write inside a per-tenant transaction and still stamp
+            // `tenant_id` for bookkeeping, but isolation for reads is by
+            // domain, so FORCE would fail every bare-pool lookup closed.
+            //
+            // RLS stays merely ENABLED (not FORCED) on all eight; the app-level
+            // `WHERE tenant_id`/`WHERE domain_id` predicate remains the
+            // isolation layer for their scoped methods and for the bare-pool
+            // accessors above.
+            const NOT_FORCED: [&str; 8] = [
                 "api_tokens",
                 "sessions",
                 "click_counters",
@@ -702,6 +737,7 @@ impl PostgresStore {
                 "click_events",
                 "webhook_deliveries",
                 "domains",
+                "aliases",
             ];
             if self.multi_tenant {
                 for table in TENANT_OWNED_TABLES
@@ -836,14 +872,17 @@ impl Store for PostgresStore {
         Ok(())
     }
 
-    async fn get_alias(&self, tenant: TenantId, alias: &str) -> Result<Option<u64>, StoreError> {
-        let row = with_read!(self, tenant, |c| {
-            sqlx::query("SELECT id FROM aliases WHERE tenant_id = $1 AND alias = $2")
-                .bind(tenant.0 as i64)
-                .bind(alias)
-                .fetch_optional(&mut *c)
-                .await
-        });
+    async fn get_alias(&self, domain_id: u64, alias: &str) -> Result<Option<u64>, StoreError> {
+        // Deliberately bare: no tenant transaction, no `app.tenant_id`. Alias
+        // lookup is scoped by domain, not by tenant (`aliases` is in
+        // `NOT_FORCED` for exactly this reason), mirroring
+        // `get_domain_by_host`.
+        let row = sqlx::query("SELECT id FROM aliases WHERE domain_id = $1 AND alias = $2")
+            .bind(domain_id as i64)
+            .bind(alias)
+            .fetch_optional(&self.read)
+            .await
+            .map_err(StoreError::backend)?;
         match row {
             Some(r) => {
                 let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
@@ -856,17 +895,19 @@ impl Store for PostgresStore {
     async fn put_alias_and_link(
         &self,
         tenant: TenantId,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
     ) -> Result<bool, StoreError> {
         let mut tx = self.begin_write_tx(tenant).await?;
         let res = sqlx::query(
-            "INSERT INTO aliases (alias, id, tenant_id) VALUES ($1,$2,$3) ON CONFLICT (alias) DO NOTHING",
+            "INSERT INTO aliases (alias, id, tenant_id, domain_id) VALUES ($1,$2,$3,$4) ON CONFLICT (domain_id, alias) DO NOTHING",
         )
         .bind(alias)
         .bind(id as i64)
         .bind(tenant.0 as i64)
+        .bind(domain_id as i64)
         .execute(&mut *tx)
         .await
         .map_err(StoreError::backend)?;
@@ -895,6 +936,7 @@ impl Store for PostgresStore {
     async fn put_alias_and_link_tx(
         &self,
         tenant: TenantId,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
@@ -902,11 +944,12 @@ impl Store for PostgresStore {
     ) -> Result<bool, StoreError> {
         let mut tx = self.begin_write_tx(tenant).await?;
         let res = sqlx::query(
-            "INSERT INTO aliases (alias, id, tenant_id) VALUES ($1,$2,$3) ON CONFLICT (alias) DO NOTHING",
+            "INSERT INTO aliases (alias, id, tenant_id, domain_id) VALUES ($1,$2,$3,$4) ON CONFLICT (domain_id, alias) DO NOTHING",
         )
         .bind(alias)
         .bind(id as i64)
         .bind(tenant.0 as i64)
+        .bind(domain_id as i64)
         .execute(&mut *tx)
         .await
         .map_err(StoreError::backend)?;

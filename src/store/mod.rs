@@ -301,10 +301,17 @@ pub trait Store: Send + Sync + 'static {
     async fn next_id(&self, tenant: TenantId) -> Result<u64, StoreError>;
     async fn get_link(&self, tenant: TenantId, id: u64) -> Result<Option<Record>, StoreError>;
     async fn put_link(&self, tenant: TenantId, id: u64, rec: &Record) -> Result<(), StoreError>;
-    async fn get_alias(&self, tenant: TenantId, alias: &str) -> Result<Option<u64>, StoreError>;
+    /// Looks up an alias within its domain's namespace. Scoped by `domain_id`,
+    /// not by tenant: a domain already picks out at most one tenant (or the
+    /// shared namespace, `SHARED_DOMAIN_ID`, which by design crosses every
+    /// tenant), so there is no separate tenant filter here. Mirrors
+    /// `get_domain_by_host`'s bare-lookup shape for the same reason: the
+    /// redirect path resolves the domain before it resolves the tenant.
+    async fn get_alias(&self, domain_id: u64, alias: &str) -> Result<Option<u64>, StoreError>;
     async fn put_alias_and_link(
         &self,
         tenant: TenantId,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
@@ -333,6 +340,7 @@ pub trait Store: Send + Sync + 'static {
     async fn put_alias_and_link_tx(
         &self,
         tenant: TenantId,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
@@ -634,17 +642,20 @@ impl ScopedStore {
     pub async fn put_link(&self, id: u64, rec: &Record) -> Result<(), StoreError> {
         self.inner.put_link(self.tenant, id, rec).await
     }
-    pub async fn get_alias(&self, alias: &str) -> Result<Option<u64>, StoreError> {
-        self.inner.get_alias(self.tenant, alias).await
+    /// Scoped by `domain_id`, not by this handle's tenant: alias namespaces
+    /// are per-domain (see `Store::get_alias`).
+    pub async fn get_alias(&self, domain_id: u64, alias: &str) -> Result<Option<u64>, StoreError> {
+        self.inner.get_alias(domain_id, alias).await
     }
     pub async fn put_alias_and_link(
         &self,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
     ) -> Result<bool, StoreError> {
         self.inner
-            .put_alias_and_link(self.tenant, alias, id, rec)
+            .put_alias_and_link(self.tenant, domain_id, alias, id, rec)
             .await
     }
     pub async fn put_link_tx(
@@ -659,13 +670,14 @@ impl ScopedStore {
     }
     pub async fn put_alias_and_link_tx(
         &self,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
         deliveries: &[OutboxRow],
     ) -> Result<bool, StoreError> {
         self.inner
-            .put_alias_and_link_tx(self.tenant, alias, id, rec, deliveries)
+            .put_alias_and_link_tx(self.tenant, domain_id, alias, id, rec, deliveries)
             .await
     }
     pub async fn delete_link_tx(

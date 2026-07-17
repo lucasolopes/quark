@@ -844,7 +844,7 @@ mod tests {
         }
         async fn get_alias(
             &self,
-            _tenant: crate::tenant::TenantId,
+            _domain_id: u64,
             _alias: &str,
         ) -> Result<Option<u64>, StoreError> {
             unimplemented!()
@@ -852,6 +852,7 @@ mod tests {
         async fn put_alias_and_link(
             &self,
             _tenant: crate::tenant::TenantId,
+            _domain_id: u64,
             _alias: &str,
             _id: u64,
             _rec: &Record,
@@ -870,6 +871,7 @@ mod tests {
         async fn put_alias_and_link_tx(
             &self,
             _tenant: crate::tenant::TenantId,
+            _domain_id: u64,
             _alias: &str,
             _id: u64,
             _rec: &Record,

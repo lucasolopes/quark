@@ -2,6 +2,7 @@ use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{device_from_ua, AnalyticsSink, ClickEvent};
 use crate::auth::{generate_token, hash_token, ApiToken, Scope};
 use crate::cache::Cache;
+use crate::domain::SHARED_DOMAIN_ID;
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::store::{
     matched_rule_index, normalize_folder, normalize_tags, pick_variant, LinkHealth, Record, Rule,
@@ -437,7 +438,7 @@ pub async fn create_link_core(
         let rows = st.webhooks.lifecycle_deliveries(tenant, &ev).await;
         match st
             .store
-            .put_alias_and_link_tx(tenant, alias, id, &rec, &rows)
+            .put_alias_and_link_tx(tenant, SHARED_DOMAIN_ID, alias, id, &rec, &rows)
             .await
         {
             Ok(true) => {}
@@ -770,14 +771,19 @@ async fn app_destination_ok(
 /// domain); if not, treats it as an alias in the store. `Ok(Some(id))` resolved,
 /// `Ok(None)` doesn't exist, `Err` backend failure. Each handler maps these
 /// cases to its own HTTP response (the redirect attaches Cache-Control on 404).
+///
+/// `tenant` is currently unused: alias lookup is scoped by domain
+/// (`SHARED_DOMAIN_ID` for now), not by tenant. It stays a parameter because
+/// resolving the real per-tenant domain (P3 Task 4/5, via the `Host` header)
+/// needs it.
 async fn resolve_code(
     st: &AppState,
-    tenant: crate::tenant::TenantId,
+    _tenant: crate::tenant::TenantId,
     code: &str,
 ) -> Result<Option<u64>, StoreError> {
     match codec::from_base62(code) {
         Some(c) if c <= permute::MAX_ID => Ok(Some(permute::decode(c, st.key))),
-        _ => st.store.get_alias(tenant, code).await,
+        _ => st.store.get_alias(SHARED_DOMAIN_ID, code).await,
     }
 }
 
@@ -2396,14 +2402,17 @@ async fn admin_folders_list(State(st): State<Arc<AppState>>, headers: HeaderMap)
 
 /// Resolves the code into (id, optional_alias). If the code is numeric, there's no
 /// alias to remove; if it's an alias string, returns the alias to delete alongside it.
+///
+/// `tenant` is currently unused: alias lookup is scoped by domain
+/// (`SHARED_DOMAIN_ID` for now), not by tenant. See `resolve_code`.
 async fn resolve_for_admin(
     st: &AppState,
-    tenant: crate::tenant::TenantId,
+    _tenant: crate::tenant::TenantId,
     code: &str,
 ) -> Result<Option<(u64, Option<String>)>, StoreError> {
     match codec::from_base62(code) {
         Some(c) if c <= permute::MAX_ID => Ok(Some((permute::decode(c, st.key), None))),
-        _ => match st.store.get_alias(tenant, code).await? {
+        _ => match st.store.get_alias(SHARED_DOMAIN_ID, code).await? {
             Some(id) => Ok(Some((id, Some(code.to_string())))),
             None => Ok(None),
         },
@@ -3427,7 +3436,7 @@ mod tests {
         access_log_line, app_destination, cache_control_for, classify_platform, create_link_core,
         fbclid_from_query, normalize_max_visits, parse_cors_origins, resolve_code,
         resolve_for_admin, send_test_event_guarded, EventType, Platform, SubscriptionKind,
-        WebhookSubscription,
+        WebhookSubscription, SHARED_DOMAIN_ID,
     };
     use crate::store::Record;
     use axum::body::Bytes;
@@ -3708,8 +3717,13 @@ mod tests {
         );
     }
 
+    /// P3 Task 2: the alias namespace moved from per-tenant to per-domain, so
+    /// a written alias now resolves regardless of which tenant asks (any
+    /// tenant creating through the shared namespace lands on the same
+    /// `SHARED_DOMAIN_ID`). Cross-domain isolation itself is exercised by the
+    /// PG-gated `alias_namespace_is_per_domain` in `tests/domains_it.rs`.
     #[tokio::test]
-    async fn create_link_core_alias_writes_under_the_passed_tenant() {
+    async fn create_link_core_alias_resolves_via_the_shared_domain() {
         let st = guard_state(None).await;
         let tenant = crate::tenant::TenantId(7);
         let headers = ReqHeaderMap::new();
@@ -3737,27 +3751,19 @@ mod tests {
 
         assert!(
             st.store
-                .get_alias(tenant, "my-alias")
+                .get_alias(SHARED_DOMAIN_ID, "my-alias")
                 .await
                 .unwrap()
                 .is_some(),
-            "the alias must resolve under the passed tenant"
-        );
-        assert_eq!(
-            st.store
-                .get_alias(crate::tenant::DEFAULT_TENANT, "my-alias")
-                .await
-                .unwrap(),
-            None,
-            "the alias must NOT resolve under DEFAULT_TENANT"
+            "the alias must resolve in the shared domain namespace"
         );
     }
 
-    /// `resolve_code`'s alias branch must call `get_alias(tenant, code)` with
-    /// the PASSED tenant, not `DEFAULT_TENANT` (the numeric-code branch is
-    /// tenant-independent by construction, so this only exercises aliases).
+    /// `resolve_code`'s alias branch resolves through the shared domain
+    /// namespace regardless of the tenant passed in (alias isolation is by
+    /// domain now, not by tenant; see `resolve_code`'s doc comment).
     #[tokio::test]
-    async fn resolve_code_resolves_alias_within_the_passed_tenant() {
+    async fn resolve_code_resolves_alias_via_the_shared_domain() {
         let st = guard_state(None).await;
         let tenant = crate::tenant::TenantId(9);
         let rec = Record {
@@ -3775,28 +3781,28 @@ mod tests {
             password_hash: None,
         };
         st.store
-            .put_alias_and_link(tenant, "foo", 5, &rec)
+            .put_alias_and_link(tenant, SHARED_DOMAIN_ID, "foo", 5, &rec)
             .await
             .unwrap();
 
         assert_eq!(
             resolve_code(&st, tenant, "foo").await.unwrap(),
             Some(5),
-            "resolve_code must resolve the alias within its own tenant"
+            "resolve_code must resolve the alias via the shared domain"
         );
         assert_eq!(
             resolve_code(&st, crate::tenant::DEFAULT_TENANT, "foo")
                 .await
                 .unwrap(),
-            None,
-            "resolve_code must NOT resolve the alias from a different tenant"
+            Some(5),
+            "resolve_code must resolve the alias regardless of the passed tenant"
         );
     }
 
-    /// `resolve_for_admin`'s alias branch must call `get_alias(tenant, code)`
-    /// with the PASSED tenant, mirroring `resolve_code`.
+    /// `resolve_for_admin`'s alias branch resolves through the shared domain
+    /// namespace, mirroring `resolve_code`.
     #[tokio::test]
-    async fn resolve_for_admin_resolves_alias_within_the_passed_tenant() {
+    async fn resolve_for_admin_resolves_alias_via_the_shared_domain() {
         let st = guard_state(None).await;
         let tenant = crate::tenant::TenantId(11);
         let rec = Record {
@@ -3814,21 +3820,21 @@ mod tests {
             password_hash: None,
         };
         st.store
-            .put_alias_and_link(tenant, "bar", 6, &rec)
+            .put_alias_and_link(tenant, SHARED_DOMAIN_ID, "bar", 6, &rec)
             .await
             .unwrap();
 
         assert_eq!(
             resolve_for_admin(&st, tenant, "bar").await.unwrap(),
             Some((6, Some("bar".to_string()))),
-            "resolve_for_admin must resolve the alias within its own tenant"
+            "resolve_for_admin must resolve the alias via the shared domain"
         );
         assert_eq!(
             resolve_for_admin(&st, crate::tenant::DEFAULT_TENANT, "bar")
                 .await
                 .unwrap(),
-            None,
-            "resolve_for_admin must NOT resolve the alias from a different tenant"
+            Some((6, Some("bar".to_string()))),
+            "resolve_for_admin must resolve the alias regardless of the passed tenant"
         );
     }
 
