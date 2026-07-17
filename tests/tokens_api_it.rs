@@ -46,6 +46,7 @@ async fn app_admin(token: &str) -> axum::Router {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     router(state)
 }
@@ -307,6 +308,7 @@ async fn api_token_works_when_no_env_admin_token_is_configured() {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let app = router(state);
 

@@ -54,6 +54,7 @@ async fn app_admin_with_dispatcher(
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks,
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     (router(state), wh_rx)
 }
@@ -102,6 +103,7 @@ async fn app_admin_with_dispatcher_clicked_subscribed(
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks,
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     (router(state), wh_rx)
 }

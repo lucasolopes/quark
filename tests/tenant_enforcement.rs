@@ -296,6 +296,7 @@ fn cloud_state(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>) -> Arc<AppSt
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     })
 }
 

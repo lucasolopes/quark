@@ -103,6 +103,20 @@ const TENANT_OWNED_TABLES: [&str; 14] = [
     "domains",
 ];
 
+/// Maps a Postgres unique-constraint violation (SQLSTATE 23505) to
+/// `StoreError::UniqueViolation`, anything else to `StoreError::Backend`.
+/// Shared by every `put_*` whose target has a UNIQUE column the caller wants
+/// to turn into a 409 instead of a 503 (`put_tenant`'s `slug`, `put_domain`'s
+/// `host`).
+fn map_unique_violation(e: sqlx::Error) -> StoreError {
+    if let sqlx::Error::Database(dbe) = &e {
+        if dbe.code().as_deref() == Some("23505") {
+            return StoreError::UniqueViolation;
+        }
+    }
+    StoreError::backend(e)
+}
+
 /// Escapes `LIKE`/`ILIKE` wildcards (default escape char = `\`) so that the
 /// user's term is treated literally. Order matters: escape `\` first.
 fn like_escape(q: &str) -> String {
@@ -1753,14 +1767,7 @@ impl Store for PostgresStore {
         // constraint this insert can actually hit is the `slug` UNIQUE — a
         // Postgres unique-violation (SQLSTATE 23505) surfaces distinctly so
         // the caller can map it to 409 instead of 503.
-        .map_err(|e| {
-            if let sqlx::Error::Database(dbe) = &e {
-                if dbe.code().as_deref() == Some("23505") {
-                    return StoreError::UniqueViolation;
-                }
-            }
-            StoreError::backend(e)
-        })?;
+        .map_err(map_unique_violation)?;
         Ok(())
     }
 
@@ -1949,24 +1956,47 @@ impl Store for PostgresStore {
             DomainStatus::Pending => "pending",
             DomainStatus::Verified => "verified",
         };
-        with_write!(self, domain.tenant_id, |c| {
-            sqlx::query(
-                "INSERT INTO domains (id, tenant_id, host, token, status, created, verified_at) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7) \
-                 ON CONFLICT (id) DO UPDATE SET \
-                   tenant_id = EXCLUDED.tenant_id, host = EXCLUDED.host, token = EXCLUDED.token, \
-                   status = EXCLUDED.status, created = EXCLUDED.created, verified_at = EXCLUDED.verified_at",
-            )
-            .bind(domain.id as i64)
-            .bind(domain.tenant_id.0 as i64)
-            .bind(&domain.host)
-            .bind(&domain.token)
-            .bind(status)
-            .bind(domain.created as i64)
-            .bind(domain.verified_at.map(|v| v as i64))
-            .execute(&mut *c)
-            .await
-        });
+        const SQL: &str =
+            "INSERT INTO domains (id, tenant_id, host, token, status, created, verified_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7) \
+             ON CONFLICT (id) DO UPDATE SET \
+               tenant_id = EXCLUDED.tenant_id, host = EXCLUDED.host, token = EXCLUDED.token, \
+               status = EXCLUDED.status, created = EXCLUDED.created, verified_at = EXCLUDED.verified_at";
+        // `id` is a fresh sequence value (never conflicts), so the only
+        // constraint this insert can actually hit is the `host` UNIQUE — a
+        // Postgres unique-violation (SQLSTATE 23505) surfaces distinctly so
+        // the caller can map it to 409 instead of 503, same as `put_tenant`.
+        // Written out by hand (not `with_write!`) because that macro folds
+        // every error into `StoreError::Backend` before it reaches here,
+        // losing the SQLSTATE this needs to inspect.
+        if self.multi_tenant {
+            let mut tx = self.begin_tenant_tx(domain.tenant_id).await?;
+            sqlx::query(SQL)
+                .bind(domain.id as i64)
+                .bind(domain.tenant_id.0 as i64)
+                .bind(&domain.host)
+                .bind(&domain.token)
+                .bind(status)
+                .bind(domain.created as i64)
+                .bind(domain.verified_at.map(|v| v as i64))
+                .execute(&mut *tx)
+                .await
+                .map_err(map_unique_violation)?;
+            tx.commit().await.map_err(StoreError::backend)?;
+        } else {
+            let mut conn = self.write.acquire().await.map_err(StoreError::backend)?;
+            sqlx::query(SQL)
+                .bind(domain.id as i64)
+                .bind(domain.tenant_id.0 as i64)
+                .bind(&domain.host)
+                .bind(&domain.token)
+                .bind(status)
+                .bind(domain.created as i64)
+                .bind(domain.verified_at.map(|v| v as i64))
+                .execute(&mut *conn)
+                .await
+                .map_err(map_unique_violation)?;
+        }
         Ok(())
     }
 

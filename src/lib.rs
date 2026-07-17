@@ -5,6 +5,7 @@ pub mod auth;
 pub mod cache;
 pub mod cluster;
 pub mod codec;
+pub mod dns;
 pub mod domain;
 pub mod domain_router;
 pub mod health;

@@ -95,6 +95,7 @@ fn bench(c: &mut Criterion) {
                 ))
             },
             host_router,
+            dns: std::sync::Arc::new(quark::dns::NullDns),
         });
         let code = to_base62(encode(1, key));
         (state, code, tx, worker)

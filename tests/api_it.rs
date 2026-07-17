@@ -36,6 +36,7 @@ async fn app() -> axum::Router {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     router(state)
 }
@@ -814,6 +815,7 @@ async fn unlock_post_is_rate_limited() {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let app = router(state);
     let code = create_protected(&app, "https://secret.example.com", "hunter2").await;
@@ -921,6 +923,7 @@ async fn rate_limit_429_after_exceeding() {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let app = router(state);
     let mk = || {
@@ -1056,6 +1059,7 @@ async fn app_admin(token: &str) -> axum::Router {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     router(state)
 }
@@ -1535,6 +1539,7 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     (router(state), rx)
 }
@@ -2238,6 +2243,7 @@ async fn cors_header_present_when_configured() {
         real_ip_header: "cf-connecting-ip".into(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let app = quark::api::router_with_cors(state, vec!["https://panel.example".into()]);
     let resp = app
@@ -2574,6 +2580,7 @@ async fn admin_links_reports_health_and_broken_filter() {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let app = router(state);
 
@@ -2698,6 +2705,7 @@ async fn session_cookie_authorizes_admin_by_scope() {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let app = router(state);
     let now = 1_000_000u64;
@@ -2837,6 +2845,7 @@ async fn admin_me_reports_session_and_oidc_state() {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let app = router(state);
 
@@ -2927,6 +2936,7 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let app = router(state);
     let now = 1_000_000u64;
@@ -3047,6 +3057,7 @@ async fn logout_requires_csrf_header_and_revokes_session() {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let app = router(state);
     store
@@ -3135,6 +3146,7 @@ async fn session_cookie_is_ignored_when_oidc_not_configured() {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let app = router(state);
     // A previously issued, still-unexpired full-scope session.
@@ -3219,6 +3231,7 @@ async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     // Seed a connection whose refresh token must never appear in a response.
     store
@@ -3335,6 +3348,7 @@ async fn sheets_callback_requires_the_state_cookie() {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let app = router(state);
 
@@ -3422,6 +3436,7 @@ async fn sheets_connect_binds_the_state_cookie_to_the_callers_tenant() {
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let tenant = quark::tenant::TenantId(42);
     store

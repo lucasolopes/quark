@@ -79,6 +79,7 @@ async fn node(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>, url: &str) ->
         real_ip_header: "cf-connecting-ip".into(),
         webhooks: webhooks(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     })
 }
 

@@ -272,6 +272,8 @@ async fn main() {
         public_host.clone(),
         None,
     ));
+    let dns: Arc<dyn quark::dns::Dns> =
+        Arc::new(quark::dns::HickoryDns::new().expect("failed to build DNS resolver"));
 
     let state = Arc::new(AppState {
         cache,
@@ -292,6 +294,7 @@ async fn main() {
         sheets_api: Some(sheets_api),
         multi_tenant,
         host_router,
+        dns,
     });
     match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {

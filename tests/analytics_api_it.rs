@@ -41,6 +41,7 @@ async fn app_with(
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
         host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     (router(state), rx)
 }
