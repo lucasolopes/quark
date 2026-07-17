@@ -241,6 +241,84 @@ async fn create_tenant_self_serve() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
+/// `POST /admin/tenants` with `slug = "master"` (a Keycloak built-in realm
+/// name) must be rejected before any tenant row is created, since P2e turns
+/// the slug into the realm name (final-review finding).
+#[tokio::test]
+#[serial]
+async fn create_tenant_rejects_reserved_slug() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_user_id, raw) = seed_session(&store, "reserved-slug-subject").await;
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/admin/tenants")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::from(r#"{"name":"Evil","slug":"master"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        store.get_tenant_by_slug("master").await.unwrap().is_none(),
+        "no tenant row must be created for a rejected slug"
+    );
+}
+
+/// `POST /admin/tenants` with a slug that fails the charset/length rule
+/// (case, underscore, punctuation, path separator, whitespace, or length)
+/// must be rejected — a bad slug becomes a malformed Keycloak realm name,
+/// Admin-API path, and OIDC issuer URL under P2e.
+#[tokio::test]
+#[serial]
+async fn create_tenant_rejects_malformed_slug() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_user_id, raw) = seed_session(&store, "malformed-slug-subject").await;
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store as Arc<dyn AnalyticsSink>,
+        true,
+    );
+
+    let too_long: String = "a".repeat(64);
+    let bad_slugs = ["Bad_Slug!", "a/b", " ", too_long.as_str(), "-x"];
+    for slug in bad_slugs {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/admin/tenants")
+                    .header("content-type", "application/json")
+                    .header("cookie", format!("qk_session={raw}"))
+                    .body(Body::from(
+                        serde_json::json!({"name": "Bad", "slug": slug}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "slug {slug:?} must be rejected"
+        );
+    }
+}
+
 /// No session cookie at all -> 401, not 404 (cloud endpoint exists, just
 /// unauthenticated).
 #[tokio::test]

@@ -2265,6 +2265,12 @@ async fn admin_tenants_create(
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
     }
+    // Reject before any side effect: P2e turns the slug verbatim into a
+    // Keycloak realm name, an Admin-API URL path, and the derived OIDC
+    // issuer, so a bad slug must never reach the store or Keycloak.
+    if !crate::tenant::is_valid_slug(&req.slug) {
+        return (StatusCode::BAD_REQUEST, "invalid slug").into_response();
+    }
     let id = match st.store.next_tenant_id().await {
         Ok(i) => i,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),

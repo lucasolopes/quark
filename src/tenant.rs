@@ -22,6 +22,45 @@ pub struct Tenant {
     pub created: u64,
 }
 
+/// Keycloak/operational realm names a tenant slug must never collide with
+/// (multi-tenancy P2e: the slug becomes the realm name — see `is_valid_slug`).
+const RESERVED_SLUGS: &[&str] = &[
+    "master",
+    "admin",
+    "account",
+    "account-console",
+    "broker",
+    "realms",
+    "security-admin-console",
+];
+
+/// Validates a tenant slug against the DNS-label / Keycloak-realm-safe
+/// charset (`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`, 1-63 chars, lowercase
+/// alnum plus internal hyphens, no leading/trailing hyphen) and rejects the
+/// small set of reserved Keycloak/operational realm names.
+///
+/// This must run before a `Tenant` is created and before any Keycloak call:
+/// the slug is later used verbatim as a Keycloak realm name, in Admin-API
+/// URL paths (`/admin/realms/{slug}/...`), and in the derived OIDC issuer
+/// (`{base}/realms/{slug}`), so a malformed or colliding slug corrupts all
+/// three (final-review finding, multi-tenancy P2e).
+pub fn is_valid_slug(slug: &str) -> bool {
+    if slug.is_empty() || slug.len() > 63 {
+        return false;
+    }
+    let bytes = slug.as_bytes();
+    let is_label_char = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
+    if !is_label_char(bytes[0]) || !is_label_char(bytes[bytes.len() - 1]) {
+        return false;
+    }
+    if !bytes.iter().all(|&b| is_label_char(b) || b == b'-') {
+        return false;
+    }
+    !RESERVED_SLUGS
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(slug))
+}
+
 /// A global user identity, keyed by the OIDC `subject` (immutable), never email.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
@@ -101,5 +140,37 @@ mod tests {
         assert!(s.contains(&Scope::Analytics));
         assert!(!s.contains(&Scope::LinksWrite));
         assert!(!s.contains(&Scope::Full));
+    }
+
+    #[test]
+    fn valid_slugs_accepted() {
+        assert!(is_valid_slug("acme"));
+        assert!(is_valid_slug("acme-corp"));
+        assert!(is_valid_slug("a"));
+        assert!(is_valid_slug("a1-b2"));
+        assert!(is_valid_slug(&"a".repeat(63)));
+    }
+
+    #[test]
+    fn malformed_slugs_rejected() {
+        assert!(!is_valid_slug(""));
+        assert!(!is_valid_slug("Bad_Slug!"));
+        assert!(!is_valid_slug("a/b"));
+        assert!(!is_valid_slug(" "));
+        assert!(!is_valid_slug("-x"));
+        assert!(!is_valid_slug("x-"));
+        assert!(!is_valid_slug(&"a".repeat(64)));
+    }
+
+    #[test]
+    fn reserved_slugs_rejected_case_insensitive() {
+        assert!(!is_valid_slug("master"));
+        assert!(!is_valid_slug("MASTER"));
+        assert!(!is_valid_slug("admin"));
+        assert!(!is_valid_slug("account"));
+        assert!(!is_valid_slug("account-console"));
+        assert!(!is_valid_slug("broker"));
+        assert!(!is_valid_slug("realms"));
+        assert!(!is_valid_slug("security-admin-console"));
     }
 }
