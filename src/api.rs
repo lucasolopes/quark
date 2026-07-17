@@ -2383,6 +2383,137 @@ async fn admin_invites_delete(
     StatusCode::OK.into_response()
 }
 
+// --- Per-tenant OIDC config CRUD (multi-tenancy P2d Task 2), cloud-only ---
+
+#[derive(Deserialize)]
+struct PutOidcConfigReq {
+    issuer: String,
+    client_id: String,
+    client_secret: String,
+    #[serde(default)]
+    scopes: Vec<String>,
+    #[serde(default)]
+    admin_claim: String,
+    #[serde(default)]
+    admin_value: String,
+    #[serde(default)]
+    readonly_value: String,
+    #[serde(default)]
+    post_login_url: Option<String>,
+}
+
+/// The redacted view of a tenant's OIDC config: every field except
+/// `client_secret`, which never leaves the server after being written —
+/// `client_secret_set` tells the panel whether one is on file.
+#[derive(Serialize)]
+struct OidcConfigView {
+    issuer: String,
+    client_id: String,
+    scopes: Vec<String>,
+    admin_claim: String,
+    admin_value: String,
+    readonly_value: String,
+    post_login_url: Option<String>,
+    client_secret_set: bool,
+}
+
+impl From<&crate::oidc::TenantOidcConfig> for OidcConfigView {
+    fn from(cfg: &crate::oidc::TenantOidcConfig) -> Self {
+        OidcConfigView {
+            issuer: cfg.issuer.clone(),
+            client_id: cfg.client_id.clone(),
+            scopes: cfg.scopes.clone(),
+            admin_claim: cfg.admin_claim.clone(),
+            admin_value: cfg.admin_value.clone(),
+            readonly_value: cfg.readonly_value.clone(),
+            post_login_url: cfg.post_login_url.clone(),
+            client_secret_set: !cfg.client_secret.is_empty(),
+        }
+    }
+}
+
+/// `PUT /admin/oidc-config`: upserts the caller's tenant's own OIDC IdP
+/// (cloud only, Owner/Admin required). Returns the redacted view — never the
+/// `client_secret` that was just written.
+async fn admin_oidc_config_put(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<PutOidcConfigReq>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let ip = client_ip(&headers, &st.real_ip_header, None);
+    if !st.ratelimiter.check(&ip, now()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+    }
+    let issuer = req.issuer.trim().trim_end_matches('/').to_string();
+    let client_id = req.client_id.trim().to_string();
+    if issuer.is_empty() || client_id.is_empty() {
+        return (StatusCode::BAD_REQUEST, "issuer and client_id are required").into_response();
+    }
+    let cfg = crate::oidc::TenantOidcConfig {
+        tenant_id: p.tenant,
+        issuer,
+        client_id,
+        client_secret: req.client_secret,
+        scopes: req.scopes,
+        admin_claim: req.admin_claim,
+        admin_value: req.admin_value,
+        readonly_value: req.readonly_value,
+        post_login_url: req.post_login_url,
+    };
+    // TODO(T3): invalidate per-tenant oidc runtime cache
+    if let Err(e) = st.store.put_oidc_config(&cfg).await {
+        return conflict_or_503(e).into_response();
+    }
+    Json(OidcConfigView::from(&cfg)).into_response()
+}
+
+/// `GET /admin/oidc-config`: the caller's tenant's own OIDC IdP, redacted
+/// (cloud only, Owner/Admin required). `404` when the tenant has none set up.
+async fn admin_oidc_config_get(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.store.get_oidc_config(p.tenant).await {
+        Ok(Some(cfg)) => Json(OidcConfigView::from(&cfg)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// `DELETE /admin/oidc-config`: removes the caller's tenant's own OIDC IdP
+/// (cloud only, Owner/Admin required). The tenant goes back to having no OIDC
+/// of its own; `404` when there was nothing to remove.
+async fn admin_oidc_config_delete(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.store.get_oidc_config(p.tenant).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    // TODO(T3): invalidate per-tenant oidc runtime cache
+    match st.store.delete_oidc_config(p.tenant).await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
 #[derive(Serialize)]
 struct AcceptInviteResp {
     tenant_id: u64,
@@ -3996,6 +4127,12 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route("/admin/me", get(admin_me))
         .route("/admin/tenants", post(admin_tenants_create))
         .route("/admin/workspace/switch", post(admin_workspace_switch))
+        .route(
+            "/admin/oidc-config",
+            get(admin_oidc_config_get)
+                .put(admin_oidc_config_put)
+                .delete(admin_oidc_config_delete),
+        )
         .route(
             "/admin/domains",
             get(admin_domains_list).post(admin_domains_create),
