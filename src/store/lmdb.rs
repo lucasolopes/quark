@@ -1259,6 +1259,7 @@ mod tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
         for id in 1..=5u64 {
             s.put_link(
@@ -1384,6 +1385,7 @@ mod tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
         s.put_link(
             crate::tenant::DEFAULT_TENANT,
@@ -1440,6 +1442,7 @@ mod tests {
             folder: folder.map(str::to_string),
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
         s.put_link(
             crate::tenant::DEFAULT_TENANT,
@@ -1671,6 +1674,7 @@ mod tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
         s.put_link(crate::tenant::DEFAULT_TENANT, 1, &rec)
             .await

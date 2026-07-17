@@ -19,6 +19,7 @@ fn rec(url: &str) -> Record {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     }
 }
 

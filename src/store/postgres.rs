@@ -112,8 +112,9 @@ fn like_escape(q: &str) -> String {
 }
 
 /// Maps a `links` row (id, url, expiry, created, tags, max_visits, rules,
-/// variants) into `(id, Record)`.
-/// Shared by `list_links` and `search_links`, which select the same columns.
+/// variants, tenant_id) into `(id, Record)`.
+/// Shared by `get_link`, `list_links`, and `search_links`, which select the
+/// same columns.
 fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
     let url: String = r.try_get("url").map_err(StoreError::backend)?;
@@ -131,6 +132,7 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let folder: Option<String> = r.try_get("folder").map_err(StoreError::backend)?;
     let fallback_url: Option<String> = r.try_get("fallback_url").map_err(StoreError::backend)?;
     let password_hash: Option<String> = r.try_get("password_hash").map_err(StoreError::backend)?;
+    let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
     Ok((
         id as u64,
         Record {
@@ -146,6 +148,7 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
             folder,
             fallback_url,
             password_hash,
+            tenant_id: TenantId(tenant_id as u64),
         },
     ))
 }
@@ -852,7 +855,7 @@ impl Store for PostgresStore {
     async fn get_link(&self, tenant: TenantId, id: u64) -> Result<Option<Record>, StoreError> {
         let row = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash FROM links WHERE tenant_id = $1 AND id = $2",
+                "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash, tenant_id FROM links WHERE tenant_id = $1 AND id = $2",
             )
             .bind(tenant.0 as i64)
             .bind(id as i64)
@@ -997,7 +1000,7 @@ impl Store for PostgresStore {
         let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash FROM links \
+                "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash, tenant_id FROM links \
                  WHERE tenant_id = $5 \
                    AND ($1::bigint IS NULL OR id > $1) \
                    AND ($2::jsonb IS NULL OR tags @> $2) \
@@ -1028,7 +1031,7 @@ impl Store for PostgresStore {
         let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits, l.rules, l.variants, l.app_ios, l.app_android, l.folder, l.fallback_url, l.password_hash \
+                "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits, l.rules, l.variants, l.app_ios, l.app_android, l.folder, l.fallback_url, l.password_hash, l.tenant_id \
                  FROM links l LEFT JOIN aliases a ON a.id = l.id AND a.tenant_id = l.tenant_id \
                  WHERE l.tenant_id = $6 \
                    AND ($1::bigint IS NULL OR l.id > $1) \

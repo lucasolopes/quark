@@ -39,6 +39,7 @@ fn plain_rec(url: &str) -> Record {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     }
 }
 
@@ -191,6 +192,7 @@ async fn put_get_link_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 7, &rec)
         .await
@@ -241,6 +243,7 @@ async fn rules_round_trip_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 42, &rec)
         .await
@@ -273,6 +276,7 @@ async fn link_without_rules_round_trips_to_empty_vec_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 43, &rec)
         .await
@@ -315,6 +319,7 @@ async fn alias_is_atomic_no_orphan_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     assert!(s
         .put_alias_and_link(
@@ -368,6 +373,7 @@ async fn tags_round_trip_filter_and_distinct_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(
         quark::tenant::DEFAULT_TENANT,
@@ -434,6 +440,7 @@ async fn folder_round_trip_filter_and_list_pg() {
         folder: folder.map(str::to_string),
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(
         quark::tenant::DEFAULT_TENANT,
@@ -512,6 +519,7 @@ async fn visits_round_trip_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 11, &rec)
         .await
@@ -550,6 +558,7 @@ async fn bump_visits_is_atomic_and_increments_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 12, &rec)
         .await
@@ -622,6 +631,7 @@ async fn variants_round_trip_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 11, &rec)
         .await
@@ -652,6 +662,7 @@ async fn variants_round_trip_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 12, &plain)
         .await

@@ -3,6 +3,7 @@ pub mod valkey;
 use crate::invalidate::Invalidator;
 use crate::now;
 use crate::store::{Record, Store, StoreError};
+use crate::tenant::TenantId;
 use moka::sync::Cache as Moka;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -34,6 +35,15 @@ pub trait CacheTier: Send + Sync + 'static {
     async fn get(&self, id: u64) -> Result<Option<Record>, TierError>;
     async fn set(&self, id: u64, rec: &Record, ttl_secs: u64) -> Result<(), TierError>;
     async fn invalidate(&self, id: u64) -> Result<(), TierError>;
+}
+
+/// `Some(rec)` if `rec.tenant_id == tenant`, `None` otherwise. The single
+/// choke point every `Cache::get` return path runs through, so a cache hit
+/// for the wrong tenant is indistinguishable from the id not existing at
+/// all (see `Cache::get`'s doc comment for why the cache hit path needs
+/// this even though the store fetch is already tenant-scoped).
+fn owned_by(rec: Record, tenant: TenantId) -> Option<Record> {
+    (rec.tenant_id == tenant).then_some(rec)
 }
 
 /// Effective L2 TTL for a record: capped by the default TTL and by the time
@@ -138,9 +148,26 @@ impl Cache {
         }
     }
 
-    pub async fn get(&self, id: u64) -> Result<Option<Record>, StoreError> {
+    /// Fetches `id`, scoped by `tenant`. The store fetch on a miss is itself
+    /// scoped (`get_link` filters by tenant, so a wrong-tenant guess never
+    /// even reaches the L1/L2 tiers), but the L1/L2 tiers are keyed by `id`
+    /// alone, not `(tenant, id)` — a deliberate choice, since ids are
+    /// globally unique (the permutation namespace is global, not
+    /// per-tenant) and re-keying every tier would mean re-keying the
+    /// cross-node invalidation wire format too.
+    ///
+    /// That means a cache HIT does not by itself prove `tenant` owns `id`:
+    /// it proves whichever tenant's request populated the cache does. So
+    /// every hit is re-checked against `rec.tenant_id` before being
+    /// returned — this is the actual cross-tenant isolation guarantee for
+    /// the redirect hot path on a custom domain; the scoped store fetch is
+    /// belt-and-suspenders on top of it, not a substitute (a mismatch here
+    /// was caught live against real Postgres: the L1 tier does not
+    /// re-validate on hit, so without this check tenant B's request could
+    /// reuse tenant A's already-cached record for the same numeric id).
+    pub async fn get(&self, tenant: TenantId, id: u64) -> Result<Option<Record>, StoreError> {
         if let Some(rec) = self.hot.get(&id) {
-            return Ok(Some(rec));
+            return Ok(owned_by(rec, tenant));
         }
         let n = now();
         let mut l2_failed_this_request = false;
@@ -150,7 +177,7 @@ impl Cache {
                     Ok(Ok(Some(rec))) => {
                         self.breaker.record_success();
                         self.hot.insert(id, rec.clone());
-                        return Ok(Some(rec));
+                        return Ok(owned_by(rec, tenant));
                     }
                     Ok(Ok(None)) => {
                         self.breaker.record_success();
@@ -162,11 +189,7 @@ impl Cache {
                 }
             }
         }
-        match self
-            .store
-            .get_link(crate::tenant::DEFAULT_TENANT, id)
-            .await?
-        {
+        match self.store.get_link(tenant, id).await? {
             Some(rec) => {
                 if let Some(l2) = &self.l2 {
                     if !l2_failed_this_request && self.breaker.allow(n) {
@@ -180,7 +203,7 @@ impl Cache {
                     }
                 }
                 self.hot.insert(id, rec.clone());
-                Ok(Some(rec))
+                Ok(owned_by(rec, tenant))
             }
             None => Ok(None),
         }
@@ -235,6 +258,7 @@ mod tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         }
     }
 
@@ -281,7 +305,11 @@ mod tests {
             .await
             .unwrap();
         let c = Cache::with_l2(store, 1000, Arc::new(HangingTier), 60, 3600, None);
-        let got = c.get(9).await.unwrap().unwrap();
+        let got = c
+            .get(crate::tenant::DEFAULT_TENANT, 9)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got.url, "hung");
     }
 
@@ -294,13 +322,24 @@ mod tests {
             .await
             .unwrap();
         let c = Cache::new(store.clone(), 1000, None);
-        assert_eq!(c.get(1).await.unwrap().unwrap().url, "u1");
+        assert_eq!(
+            c.get(crate::tenant::DEFAULT_TENANT, 1)
+                .await
+                .unwrap()
+                .unwrap()
+                .url,
+            "u1"
+        );
         store
             .delete_link(crate::tenant::DEFAULT_TENANT, 1)
             .await
             .unwrap();
         c.invalidate(1).await;
-        assert!(c.get(1).await.unwrap().is_none());
+        assert!(c
+            .get(crate::tenant::DEFAULT_TENANT, 1)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -312,13 +351,24 @@ mod tests {
             .await
             .unwrap();
         let c = Cache::new(store.clone(), 1000, None);
-        assert_eq!(c.get(2).await.unwrap().unwrap().url, "u2");
+        assert_eq!(
+            c.get(crate::tenant::DEFAULT_TENANT, 2)
+                .await
+                .unwrap()
+                .unwrap()
+                .url,
+            "u2"
+        );
         store
             .delete_link(crate::tenant::DEFAULT_TENANT, 2)
             .await
             .unwrap();
         c.invalidate_local(2).await;
-        assert!(c.get(2).await.unwrap().is_none());
+        assert!(c
+            .get(crate::tenant::DEFAULT_TENANT, 2)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -330,8 +380,19 @@ mod tests {
             .await
             .unwrap();
         let c = Cache::new(store, 1000, None);
-        assert_eq!(c.get(3).await.unwrap().unwrap().url, "u");
-        assert!(c.get(404).await.unwrap().is_none());
+        assert_eq!(
+            c.get(crate::tenant::DEFAULT_TENANT, 3)
+                .await
+                .unwrap()
+                .unwrap()
+                .url,
+            "u"
+        );
+        assert!(c
+            .get(crate::tenant::DEFAULT_TENANT, 404)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -347,10 +408,10 @@ mod tests {
         });
         let c = Cache::with_l2(store, 1000, tier.clone(), 60, 3600, None);
         for _ in 0..7 {
-            let _ = c.get(7).await.unwrap();
+            let _ = c.get(crate::tenant::DEFAULT_TENANT, 7).await.unwrap();
         }
         for id in 100..110u64 {
-            let _ = c.get(id).await.unwrap();
+            let _ = c.get(crate::tenant::DEFAULT_TENANT, id).await.unwrap();
         }
         let calls = tier.calls.load(Ordering::SeqCst);
         assert!(
@@ -380,7 +441,8 @@ mod tests {
                     app_android: None,
                     folder: None,
                     fallback_url: None,
-                    password_hash: None
+                    password_hash: None,
+                    tenant_id: crate::tenant::DEFAULT_TENANT,
                 },
                 now,
                 3600
@@ -401,7 +463,8 @@ mod tests {
                     app_android: None,
                     folder: None,
                     fallback_url: None,
-                    password_hash: None
+                    password_hash: None,
+                    tenant_id: crate::tenant::DEFAULT_TENANT,
                 },
                 now,
                 3600
@@ -422,7 +485,8 @@ mod tests {
                     app_android: None,
                     folder: None,
                     fallback_url: None,
-                    password_hash: None
+                    password_hash: None,
+                    tenant_id: crate::tenant::DEFAULT_TENANT,
                 },
                 now,
                 3600
@@ -443,7 +507,8 @@ mod tests {
                     app_android: None,
                     folder: None,
                     fallback_url: None,
-                    password_hash: None
+                    password_hash: None,
+                    tenant_id: crate::tenant::DEFAULT_TENANT,
                 },
                 now,
                 3600

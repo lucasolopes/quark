@@ -62,6 +62,15 @@ pub struct Record {
     /// field deserialize to `None` and the field is omitted when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_hash: Option<String>,
+    /// The tenant that owns this link. `#[serde(default)]` so old
+    /// blobs/rows without the column deserialize to `DEFAULT_TENANT` (every
+    /// pre-multi-tenancy record). Carried on the `Record` itself (not just
+    /// looked up separately) so the redirect hot path can compare it against
+    /// the resolved `Host` route's tenant after a cache hit — the L1/L2 tiers
+    /// are keyed by `id` alone (ids are globally unique), so this is the only
+    /// place a cross-tenant cache hit can still be caught before it's served.
+    #[serde(default)]
+    pub tenant_id: TenantId,
 }
 
 /// Maximum number of tags kept per link (extra tags beyond this are dropped).
@@ -896,6 +905,7 @@ mod scoped_tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         }
     }
 
@@ -970,6 +980,7 @@ mod tests {
             folder: None,
             fallback_url: Some("https://example.com/ended".into()),
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
         let json = serde_json::to_string(&rec).unwrap();
         let back: Record = serde_json::from_str(&json).unwrap();
@@ -1056,6 +1067,7 @@ mod rules_tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         }
     }
 

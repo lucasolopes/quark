@@ -23,10 +23,15 @@ use std::sync::Arc;
 /// `invalidate` drops the entry immediately on those actions anyway.
 pub const HOST_ROUTE_TTL_SECS: u64 = 300;
 
-/// Normalizes a `Host` header value for lookup: lowercase, and strip a trailing
-/// `:port` if present (IPv6 literals are not a concern here, only DNS hosts).
+/// Normalizes a `Host` header value for lookup: trimmed, lowercased, a
+/// trailing `:port` stripped if present (IPv6 literals are not a concern
+/// here, only DNS hosts), and a trailing `.` (a fully-qualified DNS name,
+/// e.g. `go.acme.com.`) stripped too so it still matches the stored host
+/// without the dot.
 fn normalize_host(host: &str) -> String {
+    let host = host.trim();
     let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+    let host = host.strip_suffix('.').unwrap_or(host);
     host.to_lowercase()
 }
 
@@ -590,6 +595,22 @@ mod tests {
         let router = HostRouter::new(store, Some("Quark.Example.com".into()), None);
         assert_eq!(
             router.resolve("QUARK.EXAMPLE.COM:443").await,
+            Some(DomainRoute {
+                domain_id: crate::domain::SHARED_DOMAIN_ID,
+                tenant_id: DEFAULT_TENANT,
+            })
+        );
+    }
+
+    /// P3 Task 4 (review Minor from Task 3 folded in here): a `Host` header
+    /// with surrounding whitespace or a trailing FQDN dot must still match
+    /// the stored host.
+    #[tokio::test]
+    async fn public_host_match_trims_and_strips_trailing_dot() {
+        let store = Arc::new(FakeStore::new(vec![]));
+        let router = HostRouter::new(store, Some("quark.example.com".into()), None);
+        assert_eq!(
+            router.resolve(" quark.example.com. ").await,
             Some(DomainRoute {
                 domain_id: crate::domain::SHARED_DOMAIN_ID,
                 tenant_id: DEFAULT_TENANT,

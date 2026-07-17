@@ -55,13 +55,15 @@ pub struct AppState {
     /// The Sheets HTTP seam (real `GoogleSheetsApi` in `main`, absent in tests
     /// that never drive a real sync). `None` is treated as "connector off".
     pub sheets_api: Option<Arc<dyn crate::sheets::client::SheetsApi>>,
-    /// Multi-tenant (cloud) mode, from `QUARK_MULTI_TENANT`. Plumbing only for
-    /// now — nothing reads this yet (no FORCE RLS, no per-tenant tx).
+    /// Multi-tenant (cloud) mode, from `QUARK_MULTI_TENANT`. Gates FORCE RLS,
+    /// per-tenant tx, and (P3 Task 4) whether `redirect`/`unlock` resolve the
+    /// `Host` header at all: off, they skip straight to the shared route.
     pub multi_tenant: bool,
     /// Maps a request `Host` header to `{domain_id, tenant_id}` for custom
     /// domains (multi-tenancy P3). In OSS/single-tenant mode every host still
-    /// resolves through `public_host` to the shared route; nothing reads this
-    /// yet on the redirect path (that wiring is a later task).
+    /// resolves through `public_host` to the shared route. `redirect`/`unlock`
+    /// consult this (via `resolve_host_route`) to pick the alias domain and
+    /// the tenant the link fetch is scoped by.
     pub host_router: Arc<crate::domain_router::HostRouter>,
 }
 
@@ -416,6 +418,7 @@ pub async fn create_link_core(
         folder,
         fallback_url,
         password_hash,
+        tenant_id: tenant,
     };
 
     if let Some(alias) = alias {
@@ -777,19 +780,45 @@ async fn app_destination_ok(
 /// `Ok(None)` doesn't exist, `Err` backend failure. Each handler maps these
 /// cases to its own HTTP response (the redirect attaches Cache-Control on 404).
 ///
-/// `tenant` is currently unused: alias lookup is scoped by domain
-/// (`SHARED_DOMAIN_ID` for now), not by tenant. It stays a parameter because
-/// resolving the real per-tenant domain (P3 Task 4/5, via the `Host` header)
-/// needs it.
+/// The numeric decode is global (the permutation namespace is not scoped by
+/// domain or tenant); `domain_id` only matters for the alias fallback, which
+/// is scoped per-domain (`SHARED_DOMAIN_ID` on the shared host, or the id of
+/// a resolved custom domain).
 async fn resolve_code(
     st: &AppState,
-    _tenant: crate::tenant::TenantId,
+    domain_id: u64,
     code: &str,
 ) -> Result<Option<u64>, StoreError> {
     match codec::from_base62(code) {
         Some(c) if c <= permute::MAX_ID => Ok(Some(permute::decode(c, st.key))),
-        _ => st.store.get_alias(SHARED_DOMAIN_ID, code).await,
+        _ => st.store.get_alias(domain_id, code).await,
     }
+}
+
+/// Resolves the request's `Host` header into a route for the redirect/unlock
+/// hot path.
+///
+/// OSS (`multi_tenant` off): always the shared route, no `Host` lookup at
+/// all — byte-for-byte the pre-P3 behavior, and the only path OSS ever
+/// takes since `host_router.resolve` would land on the same shared route
+/// anyway.
+///
+/// Cloud (`multi_tenant` on): normalizes the `Host` header and resolves it
+/// through `host_router`. `None` (missing header, or a host the router
+/// doesn't recognize — unknown, or a domain still pending verification)
+/// means the caller must 404: an unverified/unknown host serves nothing.
+async fn resolve_host_route(
+    st: &AppState,
+    headers: &HeaderMap,
+) -> Option<crate::domain::DomainRoute> {
+    if !st.multi_tenant {
+        return Some(crate::domain::DomainRoute {
+            domain_id: SHARED_DOMAIN_ID,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
+        });
+    }
+    let host = headers.get(header::HOST)?.to_str().ok()?;
+    st.host_router.resolve(host).await
 }
 
 /// Extracts and percent-decodes the `fbclid` query parameter Meta ads append
@@ -994,7 +1023,14 @@ async fn unlock(
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
     }
-    let id = match resolve_code(&st, crate::tenant::DEFAULT_TENANT, &code).await {
+    let Some(route) = resolve_host_route(&st, &headers).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            [(header::CACHE_CONTROL, "no-store".to_string())],
+        )
+            .into_response();
+    };
+    let id = match resolve_code(&st, route.domain_id, &code).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             return (
@@ -1012,7 +1048,10 @@ async fn unlock(
         Some(q) => format!("/{code}?{q}"),
         None => format!("/{code}"),
     };
-    let rec = match st.cache.get(id).await {
+    // Scoped by the resolved tenant: on a custom domain, a link owned by a
+    // different tenant is invisible here (cross-tenant isolation), same as
+    // in `redirect`.
+    let rec = match st.cache.get(route.tenant_id, id).await {
         Ok(Some(r)) => r,
         Ok(None) => {
             return (
@@ -1073,7 +1112,14 @@ async fn redirect(
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    let id = match resolve_code(&st, crate::tenant::DEFAULT_TENANT, &code).await {
+    let Some(route) = resolve_host_route(&st, &headers).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            [(header::CACHE_CONTROL, "no-store".to_string())],
+        )
+            .into_response();
+    };
+    let id = match resolve_code(&st, route.domain_id, &code).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             return (
@@ -1084,7 +1130,11 @@ async fn redirect(
         }
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    match st.cache.get(id).await {
+    // Scoped by the resolved tenant: on a custom domain, a link owned by a
+    // different tenant is invisible here (the store's `get_link` filters by
+    // tenant) — this is the cross-tenant isolation filter. On the shared host
+    // `route.tenant_id` is always `DEFAULT_TENANT`, matching pre-P3 behavior.
+    match st.cache.get(route.tenant_id, id).await {
         Ok(Some(mut rec)) => {
             let now = now();
             if let Some(exp) = rec.expiry {
@@ -1266,7 +1316,10 @@ async fn stats(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
-    let id = match resolve_code(&st, p.tenant, &code).await {
+    // Admin `stats` resolves aliases through the shared domain, same as
+    // before `resolve_code` took a `domain_id` (custom-domain admin lookup is
+    // not wired yet).
+    let id = match resolve_code(&st, SHARED_DOMAIN_ID, &code).await {
         Ok(Some(id)) => id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -3467,6 +3520,7 @@ mod tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         }
     }
 
@@ -3770,9 +3824,10 @@ mod tests {
         );
     }
 
-    /// `resolve_code`'s alias branch resolves through the shared domain
-    /// namespace regardless of the tenant passed in (alias isolation is by
-    /// domain now, not by tenant; see `resolve_code`'s doc comment).
+    /// `resolve_code`'s alias branch resolves through whichever domain id is
+    /// passed in; the shared domain (`SHARED_DOMAIN_ID`) is one such domain,
+    /// used regardless of which tenant created the alias (alias isolation is
+    /// by domain, not by tenant; see `resolve_code`'s doc comment).
     #[tokio::test]
     async fn resolve_code_resolves_alias_via_the_shared_domain() {
         let st = guard_state(None).await;
@@ -3790,6 +3845,7 @@ mod tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
         st.store
             .put_alias_and_link(tenant, SHARED_DOMAIN_ID, "foo", 5, &rec)
@@ -3797,16 +3853,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            resolve_code(&st, tenant, "foo").await.unwrap(),
+            resolve_code(&st, SHARED_DOMAIN_ID, "foo").await.unwrap(),
             Some(5),
             "resolve_code must resolve the alias via the shared domain"
-        );
-        assert_eq!(
-            resolve_code(&st, crate::tenant::DEFAULT_TENANT, "foo")
-                .await
-                .unwrap(),
-            Some(5),
-            "resolve_code must resolve the alias regardless of the passed tenant"
         );
     }
 
@@ -3829,6 +3878,7 @@ mod tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
         st.store
             .put_alias_and_link(tenant, SHARED_DOMAIN_ID, "bar", 6, &rec)

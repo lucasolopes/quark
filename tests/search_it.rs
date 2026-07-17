@@ -27,6 +27,7 @@ async fn seed_links(s: &PostgresStore, links: &[(&str, Option<&str>)]) -> Vec<u6
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: quark::tenant::DEFAULT_TENANT,
         };
         match alias {
             Some(a) => {

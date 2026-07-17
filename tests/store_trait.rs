@@ -20,6 +20,7 @@ async fn round_trip_via_trait_object() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     store
         .put_link(quark::tenant::DEFAULT_TENANT, id, &rec)

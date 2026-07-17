@@ -354,6 +354,7 @@ mod tests {
             folder: folder.map(String::from),
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
         let links = vec![
             (1u64, rec("https://a.com", vec!["x", "y"], Some("mkt"))),
