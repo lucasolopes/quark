@@ -1235,11 +1235,13 @@ async fn redirect(
                 }
             }
             if let Some(max) = rec.max_visits {
-                let n = match st
-                    .store
-                    .bump_visits(crate::tenant::DEFAULT_TENANT, id)
-                    .await
-                {
+                // Count the visit against the tenant the link was resolved
+                // under (`route.tenant_id`, the same scope `cache.get` used
+                // above), not a hardcoded `DEFAULT_TENANT`: on a cloud
+                // subdomain the counter must land on the owning tenant. On the
+                // shared host / OSS `route.tenant_id` is already
+                // `DEFAULT_TENANT`, so this is byte-for-byte the old behavior.
+                let n = match st.store.bump_visits(route.tenant_id, id).await {
                     Ok(n) => n,
                     Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
                 };

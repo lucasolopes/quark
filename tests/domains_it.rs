@@ -270,6 +270,56 @@ async fn get_via_host(app: &axum::Router, path: &str, host: &str) -> StatusCode 
     resp.status()
 }
 
+/// LUC-47: a visit to a cloud tenant's link (served via its subdomain)
+/// increments the counter under THAT tenant, not `DEFAULT_TENANT`. Before the
+/// fix `bump_visits` hardcoded `DEFAULT_TENANT`, so a `max_visits` link on a
+/// cloud tenant counted against tenant 0.
+#[tokio::test]
+#[serial]
+async fn visit_counter_lands_on_the_owning_tenant() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let tenant_a = make_tenant(&store, "luc47-a").await;
+    make_domain(&store, tenant_a, "go.acme.com").await;
+
+    let id = 4701u64;
+    store
+        .put_link(
+            tenant_a,
+            id,
+            &Record {
+                max_visits: Some(100),
+                ..rec("https://a.example.com/counted")
+            },
+        )
+        .await
+        .unwrap();
+    let code = numeric_code(id);
+
+    let pg = Arc::new(store);
+    let store_dyn: Arc<dyn Store> = pg.clone();
+    let sink_dyn: Arc<dyn AnalyticsSink> = pg.clone();
+    let app = cloud_app(store_dyn, sink_dyn, None);
+
+    assert_eq!(
+        get_via_host(&app, &format!("/{code}"), "go.acme.com").await,
+        StatusCode::FOUND,
+    );
+
+    assert_eq!(
+        pg.visits(tenant_a, id).await.unwrap(),
+        1,
+        "the visit must be counted under the owning tenant"
+    );
+    assert_eq!(
+        pg.visits(quark::tenant::DEFAULT_TENANT, id).await.unwrap(),
+        0,
+        "no visit must leak onto DEFAULT_TENANT"
+    );
+}
+
 /// CRITICAL (P3 Task 4): a numeric link owned by tenant A serves on A's own
 /// verified custom domain, and 404s on tenant B's verified custom domain —
 /// even though both domains are equally "known" hosts to the router. This is
