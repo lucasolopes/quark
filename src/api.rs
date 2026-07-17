@@ -1664,6 +1664,14 @@ async fn oidc_login(
                 )
                     .into_response();
             }
+            // Rate-limit the org-login start by IP (LUC-51): the generic 404
+            // already hides slug existence by body, but an unthrottled caller
+            // could still probe slugs by response timing (unknown = 1 query vs
+            // configured = more). A per-IP brake closes that side channel.
+            let ip = client_ip(&headers, &st.real_ip_header, None);
+            if !st.ratelimiter.check(&ip, now()).await {
+                return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+            }
             // Both "unknown slug" and "known tenant, no IdP of its own" return
             // the exact same 404 body: an unauthenticated caller must not be
             // able to distinguish a nonexistent organization from a real one
