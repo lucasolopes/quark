@@ -2649,6 +2649,36 @@ async fn admin_invites_create(
     if let Err(e) = st.store.create_invite(&invite).await {
         return conflict_or_503(e).into_response();
     }
+    // Keycloak realm provisioning (multi-tenancy P2e Task 3): best-effort,
+    // same shape as `provision_tenant_keycloak` — the invite row above is
+    // already committed, so a Keycloak failure here must never fail this
+    // response; the Owner can re-trigger by re-issuing the invite
+    // (`ensure_user`/`send_set_password_email` are idempotent). Model B never
+    // grants membership here: that only happens at first OIDC login, off the
+    // group claim (see `admin_invites_accept`'s split below).
+    if let Some(kc) = &st.keycloak {
+        let group = match req.role {
+            crate::tenant::Role::Admin => "quark-admins",
+            // `Role::Owner` is rejected above; Member and Viewer both land in
+            // the default-closed readers group so every invited role is
+            // admitted by the group gate `provision_tenant_keycloak` writes
+            // (`required_value: Some("quark-readers")`).
+            crate::tenant::Role::Member | crate::tenant::Role::Viewer => "quark-readers",
+            crate::tenant::Role::Owner => unreachable!("owner invites are rejected above"),
+        };
+        match st.store.get_tenant(p.tenant).await {
+            Ok(Some(tenant)) => match kc.ensure_user(&tenant.slug, &email, group).await {
+                Ok(kc_user_id) => {
+                    if let Err(e) = kc.send_set_password_email(&tenant.slug, &kc_user_id).await {
+                        log_keycloak_step_error(tenant.id.0, "send_set_password_email", e);
+                    }
+                }
+                Err(e) => log_keycloak_step_error(tenant.id.0, "ensure_user", e),
+            },
+            Ok(None) => log_keycloak_step_error(p.tenant.0, "get_tenant", "tenant not found"),
+            Err(e) => log_keycloak_step_error(p.tenant.0, "get_tenant", e),
+        }
+    }
     Json(CreateInviteResp {
         id,
         token,
@@ -2922,6 +2952,25 @@ async fn admin_invites_accept(
     // never causes a false mismatch.
     if user.email.to_ascii_lowercase() != inv.email {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    // Model B split (multi-tenancy P2e Task 3): with a `KeycloakAdmin`
+    // configured, membership is born at first OIDC login off the group claim
+    // (the P2d-A callback), never from accepting an invite. The checks above
+    // already confirmed the token is valid and belongs to this session's
+    // email, so this is a legitimate invite, but acceptance stops here: no
+    // `mark_invite_accepted` claim, no `put_membership`. The invite stays
+    // pending (re-acceptable) and the caller is pointed at their org's login
+    // instead. Model A (no Keycloak, P2c) is completely unchanged below.
+    if st.keycloak.is_some() {
+        let slug = match st.store.get_tenant(inv.tenant_id).await {
+            Ok(Some(t)) => t.slug,
+            _ => String::new(),
+        };
+        return Json(serde_json::json!({
+            "status": "login_required",
+            "login_url": format!("/admin/login?org={slug}"),
+        }))
+        .into_response();
     }
     match st.store.get_membership(user_id, inv.tenant_id).await {
         Ok(Some(_)) => return StatusCode::CONFLICT.into_response(),

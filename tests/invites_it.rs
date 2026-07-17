@@ -242,6 +242,20 @@ async fn admin_app_with_scopes(
     token_id: u64,
     scopes: Vec<Scope>,
 ) -> (axum::Router, String) {
+    admin_app_with_scopes_and_keycloak(store, multi_tenant, tenant, token_id, scopes, None).await
+}
+
+/// Same as `admin_app_with_scopes`, but with a `KeycloakAdmin` wired in
+/// (multi-tenancy P2e Task 3): `admin_invites_create`'s realm-provisioning
+/// step only fires when this is `Some`, exactly like the real `AppState`.
+async fn admin_app_with_scopes_and_keycloak(
+    store: Arc<PostgresStore>,
+    multi_tenant: bool,
+    tenant: TenantId,
+    token_id: u64,
+    scopes: Vec<Scope>,
+    keycloak: Option<Arc<dyn quark::keycloak::KeycloakAdmin>>,
+) -> (axum::Router, String) {
     let raw = format!("qtok_invites_test_{}", token_id);
     store
         .put_api_token(
@@ -276,8 +290,8 @@ async fn admin_app_with_scopes(
         multi_tenant,
         tenant_domain_suffix: None,
         oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
+        keycloak,
+        keycloak_base_url: Some("https://kc.example.com".to_string()),
         cache,
         store: store_dyn,
         key: KEY,
@@ -580,6 +594,17 @@ async fn invites_endpoints_404_in_oss() {
 /// shape the accept endpoint reads via `session_user_id` rather than
 /// `admin_guard`'s `x-admin-token` path used by create/list/revoke above.
 fn session_app_over(store: Arc<PostgresStore>, multi_tenant: bool) -> axum::Router {
+    session_app_over_with_keycloak(store, multi_tenant, None)
+}
+
+/// Same as `session_app_over`, but with a `KeycloakAdmin` wired in
+/// (multi-tenancy P2e Task 3): with this `Some`, `admin_invites_accept` takes
+/// the model-B, login-driven branch instead of granting membership directly.
+fn session_app_over_with_keycloak(
+    store: Arc<PostgresStore>,
+    multi_tenant: bool,
+    keycloak: Option<Arc<dyn quark::keycloak::KeycloakAdmin>>,
+) -> axum::Router {
     let store_dyn: Arc<dyn Store> = store.clone();
     let sink_dyn: Arc<dyn AnalyticsSink> = store;
     let cache = Cache::new(store_dyn.clone(), 1000, None);
@@ -597,8 +622,8 @@ fn session_app_over(store: Arc<PostgresStore>, multi_tenant: bool) -> axum::Rout
         multi_tenant,
         tenant_domain_suffix: None,
         oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
+        keycloak,
+        keycloak_base_url: Some("https://kc.example.com".to_string()),
         cache,
         store: store_dyn,
         key: KEY,
@@ -1025,4 +1050,307 @@ async fn list_and_delete_invites_http_are_tenant_scoped_for_non_superuser() {
 
     // Tenant A's own invite is untouched by tenant B's failed attempt.
     assert_eq!(store.list_invites(tenant_a).await.unwrap().len(), 1);
+}
+
+// --- P2e Task 3: Keycloak invite integration (model B) ---------------------
+//
+// With `st.keycloak = Some`, `admin_invites_create` provisions the invited
+// user in the tenant's realm (`ensure_user` + `send_set_password_email`) but
+// never grants membership itself — model B is login-driven, so membership is
+// only ever created by the OIDC callback on first login, off the group
+// claim. `admin_invites_accept` reflects the same split: with Keycloak
+// configured it stops after validating the invite and points the caller at
+// their org's login, granting nothing.
+
+/// `role: "member"` maps to the `quark-readers` group (the default-closed
+/// group gate written by `provision_tenant_keycloak` denies anyone outside
+/// `quark-admins`/`quark-readers`, so every invited role must land in one of
+/// the two).
+#[tokio::test]
+#[serial]
+async fn create_invite_with_keycloak_provisions_member_into_readers_group() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-kc-member").await;
+    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    mock.set_next_user_id("kc-user-invite-member");
+    let (app, token) = admin_app_with_scopes_and_keycloak(
+        store.clone(),
+        true,
+        tenant,
+        9201,
+        vec![Scope::Full],
+        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+    )
+    .await;
+
+    let (status, body) = create_invite(&app, &token, "member-invite@acme.com", "member").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["email"], "member-invite@acme.com");
+    assert_eq!(body["role"], "member");
+
+    assert_eq!(
+        mock.calls(),
+        vec![
+            "ensure_user(invites-kc-member,member-invite@acme.com,quark-readers)".to_string(),
+            "send_set_password_email(invites-kc-member,kc-user-invite-member)".to_string(),
+        ],
+        "a Member invite must provision the realm user into quark-readers"
+    );
+
+    let stored = store.list_invites(tenant).await.unwrap();
+    assert_eq!(
+        stored.len(),
+        1,
+        "the invite row must still be recorded even with Keycloak configured"
+    );
+}
+
+/// `role: "viewer"` also maps to `quark-readers` (same group as Member — see
+/// the mapping note above).
+#[tokio::test]
+#[serial]
+async fn create_invite_with_keycloak_provisions_viewer_into_readers_group() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-kc-viewer").await;
+    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    mock.set_next_user_id("kc-user-invite-viewer");
+    let (app, token) = admin_app_with_scopes_and_keycloak(
+        store.clone(),
+        true,
+        tenant,
+        9202,
+        vec![Scope::Full],
+        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+    )
+    .await;
+
+    let (status, _) = create_invite(&app, &token, "viewer-invite@acme.com", "viewer").await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(
+        mock.calls(),
+        vec![
+            "ensure_user(invites-kc-viewer,viewer-invite@acme.com,quark-readers)".to_string(),
+            "send_set_password_email(invites-kc-viewer,kc-user-invite-viewer)".to_string(),
+        ],
+        "a Viewer invite must provision the realm user into quark-readers, same as Member"
+    );
+}
+
+/// `role: "admin"` maps to `quark-admins`, distinct from Member/Viewer.
+#[tokio::test]
+#[serial]
+async fn create_invite_with_keycloak_provisions_admin_into_admins_group() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-kc-admin").await;
+    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    mock.set_next_user_id("kc-user-invite-admin");
+    let (app, token) = admin_app_with_scopes_and_keycloak(
+        store.clone(),
+        true,
+        tenant,
+        9203,
+        vec![Scope::Full],
+        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+    )
+    .await;
+
+    let (status, _) = create_invite(&app, &token, "admin-invite@acme.com", "admin").await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(
+        mock.calls(),
+        vec![
+            "ensure_user(invites-kc-admin,admin-invite@acme.com,quark-admins)".to_string(),
+            "send_set_password_email(invites-kc-admin,kc-user-invite-admin)".to_string(),
+        ],
+        "an Admin invite must provision the realm user into quark-admins"
+    );
+}
+
+/// A `KeycloakAdmin` failure (`ensure_user` erroring) must never fail the
+/// invite itself: it is still stored, and the response is still 200. There is
+/// no membership to check either way (model B never grants it here), so this
+/// only asserts the invite row survives a Keycloak-side failure.
+#[tokio::test]
+#[serial]
+async fn create_invite_with_keycloak_failure_still_stores_the_invite() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-kc-fail").await;
+    let mock = Arc::new(FailingKeycloakAdmin);
+    let (app, token) = admin_app_with_scopes_and_keycloak(
+        store.clone(),
+        true,
+        tenant,
+        9204,
+        vec![Scope::Full],
+        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+    )
+    .await;
+
+    let (status, body) = create_invite(&app, &token, "fail-invite@acme.com", "member").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a best-effort Keycloak failure must never fail the invite request"
+    );
+    assert_eq!(body["email"], "fail-invite@acme.com");
+
+    let stored = store.list_invites(tenant).await.unwrap();
+    assert_eq!(stored.len(), 1, "the invite row must still be stored");
+}
+
+/// A `KeycloakAdmin` whose `ensure_user` always errors, used to exercise the
+/// best-effort failure path on `admin_invites_create` (`MockKeycloakAdmin`
+/// only ever succeeds, mirroring the idempotent real client, so it cannot
+/// cover this branch).
+struct FailingKeycloakAdmin;
+
+#[async_trait::async_trait]
+impl quark::keycloak::KeycloakAdmin for FailingKeycloakAdmin {
+    async fn ensure_realm(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+        Ok(())
+    }
+    async fn ensure_client(
+        &self,
+        _slug: &str,
+        _redirect_uri: &str,
+    ) -> Result<(), quark::keycloak::KcError> {
+        Ok(())
+    }
+    async fn ensure_groups_and_mapper(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+        Ok(())
+    }
+    async fn ensure_user(
+        &self,
+        _slug: &str,
+        _email: &str,
+        _group: &str,
+    ) -> Result<String, quark::keycloak::KcError> {
+        Err(quark::keycloak::KcError(
+            "simulated ensure_user failure".to_string(),
+        ))
+    }
+    async fn send_set_password_email(
+        &self,
+        _slug: &str,
+        _user_id: &str,
+    ) -> Result<(), quark::keycloak::KcError> {
+        Ok(())
+    }
+}
+
+/// With `st.keycloak = Some`, accepting an invite must NOT grant membership:
+/// model B only creates membership at first OIDC login, off the group claim.
+/// The response instead points the caller at their org's login.
+#[tokio::test]
+#[serial]
+async fn accept_invite_with_keycloak_grants_no_membership() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-kc-accept").await;
+    let (user_id, raw) = seed_session(&store, "kc-accept-subject", "kc-accept@acme.com").await;
+    make_invite(
+        &store,
+        tenant,
+        "kc-accept@acme.com",
+        "raw-kc-accept",
+        quark::now(),
+        quark::now() + 3600,
+    )
+    .await;
+
+    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let app = session_app_over_with_keycloak(
+        store.clone(),
+        true,
+        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+    );
+
+    let (status, body) = accept_invite(&app, "raw-kc-accept", Some(&raw)).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "model B's accept response is a harmless status, not a membership grant"
+    );
+    assert_eq!(body["status"], "login_required");
+    assert_eq!(body["login_url"], "/admin/login?org=invites-kc-accept");
+
+    assert!(
+        store
+            .get_membership(user_id, tenant)
+            .await
+            .unwrap()
+            .is_none(),
+        "model B: accept must never create a membership; that happens on first OIDC login"
+    );
+    assert!(
+        mock.calls().is_empty(),
+        "accept never calls KeycloakAdmin directly; it only checks st.keycloak.is_some()"
+    );
+}
+
+/// Model-A parity: with `st.keycloak = None`, accepting still grants
+/// membership exactly like before P2e (already covered end-to-end by
+/// `accept_invite_grants_membership_and_repoints_session` above, which uses
+/// the same `None`-keycloak `session_app_over`). This test only pins the
+/// negative side explicitly: a session-app built with keycloak wired to
+/// `None` never takes the login-redirect branch.
+#[tokio::test]
+#[serial]
+async fn accept_invite_without_keycloak_keeps_model_a_behavior() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-no-kc-accept").await;
+    let (user_id, raw) =
+        seed_session(&store, "no-kc-accept-subject", "no-kc-accept@acme.com").await;
+    make_invite(
+        &store,
+        tenant,
+        "no-kc-accept@acme.com",
+        "raw-no-kc-accept",
+        quark::now(),
+        quark::now() + 3600,
+    )
+    .await;
+
+    let app = session_app_over_with_keycloak(store.clone(), true, None);
+    let (status, body) = accept_invite(&app, "raw-no-kc-accept", Some(&raw)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["tenant_id"], tenant.0);
+    assert_eq!(body["role"], "member");
+    assert_ne!(
+        body.get("status"),
+        Some(&serde_json::Value::String("login_required".to_string())),
+        "with no Keycloak configured, accept must never take the login-redirect branch"
+    );
+
+    let membership = store.get_membership(user_id, tenant).await.unwrap();
+    assert_eq!(
+        membership.map(|m| m.role),
+        Some(Role::Member),
+        "without Keycloak configured, accept must still grant the invited role (P2c parity)"
+    );
 }
