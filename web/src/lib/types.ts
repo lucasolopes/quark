@@ -79,6 +79,8 @@ export interface MeResponse {
   scopes?: string[];
   memberships?: Membership[];
   current_tenant?: number | null;
+  /** `<slug>.<suffix>` domain wildcard for the cloud tenant's own short links; null/absent in OSS or when unconfigured. */
+  tenant_domain_suffix?: string | null;
 }
 /** A pending or accepted team invite (cloud only), for the Members screen. */
 export interface InviteView {

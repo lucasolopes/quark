@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LinkTable } from "./LinkTable";
 import { withProviders } from "@/test-utils";
@@ -16,6 +17,38 @@ const link: Link = {
   rules: [],
   variants: [],
 };
+
+function meResponse(body: object) {
+  return new Response(JSON.stringify(body), { status: 200 });
+}
+const ossMe = { authenticated: true, oidc_enabled: false };
+const cloudMe = {
+  authenticated: true,
+  oidc_enabled: false,
+  current_tenant: 1,
+  memberships: [{ tenant_id: 1, name: "Acme", slug: "acme", role: "Owner" }],
+  tenant_domain_suffix: "quark.link",
+};
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+  // Default: OSS `me` (no memberships/suffix), so pre-existing tests that
+  // don't care about the short URL keep behaving as before this feature.
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse(ossMe));
+});
+
+/**
+ * Renders `LinkTable` and waits for the `["me"]` query to settle before
+ * returning, so a test's first click sees the resolved tenant slug/suffix
+ * rather than racing the still-pending fetch (which would otherwise flip
+ * the short URL under a Radix trigger mid-interaction and drop the click).
+ */
+async function renderTable(links: Link[], me: object = ossMe) {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse(me));
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(withProviders(<LinkTable links={links} onEdit={() => {}} onDelete={() => {}} />, { queryClient }));
+  await waitFor(() => expect(queryClient.getQueryData(["me"])).toEqual(me));
+}
 
 describe("LinkTable — A/B variants badge", () => {
   it("shows a badge with the variant count when the link has variants", () => {
@@ -56,8 +89,8 @@ describe("LinkTable — health indicator", () => {
 });
 
 describe("LinkTable — QR code", () => {
-  it("opens the QR code dialog with the short URL and the download button", async () => {
-    render(withProviders(<LinkTable links={[link]} onEdit={() => {}} onDelete={() => {}} />));
+  it("opens the QR code dialog with the short URL (OSS fallback) and the download button", async () => {
+    await renderTable([link]);
 
     await userEvent.click(screen.getByRole("button", { name: /more actions for 6lB362J/i }));
     await userEvent.click(await screen.findByRole("menuitem", { name: /qr code/i }));
@@ -68,7 +101,7 @@ describe("LinkTable — QR code", () => {
   });
 
   it("closes the QR code dialog on cancel", async () => {
-    render(withProviders(<LinkTable links={[link]} onEdit={() => {}} onDelete={() => {}} />));
+    await renderTable([link]);
 
     await userEvent.click(screen.getByRole("button", { name: /more actions for 6lB362J/i }));
     await userEvent.click(await screen.findByRole("menuitem", { name: /qr code/i }));
@@ -76,6 +109,37 @@ describe("LinkTable — QR code", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(screen.queryByRole("dialog", { name: /qr code for 6lB362J/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the tenant subdomain URL when the cloud tenant has a provisioned suffix", async () => {
+    await renderTable([link], cloudMe);
+
+    await userEvent.click(screen.getByRole("button", { name: /more actions for 6lB362J/i }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /qr code/i }));
+
+    expect(await screen.findByRole("dialog", { name: /qr code for 6lB362J/i })).toBeInTheDocument();
+    expect(screen.getByText("https://acme.quark.link/6lB362J")).toBeInTheDocument();
+  });
+});
+
+describe("LinkTable — copy short URL", () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+      configurable: true,
+    });
+  });
+
+  it("copies the PUBLIC_BASE URL in OSS (no tenant suffix)", async () => {
+    await renderTable([link]);
+    await userEvent.click(screen.getByRole("button", { name: /copy short link for 6lB362J/i }));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(`${window.location.origin}/6lB362J`);
+  });
+
+  it("copies the tenant subdomain URL when the cloud tenant has a provisioned suffix", async () => {
+    await renderTable([link], cloudMe);
+    await userEvent.click(screen.getByRole("button", { name: /copy short link for 6lB362J/i }));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("https://acme.quark.link/6lB362J");
   });
 });
 

@@ -15,6 +15,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useT } from "@/i18n";
 import { formatDate } from "@/lib/format";
+import { useMe } from "@/lib/queries";
 import { tagColor } from "@/lib/tag-color";
 import type { Link } from "@/lib/types";
 
@@ -28,7 +29,20 @@ const PUBLIC_BASE = (
   (import.meta.env.VITE_API_BASE_URL as string | undefined) || window.location.origin
 ).replace(/\/+$/, "");
 
-function shortUrl(code: string): string {
+/** The current tenant's own subdomain, when the cloud has provisioned one. */
+interface TenantDomain {
+  slug?: string | null;
+  suffix?: string | null;
+}
+
+/**
+ * Builds the short URL shown/copied for a code. Cloud tenants with a
+ * provisioned `<slug>.<suffix>` subdomain get links on their own domain;
+ * everyone else (OSS, or a cloud tenant with no suffix configured yet)
+ * falls back to `PUBLIC_BASE`, unchanged from before subdomains existed.
+ */
+function buildShortUrl(code: string, { slug, suffix }: TenantDomain): string {
+  if (slug && suffix) return `https://${slug}.${suffix}/${code}`;
   return `${PUBLIC_BASE}/${code}`;
 }
 
@@ -46,10 +60,13 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
   const [justCopiedId, setJustCopiedId] = useState<number | null>(null);
   const [qrLink, setQrLink] = useState<Link | null>(null);
   const navigate = useNavigate();
+  const { data: me } = useMe();
+  const currentMembership = me?.memberships?.find((m) => m.tenant_id === me.current_tenant);
+  const tenantDomain: TenantDomain = { slug: currentMembership?.slug, suffix: me?.tenant_domain_suffix };
 
   async function handleCopy(link: Link) {
     try {
-      await navigator.clipboard.writeText(shortUrl(link.code));
+      await navigator.clipboard.writeText(buildShortUrl(link.code, tenantDomain));
       toast.success(t("linkTable.copied"));
       setJustCopiedId(link.id);
       setTimeout(() => setJustCopiedId((current) => (current === link.id ? null : current)), 1500);
@@ -278,7 +295,7 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
       {qrLink && (
         <LinkQrDialog
           code={qrLink.code}
-          url={shortUrl(qrLink.code)}
+          url={buildShortUrl(qrLink.code, tenantDomain)}
           open
           onOpenChange={(next) => {
             if (!next) setQrLink(null);
