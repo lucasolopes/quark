@@ -196,7 +196,12 @@ async fn main() {
     let block_private = std::env::var("QUARK_BLOCK_PRIVATE")
         .map(|v| v != "0")
         .unwrap_or(true);
-    let public_host = std::env::var("QUARK_PUBLIC_HOST").ok();
+    // Lowercased so the self-loop / claim-prevention checks that compare an
+    // incoming host (always lowercased) against it can never be bypassed by a
+    // mixed-case env value.
+    let public_host = std::env::var("QUARK_PUBLIC_HOST")
+        .ok()
+        .map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase());
     let real_ip_header =
         std::env::var("QUARK_REAL_IP_HEADER").unwrap_or_else(|_| "cf-connecting-ip".to_string());
 
