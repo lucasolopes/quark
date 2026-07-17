@@ -62,3 +62,37 @@ describe("api client", () => {
     expect(r.tags).toEqual([{ name: "promo", count: 3 }, { name: "summer", count: 1 }]);
   });
 });
+
+describe("workspace endpoints", () => {
+  beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+
+  it("createWorkspace posts name+slug to /admin/tenants and returns the tenant", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: 5, name: "Acme", slug: "acme", created: 1 }), { status: 200 }),
+    );
+    const t = await api.createWorkspace("Acme", "acme");
+    expect(t.id).toBe(5);
+    const [url, init] = spy.mock.calls[0];
+    expect(String(url)).toContain("/admin/tenants");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ name: "Acme", slug: "acme" });
+  });
+
+  it("createWorkspace throws ApiError(409) on a duplicate slug", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 409 }));
+    await expect(api.createWorkspace("Acme", "acme")).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("switchWorkspace posts tenant_id to /admin/workspace/switch", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    await api.switchWorkspace(7);
+    const [url, init] = spy.mock.calls[0];
+    expect(String(url)).toContain("/admin/workspace/switch");
+    expect(JSON.parse(String(init?.body))).toEqual({ tenant_id: 7 });
+  });
+
+  it("switchWorkspace throws ApiError(403) when the user lacks membership", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 403 }));
+    await expect(api.switchWorkspace(7)).rejects.toMatchObject({ status: 403 });
+  });
+});

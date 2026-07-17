@@ -1,5 +1,6 @@
 import { QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
+import { hasToken } from "./auth";
 import type { CreateLinkRequest, CreatePixelRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest, WellknownName } from "./types";
 
 const LINKS_QUERY_KEY = ["links"];
@@ -23,6 +24,43 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+/**
+ * The `GET /admin/me` query, shared by `RequireAuth` and `WorkspaceSwitcher`.
+ * Disabled when a break-glass token is present (OSS/token login never calls it),
+ * so its data is undefined in that case and the switcher/gate stay hidden.
+ */
+export function useMe() {
+  return useQuery({
+    queryKey: ["me"],
+    queryFn: () => api.me(),
+    enabled: !hasToken(),
+    retry: false,
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * Creates a workspace; the session is now scoped to it, so invalidate ALL
+ * queries — every per-tenant list (links, stats, tokens, …) must reload, and
+ * `["me"]` must refetch so the gate/switcher re-resolve.
+ */
+export function useCreateWorkspace() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, slug }: { name: string; slug: string }) => api.createWorkspace(name, slug),
+    onSuccess: () => { void client.invalidateQueries(); },
+  });
+}
+
+/** Switches the current workspace; invalidates ALL queries (see `useCreateWorkspace`). */
+export function useSwitchWorkspace() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (tenantId: number) => api.switchWorkspace(tenantId),
+    onSuccess: () => { void client.invalidateQueries(); },
+  });
+}
 
 const LINKS_PAGE_SIZE = 50;
 
