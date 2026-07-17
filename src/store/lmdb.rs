@@ -972,6 +972,11 @@ impl Store for LmdbStore {
         Ok(out)
     }
 
+    async fn get_owner_user_id(&self, _tenant: TenantId) -> Result<Option<u64>, StoreError> {
+        // OSS is single-tenant with no Keycloak backfill; never invoked here.
+        Ok(None)
+    }
+
     // Custom domains (P3) are cloud-only: OSS never routes to a custom host,
     // and the admin CRUD endpoints are gated behind `multi_tenant`, so these
     // are never actually invoked on this backend. Kept as clear "unsupported"

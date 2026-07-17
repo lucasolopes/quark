@@ -1207,6 +1207,12 @@ mod tests {
         ) -> Result<Vec<crate::tenant::Membership>, StoreError> {
             unimplemented!()
         }
+        async fn get_owner_user_id(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Option<u64>, StoreError> {
+            unimplemented!()
+        }
         async fn next_domain_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }
