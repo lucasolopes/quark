@@ -4954,6 +4954,210 @@ mod tests {
         );
     }
 
+    /// Security fix (P2d Task 5b, final-branch-review finding): a tenant's
+    /// `Owner` logging back in through that tenant's own IdP must not be
+    /// downgraded by whatever role the claim maps to. `claim_role` never
+    /// produces `Owner`, so before this fix a second login by the sole Owner
+    /// silently demoted them and left the tenant with no Owner at all
+    /// (Owner-only operations become unreachable — an availability bug, not
+    /// an escalation). `ensure_user_and_membership` must now read the
+    /// existing membership first and keep `Owner` rather than overwrite it.
+    #[tokio::test]
+    async fn tenant_login_never_downgrades_an_existing_owner() {
+        let st = multi_tenant_state().await;
+        let tenant = crate::tenant::TenantId(1);
+        st.store
+            .put_tenant(&crate::tenant::Tenant {
+                id: tenant,
+                name: "Acme".to_string(),
+                slug: "acme".to_string(),
+                created: 0,
+            })
+            .await
+            .unwrap();
+
+        // Grant Owner the way a real workspace creation would (never through
+        // `ensure_user_and_membership`/claim_role, which can't produce it).
+        let uid = st.store.next_user_id().await.unwrap();
+        st.store
+            .put_user(&crate::tenant::User {
+                id: uid,
+                subject: "sub-owner".to_string(),
+                email: "owner@acme.example".to_string(),
+                display: "Owner".to_string(),
+                created: 0,
+            })
+            .await
+            .unwrap();
+        st.store
+            .put_membership(&crate::tenant::Membership {
+                user_id: uid,
+                tenant_id: tenant,
+                role: crate::tenant::Role::Owner,
+                created: 0,
+            })
+            .await
+            .unwrap();
+
+        // The IdP's admin-group claim maps to Admin, not Owner — as if the
+        // Owner were removed from the admin group, or the tenant's IdP
+        // config simply doesn't distinguish an Owner group at all.
+        let cfg = crate::oidc::TenantOidcConfig {
+            tenant_id: tenant,
+            issuer: "https://idp.acme.example".into(),
+            client_id: "acme".into(),
+            client_secret: "s".into(),
+            scopes: vec!["openid".into()],
+            admin_claim: "groups".into(),
+            admin_value: "acme-admins".into(),
+            readonly_value: "acme-viewers".into(),
+            required_value: None,
+            post_login_url: None,
+        };
+        let claims = serde_json::json!({ "groups": ["acme-admins"] });
+        let role = crate::oidc::claim_role(&claims, &cfg);
+        assert_eq!(role, crate::tenant::Role::Admin);
+
+        let uid2 = crate::oidc::ensure_user_and_membership(
+            st.store.as_ref(),
+            true,
+            "sub-owner",
+            "owner@acme.example",
+            "Owner",
+            &[],
+            Some((tenant, role)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(uid2, uid, "same subject must resolve to the same user");
+
+        let m = st.store.get_membership(uid, tenant).await.unwrap().unwrap();
+        assert_eq!(
+            m.role,
+            crate::tenant::Role::Owner,
+            "the Owner's own login must not downgrade them via the claim"
+        );
+    }
+
+    /// Counterpart to the Owner-preservation test above: a non-owner's
+    /// membership must still follow the claim on every login, so a group
+    /// change (Member promoted into the admin group) keeps taking effect.
+    /// Only `Owner` is special-cased; this asserts the fix didn't freeze
+    /// every role.
+    #[tokio::test]
+    async fn tenant_login_still_applies_claim_role_for_non_owners() {
+        let st = multi_tenant_state().await;
+        let tenant = crate::tenant::TenantId(1);
+        st.store
+            .put_tenant(&crate::tenant::Tenant {
+                id: tenant,
+                name: "Acme".to_string(),
+                slug: "acme".to_string(),
+                created: 0,
+            })
+            .await
+            .unwrap();
+        let cfg = crate::oidc::TenantOidcConfig {
+            tenant_id: tenant,
+            issuer: "https://idp.acme.example".into(),
+            client_id: "acme".into(),
+            client_secret: "s".into(),
+            scopes: vec!["openid".into()],
+            admin_claim: "groups".into(),
+            admin_value: "acme-admins".into(),
+            readonly_value: "acme-viewers".into(),
+            required_value: None,
+            post_login_url: None,
+        };
+
+        // First login: no admin-group claim yet, lands as Member (default).
+        let member_claims = serde_json::json!({ "groups": ["nobody"] });
+        let role = crate::oidc::claim_role(&member_claims, &cfg);
+        assert_eq!(role, crate::tenant::Role::Member);
+        let uid = crate::oidc::ensure_user_and_membership(
+            st.store.as_ref(),
+            true,
+            "sub-member",
+            "member@acme.example",
+            "Member",
+            &[],
+            Some((tenant, role)),
+        )
+        .await
+        .unwrap();
+        let m = st.store.get_membership(uid, tenant).await.unwrap().unwrap();
+        assert_eq!(m.role, crate::tenant::Role::Member);
+
+        // Second login: now in the admin group — must be upgraded to Admin,
+        // since a non-owner's role always tracks the claim.
+        let admin_claims = serde_json::json!({ "groups": ["acme-admins"] });
+        let role = crate::oidc::claim_role(&admin_claims, &cfg);
+        assert_eq!(role, crate::tenant::Role::Admin);
+        let uid2 = crate::oidc::ensure_user_and_membership(
+            st.store.as_ref(),
+            true,
+            "sub-member",
+            "member@acme.example",
+            "Member",
+            &[],
+            Some((tenant, role)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(uid2, uid);
+        let m = st.store.get_membership(uid, tenant).await.unwrap().unwrap();
+        assert_eq!(
+            m.role,
+            crate::tenant::Role::Admin,
+            "a non-owner's role must follow the claim on every login"
+        );
+    }
+
+    /// Brand-new user via per-tenant login still just gets the claim role —
+    /// the Owner-preservation branch in `ensure_user_and_membership` must not
+    /// change behavior when there is no prior membership to preserve.
+    #[tokio::test]
+    async fn tenant_login_new_user_gets_claim_role() {
+        let st = multi_tenant_state().await;
+        let tenant = crate::tenant::TenantId(1);
+        st.store
+            .put_tenant(&crate::tenant::Tenant {
+                id: tenant,
+                name: "Acme".to_string(),
+                slug: "acme".to_string(),
+                created: 0,
+            })
+            .await
+            .unwrap();
+        let cfg = crate::oidc::TenantOidcConfig {
+            tenant_id: tenant,
+            issuer: "https://idp.acme.example".into(),
+            client_id: "acme".into(),
+            client_secret: "s".into(),
+            scopes: vec!["openid".into()],
+            admin_claim: "groups".into(),
+            admin_value: "acme-admins".into(),
+            readonly_value: "acme-viewers".into(),
+            required_value: None,
+            post_login_url: None,
+        };
+        let claims = serde_json::json!({ "groups": ["acme-admins"] });
+        let role = crate::oidc::claim_role(&claims, &cfg);
+        let uid = crate::oidc::ensure_user_and_membership(
+            st.store.as_ref(),
+            true,
+            "sub-brand-new",
+            "new@acme.example",
+            "New",
+            &[],
+            Some((tenant, role)),
+        )
+        .await
+        .unwrap();
+        let m = st.store.get_membership(uid, tenant).await.unwrap().unwrap();
+        assert_eq!(m.role, crate::tenant::Role::Admin);
+    }
+
     /// Required-group gate (multi-tenancy P2d Task 4b), driven at the same
     /// level as `tenant_login_membership_role_matches_claim_mapping`:
     /// `passes_required_group` is the decision `oidc_callback` must check

@@ -458,11 +458,22 @@ pub async fn ensure_user_and_membership(
             })
             .await?;
     } else if let Some((tenant, role)) = tenant_membership {
+        // Never let a login claim downgrade an existing Owner. `claim_role`
+        // can't produce `Role::Owner` on its own, so the only way a user has
+        // it is a prior explicit grant (workspace creation, invite accept) —
+        // preserve it rather than overwrite it with whatever the IdP group
+        // maps to today. Any other existing role (or none yet) still follows
+        // the claim, so group changes keep reflecting for non-owners.
+        let existing = store.get_membership(user.id, tenant).await?;
+        let effective_role = match existing {
+            Some(m) if m.role == Role::Owner => Role::Owner,
+            _ => role,
+        };
         store
             .put_membership(&Membership {
                 user_id: user.id,
                 tenant_id: tenant,
-                role,
+                role: effective_role,
                 created: crate::now(),
             })
             .await?;
