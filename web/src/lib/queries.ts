@@ -11,6 +11,8 @@ const TOKENS_QUERY_KEY = ["tokens"];
 const PIXELS_QUERY_KEY = ["pixels"];
 const SHEETS_STATUS_QUERY_KEY = ["sheets", "status"];
 const INVITES_QUERY_KEY = ["invites"];
+const SSO_DOMAINS_QUERY_KEY = ["sso-domains"];
+const OIDC_CONFIGURED_QUERY_KEY = ["oidc-configured"];
 
 /**
  * The application's single TanStack Query client. `retry: false` because a
@@ -378,5 +380,53 @@ export function useAcceptInvite() {
   return useMutation({
     mutationFn: (token: string) => api.acceptInvite(token),
     onSuccess: () => { void client.invalidateQueries(); },
+  });
+}
+
+/**
+ * Whether the current workspace has its own OIDC provider configured, for
+ * the SSO domains screen's gate. `retry: false` so an unconfigured workspace
+ * (a normal `false`, not an error) resolves at once.
+ */
+export function useOidcConfigured() {
+  return useQuery({
+    queryKey: OIDC_CONFIGURED_QUERY_KEY,
+    queryFn: () => api.oidcConfigured(),
+    retry: false,
+  });
+}
+
+/** List of SSO email domains for the current workspace, for the SSO domains screen. */
+export function useSsoDomains() {
+  return useQuery({
+    queryKey: SSO_DOMAINS_QUERY_KEY,
+    queryFn: () => api.listSsoDomains(),
+  });
+}
+
+/** Registers an SSO email domain; on success invalidates `useSsoDomains`. */
+export function useCreateSsoDomain() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (domain: string) => api.createSsoDomain(domain),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: SSO_DOMAINS_QUERY_KEY }); },
+  });
+}
+
+/** Checks an SSO email domain's DNS TXT record; on success invalidates `useSsoDomains` (status may have flipped to verified). */
+export function useVerifySsoDomain() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.verifySsoDomain(id),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: SSO_DOMAINS_QUERY_KEY }); },
+  });
+}
+
+/** Removes an SSO email domain; on success invalidates `useSsoDomains`. */
+export function useDeleteSsoDomain() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.deleteSsoDomain(id),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: SSO_DOMAINS_QUERY_KEY }); },
   });
 }

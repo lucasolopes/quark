@@ -194,3 +194,73 @@ describe("oidcLoginUrl", () => {
     expect(url).toContain(`/admin/login?org=${encodeURIComponent("a b")}`);
   });
 });
+
+describe("SSO email domain endpoints", () => {
+  beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+
+  it("oidcConfigured returns true on 200", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
+    expect(await api.oidcConfigured()).toBe(true);
+  });
+
+  it("oidcConfigured returns false on 404 (no oidc provider set up yet)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 404 }));
+    expect(await api.oidcConfigured()).toBe(false);
+  });
+
+  it("listSsoDomains GETs /admin/sso-domains", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify([]), { status: 200 }));
+    await api.listSsoDomains();
+    const [url, init] = spy.mock.calls[0];
+    expect(String(url)).toContain("/admin/sso-domains");
+    expect(init?.method ?? "GET").toBe("GET");
+  });
+
+  it("createSsoDomain posts {domain} to /admin/sso-domains", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 1, domain: "acme.com", status: "pending", created: 1, verified_at: null,
+          txt_name: "_quark-sso.acme.com", txt_value: "tok_abc",
+        }),
+        { status: 200 },
+      ),
+    );
+    const d = await api.createSsoDomain("acme.com");
+    expect(d.domain).toBe("acme.com");
+    const [url, init] = spy.mock.calls[0];
+    expect(String(url)).toContain("/admin/sso-domains");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ domain: "acme.com" });
+  });
+
+  it("verifySsoDomain posts to /admin/sso-domains/:id/verify", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 1, domain: "acme.com", status: "verified", created: 1, verified_at: 2,
+          txt_name: "_quark-sso.acme.com", txt_value: "tok_abc",
+        }),
+        { status: 200 },
+      ),
+    );
+    const d = await api.verifySsoDomain(1);
+    expect(d.status).toBe("verified");
+    const [url, init] = spy.mock.calls[0];
+    expect(String(url)).toContain("/admin/sso-domains/1/verify");
+    expect(init?.method).toBe("POST");
+  });
+
+  it("deleteSsoDomain DELETEs /admin/sso-domains/:id", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
+    await api.deleteSsoDomain(7);
+    const [url, init] = spy.mock.calls[0];
+    expect(String(url)).toContain("/admin/sso-domains/7");
+    expect(init?.method).toBe("DELETE");
+  });
+
+  it("deleteSsoDomain throws ApiError on a non-ok response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("not found", { status: 404 }));
+    await expect(api.deleteSsoDomain(7)).rejects.toMatchObject({ status: 404 });
+  });
+});
