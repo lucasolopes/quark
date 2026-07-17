@@ -46,3 +46,17 @@ ClickHouse **não muda o sort key via `ALTER`**. Uma tabela `clicks` **nova** na
 
 ## Rollback
 Remover `QUARK_CLICKHOUSE_URL` e redeployar → o sink volta pro Postgres na hora, sem perda (o Postgres nunca deixou de ser a fonte dos links; o analytics volta a agregar no Postgres). Os dados já escritos no ClickHouse ficam lá pra quando religar.
+
+## Decisão (2026-07-17): DEFERIDO até o volume justificar
+
+Pesquisa de custo (preços atuais): com tráfego ~zero, toda opção hospedada custa mais que o Postgres, que já resolve.
+
+| Opção | $/mês | Nota |
+|---|---|---|
+| **Defer (não provisionar)** | **$0** | recomendado; ClickHouse só compensa em ~dezenas de milhares de eventos/dia |
+| Self-host no Fly | ~$13–22 | máquina 2–4GB + volume 10GB; **mais barato quando precisar** (scale-to-zero não ajuda, volume cobra parado) |
+| Tinybird free | $0 | teto 1.000 req/dia — trial, não plano |
+| ClickHouse Cloud | ~$25–66+ | **sem tier grátis permanente**; o mais caro pro caso |
+| DoubleCloud | — | fechou mar/2025 |
+
+**Gatilho pra religar:** quando o volume de cliques crescer (dezenas de milhares/dia) ou o agregado no Postgres começar a pesar → self-host no Fly (passos acima) e setar `QUARK_CLICKHOUSE_URL`. Até lá, `$0` e o analytics segue no Postgres.
