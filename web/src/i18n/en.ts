@@ -38,6 +38,7 @@ export const en = {
     navAppLinks: "App Links",
     navMembers: "Members",
     navSsoDomains: "SSO domains",
+    navAnalytics: "Analytics",
     navGroupLinks: "Links",
     navGroupData: "Analytics",
     navGroupAuto: "Automation",
@@ -245,6 +246,13 @@ export const en = {
     firstClick: "First click",
     lastClick: "Last click",
     recentEvents: "Recent events",
+  },
+  analytics: {
+    heading: "Analytics",
+    searchPlaceholder: "Search a link…",
+    searchAriaLabel: "Search links",
+    empty: "Select a link to see its analytics",
+    noResults: "No links found",
   },
   charts: {
     perDayTitle: "Clicks per day",
