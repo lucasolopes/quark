@@ -1,4 +1,5 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
+import { AcceptInvite } from "@/routes/AcceptInvite";
 import { AppLinks } from "@/routes/AppLinks";
 import { Extensions } from "@/routes/Extensions";
 import { Import } from "@/routes/Import";
@@ -14,6 +15,9 @@ import { Shell } from "./Shell";
 
 export const router = createBrowserRouter([
   { path: "/login", element: <Login /> },
+  // Public, outside RequireAuth: an invitee has no workspace yet, so nesting
+  // this under the authed tree would trap them in WorkspaceGate/onboarding.
+  { path: "/invite/:token", element: <AcceptInvite /> },
   {
     path: "/",
     element: (

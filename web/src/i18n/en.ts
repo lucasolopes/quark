@@ -623,6 +623,7 @@ export const en = {
     errorAlreadyMember: "You're already a member of this workspace.",
     errorGeneric: "Could not accept the invite. Try again.",
     signInFirst: "Sign in first to accept this invite.",
+    goToApp: "Go to your links",
   },
 };
 

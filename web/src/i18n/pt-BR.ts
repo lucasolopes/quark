@@ -625,5 +625,6 @@ export const ptBR: Messages = {
     errorAlreadyMember: "Você já é membro deste workspace.",
     errorGeneric: "Não foi possível aceitar o convite. Tente de novo.",
     signInFirst: "Entre primeiro para aceitar este convite.",
+    goToApp: "Ir para seus links",
   },
 };
