@@ -353,6 +353,22 @@ async fn main() {
         }
     };
 
+    // Keycloak tenant provisioning boot backfill (multi-tenancy P2e Task 2):
+    // every tenant that has no `oidc_config` yet (created before Keycloak was
+    // configured, or whose creation-time attempt only got partway) gets
+    // (re-)provisioned here. Idempotent and cheap, like the subdomain
+    // backfill above — safe to run on every replica.
+    if multi_tenant {
+        if let (Some(kc), Some(base)) = (&keycloak, &keycloak_base_url) {
+            match quark::api::backfill_keycloak_provisioning(&store, kc, base).await {
+                Ok(n) => eprintln!("keycloak tenant backfill: {n} provisioned"),
+                Err(e) => eprintln!(
+                    "WARNING: keycloak tenant backfill skipped (list_tenants failed: {e})"
+                ),
+            }
+        }
+    }
+
     let state = Arc::new(AppState {
         cache,
         store,

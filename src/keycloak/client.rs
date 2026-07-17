@@ -283,13 +283,15 @@ impl KeycloakAdmin for HttpKeycloakAdmin {
             "emailVerified": false,
             "groups": [format!("/{group}")],
         });
-        let resp = self
-            .post_json(
-                &format!("{}/admin/realms/{slug}/users", self.base),
-                &token,
-                &create_body,
-            )
-            .await?;
+        let create_url = format!("{}/admin/realms/{slug}/users", self.base);
+        let mut resp = self.post_json(&create_url, &token, &create_body).await?;
+        if resp.status() == StatusCode::UNAUTHORIZED {
+            // Mirrors `admin_post_idempotent`/`admin_get`: the cached token
+            // may have expired between `admin_token` and this POST, so fetch
+            // a fresh one and retry exactly once before giving up.
+            let token = self.fetch_token().await?;
+            resp = self.post_json(&create_url, &token, &create_body).await?;
+        }
         if resp.status() == StatusCode::CONFLICT {
             // Raced with another provisioning attempt for the same tenant;
             // the user now exists, look it up rather than erroring.

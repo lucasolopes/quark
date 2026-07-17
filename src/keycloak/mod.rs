@@ -156,17 +156,38 @@ pub fn derive_issuer(base: &str, slug: &str) -> String {
     format!("{}/realms/{slug}", base.trim_end_matches('/'))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Test-only helpers shared across unit tests (`mod tests` below) and the
+/// integration tests in `tests/` — kept unconditionally public (not
+/// `#[cfg(test)]`) because integration test binaries compile the crate
+/// without `cfg(test)` and would otherwise have no way to exercise
+/// `KeycloakAdmin`-calling code (Task 2's tenant-provisioning flow) without a
+/// live Keycloak server.
+pub mod testing {
+    use super::{KcError, KeycloakAdmin};
+    use async_trait::async_trait;
     use std::sync::Mutex;
 
     /// Records every call (as a formatted string) so tests can assert call
-    /// shape and order without a live Keycloak server.
+    /// shape and order without a live Keycloak server. Every method always
+    /// succeeds, mirroring the real client's idempotent contract (a `409` is
+    /// treated as success there too).
     #[derive(Default)]
-    struct MockKeycloakAdmin {
+    pub struct MockKeycloakAdmin {
         calls: Mutex<Vec<String>>,
         next_user_id: Mutex<Option<String>>,
+    }
+
+    impl MockKeycloakAdmin {
+        /// The calls made so far, in order.
+        pub fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+
+        /// Sets the id `ensure_user` returns on its next call (defaults to
+        /// `"user-1"` when never set).
+        pub fn set_next_user_id(&self, id: &str) {
+            *self.next_user_id.lock().unwrap() = Some(id.to_string());
+        }
     }
 
     #[async_trait]
@@ -221,11 +242,17 @@ mod tests {
             Ok(())
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::MockKeycloakAdmin;
+    use super::*;
 
     #[tokio::test]
     async fn mock_records_calls_through_the_trait_object() {
         let mock = MockKeycloakAdmin::default();
-        *mock.next_user_id.lock().unwrap() = Some("kc-user-42".to_string());
+        mock.set_next_user_id("kc-user-42");
         let admin: &dyn KeycloakAdmin = &mock;
 
         admin.ensure_realm("acme").await.unwrap();
@@ -242,7 +269,7 @@ mod tests {
         admin.send_set_password_email("acme", &uid).await.unwrap();
 
         assert_eq!(
-            *mock.calls.lock().unwrap(),
+            mock.calls(),
             vec![
                 "ensure_realm(acme)".to_string(),
                 "ensure_client(acme,https://acme.quarkus.example/admin/callback)".to_string(),
