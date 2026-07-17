@@ -872,6 +872,39 @@ impl PostgresStore {
                         .map_err(StoreError::backend)?;
                 }
             }
+
+            // Multi-tenancy P4a Task 1: analytics rows created before the
+            // `tenant_id` column was populated (or written by a version of
+            // `record_batch` that didn't bind it yet) sit at the column
+            // default, 0. Backfill them from the owning link now that the
+            // link's `tenant_id` is known. Idempotent — the `tenant_id = 0`
+            // guard means a re-run only touches rows still at the default,
+            // so running this on every boot is a no-op once caught up.
+            // Clicks whose link was since deleted have no match and stay 0
+            // (orphaned, acceptable). No `CONCURRENTLY` (see the index note
+            // above); these are plain, non-blocking `UPDATE`s under the same
+            // advisory lock as the rest of this migration.
+            let mut backfilled: i64 = 0;
+            for ddl in [
+                "UPDATE click_events ce SET tenant_id = l.tenant_id \
+                 FROM links l WHERE l.id = ce.id AND ce.tenant_id = 0",
+                "UPDATE click_counters cc SET tenant_id = l.tenant_id \
+                 FROM links l WHERE l.id = cc.id AND cc.tenant_id = 0",
+                "UPDATE stats_meta sm SET tenant_id = l.tenant_id \
+                 FROM links l WHERE l.id = sm.id AND sm.tenant_id = 0",
+            ] {
+                let result = sqlx::query(ddl)
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(StoreError::backend)?;
+                backfilled += result.rows_affected() as i64;
+            }
+            if backfilled > 0 {
+                eprintln!(
+                    "analytics tenant_id backfill: {backfilled} row(s) updated from links.tenant_id"
+                );
+            }
+
             Ok(())
         }
         .await;
@@ -2527,33 +2560,38 @@ impl AnalyticsSink for PostgresStore {
             for e in &evs {
                 delta.apply(e);
             }
+            // All events for the same link share one tenant (the link's owner),
+            // so any event in `evs` carries the right value for the whole batch.
+            let tenant_id = evs.first().map(|e| e.tenant_id as i64).unwrap_or(0);
             for (dimension, bucket, count) in counter_rows(&delta) {
                 sqlx::query(
-                    "INSERT INTO click_counters (id, dimension, bucket, count) VALUES ($1,$2,$3,$4) \
-                     ON CONFLICT (id, dimension, bucket) DO UPDATE SET count = click_counters.count + EXCLUDED.count",
+                    "INSERT INTO click_counters (id, dimension, bucket, count, tenant_id) VALUES ($1,$2,$3,$4,$5) \
+                     ON CONFLICT (id, dimension, bucket) DO UPDATE SET count = click_counters.count + EXCLUDED.count, tenant_id = EXCLUDED.tenant_id",
                 )
                 .bind(id as i64)
                 .bind(dimension)
                 .bind(&bucket)
                 .bind(count)
+                .bind(tenant_id)
                 .execute(&mut *tx)
                 .await
                 .map_err(StoreError::backend)?;
             }
             sqlx::query(
-                "INSERT INTO stats_meta (id, first_ts, last_ts) VALUES ($1,$2,$3) \
-                 ON CONFLICT (id) DO UPDATE SET first_ts = LEAST(stats_meta.first_ts, EXCLUDED.first_ts), last_ts = GREATEST(stats_meta.last_ts, EXCLUDED.last_ts)",
+                "INSERT INTO stats_meta (id, first_ts, last_ts, tenant_id) VALUES ($1,$2,$3,$4) \
+                 ON CONFLICT (id) DO UPDATE SET first_ts = LEAST(stats_meta.first_ts, EXCLUDED.first_ts), last_ts = GREATEST(stats_meta.last_ts, EXCLUDED.last_ts), tenant_id = EXCLUDED.tenant_id",
             )
             .bind(id as i64)
             .bind(delta.first_ts as i64)
             .bind(delta.last_ts as i64)
+            .bind(tenant_id)
             .execute(&mut *tx)
             .await
             .map_err(StoreError::backend)?;
             for e in &evs {
                 sqlx::query(
-                    "INSERT INTO click_events (id, ts, referer, country, user_agent, city, variant, event_id) \
-                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+                    "INSERT INTO click_events (id, ts, referer, country, user_agent, city, variant, event_id, tenant_id) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
                 )
                 .bind(id as i64)
                 .bind(e.ts as i64)
@@ -2563,6 +2601,7 @@ impl AnalyticsSink for PostgresStore {
                 .bind(&e.city)
                 .bind(e.variant.map(|v| v as i32))
                 .bind(&e.event_id)
+                .bind(e.tenant_id as i64)
                 .execute(&mut *tx)
                 .await
                 .map_err(StoreError::backend)?;
@@ -2669,6 +2708,7 @@ impl AnalyticsSink for PostgresStore {
                 ip: None,
                 fbc: None,
                 variant: variant.map(|v| v as u32),
+                tenant_id: 0,
             });
         }
         Ok(Some(Stats {

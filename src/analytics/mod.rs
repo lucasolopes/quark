@@ -41,6 +41,12 @@ pub struct ClickEvent {
     /// has no variants (the common case).
     #[serde(default)]
     pub variant: Option<u32>,
+    /// Owning tenant of the link this click hit, stamped from the
+    /// authoritative `Record` at redirect time. `serde(default)` keeps old
+    /// persisted/cached blobs (pre multi-tenancy P4a) deserializing as 0,
+    /// the default tenant.
+    #[serde(default)]
+    pub tenant_id: u64,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -429,6 +435,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         }
     }
 
@@ -511,6 +518,7 @@ mod tests {
                 ip: None,
                 fbc: None,
                 variant: None,
+                tenant_id: 0,
             })
             .await
             .unwrap();
@@ -551,6 +559,7 @@ mod tests {
             ip: Some("203.0.113.9".into()),
             fbc: Some("fb.1.100000.abc123".into()),
             variant: None,
+            tenant_id: 0,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(!json.contains("203.0.113.9"));
@@ -574,6 +583,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -587,6 +597,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         });
         assert_eq!(a.first_ts, 0);
         assert_eq!(a.last_ts, 5_000_000_000);
@@ -689,6 +700,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -704,6 +716,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -720,6 +733,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         });
 
         assert_eq!(a.per_os.get("iOS"), Some(&1));
@@ -841,6 +855,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: Some(0),
+            tenant_id: 0,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -854,6 +869,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: Some(0),
+            tenant_id: 0,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -867,6 +883,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: Some(1),
+            tenant_id: 0,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -880,6 +897,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         });
         assert_eq!(a.per_variant.get("0"), Some(&2));
         assert_eq!(a.per_variant.get("1"), Some(&1));

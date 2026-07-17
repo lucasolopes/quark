@@ -1323,6 +1323,7 @@ async fn redirect(
                 fbc: fbclid_from_query(raw_query.as_deref())
                     .map(|fbclid| format!("fb.1.{}.{}", now.saturating_mul(1000), fbclid)),
                 variant,
+                tenant_id: rec.tenant_id.0,
             };
             // Gate already read above into `clicked_subscribed`. The payload
             // build reads `ev`'s fields (and `rec.url`, which is only still

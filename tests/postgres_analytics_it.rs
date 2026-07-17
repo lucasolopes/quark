@@ -1,12 +1,79 @@
 use quark::analytics::{AnalyticsSink, ClickEvent};
 use quark::store::postgres::PostgresStore;
+use quark::store::{Record, Store};
+use quark::tenant::TenantId;
 use serial_test::serial;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Row};
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
     let s = PostgresStore::open(&url, false).await.unwrap();
     s.reset_for_tests().await.unwrap();
     Some(s)
+}
+
+/// `fresh()` plus a raw pool used to inspect `tenant_id` columns directly —
+/// `AnalyticsSink`/`Store` don't expose that column, only the app-level
+/// aggregates that never surface it.
+async fn fresh_with_pool() -> Option<(PostgresStore, PgPool)> {
+    let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
+    let s = PostgresStore::open(&url, false).await.unwrap();
+    s.reset_for_tests().await.unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&url)
+        .await
+        .unwrap();
+    Some((s, pool))
+}
+
+fn rec_for(tenant: TenantId, url: &str) -> Record {
+    Record {
+        url: url.into(),
+        expiry: None,
+        created: 0,
+        tags: Vec::new(),
+        max_visits: None,
+        rules: Vec::new(),
+        variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
+        folder: None,
+        fallback_url: None,
+        password_hash: None,
+        tenant_id: tenant,
+    }
+}
+
+async fn click_events_tenant_id(pool: &PgPool, id: u64) -> i64 {
+    sqlx::query("SELECT tenant_id FROM click_events WHERE id=$1 LIMIT 1")
+        .bind(id as i64)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        .try_get("tenant_id")
+        .unwrap()
+}
+
+async fn click_counters_tenant_id(pool: &PgPool, id: u64) -> i64 {
+    sqlx::query("SELECT tenant_id FROM click_counters WHERE id=$1 LIMIT 1")
+        .bind(id as i64)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        .try_get("tenant_id")
+        .unwrap()
+}
+
+async fn stats_meta_tenant_id(pool: &PgPool, id: u64) -> i64 {
+    sqlx::query("SELECT tenant_id FROM stats_meta WHERE id=$1")
+        .bind(id as i64)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        .try_get("tenant_id")
+        .unwrap()
 }
 fn ev(id: u64, ts: u64) -> ClickEvent {
     ClickEvent {
@@ -21,6 +88,7 @@ fn ev(id: u64, ts: u64) -> ClickEvent {
         ip: None,
         fbc: None,
         variant: None,
+        tenant_id: 0,
     }
 }
 
@@ -37,6 +105,7 @@ fn ev_ua(id: u64, ts: u64, country: &str, ua: &str) -> ClickEvent {
         ip: None,
         fbc: None,
         variant: None,
+        tenant_id: 0,
     }
 }
 
@@ -199,4 +268,105 @@ async fn record_batch_concurrent_no_lost_updates() {
     t2.await.unwrap();
     let st = s0.stats(42).await.unwrap().unwrap();
     assert_eq!(st.aggregates.total, 2 * n);
+}
+
+/// Multi-tenancy P4a Task 1: `record_batch` binds `ev.tenant_id` into the 3
+/// analytics tables, so a click for a link owned by tenant B lands tagged
+/// with B — not the column default (0).
+#[tokio::test]
+#[serial(pg)]
+async fn click_event_tagged_with_owning_tenant_pg() {
+    let Some((s, pool)) = fresh_with_pool().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let tenant_b = TenantId(2);
+    s.put_link(tenant_b, 50, &rec_for(tenant_b, "https://example.com/b"))
+        .await
+        .unwrap();
+
+    let mut click = ev(50, 1_752_300_000);
+    click.tenant_id = tenant_b.0;
+    s.record_batch(&[click]).await.unwrap();
+
+    assert_eq!(click_events_tenant_id(&pool, 50).await, tenant_b.0 as i64);
+    assert_eq!(click_counters_tenant_id(&pool, 50).await, tenant_b.0 as i64);
+    assert_eq!(stats_meta_tenant_id(&pool, 50).await, tenant_b.0 as i64);
+}
+
+/// Multi-tenancy P4a Task 1: the boot backfill (run as part of `init_schema`,
+/// under the advisory lock) fixes rows written before `tenant_id` was
+/// populated — i.e. still at the column default (0) — from the owning
+/// link. It only touches `tenant_id = 0` rows with a matching link: a link
+/// deleted before the backfill runs leaves its clicks at 0, and re-running
+/// the backfill (opening the store again — `init_schema` runs on every
+/// `open`) is a no-op once caught up.
+#[tokio::test]
+#[serial(pg)]
+async fn analytics_tenant_backfill_pg() {
+    let Some((s, pool)) = fresh_with_pool().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let url = std::env::var("QUARK_TEST_DATABASE_URL").unwrap();
+    let tenant_b = TenantId(3);
+    s.put_link(
+        tenant_b,
+        60,
+        &rec_for(tenant_b, "https://example.com/backfill"),
+    )
+    .await
+    .unwrap();
+
+    // Rows pre-dating the stamp: written directly at tenant_id = 0, as
+    // `record_batch` would have left them before this task.
+    sqlx::query(
+        "INSERT INTO click_events (id, ts, referer, country, user_agent, city, variant, event_id, tenant_id) \
+         VALUES ($1, 1, NULL, NULL, NULL, NULL, NULL, '', 0)",
+    )
+    .bind(60i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO click_counters (id, dimension, bucket, count, tenant_id) VALUES ($1, 'total', '', 1, 0)",
+    )
+    .bind(60i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO stats_meta (id, first_ts, last_ts, tenant_id) VALUES ($1, 1, 1, 0)")
+        .bind(60i64)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Orphan: a click_events row whose link id has no match in `links`
+    // (the link was deleted). Must stay at 0 — the backfill only follows
+    // `id`s that still resolve.
+    sqlx::query(
+        "INSERT INTO click_events (id, ts, referer, country, user_agent, city, variant, event_id, tenant_id) \
+         VALUES ($1, 1, NULL, NULL, NULL, NULL, NULL, '', 0)",
+    )
+    .bind(61i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Run the backfill: `init_schema` runs on every `PostgresStore::open`.
+    PostgresStore::open(&url, false).await.unwrap();
+
+    assert_eq!(click_events_tenant_id(&pool, 60).await, tenant_b.0 as i64);
+    assert_eq!(click_counters_tenant_id(&pool, 60).await, tenant_b.0 as i64);
+    assert_eq!(stats_meta_tenant_id(&pool, 60).await, tenant_b.0 as i64);
+    assert_eq!(
+        click_events_tenant_id(&pool, 61).await,
+        0,
+        "a click whose link was deleted has no match and stays at the default tenant"
+    );
+
+    // Idempotent: running the backfill again must not change an
+    // already-correct value.
+    PostgresStore::open(&url, false).await.unwrap();
+    assert_eq!(click_events_tenant_id(&pool, 60).await, tenant_b.0 as i64);
 }

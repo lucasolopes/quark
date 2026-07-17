@@ -345,6 +345,7 @@ impl AnalyticsSink for ClickHouseSink {
                 } else {
                     None
                 },
+                tenant_id: 0,
             })
             .collect();
 

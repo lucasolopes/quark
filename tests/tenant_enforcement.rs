@@ -174,6 +174,7 @@ async fn cloud_analytics_and_outbox_accessors_survive_force_rls() {
         ip: None,
         fbc: None,
         variant: None,
+        tenant_id: 0,
     };
     concrete
         .record_batch(&[click])
