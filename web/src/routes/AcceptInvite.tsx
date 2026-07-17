@@ -3,8 +3,11 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useT } from "@/i18n";
-import { ApiError } from "@/lib/api";
+import { ApiError, oidcLoginUrl } from "@/lib/api";
 import { useAcceptInvite, useMe } from "@/lib/queries";
+
+/** The API origin, derived from `oidcLoginUrl()` rather than hardcoded. */
+const API_ORIGIN = oidcLoginUrl().replace(/\/admin\/login$/, "");
 
 /**
  * Maps an accept-invite failure to its i18n copy. 404/410 both mean the token
@@ -66,7 +69,17 @@ export function AcceptInvite() {
   function handleAccept() {
     if (!token) return;
     acceptInvite.mutate(token, {
-      onSuccess: () => navigate("/links", { replace: true }),
+      onSuccess: (data) => {
+        // Model B: the tenant requires SSO, so accept alone didn't grant
+        // membership — hand off to the tenant's login via a full-page
+        // navigation (the panel and API are separate origins; a fetch here
+        // would just hit CORS, not sign the user in).
+        if (data?.status === "login_required" && data.login_url) {
+          window.location.assign(`${API_ORIGIN}${data.login_url}`);
+          return;
+        }
+        navigate("/links", { replace: true });
+      },
     });
   }
 

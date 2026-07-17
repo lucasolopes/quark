@@ -1,6 +1,6 @@
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { QuarkMark } from "@/components/brand/QuarkMark";
@@ -18,6 +18,10 @@ export function Login() {
   const [oidcEnabled, setOidcEnabled] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  // Untrusted UX hint from the URL: only ever displayed and forwarded to
+  // `oidcLoginUrl`, never validated here — the server decides what it means.
+  const org = params.get("org")?.trim() || "";
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -115,16 +119,34 @@ export function Login() {
                 {t("login.or")}
                 <span className="h-px flex-1 bg-border" />
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                onClick={() => {
-                  window.location.href = oidcLoginUrl();
-                }}
-              >
-                {t("login.oidcButton")}
-              </Button>
+              {org ? (
+                <>
+                  <p className="mb-2 text-center text-sm text-muted-foreground">
+                    {t("login.orgHeader", { org })}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => {
+                      window.location.href = oidcLoginUrl(org);
+                    }}
+                  >
+                    {t("login.orgButton", { org })}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    window.location.href = oidcLoginUrl();
+                  }}
+                >
+                  {t("login.oidcButton")}
+                </Button>
+              )}
             </>
           )}
         </CardContent>

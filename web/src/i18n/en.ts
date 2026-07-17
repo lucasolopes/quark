@@ -20,6 +20,8 @@ export const en = {
     sessionStarted: "Signed in.",
     or: "or",
     oidcButton: "Sign in with provider",
+    orgHeader: "Organization: {org}",
+    orgButton: "Sign in to {org}",
     invalidToken: "Invalid token. Check it and try again.",
     connectionError: "Could not connect. Try again.",
   },
