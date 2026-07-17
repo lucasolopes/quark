@@ -317,27 +317,51 @@ pub fn verify_id_token(
     })
 }
 
+/// Whether `claims[claim_name]` contains `needle`, as either a single string
+/// claim or an array claim (the two shapes IdPs commonly use for group/role
+/// claims). Shared by `map_scopes` and `claim_role`.
+fn claim_contains(claims: &serde_json::Value, claim_name: &str, needle: &str) -> bool {
+    match claims.get(claim_name) {
+        Some(serde_json::Value::String(s)) => s == needle,
+        Some(serde_json::Value::Array(arr)) => arr.iter().any(|v| v.as_str() == Some(needle)),
+        _ => false,
+    }
+}
+
 /// Maps verified claims to granted scopes, default-closed: only the configured
 /// admin value grants `Full`; the optional read-only value grants
 /// `LinksRead`+`Analytics`; anything else grants nothing.
 pub fn map_scopes(claims: &serde_json::Value, cfg: &OidcConfig) -> Vec<Scope> {
-    let claim = claims.get(&cfg.admin_claim);
-    let has = |needle: &str| -> bool {
-        match claim {
-            Some(serde_json::Value::String(s)) => s == needle,
-            Some(serde_json::Value::Array(arr)) => arr.iter().any(|v| v.as_str() == Some(needle)),
-            _ => false,
-        }
-    };
-    if !cfg.admin_value.is_empty() && has(&cfg.admin_value) {
+    if !cfg.admin_value.is_empty() && claim_contains(claims, &cfg.admin_claim, &cfg.admin_value) {
         return vec![Scope::Full];
     }
     if let Some(ro) = &cfg.readonly_value {
-        if has(ro) {
+        if claim_contains(claims, &cfg.admin_claim, ro) {
             return vec![Scope::LinksRead, Scope::Analytics];
         }
     }
     Vec::new()
+}
+
+/// Maps a tenant IdP's group claim to a `Membership` role (multi-tenancy P2d,
+/// per-tenant login). Mirrors `map_scopes`'s claim shape handling, but targets
+/// a `Role` rather than a `Scope`: `admin_value` present in the claim grants
+/// `Role::Admin`, `readonly_value` grants `Role::Viewer`, and anything else
+/// (including a claim that matches neither) grants the default `Role::Member`
+/// — every authenticated tenant IdP user gets at least member access, never
+/// none, unlike the default-closed OSS/global `map_scopes`. `Role::Owner` is
+/// never returned here: Owner comes only from creating the tenant, never from
+/// an IdP claim.
+pub fn claim_role(claims: &serde_json::Value, cfg: &TenantOidcConfig) -> Role {
+    if !cfg.admin_value.is_empty() && claim_contains(claims, &cfg.admin_claim, &cfg.admin_value) {
+        return Role::Admin;
+    }
+    if !cfg.readonly_value.is_empty()
+        && claim_contains(claims, &cfg.admin_claim, &cfg.readonly_value)
+    {
+        return Role::Viewer;
+    }
+    Role::Member
 }
 
 /// Resolves the `User` for a verified login (creating one on first login, keyed
@@ -346,12 +370,21 @@ pub fn map_scopes(claims: &serde_json::Value, cfg: &OidcConfig) -> Vec<Scope> {
 ///
 /// OSS (`multi_tenant == false`): also upserts the `Membership` in
 /// `DEFAULT_TENANT`, with a `role` aligned to the same IdP group that produced
-/// `scopes`. Cloud (`multi_tenant == true`): creates no membership — a cloud
-/// user starts with 0 memberships until they create or are invited to a
-/// workspace (P2b/P2c).
+/// `scopes`. `tenant_membership` is ignored in this mode (the caller never
+/// passes one for the OSS/global login path).
 ///
-/// Authorization is unaffected by this: it is decided by `scopes` (from
-/// `map_scopes`) alone, unchanged; the stored `role` is a record, not a gate.
+/// Cloud (`multi_tenant == true`): the global env-IdP login (`tenant_membership
+/// == None`) creates no membership — a cloud user starts with 0 memberships
+/// until they create or are invited to a workspace (P2b/P2c). A per-tenant
+/// login (multi-tenancy P2d, `?org=<slug>`) passes `Some((tenant, role))`,
+/// where `role` came from `claim_role` against that tenant's own IdP config;
+/// this upserts a `Membership(user, tenant, role)` so signing in through the
+/// tenant's own IdP is itself how a member joins that tenant.
+///
+/// Authorization is unaffected by this: for OSS it is decided by `scopes`
+/// (from `map_scopes`); for cloud it is decided by the membership role at
+/// request time (`admin_guard`); the stored `role` here is what grants that
+/// authorization for the tenant path, not merely a record.
 pub async fn ensure_user_and_membership(
     store: &dyn Store,
     multi_tenant: bool,
@@ -359,6 +392,7 @@ pub async fn ensure_user_and_membership(
     email: &str,
     display: &str,
     scopes: &[Scope],
+    tenant_membership: Option<(TenantId, Role)>,
 ) -> Result<u64, StoreError> {
     let user = match store.get_user_by_subject(subject).await? {
         Some(u) => u,
@@ -377,7 +411,8 @@ pub async fn ensure_user_and_membership(
     };
     if !multi_tenant {
         // OSS: single implicit tenant 0. Cloud: no membership until the user
-        // creates or is invited to a workspace (P2b/P2c).
+        // creates or is invited to a workspace (P2b/P2c), unless this is a
+        // per-tenant login (see `tenant_membership` below).
         let role = if scopes.iter().any(|s| *s == Scope::Full) {
             Role::Admin
         } else {
@@ -387,6 +422,15 @@ pub async fn ensure_user_and_membership(
             .put_membership(&Membership {
                 user_id: user.id,
                 tenant_id: DEFAULT_TENANT,
+                role,
+                created: crate::now(),
+            })
+            .await?;
+    } else if let Some((tenant, role)) = tenant_membership {
+        store
+            .put_membership(&Membership {
+                user_id: user.id,
+                tenant_id: tenant,
                 role,
                 created: crate::now(),
             })
@@ -798,6 +842,7 @@ mod tests {
             "sub1@example.com",
             "Sub One",
             &[Scope::Full],
+            None,
         )
         .await
         .unwrap();
@@ -819,6 +864,7 @@ mod tests {
             "sub1@example.com",
             "Sub One",
             &[Scope::LinksRead, Scope::Analytics],
+            None,
         )
         .await
         .unwrap();
@@ -838,6 +884,7 @@ mod tests {
             "sub2@example.com",
             "Sub Two",
             &[Scope::LinksRead, Scope::Analytics],
+            None,
         )
         .await
         .unwrap();
@@ -857,9 +904,10 @@ mod tests {
     async fn cloud_login_creates_user_but_no_default_membership() {
         let dir = tempfile::tempdir().unwrap();
         let store = crate::store::lmdb::LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        let uid = ensure_user_and_membership(&store, true, "sub-cloud", "e@x", "E", &[Scope::Full])
-            .await
-            .unwrap();
+        let uid =
+            ensure_user_and_membership(&store, true, "sub-cloud", "e@x", "E", &[Scope::Full], None)
+                .await
+                .unwrap();
         assert!(store
             .get_user_by_subject("sub-cloud")
             .await
@@ -871,5 +919,91 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    // Cloud, per-tenant login (multi-tenancy P2d): passing `tenant_membership`
+    // creates the Membership in that tenant with the given role — this is how
+    // signing in through a tenant's own IdP joins the tenant.
+    #[tokio::test]
+    async fn cloud_login_with_tenant_creates_membership_with_claim_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::store::lmdb::LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let tenant = TenantId(9);
+
+        let uid = ensure_user_and_membership(
+            &store,
+            true,
+            "sub-tenant-admin",
+            "e@x",
+            "E",
+            &[],
+            Some((tenant, Role::Admin)),
+        )
+        .await
+        .unwrap();
+
+        let membership = store.get_membership(uid, tenant).await.unwrap().unwrap();
+        assert_eq!(membership.role, Role::Admin);
+        // Still no membership in the default tenant from this login.
+        assert!(store
+            .get_membership(uid, DEFAULT_TENANT)
+            .await
+            .unwrap()
+            .is_none());
+
+        // A second login with a different claim-mapped role updates the role
+        // rather than duplicating the membership.
+        let uid2 = ensure_user_and_membership(
+            &store,
+            true,
+            "sub-tenant-admin",
+            "e@x",
+            "E",
+            &[],
+            Some((tenant, Role::Viewer)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(uid2, uid);
+        let membership = store.get_membership(uid, tenant).await.unwrap().unwrap();
+        assert_eq!(membership.role, Role::Viewer);
+    }
+
+    #[test]
+    fn claim_role_maps_admin_and_readonly_and_defaults_to_member() {
+        let cfg = TenantOidcConfig {
+            tenant_id: TenantId(1),
+            issuer: "https://idp.acme.example".into(),
+            client_id: "acme".into(),
+            client_secret: "s".into(),
+            scopes: vec!["openid".into()],
+            admin_claim: "groups".into(),
+            admin_value: "acme-admins".into(),
+            readonly_value: "acme-viewers".into(),
+            post_login_url: None,
+        };
+
+        let admin = serde_json::json!({ "groups": ["x", "acme-admins"] });
+        assert_eq!(claim_role(&admin, &cfg), Role::Admin);
+
+        let ro = serde_json::json!({ "groups": ["acme-viewers"] });
+        assert_eq!(claim_role(&ro, &cfg), Role::Viewer);
+
+        // string claim form
+        let admin_str = serde_json::json!({ "groups": "acme-admins" });
+        assert_eq!(claim_role(&admin_str, &cfg), Role::Admin);
+
+        // neither value present -> Member (not empty, unlike map_scopes)
+        let none = serde_json::json!({ "groups": ["random"] });
+        assert_eq!(claim_role(&none, &cfg), Role::Member);
+
+        // missing claim entirely -> Member
+        let missing = serde_json::json!({ "sub": "x" });
+        assert_eq!(claim_role(&missing, &cfg), Role::Member);
+
+        // Owner is never granted by a claim, no matter what the claim says.
+        for claims in [&admin, &ro, &admin_str, &none, &missing] {
+            assert_ne!(claim_role(claims, &cfg), Role::Owner);
+        }
     }
 }

@@ -1589,18 +1589,78 @@ const LOGIN_COOKIE: &str = "qk_login";
 /// How long a login session lasts.
 const SESSION_TTL_SECS: u64 = 12 * 3600;
 
+#[derive(Deserialize)]
+struct LoginParams {
+    /// Tenant slug for a per-tenant login (multi-tenancy P2d,
+    /// `/admin/login?org=<slug>`). Absent (or empty) means the global/OSS
+    /// login against the env-configured IdP, unchanged.
+    org: Option<String>,
+}
+
 /// `GET /admin/login`: start the OIDC Authorization Code + PKCE flow, stashing
 /// the state/verifier/nonce in a short-lived signed cookie and redirecting to
 /// the IdP.
-async fn oidc_login(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    let Some(oidc) = st.oidc.as_ref() else {
-        return (StatusCode::NOT_FOUND, "oidc not configured").into_response();
+///
+/// With `?org=<slug>` (multi-tenancy P2d, cloud-only) this resolves the
+/// tenant by slug and uses *its own* IdP config instead of the global one,
+/// signing the tenant id into the cookie so the callback validates against
+/// that same tenant. An unknown slug or a tenant with no OIDC config of its
+/// own is an explicit error here — it never falls through to the global IdP,
+/// which would let a caller land on the wrong tenant's login/identity.
+async fn oidc_login(
+    State(st): State<Arc<AppState>>,
+    Query(params): Query<LoginParams>,
+    headers: HeaderMap,
+) -> Response {
+    let (runtime, tenant) = match params.org.as_deref().filter(|s| !s.is_empty()) {
+        Some(slug) => {
+            if !st.multi_tenant {
+                return (
+                    StatusCode::NOT_FOUND,
+                    "organization login requires a cloud deployment",
+                )
+                    .into_response();
+            }
+            let tenant = match st.store.get_tenant_by_slug(slug).await {
+                Ok(Some(t)) => t,
+                Ok(None) => return (StatusCode::NOT_FOUND, "unknown organization").into_response(),
+                Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            };
+            let cfg = match st.store.get_oidc_config_bare(tenant.id).await {
+                Ok(Some(c)) => c,
+                Ok(None) => {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        "organization has no identity provider configured",
+                    )
+                        .into_response()
+                }
+                Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            };
+            let rt = match st.oidc_tenants.get_or_build(tenant.id, &cfg).await {
+                Ok(rt) => rt,
+                Err(_) => {
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        "organization's identity provider is unreachable",
+                    )
+                        .into_response()
+                }
+            };
+            (rt, Some(tenant.id))
+        }
+        None => {
+            let Some(oidc) = st.oidc.as_ref() else {
+                return (StatusCode::NOT_FOUND, "oidc not configured").into_response();
+            };
+            (oidc.clone(), None)
+        }
     };
     let state = crate::oidc::random_token();
     let nonce = crate::oidc::random_token();
     let (verifier, challenge) = crate::oidc::pkce_pair();
-    let url = oidc.authorize_url(&state, &nonce, &challenge);
-    let value = crate::oidc::sign_login_state(&st.signing_key, &state, &verifier, &nonce, None);
+    let url = runtime.authorize_url(&state, &nonce, &challenge);
+    let value = crate::oidc::sign_login_state(&st.signing_key, &state, &verifier, &nonce, tenant);
     let secure = if request_is_https(&headers) {
         "; Secure"
     } else {
@@ -1632,20 +1692,23 @@ struct CallbackParams {
 /// the code (with the PKCE verifier), verify the id_token, map claims to scopes
 /// (default-closed), and create a session. A valid IdP user with no granted
 /// scope gets `403` (authenticated but unauthorized).
+///
+/// The tenant (if any) that validates this callback comes *only* from the
+/// HMAC-signed `qk_login` cookie minted at `/admin/login` — never from a
+/// client-supplied parameter on this request — so a tampered or forged
+/// tenant cannot redirect validation to a different IdP than the one the
+/// login actually started against.
 async fn oidc_callback(
     State(st): State<Arc<AppState>>,
     Query(params): Query<CallbackParams>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(oidc) = st.oidc.as_ref() else {
-        return (StatusCode::NOT_FOUND, "oidc not configured").into_response();
-    };
     if params.error.is_some() {
         return (StatusCode::UNAUTHORIZED, "login was denied at the provider").into_response();
     }
     let login = cookie_value(&headers, LOGIN_COOKIE)
         .and_then(|c| crate::oidc::verify_login_state(&st.signing_key, c));
-    let Some((state, verifier, nonce, _tenant)) = login else {
+    let Some((state, verifier, nonce, tenant)) = login else {
         return (StatusCode::BAD_REQUEST, "missing or invalid login state").into_response();
     };
     // CSRF: the state echoed by the IdP must match the one we signed.
@@ -1655,24 +1718,89 @@ async fn oidc_callback(
     let Some(code) = params.code else {
         return (StatusCode::BAD_REQUEST, "missing code").into_response();
     };
-    let id_token = match oidc.exchange_code(&code, &verifier).await {
+
+    // Resolve which IdP runtime and config validate this callback: the
+    // tenant signed into the login cookie (multi-tenancy P2d), or the global
+    // env-configured IdP.
+    let (runtime, tenant_cfg) = match tenant {
+        Some(tenant_id) => {
+            let cfg = match st.store.get_oidc_config_bare(tenant_id).await {
+                Ok(Some(c)) => c,
+                Ok(None) => {
+                    // The tenant's config was removed after the login started.
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        "organization's identity provider is no longer configured",
+                    )
+                        .into_response();
+                }
+                Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            };
+            let rt = match st.oidc_tenants.get_or_build(tenant_id, &cfg).await {
+                Ok(rt) => rt,
+                Err(_) => {
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        "organization's identity provider is unreachable",
+                    )
+                        .into_response()
+                }
+            };
+            (rt, Some(cfg))
+        }
+        None => {
+            let Some(oidc) = st.oidc.as_ref() else {
+                return (StatusCode::NOT_FOUND, "oidc not configured").into_response();
+            };
+            (oidc.clone(), None)
+        }
+    };
+
+    let id_token = match runtime.exchange_code(&code, &verifier).await {
         Ok(t) => t,
         Err(_) => return (StatusCode::BAD_GATEWAY, "token exchange failed").into_response(),
     };
-    let claims = match oidc.verify(&id_token, &nonce).await {
+    let claims = match runtime.verify(&id_token, &nonce).await {
         Ok(c) => c,
         Err(_) => return (StatusCode::UNAUTHORIZED, "invalid id_token").into_response(),
     };
-    let scopes = crate::oidc::map_scopes(&claims.raw, &oidc.config);
-    if scopes.is_empty() {
-        return (StatusCode::FORBIDDEN, "your account has no quark access").into_response();
-    }
     let email = claims
         .raw
         .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    // Per-tenant login (multi-tenancy P2d): the role comes from the tenant's
+    // own claim mapping and always grants at least Member (see `claim_role`).
+    // Global/OSS login: unchanged, default-closed scope mapping; no granted
+    // scope is a 403.
+    let (scopes, tenant_membership, session_tenant, dest) = match (tenant, &tenant_cfg) {
+        (Some(tenant_id), Some(cfg)) => {
+            let role = crate::oidc::claim_role(&claims.raw, cfg);
+            (
+                crate::tenant::role_scopes(role).to_vec(),
+                Some((tenant_id, role)),
+                tenant_id,
+                cfg.post_login_url
+                    .clone()
+                    .unwrap_or_else(|| "/".to_string()),
+            )
+        }
+        _ => {
+            let scopes = crate::oidc::map_scopes(&claims.raw, &runtime.config);
+            if scopes.is_empty() {
+                return (StatusCode::FORBIDDEN, "your account has no quark access").into_response();
+            }
+            (
+                scopes,
+                None,
+                crate::tenant::DEFAULT_TENANT,
+                runtime.config.post_login_url.clone(),
+            )
+        }
+    };
+
     let user_id = match crate::oidc::ensure_user_and_membership(
         st.store.as_ref(),
         st.multi_tenant,
@@ -1680,6 +1808,7 @@ async fn oidc_callback(
         &email,
         &claims.display,
         &scopes,
+        tenant_membership,
     )
     .await
     {
@@ -1695,12 +1824,12 @@ async fn oidc_callback(
         scopes,
         created: now,
         expires: now + SESSION_TTL_SECS,
-        tenant_id: crate::tenant::DEFAULT_TENANT,
+        tenant_id: session_tenant,
         user_id,
     };
     if st
         .store
-        .put_session(crate::tenant::DEFAULT_TENANT, &session)
+        .put_session(session_tenant, &session)
         .await
         .is_err()
     {
@@ -1719,7 +1848,6 @@ async fn oidc_callback(
         "{SESSION_COOKIE}={raw}; Max-Age={SESSION_TTL_SECS}; Path=/; HttpOnly; SameSite={same_site}"
     );
     // Redirect to the configured post-login URL (the panel), default "/".
-    let dest = oidc.config.post_login_url.clone();
     // Clear the now-consumed login-state cookie so it cannot be replayed.
     let clear_login = format!("{LOGIN_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
     let mut resp = (
@@ -4320,6 +4448,308 @@ mod tests {
             tenant_domain_suffix: None,
             oidc_tenants: crate::oidc::TenantOidcCache::new(),
         })
+    }
+
+    /// Cloud-mode `AppState` for exercising the `?org=` login/callback
+    /// decision logic (multi-tenancy P2d) without a live IdP: LMDB-backed
+    /// (`multi_tenant: true`), no global env OIDC configured. LMDB's
+    /// `get_oidc_config_bare`/`get_oidc_config` always return `Ok(None)` (see
+    /// `src/store/lmdb.rs`), which is exactly the "tenant exists but has no
+    /// IdP of its own" shape these tests need — the store-lookup and
+    /// tenant-resolution branches never require reaching a real IdP over the
+    /// network.
+    async fn multi_tenant_state() -> Arc<super::AppState> {
+        let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+        let (store, sink) = crate::store::open_backends(dir.path(), false)
+            .await
+            .unwrap();
+        let cache = crate::cache::Cache::new(store.clone(), 1000, None);
+        let host_router = Arc::new(crate::domain_router::HostRouter::new(
+            store.clone(),
+            None,
+            None,
+        ));
+        let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+        let (tx, _wrx) = tokio::sync::mpsc::channel(1);
+        let webhooks = Arc::new(crate::webhooks::delivery::WebhookDispatcher::new(
+            tx,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        ));
+        Arc::new(super::AppState {
+            oidc: None,
+            sheets: None,
+            sheets_api: None,
+            oidc_configured: false,
+            cache,
+            store,
+            key: 0x1234,
+            signing_key: [7u8; 32],
+            analytics_tx,
+            sink,
+            admin_token: None,
+            ratelimiter: crate::abuse::ratelimit::RateLimiter::disabled(),
+            block_private: true,
+            public_host: None,
+            real_ip_header: "cf-connecting-ip".to_string(),
+            webhooks,
+            multi_tenant: true,
+            host_router,
+            dns: Arc::new(crate::dns::NullDns),
+            tenant_domain_suffix: None,
+            oidc_tenants: crate::oidc::TenantOidcCache::new(),
+        })
+    }
+
+    // --- `?org=` login / per-tenant callback (multi-tenancy P2d) ---
+    //
+    // These exercise the resolution/decision logic directly against the
+    // handlers: which tenant (if any) a login resolves to, and whether the
+    // outcome is the explicit error the security model requires (never a
+    // silent fallthrough to a different IdP). None of the cases below need a
+    // live IdP: `?org=` on an unknown slug or a tenant with no config of its
+    // own is rejected before any network call would happen. The "known slug
+    // WITH a working config" happy path additionally needs the tenant's IdP
+    // to actually answer discovery/JWKS/token requests, which the LMDB test
+    // backend has no way to provide (`get_oidc_config_bare` always returns
+    // `Ok(None)` there); that path is covered by the Postgres-gated store
+    // tests (`tests/oidc_config_it.rs`) for config storage/isolation, plus
+    // the `oidc.rs` unit tests for cookie signing/claim mapping/membership.
+    // Exercising the full network round trip needs a real or fake IdP
+    // (Keycloak, per `docker-compose.e2e.yml`) and is deferred to the P2d
+    // frontend/e2e follow-up; see the Task 4 report.
+
+    #[tokio::test]
+    async fn org_login_unknown_slug_is_404_not_global() {
+        let st = multi_tenant_state().await;
+        let resp = super::oidc_login(
+            State(st),
+            axum::extract::Query(super::LoginParams {
+                org: Some("ghost-org".to_string()),
+            }),
+            ReqHeaderMap::new(),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+        assert!(
+            resp.headers().get(axum::http::header::LOCATION).is_none(),
+            "an unknown org must never redirect to any IdP"
+        );
+    }
+
+    #[tokio::test]
+    async fn org_login_tenant_without_oidc_config_is_404_not_global() {
+        let st = multi_tenant_state().await;
+        let tenant_id = crate::tenant::TenantId(st.store.next_tenant_id().await.unwrap());
+        st.store
+            .put_tenant(&crate::tenant::Tenant {
+                id: tenant_id,
+                name: "Acme".to_string(),
+                slug: "acme".to_string(),
+                created: 0,
+            })
+            .await
+            .unwrap();
+
+        let resp = super::oidc_login(
+            State(st),
+            axum::extract::Query(super::LoginParams {
+                org: Some("acme".to_string()),
+            }),
+            ReqHeaderMap::new(),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+        assert!(
+            resp.headers().get(axum::http::header::LOCATION).is_none(),
+            "a tenant with no OIDC config of its own must never fall back to the global IdP"
+        );
+    }
+
+    #[tokio::test]
+    async fn org_login_requires_multi_tenant_mode() {
+        let st = guard_state_with_oidc(None, false).await; // multi_tenant: false
+        let resp = super::oidc_login(
+            State(st),
+            axum::extract::Query(super::LoginParams {
+                org: Some("acme".to_string()),
+            }),
+            ReqHeaderMap::new(),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn org_login_absent_is_the_unchanged_global_path() {
+        // multi_tenant: true, but no `?org=` and no global OIDC configured:
+        // behaves exactly like the pre-P2d global path (404, oidc not
+        // configured), regardless of the cloud/OSS deployment mode.
+        let st = multi_tenant_state().await;
+        let resp = super::oidc_login(
+            State(st),
+            axum::extract::Query(super::LoginParams { org: None }),
+            ReqHeaderMap::new(),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn org_login_empty_string_is_treated_as_absent() {
+        let st = multi_tenant_state().await;
+        let resp = super::oidc_login(
+            State(st),
+            axum::extract::Query(super::LoginParams {
+                org: Some(String::new()),
+            }),
+            ReqHeaderMap::new(),
+        )
+        .await;
+        // Same outcome as `org: None`: falls to the global path (404 here,
+        // since no global OIDC is configured), not treated as a slug lookup.
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn callback_with_no_login_cookie_is_400() {
+        let st = guard_state_with_oidc(None, false).await;
+        let resp = super::oidc_callback(
+            State(st),
+            axum::extract::Query(super::CallbackParams {
+                code: Some("some-code".to_string()),
+                state: Some("some-state".to_string()),
+                error: None,
+            }),
+            ReqHeaderMap::new(),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn callback_tenant_from_cookie_but_config_gone_is_400_not_global() {
+        // The tenant signed into the cookie no longer has an OIDC config
+        // (e.g. removed mid-flow, or a forged tenant id that happens to
+        // exist but was never configured). This must be an explicit error,
+        // never a fall-through to the global IdP.
+        let st = multi_tenant_state().await;
+        let tenant_id = crate::tenant::TenantId(st.store.next_tenant_id().await.unwrap());
+        st.store
+            .put_tenant(&crate::tenant::Tenant {
+                id: tenant_id,
+                name: "Acme".to_string(),
+                slug: "acme".to_string(),
+                created: 0,
+            })
+            .await
+            .unwrap();
+        let cookie_value =
+            crate::oidc::sign_login_state(&st.signing_key, "st8", "verif", "nnc", Some(tenant_id));
+        let mut headers = ReqHeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            format!("qk_login={cookie_value}").parse().unwrap(),
+        );
+        let resp = super::oidc_callback(
+            State(st),
+            axum::extract::Query(super::CallbackParams {
+                code: Some("code".to_string()),
+                state: Some("st8".to_string()),
+                error: None,
+            }),
+            headers,
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn callback_tampered_tenant_in_cookie_is_rejected() {
+        // A cookie whose tenant field was swapped for a different tenant id
+        // must fail the HMAC check entirely (verified at the `oidc.rs`
+        // level); at the HTTP layer that surfaces as the same "missing or
+        // invalid login state" 400 as no cookie at all, never a successful
+        // login into the swapped-in tenant.
+        let st = multi_tenant_state().await;
+        let real_tenant = crate::tenant::TenantId(1);
+        let cookie_value = crate::oidc::sign_login_state(
+            &st.signing_key,
+            "st8",
+            "verif",
+            "nnc",
+            Some(real_tenant),
+        );
+        let tampered = cookie_value.replacen(".1.", ".2.", 1);
+        assert_ne!(
+            tampered, cookie_value,
+            "sanity: tamper must actually change the value"
+        );
+        let mut headers = ReqHeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            format!("qk_login={tampered}").parse().unwrap(),
+        );
+        let resp = super::oidc_callback(
+            State(st),
+            axum::extract::Query(super::CallbackParams {
+                code: Some("code".to_string()),
+                state: Some("st8".to_string()),
+                error: None,
+            }),
+            headers,
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    /// `claim_role` never grants `Role::Owner`, and its Admin/Viewer/Member
+    /// mapping matches the `TenantOidcConfig`'s claim, end to end through
+    /// `ensure_user_and_membership` with a real store (LMDB) — the same path
+    /// `oidc_callback` drives for a per-tenant login. This is the decision
+    /// logic the HTTP callback cannot exercise without a live IdP, tested
+    /// directly instead.
+    #[tokio::test]
+    async fn tenant_login_membership_role_matches_claim_mapping() {
+        let st = multi_tenant_state().await;
+        let cfg = crate::oidc::TenantOidcConfig {
+            tenant_id: crate::tenant::TenantId(1),
+            issuer: "https://idp.acme.example".into(),
+            client_id: "acme".into(),
+            client_secret: "s".into(),
+            scopes: vec!["openid".into()],
+            admin_claim: "groups".into(),
+            admin_value: "acme-admins".into(),
+            readonly_value: "acme-viewers".into(),
+            post_login_url: None,
+        };
+        let tenant = crate::tenant::TenantId(1);
+
+        let admin_claims = serde_json::json!({ "groups": ["acme-admins"] });
+        let role = crate::oidc::claim_role(&admin_claims, &cfg);
+        assert_eq!(role, crate::tenant::Role::Admin);
+        let uid = crate::oidc::ensure_user_and_membership(
+            st.store.as_ref(),
+            true,
+            "sub-a",
+            "a@acme.example",
+            "A",
+            &[],
+            Some((tenant, role)),
+        )
+        .await
+        .unwrap();
+        let m = st.store.get_membership(uid, tenant).await.unwrap().unwrap();
+        assert_eq!(m.role, crate::tenant::Role::Admin);
+
+        let viewer_claims = serde_json::json!({ "groups": ["acme-viewers"] });
+        let role = crate::oidc::claim_role(&viewer_claims, &cfg);
+        assert_eq!(role, crate::tenant::Role::Viewer);
+
+        let neither_claims = serde_json::json!({ "groups": ["nobody"] });
+        let role = crate::oidc::claim_role(&neither_claims, &cfg);
+        assert_eq!(role, crate::tenant::Role::Member);
+        assert_ne!(role, crate::tenant::Role::Owner);
     }
 
     /// `admin_guard` returns the resolved `Principal` on every success path
