@@ -1,5 +1,6 @@
 use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
 use crate::auth::ApiToken;
+use crate::domain::{Domain, DomainStatus};
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant};
 use crate::tenant::{Membership, Role, Tenant, TenantId, User};
@@ -85,7 +86,7 @@ const CLAIM_LEASE_SECS: u64 = 60;
 
 /// Every tenant-owned table: gets a `tenant_id` column and an RLS policy.
 /// (Global counters/sequences and lease tables are intentionally absent.)
-const TENANT_OWNED_TABLES: [&str; 13] = [
+const TENANT_OWNED_TABLES: [&str; 14] = [
     "links",
     "aliases",
     "link_health",
@@ -99,7 +100,22 @@ const TENANT_OWNED_TABLES: [&str; 13] = [
     "click_events",
     "webhook_deliveries",
     "sheets_connection",
+    "domains",
 ];
+
+/// Maps a Postgres unique-constraint violation (SQLSTATE 23505) to
+/// `StoreError::UniqueViolation`, anything else to `StoreError::Backend`.
+/// Shared by every `put_*` whose target has a UNIQUE column the caller wants
+/// to turn into a 409 instead of a 503 (`put_tenant`'s `slug`, `put_domain`'s
+/// `host`).
+fn map_unique_violation(e: sqlx::Error) -> StoreError {
+    if let sqlx::Error::Database(dbe) = &e {
+        if dbe.code().as_deref() == Some("23505") {
+            return StoreError::UniqueViolation;
+        }
+    }
+    StoreError::backend(e)
+}
 
 /// Escapes `LIKE`/`ILIKE` wildcards (default escape char = `\`) so that the
 /// user's term is treated literally. Order matters: escape `\` first.
@@ -110,8 +126,9 @@ fn like_escape(q: &str) -> String {
 }
 
 /// Maps a `links` row (id, url, expiry, created, tags, max_visits, rules,
-/// variants) into `(id, Record)`.
-/// Shared by `list_links` and `search_links`, which select the same columns.
+/// variants, tenant_id) into `(id, Record)`.
+/// Shared by `get_link`, `list_links`, and `search_links`, which select the
+/// same columns.
 fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
     let url: String = r.try_get("url").map_err(StoreError::backend)?;
@@ -129,6 +146,7 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
     let folder: Option<String> = r.try_get("folder").map_err(StoreError::backend)?;
     let fallback_url: Option<String> = r.try_get("fallback_url").map_err(StoreError::backend)?;
     let password_hash: Option<String> = r.try_get("password_hash").map_err(StoreError::backend)?;
+    let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
     Ok((
         id as u64,
         Record {
@@ -144,8 +162,33 @@ fn row_to_link(r: &PgRow) -> Result<(u64, Record), StoreError> {
             folder,
             fallback_url,
             password_hash,
+            tenant_id: TenantId(tenant_id as u64),
         },
     ))
+}
+
+/// Maps a `domains` row into a `Domain`.
+fn row_to_domain(r: &PgRow) -> Result<Domain, StoreError> {
+    let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+    let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
+    let host: String = r.try_get("host").map_err(StoreError::backend)?;
+    let token: String = r.try_get("token").map_err(StoreError::backend)?;
+    let status: String = r.try_get("status").map_err(StoreError::backend)?;
+    let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    let verified_at: Option<i64> = r.try_get("verified_at").map_err(StoreError::backend)?;
+    let status = match status.as_str() {
+        "verified" => DomainStatus::Verified,
+        _ => DomainStatus::Pending,
+    };
+    Ok(Domain {
+        id: id as u64,
+        tenant_id: crate::tenant::TenantId(tenant_id as u64),
+        host,
+        token,
+        status,
+        created: created as u64,
+        verified_at: verified_at.map(|v| v as u64),
+    })
 }
 
 /// Maps a `webhooks` row into a `WebhookSubscription`.
@@ -438,6 +481,10 @@ impl PostgresStore {
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS fallback_url TEXT",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS password_hash TEXT",
                 "CREATE TABLE IF NOT EXISTS aliases (alias TEXT PRIMARY KEY, id BIGINT NOT NULL)",
+                // P3 Task 2: alias namespace becomes per-domain instead of
+                // global. Existing rows have no domain opinion, so they
+                // default into the shared namespace (`SHARED_DOMAIN_ID` = 0).
+                "ALTER TABLE aliases ADD COLUMN IF NOT EXISTS domain_id BIGINT NOT NULL DEFAULT 0",
                 "CREATE TABLE IF NOT EXISTS link_health (id BIGINT PRIMARY KEY, checked_at BIGINT NOT NULL, status INT, healthy BOOLEAN NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS health_lease (id INT PRIMARY KEY, holder TEXT NOT NULL, expires_at BIGINT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, subject TEXT NOT NULL, display TEXT NOT NULL, scopes JSONB NOT NULL, created BIGINT NOT NULL, expires BIGINT NOT NULL)",
@@ -495,6 +542,10 @@ impl PostgresStore {
                 "CREATE INDEX IF NOT EXISTS memberships_by_tenant ON memberships (tenant_id)",
                 // --- Multi-tenancy (P1b): sessions carry the authenticated user ---
                 "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 0",
+                // --- Multi-tenancy (P3): custom domains ---
+                // Starts at 1 so it never collides with the reserved shared-domain sentinel (0).
+                "CREATE SEQUENCE IF NOT EXISTS quark_domain_id_seq START WITH 1",
+                "CREATE TABLE IF NOT EXISTS domains (id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL DEFAULT 0, host TEXT NOT NULL UNIQUE, token TEXT NOT NULL, status TEXT NOT NULL, created BIGINT NOT NULL, verified_at BIGINT)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -571,6 +622,28 @@ impl PostgresStore {
                     ALTER TABLE wellknown_documents ADD PRIMARY KEY (tenant_id, name); \
                   END IF; \
                 END $$",
+                // aliases: PK was `alias` alone (a single global namespace).
+                // Rework to `(domain_id, alias)` so the same alias string can
+                // exist once per domain (P3 Task 2). `array_agg(... ORDER BY
+                // attname)` sorts alphabetically, so the target is
+                // `['alias', 'domain_id']`.
+                "DO $$ \
+                BEGIN \
+                  IF NOT EXISTS ( \
+                    SELECT 1 \
+                    FROM pg_index i \
+                    JOIN pg_class c ON c.oid = i.indrelid \
+                    WHERE c.relname = 'aliases' AND i.indisprimary \
+                      AND ( \
+                        SELECT array_agg(a.attname::text ORDER BY a.attname) \
+                        FROM pg_attribute a \
+                        WHERE a.attrelid = c.oid AND a.attnum = ANY(i.indkey) \
+                      ) = ARRAY['alias', 'domain_id'] \
+                  ) THEN \
+                    ALTER TABLE aliases DROP CONSTRAINT IF EXISTS aliases_pkey; \
+                    ALTER TABLE aliases ADD PRIMARY KEY (domain_id, alias); \
+                  END IF; \
+                END $$",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -594,6 +667,7 @@ impl PostgresStore {
                 "CREATE INDEX IF NOT EXISTS pixels_by_tenant ON pixels (tenant_id, id)",
                 "CREATE INDEX IF NOT EXISTS api_tokens_by_tenant ON api_tokens (tenant_id, id)",
                 "CREATE INDEX IF NOT EXISTS click_counters_by_tenant ON click_counters (tenant_id, id, dimension, bucket)",
+                "CREATE INDEX IF NOT EXISTS domains_by_tenant_id ON domains (tenant_id)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -653,17 +727,34 @@ impl PostgresStore {
             // itself carries the *subscription's* tenant, so a mismatched
             // `WITH CHECK` would reject legitimate enqueues.
             //
-            // RLS stays merely ENABLED (not FORCED) on all six; the app-level
-            // `WHERE tenant_id` predicate remains the isolation layer for their
-            // tenant-scoped methods (`list_api_tokens`, `put_session`, ...) and
-            // for the bare-pool accessors above.
-            const NOT_FORCED: [&str; 6] = [
+            // Also excepted: `domains` (P3 custom domains). The public redirect
+            // looks a domain up by `Host` before the tenant is known at all
+            // (`get_domain_by_host`), on the bare pool with no `app.tenant_id`
+            // set — FORCE would make that lookup fail closed and break every
+            // custom-domain redirect.
+            //
+            // Also excepted: `aliases` (P3 Task 2). The alias namespace is now
+            // scoped by `domain_id`, not by tenant: `get_alias` runs on the
+            // bare pool the same way `get_domain_by_host` does, and the shared
+            // namespace (`SHARED_DOMAIN_ID` = 0) is deliberately visible across
+            // every tenant. `put_alias_and_link`/`put_alias_and_link_tx` still
+            // write inside a per-tenant transaction and still stamp
+            // `tenant_id` for bookkeeping, but isolation for reads is by
+            // domain, so FORCE would fail every bare-pool lookup closed.
+            //
+            // RLS stays merely ENABLED (not FORCED) on all eight; the app-level
+            // `WHERE tenant_id`/`WHERE domain_id` predicate remains the
+            // isolation layer for their scoped methods and for the bare-pool
+            // accessors above.
+            const NOT_FORCED: [&str; 8] = [
                 "api_tokens",
                 "sessions",
                 "click_counters",
                 "stats_meta",
                 "click_events",
                 "webhook_deliveries",
+                "domains",
+                "aliases",
             ];
             if self.multi_tenant {
                 for table in TENANT_OWNED_TABLES
@@ -693,13 +784,14 @@ impl PostgresStore {
     /// OSS/default-tenant path keeps working after a reset).
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships RESTART IDENTITY",
+            "TRUNCATE links, aliases, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships, domains RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_pixel_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_user_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_tenant_id_seq RESTART WITH 1",
+            "ALTER SEQUENCE quark_domain_id_seq RESTART WITH 1",
             "INSERT INTO tenants (id, name, slug, created) VALUES (0, 'default', 'default', 0) ON CONFLICT (id) DO NOTHING",
         ] {
             sqlx::query(q)
@@ -777,7 +869,7 @@ impl Store for PostgresStore {
     async fn get_link(&self, tenant: TenantId, id: u64) -> Result<Option<Record>, StoreError> {
         let row = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash FROM links WHERE tenant_id = $1 AND id = $2",
+                "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash, tenant_id FROM links WHERE tenant_id = $1 AND id = $2",
             )
             .bind(tenant.0 as i64)
             .bind(id as i64)
@@ -797,14 +889,17 @@ impl Store for PostgresStore {
         Ok(())
     }
 
-    async fn get_alias(&self, tenant: TenantId, alias: &str) -> Result<Option<u64>, StoreError> {
-        let row = with_read!(self, tenant, |c| {
-            sqlx::query("SELECT id FROM aliases WHERE tenant_id = $1 AND alias = $2")
-                .bind(tenant.0 as i64)
-                .bind(alias)
-                .fetch_optional(&mut *c)
-                .await
-        });
+    async fn get_alias(&self, domain_id: u64, alias: &str) -> Result<Option<u64>, StoreError> {
+        // Deliberately bare: no tenant transaction, no `app.tenant_id`. Alias
+        // lookup is scoped by domain, not by tenant (`aliases` is in
+        // `NOT_FORCED` for exactly this reason), mirroring
+        // `get_domain_by_host`.
+        let row = sqlx::query("SELECT id FROM aliases WHERE domain_id = $1 AND alias = $2")
+            .bind(domain_id as i64)
+            .bind(alias)
+            .fetch_optional(&self.read)
+            .await
+            .map_err(StoreError::backend)?;
         match row {
             Some(r) => {
                 let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
@@ -817,17 +912,19 @@ impl Store for PostgresStore {
     async fn put_alias_and_link(
         &self,
         tenant: TenantId,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
     ) -> Result<bool, StoreError> {
         let mut tx = self.begin_write_tx(tenant).await?;
         let res = sqlx::query(
-            "INSERT INTO aliases (alias, id, tenant_id) VALUES ($1,$2,$3) ON CONFLICT (alias) DO NOTHING",
+            "INSERT INTO aliases (alias, id, tenant_id, domain_id) VALUES ($1,$2,$3,$4) ON CONFLICT (domain_id, alias) DO NOTHING",
         )
         .bind(alias)
         .bind(id as i64)
         .bind(tenant.0 as i64)
+        .bind(domain_id as i64)
         .execute(&mut *tx)
         .await
         .map_err(StoreError::backend)?;
@@ -856,6 +953,7 @@ impl Store for PostgresStore {
     async fn put_alias_and_link_tx(
         &self,
         tenant: TenantId,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
@@ -863,11 +961,12 @@ impl Store for PostgresStore {
     ) -> Result<bool, StoreError> {
         let mut tx = self.begin_write_tx(tenant).await?;
         let res = sqlx::query(
-            "INSERT INTO aliases (alias, id, tenant_id) VALUES ($1,$2,$3) ON CONFLICT (alias) DO NOTHING",
+            "INSERT INTO aliases (alias, id, tenant_id, domain_id) VALUES ($1,$2,$3,$4) ON CONFLICT (domain_id, alias) DO NOTHING",
         )
         .bind(alias)
         .bind(id as i64)
         .bind(tenant.0 as i64)
+        .bind(domain_id as i64)
         .execute(&mut *tx)
         .await
         .map_err(StoreError::backend)?;
@@ -915,7 +1014,7 @@ impl Store for PostgresStore {
         let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash FROM links \
+                "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash, tenant_id FROM links \
                  WHERE tenant_id = $5 \
                    AND ($1::bigint IS NULL OR id > $1) \
                    AND ($2::jsonb IS NULL OR tags @> $2) \
@@ -946,7 +1045,7 @@ impl Store for PostgresStore {
         let tag_json = tag.map(|t| serde_json::json!([t]));
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits, l.rules, l.variants, l.app_ios, l.app_android, l.folder, l.fallback_url, l.password_hash \
+                "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits, l.rules, l.variants, l.app_ios, l.app_android, l.folder, l.fallback_url, l.password_hash, l.tenant_id \
                  FROM links l LEFT JOIN aliases a ON a.id = l.id AND a.tenant_id = l.tenant_id \
                  WHERE l.tenant_id = $6 \
                    AND ($1::bigint IS NULL OR l.id > $1) \
@@ -1668,14 +1767,7 @@ impl Store for PostgresStore {
         // constraint this insert can actually hit is the `slug` UNIQUE — a
         // Postgres unique-violation (SQLSTATE 23505) surfaces distinctly so
         // the caller can map it to 409 instead of 503.
-        .map_err(|e| {
-            if let sqlx::Error::Database(dbe) = &e {
-                if dbe.code().as_deref() == Some("23505") {
-                    return StoreError::UniqueViolation;
-                }
-            }
-            StoreError::backend(e)
-        })?;
+        .map_err(map_unique_violation)?;
         Ok(())
     }
 
@@ -1801,6 +1893,147 @@ impl Store for PostgresStore {
         .await
         .map_err(StoreError::backend)?;
         rows.iter().map(row_to_membership).collect()
+    }
+
+    // --- Custom domains (P3), cloud-only ---
+    async fn next_domain_id(&self) -> Result<u64, StoreError> {
+        let row = sqlx::query("SELECT nextval('quark_domain_id_seq') AS id")
+            .fetch_one(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
+        Ok(id as u64)
+    }
+
+    async fn get_domain_by_host(&self, host: &str) -> Result<Option<Domain>, StoreError> {
+        // Deliberately bare: no tenant transaction, no `app.tenant_id`. The
+        // redirect path only has a `Host` header before it knows the tenant,
+        // so this runs on the read pool directly (`domains` is in
+        // `NOT_FORCED` for exactly this reason).
+        let row = sqlx::query(
+            "SELECT id, tenant_id, host, token, status, created, verified_at FROM domains WHERE host = $1",
+        )
+        .bind(host)
+        .fetch_optional(&self.read)
+        .await
+        .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => Ok(Some(row_to_domain(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_domain(&self, tenant: TenantId, id: u64) -> Result<Option<Domain>, StoreError> {
+        let row = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, tenant_id, host, token, status, created, verified_at FROM domains WHERE tenant_id = $1 AND id = $2",
+            )
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .fetch_optional(&mut *c)
+            .await
+        });
+        match row {
+            Some(r) => Ok(Some(row_to_domain(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_domains(&self, tenant: TenantId) -> Result<Vec<Domain>, StoreError> {
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, tenant_id, host, token, status, created, verified_at FROM domains WHERE tenant_id = $1 ORDER BY id",
+            )
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
+        rows.iter().map(row_to_domain).collect()
+    }
+
+    async fn put_domain(&self, domain: &Domain) -> Result<(), StoreError> {
+        let status = match domain.status {
+            DomainStatus::Pending => "pending",
+            DomainStatus::Verified => "verified",
+        };
+        const SQL: &str =
+            "INSERT INTO domains (id, tenant_id, host, token, status, created, verified_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7) \
+             ON CONFLICT (id) DO UPDATE SET \
+               tenant_id = EXCLUDED.tenant_id, host = EXCLUDED.host, token = EXCLUDED.token, \
+               status = EXCLUDED.status, created = EXCLUDED.created, verified_at = EXCLUDED.verified_at";
+        // `id` is a fresh sequence value (never conflicts), so the only
+        // constraint this insert can actually hit is the `host` UNIQUE — a
+        // Postgres unique-violation (SQLSTATE 23505) surfaces distinctly so
+        // the caller can map it to 409 instead of 503, same as `put_tenant`.
+        // Written out by hand (not `with_write!`) because that macro folds
+        // every error into `StoreError::Backend` before it reaches here,
+        // losing the SQLSTATE this needs to inspect.
+        if self.multi_tenant {
+            let mut tx = self.begin_tenant_tx(domain.tenant_id).await?;
+            sqlx::query(SQL)
+                .bind(domain.id as i64)
+                .bind(domain.tenant_id.0 as i64)
+                .bind(&domain.host)
+                .bind(&domain.token)
+                .bind(status)
+                .bind(domain.created as i64)
+                .bind(domain.verified_at.map(|v| v as i64))
+                .execute(&mut *tx)
+                .await
+                .map_err(map_unique_violation)?;
+            tx.commit().await.map_err(StoreError::backend)?;
+        } else {
+            let mut conn = self.write.acquire().await.map_err(StoreError::backend)?;
+            sqlx::query(SQL)
+                .bind(domain.id as i64)
+                .bind(domain.tenant_id.0 as i64)
+                .bind(&domain.host)
+                .bind(&domain.token)
+                .bind(status)
+                .bind(domain.created as i64)
+                .bind(domain.verified_at.map(|v| v as i64))
+                .execute(&mut *conn)
+                .await
+                .map_err(map_unique_violation)?;
+        }
+        Ok(())
+    }
+
+    async fn set_domain_status(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        status: DomainStatus,
+        verified_at: Option<u64>,
+    ) -> Result<(), StoreError> {
+        let status = match status {
+            DomainStatus::Pending => "pending",
+            DomainStatus::Verified => "verified",
+        };
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "UPDATE domains SET status = $1, verified_at = $2 WHERE tenant_id = $3 AND id = $4",
+            )
+            .bind(status)
+            .bind(verified_at.map(|v| v as i64))
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .execute(&mut *c)
+            .await
+        });
+        Ok(())
+    }
+
+    async fn delete_domain(&self, tenant: TenantId, id: u64) -> Result<(), StoreError> {
+        with_write!(self, tenant, |c| {
+            sqlx::query("DELETE FROM domains WHERE tenant_id = $1 AND id = $2")
+                .bind(tenant.0 as i64)
+                .bind(id as i64)
+                .execute(&mut *c)
+                .await
+        });
+        Ok(())
     }
 
     async fn enqueue_deliveries(&self, rows: &[OutboxRow]) -> Result<(), StoreError> {

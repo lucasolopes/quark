@@ -844,7 +844,7 @@ mod tests {
         }
         async fn get_alias(
             &self,
-            _tenant: crate::tenant::TenantId,
+            _domain_id: u64,
             _alias: &str,
         ) -> Result<Option<u64>, StoreError> {
             unimplemented!()
@@ -852,6 +852,7 @@ mod tests {
         async fn put_alias_and_link(
             &self,
             _tenant: crate::tenant::TenantId,
+            _domain_id: u64,
             _alias: &str,
             _id: u64,
             _rec: &Record,
@@ -870,6 +871,7 @@ mod tests {
         async fn put_alias_and_link_tx(
             &self,
             _tenant: crate::tenant::TenantId,
+            _domain_id: u64,
             _alias: &str,
             _id: u64,
             _rec: &Record,
@@ -1188,6 +1190,47 @@ mod tests {
             &self,
             _user_id: u64,
         ) -> Result<Vec<crate::tenant::Membership>, StoreError> {
+            unimplemented!()
+        }
+        async fn next_domain_id(&self) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
+        async fn get_domain_by_host(
+            &self,
+            _host: &str,
+        ) -> Result<Option<crate::domain::Domain>, StoreError> {
+            unimplemented!()
+        }
+        async fn get_domain(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+        ) -> Result<Option<crate::domain::Domain>, StoreError> {
+            unimplemented!()
+        }
+        async fn list_domains(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Vec<crate::domain::Domain>, StoreError> {
+            unimplemented!()
+        }
+        async fn put_domain(&self, _domain: &crate::domain::Domain) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn set_domain_status(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+            _status: crate::domain::DomainStatus,
+            _verified_at: Option<u64>,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn delete_domain(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+        ) -> Result<(), StoreError> {
             unimplemented!()
         }
         async fn enqueue_deliveries(&self, _rows: &[OutboxRow]) -> Result<(), StoreError> {

@@ -21,6 +21,11 @@ async fn app_admin(token: &str) -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -40,6 +45,8 @@ async fn app_admin(token: &str) -> axum::Router {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     router(state)
 }
@@ -257,6 +264,11 @@ async fn api_token_works_when_no_env_admin_token_is_configured() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
 
     let id = store
@@ -295,6 +307,8 @@ async fn api_token_works_when_no_env_admin_token_is_configured() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     let app = router(state);
 

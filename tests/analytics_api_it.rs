@@ -16,6 +16,11 @@ async fn app_with(
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, rx) = tokio::sync::mpsc::channel(chan_cap);
     let state = Arc::new(AppState {
         oidc: None,
@@ -35,6 +40,8 @@ async fn app_with(
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     (router(state), rx)
 }

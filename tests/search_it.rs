@@ -27,11 +27,18 @@ async fn seed_links(s: &PostgresStore, links: &[(&str, Option<&str>)]) -> Vec<u6
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: quark::tenant::DEFAULT_TENANT,
         };
         match alias {
             Some(a) => {
                 assert!(s
-                    .put_alias_and_link(quark::tenant::DEFAULT_TENANT, a, id, &rec)
+                    .put_alias_and_link(
+                        quark::tenant::DEFAULT_TENANT,
+                        quark::domain::SHARED_DOMAIN_ID,
+                        a,
+                        id,
+                        &rec
+                    )
                     .await
                     .unwrap());
             }

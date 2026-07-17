@@ -3,6 +3,7 @@ pub mod postgres;
 
 use crate::analytics::AnalyticsSink;
 use crate::auth::ApiToken;
+use crate::domain::{Domain, DomainStatus};
 use crate::pixel::PixelConfig;
 use crate::tenant::{Membership, Tenant, TenantId, User};
 use crate::webhooks::WebhookSubscription;
@@ -61,6 +62,15 @@ pub struct Record {
     /// field deserialize to `None` and the field is omitted when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_hash: Option<String>,
+    /// The tenant that owns this link. `#[serde(default)]` so old
+    /// blobs/rows without the column deserialize to `DEFAULT_TENANT` (every
+    /// pre-multi-tenancy record). Carried on the `Record` itself (not just
+    /// looked up separately) so the redirect hot path can compare it against
+    /// the resolved `Host` route's tenant after a cache hit — the L1/L2 tiers
+    /// are keyed by `id` alone (ids are globally unique), so this is the only
+    /// place a cross-tenant cache hit can still be caught before it's served.
+    #[serde(default)]
+    pub tenant_id: TenantId,
 }
 
 /// Maximum number of tags kept per link (extra tags beyond this are dropped).
@@ -300,10 +310,17 @@ pub trait Store: Send + Sync + 'static {
     async fn next_id(&self, tenant: TenantId) -> Result<u64, StoreError>;
     async fn get_link(&self, tenant: TenantId, id: u64) -> Result<Option<Record>, StoreError>;
     async fn put_link(&self, tenant: TenantId, id: u64, rec: &Record) -> Result<(), StoreError>;
-    async fn get_alias(&self, tenant: TenantId, alias: &str) -> Result<Option<u64>, StoreError>;
+    /// Looks up an alias within its domain's namespace. Scoped by `domain_id`,
+    /// not by tenant: a domain already picks out at most one tenant (or the
+    /// shared namespace, `SHARED_DOMAIN_ID`, which by design crosses every
+    /// tenant), so there is no separate tenant filter here. Mirrors
+    /// `get_domain_by_host`'s bare-lookup shape for the same reason: the
+    /// redirect path resolves the domain before it resolves the tenant.
+    async fn get_alias(&self, domain_id: u64, alias: &str) -> Result<Option<u64>, StoreError>;
     async fn put_alias_and_link(
         &self,
         tenant: TenantId,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
@@ -332,6 +349,7 @@ pub trait Store: Send + Sync + 'static {
     async fn put_alias_and_link_tx(
         &self,
         tenant: TenantId,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
@@ -534,6 +552,31 @@ pub trait Store: Send + Sync + 'static {
     /// All memberships for a user, across tenants.
     async fn list_memberships_for_user(&self, user_id: u64) -> Result<Vec<Membership>, StoreError>;
 
+    // --- Custom domains (multi-tenancy P3), cloud-only ---
+    /// Allocates the next global domain id. `0` is reserved (`SHARED_DOMAIN_ID`).
+    async fn next_domain_id(&self) -> Result<u64, StoreError>;
+    /// Looks up a domain by host, across all tenants. Runs on the bare pool
+    /// with no tenant scoping: the redirect handler only has a `Host` header
+    /// before it knows which tenant owns it, so this is the one deliberately
+    /// public, cross-tenant domain lookup.
+    async fn get_domain_by_host(&self, host: &str) -> Result<Option<Domain>, StoreError>;
+    /// Reads a domain by id, scoped to `tenant`.
+    async fn get_domain(&self, tenant: TenantId, id: u64) -> Result<Option<Domain>, StoreError>;
+    /// Lists all domains owned by `tenant`.
+    async fn list_domains(&self, tenant: TenantId) -> Result<Vec<Domain>, StoreError>;
+    /// Upserts a domain row.
+    async fn put_domain(&self, domain: &Domain) -> Result<(), StoreError>;
+    /// Updates a domain's verification status, scoped to `tenant`.
+    async fn set_domain_status(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        status: DomainStatus,
+        verified_at: Option<u64>,
+    ) -> Result<(), StoreError>;
+    /// Deletes a domain, scoped to `tenant`.
+    async fn delete_domain(&self, tenant: TenantId, id: u64) -> Result<(), StoreError>;
+
     /// Durable webhook outbox (scale-audit #3), Postgres-only. Inserts one
     /// delivery row per (event, subscription) with `ON CONFLICT (delivery_key)
     /// DO NOTHING`, so a duplicate enqueue of the same (event, sub) is a no-op.
@@ -608,17 +651,20 @@ impl ScopedStore {
     pub async fn put_link(&self, id: u64, rec: &Record) -> Result<(), StoreError> {
         self.inner.put_link(self.tenant, id, rec).await
     }
-    pub async fn get_alias(&self, alias: &str) -> Result<Option<u64>, StoreError> {
-        self.inner.get_alias(self.tenant, alias).await
+    /// Scoped by `domain_id`, not by this handle's tenant: alias namespaces
+    /// are per-domain (see `Store::get_alias`).
+    pub async fn get_alias(&self, domain_id: u64, alias: &str) -> Result<Option<u64>, StoreError> {
+        self.inner.get_alias(domain_id, alias).await
     }
     pub async fn put_alias_and_link(
         &self,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
     ) -> Result<bool, StoreError> {
         self.inner
-            .put_alias_and_link(self.tenant, alias, id, rec)
+            .put_alias_and_link(self.tenant, domain_id, alias, id, rec)
             .await
     }
     pub async fn put_link_tx(
@@ -633,13 +679,14 @@ impl ScopedStore {
     }
     pub async fn put_alias_and_link_tx(
         &self,
+        domain_id: u64,
         alias: &str,
         id: u64,
         rec: &Record,
         deliveries: &[OutboxRow],
     ) -> Result<bool, StoreError> {
         self.inner
-            .put_alias_and_link_tx(self.tenant, alias, id, rec, deliveries)
+            .put_alias_and_link_tx(self.tenant, domain_id, alias, id, rec, deliveries)
             .await
     }
     pub async fn delete_link_tx(
@@ -858,6 +905,7 @@ mod scoped_tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         }
     }
 
@@ -932,6 +980,7 @@ mod tests {
             folder: None,
             fallback_url: Some("https://example.com/ended".into()),
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
         let json = serde_json::to_string(&rec).unwrap();
         let back: Record = serde_json::from_str(&json).unwrap();
@@ -1018,6 +1067,7 @@ mod rules_tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         }
     }
 

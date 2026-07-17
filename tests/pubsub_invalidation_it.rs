@@ -26,6 +26,7 @@ fn rec(url: &str) -> Record {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     }
 }
 
@@ -53,6 +54,11 @@ async fn node(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>, url: &str) ->
         conn: Some(mux(url).await),
     });
     let cache = Cache::new(store.clone(), 1000, Some(inv.clone()));
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     Arc::new(AppState {
         oidc: None,
@@ -72,6 +78,8 @@ async fn node(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>, url: &str) ->
         public_host: None,
         real_ip_header: "cf-connecting-ip".into(),
         webhooks: webhooks(),
+        host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     })
 }
 
@@ -99,7 +107,13 @@ async fn cache_invalidation_propagates_to_other_node() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     assert_eq!(
-        node_b.cache.get(id).await.unwrap().unwrap().url,
+        node_b
+            .cache
+            .get(quark::tenant::DEFAULT_TENANT, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .url,
         "https://old.example"
     );
     store
@@ -111,7 +125,13 @@ async fn cache_invalidation_propagates_to_other_node() {
 
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if node_b.cache.get(id).await.unwrap().is_none() {
+        if node_b
+            .cache
+            .get(quark::tenant::DEFAULT_TENANT, id)
+            .await
+            .unwrap()
+            .is_none()
+        {
             break;
         }
         assert!(

@@ -196,7 +196,12 @@ async fn main() {
     let block_private = std::env::var("QUARK_BLOCK_PRIVATE")
         .map(|v| v != "0")
         .unwrap_or(true);
-    let public_host = std::env::var("QUARK_PUBLIC_HOST").ok();
+    // Lowercased so the self-loop / claim-prevention checks that compare an
+    // incoming host (always lowercased) against it can never be bypassed by a
+    // mixed-case env value.
+    let public_host = std::env::var("QUARK_PUBLIC_HOST")
+        .ok()
+        .map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase());
     let real_ip_header =
         std::env::var("QUARK_REAL_IP_HEADER").unwrap_or_else(|_| "cf-connecting-ip".to_string());
 
@@ -264,6 +269,17 @@ async fn main() {
     }
     let sheets = sheets_config.map(Arc::new);
 
+    // Custom-domain host routing (multi-tenancy P3). Meaningful only in cloud
+    // (`multi_tenant`); in OSS every host still resolves through `public_host`
+    // to the shared route, since no domain is ever `Verified` there.
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        public_host.clone(),
+        None,
+    ));
+    let dns: Arc<dyn quark::dns::Dns> =
+        Arc::new(quark::dns::HickoryDns::new().expect("failed to build DNS resolver"));
+
     let state = Arc::new(AppState {
         cache,
         store,
@@ -282,6 +298,8 @@ async fn main() {
         sheets,
         sheets_api: Some(sheets_api),
         multi_tenant,
+        host_router,
+        dns,
     });
     match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {

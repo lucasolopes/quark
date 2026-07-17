@@ -2,6 +2,8 @@ use crate::abuse::{extract_host, is_internal_host};
 use crate::analytics::{device_from_ua, AnalyticsSink, ClickEvent};
 use crate::auth::{generate_token, hash_token, ApiToken, Scope};
 use crate::cache::Cache;
+use crate::dns::Dns;
+use crate::domain::{Domain, DomainStatus, SHARED_DOMAIN_ID};
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::store::{
     matched_rule_index, normalize_folder, normalize_tags, pick_variant, LinkHealth, Record, Rule,
@@ -54,9 +56,19 @@ pub struct AppState {
     /// The Sheets HTTP seam (real `GoogleSheetsApi` in `main`, absent in tests
     /// that never drive a real sync). `None` is treated as "connector off".
     pub sheets_api: Option<Arc<dyn crate::sheets::client::SheetsApi>>,
-    /// Multi-tenant (cloud) mode, from `QUARK_MULTI_TENANT`. Plumbing only for
-    /// now — nothing reads this yet (no FORCE RLS, no per-tenant tx).
+    /// Multi-tenant (cloud) mode, from `QUARK_MULTI_TENANT`. Gates FORCE RLS,
+    /// per-tenant tx, and (P3 Task 4) whether `redirect`/`unlock` resolve the
+    /// `Host` header at all: off, they skip straight to the shared route.
     pub multi_tenant: bool,
+    /// Maps a request `Host` header to `{domain_id, tenant_id}` for custom
+    /// domains (multi-tenancy P3). In OSS/single-tenant mode every host still
+    /// resolves through `public_host` to the shared route. `redirect`/`unlock`
+    /// consult this (via `resolve_host_route`) to pick the alias domain and
+    /// the tenant the link fetch is scoped by.
+    pub host_router: Arc<crate::domain_router::HostRouter>,
+    /// TXT lookup seam for custom-domain verification (multi-tenancy P3).
+    /// Only `admin_domains_verify` calls it; never on the redirect path.
+    pub dns: Arc<dyn Dns>,
 }
 
 #[derive(Deserialize)]
@@ -127,7 +139,7 @@ async fn validate_rules(
         let Some(host) = extract_host(&rule.to) else {
             return Err((StatusCode::BAD_REQUEST, "rule destination without host").into_response());
         };
-        if st.block_private && is_blocked_target(&host, headers, st) {
+        if st.block_private && is_blocked_target(&host, headers, st).await {
             return Err((StatusCode::FORBIDDEN, "rule destination not allowed").into_response());
         }
         out.push(rule);
@@ -295,7 +307,7 @@ async fn validate_variants(
         let Some(host) = extract_host(&variant.url) else {
             return Err((StatusCode::BAD_REQUEST, "variant url without host").into_response());
         };
-        if st.block_private && is_blocked_target(&host, headers, st) {
+        if st.block_private && is_blocked_target(&host, headers, st).await {
             return Err((StatusCode::FORBIDDEN, "variant destination not allowed").into_response());
         }
     }
@@ -386,7 +398,7 @@ pub async fn create_link_core(
     let Some(host) = extract_host(url) else {
         return Err(CreateError::NoHost);
     };
-    if st.block_private && is_blocked_target(&host, headers, st) {
+    if st.block_private && is_blocked_target(&host, headers, st).await {
         return Err(CreateError::Blocked);
     }
 
@@ -410,6 +422,7 @@ pub async fn create_link_core(
         folder,
         fallback_url,
         password_hash,
+        tenant_id: tenant,
     };
 
     if let Some(alias) = alias {
@@ -437,7 +450,7 @@ pub async fn create_link_core(
         let rows = st.webhooks.lifecycle_deliveries(tenant, &ev).await;
         match st
             .store
-            .put_alias_and_link_tx(tenant, alias, id, &rec, &rows)
+            .put_alias_and_link_tx(tenant, SHARED_DOMAIN_ID, alias, id, &rec, &rows)
             .await
         {
             Ok(true) => {}
@@ -731,8 +744,11 @@ fn app_destination<'a>(rec: &'a Record, ua: Option<&str>) -> Option<&'a str> {
     }
 }
 
-/// Built-in guard: internal network destination, or a loop back to quark's own host.
-fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
+/// Built-in guard: internal network destination, or a loop back to any host
+/// quark itself serves (the shared `public_host`, or in multi-tenant mode
+/// any verified custom domain — a self-loop through a custom domain is still
+/// a self-loop).
+async fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
     if is_internal_host(host) {
         return true;
     }
@@ -742,7 +758,13 @@ fn is_blocked_target(host: &str, headers: &HeaderMap, st: &AppState) -> bool {
             .and_then(|v| v.to_str().ok())
             .map(|h| h.split(':').next().unwrap_or(h).to_ascii_lowercase())
     });
-    matches!(self_host, Some(sh) if sh == host)
+    if matches!(self_host, Some(sh) if sh == host) {
+        return true;
+    }
+    if st.multi_tenant && st.host_router.resolve(host).await.is_some() {
+        return true;
+    }
+    false
 }
 
 /// Validates an app destination URL with the same rules — and the same status
@@ -760,7 +782,7 @@ async fn app_destination_ok(
     let Some(host) = extract_host(url) else {
         return Err(StatusCode::BAD_REQUEST);
     };
-    if st.block_private && is_blocked_target(&host, headers, st) {
+    if st.block_private && is_blocked_target(&host, headers, st).await {
         return Err(StatusCode::FORBIDDEN);
     }
     Ok(())
@@ -770,15 +792,46 @@ async fn app_destination_ok(
 /// domain); if not, treats it as an alias in the store. `Ok(Some(id))` resolved,
 /// `Ok(None)` doesn't exist, `Err` backend failure. Each handler maps these
 /// cases to its own HTTP response (the redirect attaches Cache-Control on 404).
+///
+/// The numeric decode is global (the permutation namespace is not scoped by
+/// domain or tenant); `domain_id` only matters for the alias fallback, which
+/// is scoped per-domain (`SHARED_DOMAIN_ID` on the shared host, or the id of
+/// a resolved custom domain).
 async fn resolve_code(
     st: &AppState,
-    tenant: crate::tenant::TenantId,
+    domain_id: u64,
     code: &str,
 ) -> Result<Option<u64>, StoreError> {
     match codec::from_base62(code) {
         Some(c) if c <= permute::MAX_ID => Ok(Some(permute::decode(c, st.key))),
-        _ => st.store.get_alias(tenant, code).await,
+        _ => st.store.get_alias(domain_id, code).await,
     }
+}
+
+/// Resolves the request's `Host` header into a route for the redirect/unlock
+/// hot path.
+///
+/// OSS (`multi_tenant` off): always the shared route, no `Host` lookup at
+/// all — byte-for-byte the pre-P3 behavior, and the only path OSS ever
+/// takes since `host_router.resolve` would land on the same shared route
+/// anyway.
+///
+/// Cloud (`multi_tenant` on): normalizes the `Host` header and resolves it
+/// through `host_router`. `None` (missing header, or a host the router
+/// doesn't recognize — unknown, or a domain still pending verification)
+/// means the caller must 404: an unverified/unknown host serves nothing.
+async fn resolve_host_route(
+    st: &AppState,
+    headers: &HeaderMap,
+) -> Option<crate::domain::DomainRoute> {
+    if !st.multi_tenant {
+        return Some(crate::domain::DomainRoute {
+            domain_id: SHARED_DOMAIN_ID,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
+        });
+    }
+    let host = headers.get(header::HOST)?.to_str().ok()?;
+    st.host_router.resolve(host).await
 }
 
 /// Extracts and percent-decodes the `fbclid` query parameter Meta ads append
@@ -983,7 +1036,14 @@ async fn unlock(
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
     }
-    let id = match resolve_code(&st, crate::tenant::DEFAULT_TENANT, &code).await {
+    let Some(route) = resolve_host_route(&st, &headers).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            [(header::CACHE_CONTROL, "no-store".to_string())],
+        )
+            .into_response();
+    };
+    let id = match resolve_code(&st, route.domain_id, &code).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             return (
@@ -1001,7 +1061,10 @@ async fn unlock(
         Some(q) => format!("/{code}?{q}"),
         None => format!("/{code}"),
     };
-    let rec = match st.cache.get(id).await {
+    // Scoped by the resolved tenant: on a custom domain, a link owned by a
+    // different tenant is invisible here (cross-tenant isolation), same as
+    // in `redirect`.
+    let rec = match st.cache.get(route.tenant_id, id).await {
         Ok(Some(r)) => r,
         Ok(None) => {
             return (
@@ -1062,7 +1125,14 @@ async fn redirect(
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    let id = match resolve_code(&st, crate::tenant::DEFAULT_TENANT, &code).await {
+    let Some(route) = resolve_host_route(&st, &headers).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            [(header::CACHE_CONTROL, "no-store".to_string())],
+        )
+            .into_response();
+    };
+    let id = match resolve_code(&st, route.domain_id, &code).await {
         Ok(Some(id)) => id,
         Ok(None) => {
             return (
@@ -1073,7 +1143,11 @@ async fn redirect(
         }
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    match st.cache.get(id).await {
+    // Scoped by the resolved tenant: on a custom domain, a link owned by a
+    // different tenant is invisible here (the store's `get_link` filters by
+    // tenant) — this is the cross-tenant isolation filter. On the shared host
+    // `route.tenant_id` is always `DEFAULT_TENANT`, matching pre-P3 behavior.
+    match st.cache.get(route.tenant_id, id).await {
         Ok(Some(mut rec)) => {
             let now = now();
             if let Some(exp) = rec.expiry {
@@ -1255,7 +1329,10 @@ async fn stats(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
-    let id = match resolve_code(&st, p.tenant, &code).await {
+    // Admin `stats` resolves aliases through the shared domain, same as
+    // before `resolve_code` took a `domain_id` (custom-domain admin lookup is
+    // not wired yet).
+    let id = match resolve_code(&st, SHARED_DOMAIN_ID, &code).await {
         Ok(Some(id)) => id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -1837,6 +1914,213 @@ async fn admin_workspace_switch(
     }
 }
 
+// --- Custom domains (multi-tenancy P3), cloud-only ---
+
+/// Name of the TXT record a caller must publish to prove ownership of a
+/// custom domain.
+fn verify_txt_name(host: &str) -> String {
+    format!("_quark-verify.{host}")
+}
+
+/// A minimal syntax check for a host a caller wants to bind: dotted labels,
+/// each 1-63 characters of alphanumerics/hyphens, no leading/trailing hyphen.
+/// Not a full RFC 1035 validator, just enough to reject obvious junk before
+/// it reaches the store.
+fn is_valid_host_format(host: &str) -> bool {
+    if host.is_empty() || host.len() > 253 || !host.contains('.') {
+        return false;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+    })
+}
+
+#[derive(Deserialize)]
+struct CreateDomainReq {
+    host: String,
+}
+
+/// A domain plus the DNS instructions to verify it: the panel and any caller
+/// need both together, so `list`/`create`/`verify` all return this shape
+/// rather than the bare store `Domain`.
+#[derive(Serialize)]
+struct DomainView {
+    id: u64,
+    host: String,
+    status: DomainStatus,
+    created: u64,
+    verified_at: Option<u64>,
+    /// Name of the TXT record to publish: `_quark-verify.<host>`.
+    txt_name: String,
+    /// Value the TXT record must hold (the domain's verification token).
+    txt_value: String,
+    /// CNAME target the caller should point `host` at. `None` when this
+    /// deploy has no shared `public_host` configured.
+    cname_target: Option<String>,
+}
+
+fn domain_view(d: &Domain, public_host: &Option<String>) -> DomainView {
+    DomainView {
+        id: d.id,
+        host: d.host.clone(),
+        status: d.status,
+        created: d.created,
+        verified_at: d.verified_at,
+        txt_name: verify_txt_name(&d.host),
+        txt_value: d.token.clone(),
+        cname_target: public_host.clone(),
+    }
+}
+
+/// `GET /admin/domains`: list the caller's tenant's custom domains, each with
+/// the DNS instructions needed to verify it (cloud only).
+async fn admin_domains_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.store.list_domains(p.tenant).await {
+        Ok(domains) => Json(
+            domains
+                .iter()
+                .map(|d| domain_view(d, &st.public_host))
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// `POST /admin/domains {host}`: register a custom domain for the caller's
+/// tenant, pending DNS verification (cloud only). Rejects internal hosts and
+/// the shared `public_host`, and normalizes `host` (lowercase, trimmed, no
+/// trailing dot) before storing — `get_domain_by_host`/`HostRouter` always
+/// query lowercase, so an un-normalized host would never resolve. Duplicate
+/// `host` (unique violation) -> 409.
+async fn admin_domains_create(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateDomainReq>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let ip = client_ip(&headers, &st.real_ip_header, None);
+    if !st.ratelimiter.check(&ip, now()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+    }
+    let host = req.host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if !is_valid_host_format(&host) {
+        return (StatusCode::BAD_REQUEST, "invalid host").into_response();
+    }
+    if is_internal_host(&host) || st.public_host.as_deref() == Some(host.as_str()) {
+        return (StatusCode::BAD_REQUEST, "host not allowed").into_response();
+    }
+    let id = match st.store.next_domain_id().await {
+        Ok(i) => i,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let domain = Domain {
+        id,
+        tenant_id: p.tenant,
+        host,
+        token: generate_token(),
+        status: DomainStatus::Pending,
+        created: now(),
+        verified_at: None,
+    };
+    if let Err(e) = st.store.put_domain(&domain).await {
+        return conflict_or_503(e).into_response();
+    }
+    Json(domain_view(&domain, &st.public_host)).into_response()
+}
+
+/// `POST /admin/domains/:id/verify`: look up the `_quark-verify.<host>` TXT
+/// record for the caller's tenant's domain; on a match, mark it `Verified`
+/// and invalidate the host router so the new route takes effect immediately.
+/// A missing or mismatched TXT record leaves the domain `Pending`.
+async fn admin_domains_verify(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let ip = client_ip(&headers, &st.real_ip_header, None);
+    if !st.ratelimiter.check(&ip, now()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+    }
+    let mut domain = match st.store.get_domain(p.tenant, id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let txt_name = verify_txt_name(&domain.host);
+    let matched = st
+        .dns
+        .lookup_txt(&txt_name)
+        .await
+        .map(|values| values.iter().any(|v| v == &domain.token))
+        .unwrap_or(false);
+    if matched {
+        let verified_at = now();
+        if st
+            .store
+            .set_domain_status(p.tenant, id, DomainStatus::Verified, Some(verified_at))
+            .await
+            .is_err()
+        {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+        st.host_router.invalidate(&domain.host).await;
+        domain.status = DomainStatus::Verified;
+        domain.verified_at = Some(verified_at);
+    }
+    Json(domain_view(&domain, &st.public_host)).into_response()
+}
+
+/// `DELETE /admin/domains/:id`: remove the caller's tenant's custom domain
+/// and drop any cached host-router entry for it (cloud only).
+async fn admin_domains_delete(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let domain = match st.store.get_domain(p.tenant, id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if st.store.delete_domain(p.tenant, id).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    st.host_router.invalidate(&domain.host).await;
+    StatusCode::NO_CONTENT.into_response()
+}
+
 /// Name of the short-lived cookie holding the signed Sheets OAuth `state`,
 /// binding the connect flow to the browser that started it (anti login-CSRF).
 const SHEETS_STATE_COOKIE: &str = "qk_sheets_state";
@@ -2396,14 +2680,17 @@ async fn admin_folders_list(State(st): State<Arc<AppState>>, headers: HeaderMap)
 
 /// Resolves the code into (id, optional_alias). If the code is numeric, there's no
 /// alias to remove; if it's an alias string, returns the alias to delete alongside it.
+///
+/// `tenant` is currently unused: alias lookup is scoped by domain
+/// (`SHARED_DOMAIN_ID` for now), not by tenant. See `resolve_code`.
 async fn resolve_for_admin(
     st: &AppState,
-    tenant: crate::tenant::TenantId,
+    _tenant: crate::tenant::TenantId,
     code: &str,
 ) -> Result<Option<(u64, Option<String>)>, StoreError> {
     match codec::from_base62(code) {
         Some(c) if c <= permute::MAX_ID => Ok(Some((permute::decode(c, st.key), None))),
-        _ => match st.store.get_alias(tenant, code).await? {
+        _ => match st.store.get_alias(SHARED_DOMAIN_ID, code).await? {
             Some(id) => Ok(Some((id, Some(code.to_string())))),
             None => Ok(None),
         },
@@ -2486,7 +2773,7 @@ async fn admin_link_patch(
         let Some(host) = extract_host(s) else {
             return (StatusCode::BAD_REQUEST, "url without host").into_response();
         };
-        if st.block_private && is_blocked_target(&host, &headers, &st) {
+        if st.block_private && is_blocked_target(&host, &headers, &st).await {
             return (StatusCode::FORBIDDEN, "destination not allowed").into_response();
         }
         rec.url = s.to_string();
@@ -2699,13 +2986,17 @@ async fn admin_webhooks_list(State(st): State<Arc<AppState>>, headers: HeaderMap
 }
 
 /// Serves a stored well-known document as `application/json`. Public, no auth.
+/// Tenant is picked by the incoming `Host` header via `resolve_host_route`,
+/// the same resolution the redirect hot path uses: the shared host (or OSS,
+/// where `multi_tenant` is off) always lands on `DEFAULT_TENANT`; a verified
+/// custom domain serves its own tenant's document; an unknown/unverified
+/// host has no route, so this 404s before ever touching the store.
 /// `Some(body)` -> 200 verbatim; `None` -> 404; store error -> 503.
-async fn serve_wellknown(st: &AppState, name: &str) -> Response {
-    match st
-        .store
-        .get_wellknown(crate::tenant::DEFAULT_TENANT, name)
-        .await
-    {
+async fn serve_wellknown(st: &AppState, name: &str, headers: &HeaderMap) -> Response {
+    let Some(route) = resolve_host_route(st, headers).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match st.store.get_wellknown(route.tenant_id, name).await {
         Ok(Some(body)) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -2929,12 +3220,12 @@ async fn admin_webhooks_patch(
     StatusCode::OK.into_response()
 }
 
-async fn wellknown_aasa(State(st): State<Arc<AppState>>) -> Response {
-    serve_wellknown(&st, "apple-app-site-association").await
+async fn wellknown_aasa(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    serve_wellknown(&st, "apple-app-site-association", &headers).await
 }
 
-async fn wellknown_assetlinks(State(st): State<Arc<AppState>>) -> Response {
-    serve_wellknown(&st, "assetlinks.json").await
+async fn wellknown_assetlinks(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    serve_wellknown(&st, "assetlinks.json", &headers).await
 }
 
 async fn admin_wellknown_get(
@@ -3348,6 +3639,15 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route("/admin/me", get(admin_me))
         .route("/admin/tenants", post(admin_tenants_create))
         .route("/admin/workspace/switch", post(admin_workspace_switch))
+        .route(
+            "/admin/domains",
+            get(admin_domains_list).post(admin_domains_create),
+        )
+        .route(
+            "/admin/domains/:id",
+            axum::routing::delete(admin_domains_delete),
+        )
+        .route("/admin/domains/:id/verify", post(admin_domains_verify))
         .route("/admin/integrations/sheets/connect", get(sheets_connect))
         .route("/admin/integrations/sheets/callback", get(sheets_callback))
         .route("/admin/integrations/sheets/sync", post(sheets_sync))
@@ -3427,7 +3727,7 @@ mod tests {
         access_log_line, app_destination, cache_control_for, classify_platform, create_link_core,
         fbclid_from_query, normalize_max_visits, parse_cors_origins, resolve_code,
         resolve_for_admin, send_test_event_guarded, EventType, Platform, SubscriptionKind,
-        WebhookSubscription,
+        WebhookSubscription, SHARED_DOMAIN_ID,
     };
     use crate::store::Record;
     use axum::body::Bytes;
@@ -3453,6 +3753,7 @@ mod tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         }
     }
 
@@ -3475,6 +3776,11 @@ mod tests {
             .await
             .unwrap();
         let cache = crate::cache::Cache::new(store.clone(), 1000, None);
+        let host_router = Arc::new(crate::domain_router::HostRouter::new(
+            store.clone(),
+            None,
+            None,
+        ));
         let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
         let (tx, _wrx) = tokio::sync::mpsc::channel(1);
         let webhooks = Arc::new(crate::webhooks::delivery::WebhookDispatcher::new(
@@ -3500,6 +3806,8 @@ mod tests {
             real_ip_header: "cf-connecting-ip".to_string(),
             webhooks,
             multi_tenant: false,
+            host_router,
+            dns: Arc::new(crate::dns::NullDns),
         })
     }
 
@@ -3708,8 +4016,13 @@ mod tests {
         );
     }
 
+    /// P3 Task 2: the alias namespace moved from per-tenant to per-domain, so
+    /// a written alias now resolves regardless of which tenant asks (any
+    /// tenant creating through the shared namespace lands on the same
+    /// `SHARED_DOMAIN_ID`). Cross-domain isolation itself is exercised by the
+    /// PG-gated `alias_namespace_is_per_domain` in `tests/domains_it.rs`.
     #[tokio::test]
-    async fn create_link_core_alias_writes_under_the_passed_tenant() {
+    async fn create_link_core_alias_resolves_via_the_shared_domain() {
         let st = guard_state(None).await;
         let tenant = crate::tenant::TenantId(7);
         let headers = ReqHeaderMap::new();
@@ -3737,27 +4050,20 @@ mod tests {
 
         assert!(
             st.store
-                .get_alias(tenant, "my-alias")
+                .get_alias(SHARED_DOMAIN_ID, "my-alias")
                 .await
                 .unwrap()
                 .is_some(),
-            "the alias must resolve under the passed tenant"
-        );
-        assert_eq!(
-            st.store
-                .get_alias(crate::tenant::DEFAULT_TENANT, "my-alias")
-                .await
-                .unwrap(),
-            None,
-            "the alias must NOT resolve under DEFAULT_TENANT"
+            "the alias must resolve in the shared domain namespace"
         );
     }
 
-    /// `resolve_code`'s alias branch must call `get_alias(tenant, code)` with
-    /// the PASSED tenant, not `DEFAULT_TENANT` (the numeric-code branch is
-    /// tenant-independent by construction, so this only exercises aliases).
+    /// `resolve_code`'s alias branch resolves through whichever domain id is
+    /// passed in; the shared domain (`SHARED_DOMAIN_ID`) is one such domain,
+    /// used regardless of which tenant created the alias (alias isolation is
+    /// by domain, not by tenant; see `resolve_code`'s doc comment).
     #[tokio::test]
-    async fn resolve_code_resolves_alias_within_the_passed_tenant() {
+    async fn resolve_code_resolves_alias_via_the_shared_domain() {
         let st = guard_state(None).await;
         let tenant = crate::tenant::TenantId(9);
         let rec = Record {
@@ -3773,30 +4079,24 @@ mod tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
         st.store
-            .put_alias_and_link(tenant, "foo", 5, &rec)
+            .put_alias_and_link(tenant, SHARED_DOMAIN_ID, "foo", 5, &rec)
             .await
             .unwrap();
 
         assert_eq!(
-            resolve_code(&st, tenant, "foo").await.unwrap(),
+            resolve_code(&st, SHARED_DOMAIN_ID, "foo").await.unwrap(),
             Some(5),
-            "resolve_code must resolve the alias within its own tenant"
-        );
-        assert_eq!(
-            resolve_code(&st, crate::tenant::DEFAULT_TENANT, "foo")
-                .await
-                .unwrap(),
-            None,
-            "resolve_code must NOT resolve the alias from a different tenant"
+            "resolve_code must resolve the alias via the shared domain"
         );
     }
 
-    /// `resolve_for_admin`'s alias branch must call `get_alias(tenant, code)`
-    /// with the PASSED tenant, mirroring `resolve_code`.
+    /// `resolve_for_admin`'s alias branch resolves through the shared domain
+    /// namespace, mirroring `resolve_code`.
     #[tokio::test]
-    async fn resolve_for_admin_resolves_alias_within_the_passed_tenant() {
+    async fn resolve_for_admin_resolves_alias_via_the_shared_domain() {
         let st = guard_state(None).await;
         let tenant = crate::tenant::TenantId(11);
         let rec = Record {
@@ -3812,23 +4112,24 @@ mod tests {
             folder: None,
             fallback_url: None,
             password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
         st.store
-            .put_alias_and_link(tenant, "bar", 6, &rec)
+            .put_alias_and_link(tenant, SHARED_DOMAIN_ID, "bar", 6, &rec)
             .await
             .unwrap();
 
         assert_eq!(
             resolve_for_admin(&st, tenant, "bar").await.unwrap(),
             Some((6, Some("bar".to_string()))),
-            "resolve_for_admin must resolve the alias within its own tenant"
+            "resolve_for_admin must resolve the alias via the shared domain"
         );
         assert_eq!(
             resolve_for_admin(&st, crate::tenant::DEFAULT_TENANT, "bar")
                 .await
                 .unwrap(),
-            None,
-            "resolve_for_admin must NOT resolve the alias from a different tenant"
+            Some((6, Some("bar".to_string()))),
+            "resolve_for_admin must resolve the alias regardless of the passed tenant"
         );
     }
 

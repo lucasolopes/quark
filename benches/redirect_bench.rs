@@ -49,6 +49,7 @@ fn bench(c: &mut Criterion) {
                     folder: None,
                     fallback_url: None,
                     password_hash: None,
+                    tenant_id: quark::tenant::DEFAULT_TENANT,
                 },
             )
             .await
@@ -63,6 +64,11 @@ fn bench(c: &mut Criterion) {
             key,
             quark::pixel::PixelBases::default(),
         );
+        let host_router = Arc::new(quark::domain_router::HostRouter::new(
+            store.clone(),
+            None,
+            None,
+        ));
         let state = Arc::new(AppState {
             oidc: None,
             sheets: None,
@@ -88,6 +94,8 @@ fn bench(c: &mut Criterion) {
                     Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 ))
             },
+            host_router,
+            dns: std::sync::Arc::new(quark::dns::NullDns),
         });
         let code = to_base62(encode(1, key));
         (state, code, tx, worker)

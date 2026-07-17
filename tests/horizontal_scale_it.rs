@@ -23,6 +23,11 @@ async fn pg_replica(url: &str) -> axum::Router {
     let store: Arc<dyn Store> = pg.clone();
     let sink: Arc<dyn AnalyticsSink> = pg;
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -42,6 +47,8 @@ async fn pg_replica(url: &str) -> axum::Router {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
     });
     router(state)
 }

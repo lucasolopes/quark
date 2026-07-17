@@ -21,6 +21,7 @@ async fn put_get_link() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     store
         .put_link(quark::tenant::DEFAULT_TENANT, 7, &rec)
@@ -77,6 +78,7 @@ async fn put_alias_and_link_is_atomic() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     let rec2 = Record {
         url: "https://other.com".into(),
@@ -91,15 +93,22 @@ async fn put_alias_and_link_is_atomic() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
 
     assert!(store
-        .put_alias_and_link(quark::tenant::DEFAULT_TENANT, "promo", 5, &rec)
+        .put_alias_and_link(
+            quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
+            "promo",
+            5,
+            &rec
+        )
         .await
         .unwrap());
     assert_eq!(
         store
-            .get_alias(quark::tenant::DEFAULT_TENANT, "promo")
+            .get_alias(quark::domain::SHARED_DOMAIN_ID, "promo")
             .await
             .unwrap(),
         Some(5)
@@ -115,12 +124,18 @@ async fn put_alias_and_link_is_atomic() {
     );
 
     assert!(!store
-        .put_alias_and_link(quark::tenant::DEFAULT_TENANT, "promo", 9, &rec2)
+        .put_alias_and_link(
+            quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
+            "promo",
+            9,
+            &rec2
+        )
         .await
         .unwrap());
     assert_eq!(
         store
-            .get_alias(quark::tenant::DEFAULT_TENANT, "promo")
+            .get_alias(quark::domain::SHARED_DOMAIN_ID, "promo")
             .await
             .unwrap(),
         Some(5)

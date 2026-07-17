@@ -39,6 +39,7 @@ fn plain_rec(url: &str) -> Record {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     }
 }
 
@@ -191,6 +192,7 @@ async fn put_get_link_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 7, &rec)
         .await
@@ -241,6 +243,7 @@ async fn rules_round_trip_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 42, &rec)
         .await
@@ -273,6 +276,7 @@ async fn link_without_rules_round_trips_to_empty_vec_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 43, &rec)
         .await
@@ -315,17 +319,30 @@ async fn alias_is_atomic_no_orphan_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     assert!(s
-        .put_alias_and_link(quark::tenant::DEFAULT_TENANT, "promo", 5, &rec)
+        .put_alias_and_link(
+            quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
+            "promo",
+            5,
+            &rec
+        )
         .await
         .unwrap());
     assert!(!s
-        .put_alias_and_link(quark::tenant::DEFAULT_TENANT, "promo", 9, &rec)
+        .put_alias_and_link(
+            quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
+            "promo",
+            9,
+            &rec
+        )
         .await
         .unwrap());
     assert_eq!(
-        s.get_alias(quark::tenant::DEFAULT_TENANT, "promo")
+        s.get_alias(quark::domain::SHARED_DOMAIN_ID, "promo")
             .await
             .unwrap(),
         Some(5)
@@ -356,6 +373,7 @@ async fn tags_round_trip_filter_and_distinct_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(
         quark::tenant::DEFAULT_TENANT,
@@ -422,6 +440,7 @@ async fn folder_round_trip_filter_and_list_pg() {
         folder: folder.map(str::to_string),
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(
         quark::tenant::DEFAULT_TENANT,
@@ -500,6 +519,7 @@ async fn visits_round_trip_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 11, &rec)
         .await
@@ -538,6 +558,7 @@ async fn bump_visits_is_atomic_and_increments_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 12, &rec)
         .await
@@ -610,6 +631,7 @@ async fn variants_round_trip_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 11, &rec)
         .await
@@ -640,6 +662,7 @@ async fn variants_round_trip_pg() {
         folder: None,
         fallback_url: None,
         password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
     };
     s.put_link(quark::tenant::DEFAULT_TENANT, 12, &plain)
         .await
@@ -758,6 +781,7 @@ async fn put_alias_and_link_tx_writes_all_atomically() {
     let claimed = s
         .put_alias_and_link_tx(
             quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
             "promo",
             5,
             &rec,
@@ -767,7 +791,7 @@ async fn put_alias_and_link_tx_writes_all_atomically() {
         .unwrap();
     assert!(claimed);
     assert_eq!(
-        s.get_alias(quark::tenant::DEFAULT_TENANT, "promo")
+        s.get_alias(quark::domain::SHARED_DOMAIN_ID, "promo")
             .await
             .unwrap(),
         Some(5)
@@ -796,6 +820,7 @@ async fn put_alias_and_link_tx_conflict_rolls_back_link_and_deliveries() {
     assert!(s
         .put_alias_and_link_tx(
             quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
             "promo",
             5,
             &plain_rec("https://first.com"),
@@ -808,6 +833,7 @@ async fn put_alias_and_link_tx_conflict_rolls_back_link_and_deliveries() {
     let claimed = s
         .put_alias_and_link_tx(
             quark::tenant::DEFAULT_TENANT,
+            quark::domain::SHARED_DOMAIN_ID,
             "promo",
             9,
             &plain_rec("https://second.com"),
@@ -829,7 +855,7 @@ async fn put_alias_and_link_tx_conflict_rolls_back_link_and_deliveries() {
     );
     // The original alias still points at id 5.
     assert_eq!(
-        s.get_alias(quark::tenant::DEFAULT_TENANT, "promo")
+        s.get_alias(quark::domain::SHARED_DOMAIN_ID, "promo")
             .await
             .unwrap(),
         Some(5)
