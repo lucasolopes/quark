@@ -679,3 +679,254 @@ async fn oidc_config_endpoints_404_in_oss_without_postgres() {
     let status = delete_oidc_config_http(&app, "whatever").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+/// `GET /admin/login` and `GET /admin/callback` are `404` too, without
+/// Postgres and without any global env OIDC configured — the same ungated
+/// OSS shape as `oidc_config_endpoints_404_in_oss_without_postgres`, but for
+/// the login/callback surface rather than the CRUD one. This is the router
+/// path (not the direct-handler-call path the `api.rs` unit tests use), so it
+/// proves the actual routes wired into `router()` carry the gate, not just
+/// the functions behind them.
+#[tokio::test]
+async fn oss_login_and_callback_404_without_oidc_configured_or_postgres() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: false,
+        multi_tenant: false,
+        tenant_domain_suffix: None,
+        oidc_tenants: quark::oidc::TenantOidcCache::new(),
+        cache,
+        store,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    let app = router(state);
+
+    let login_resp = app
+        .clone()
+        .oneshot(Request::get("/admin/login").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(login_resp.status(), StatusCode::NOT_FOUND);
+
+    let callback_resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/callback?code=c&state=s")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(callback_resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// A `?org=` login against an OSS deployment (`multi_tenant: false`) is also
+/// `404`, at the router level, mirroring `org_login_requires_multi_tenant_mode`
+/// in the `api.rs` unit tests (which calls the handler directly) but through
+/// the actual route.
+#[tokio::test]
+async fn oss_org_login_404_at_router_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: false,
+        multi_tenant: false,
+        tenant_domain_suffix: None,
+        oidc_tenants: quark::oidc::TenantOidcCache::new(),
+        cache,
+        store,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    let app = router(state);
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/login?org=acme")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+// --- Task 5: security sweep -------------------------------------------------
+
+/// Builds a router with an env break-glass admin token, `multi_tenant: true`.
+/// Used to prove break-glass authorization is unaffected by per-tenant OIDC
+/// configs existing for other tenants.
+async fn admin_app_with_breakglass_token(store: Arc<PostgresStore>, token: &str) -> axum::Router {
+    let store_dyn: Arc<dyn Store> = store.clone();
+    let sink_dyn: Arc<dyn AnalyticsSink> = store;
+    let cache = Cache::new(store_dyn.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store_dyn.clone(),
+        Some("quark.example.com".to_string()),
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: false,
+        multi_tenant: true,
+        tenant_domain_suffix: None,
+        oidc_tenants: quark::oidc::TenantOidcCache::new(),
+        cache,
+        store: store_dyn,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink: sink_dyn,
+        admin_token: Some(token.to_string()),
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: Some("quark.example.com".to_string()),
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    router(state)
+}
+
+/// A tenant B token (`Scope::Full`, scoped to B) can never see, overwrite, or
+/// remove tenant A's OIDC config through `/admin/oidc-config`: `GET` 404s
+/// (not A's config), `PUT` creates B's own row without touching A's, and
+/// `DELETE` (before B has a config) 404s — all while A's config, verified via
+/// the store directly, is untouched throughout. This is the HTTP-level
+/// counterpart to the store-level `tenant_scoped_read_does_not_leak_across_tenants`:
+/// it proves the isolation holds through `admin_guard`'s `Principal.tenant`,
+/// not just through the store's `WHERE tenant_id` predicate.
+#[tokio::test]
+#[serial]
+async fn cross_tenant_token_cannot_see_edit_or_delete_another_tenants_config() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant_a = make_tenant(&store, "oidc-xtenant-a").await;
+    let tenant_b = make_tenant(&store, "oidc-xtenant-b").await;
+    let config_a = cfg(tenant_a, "https://idp.acme.example");
+    store.put_oidc_config(&config_a).await.unwrap();
+
+    let (app_b, token_b) =
+        admin_app_with_scopes(store.clone(), true, tenant_b, 9301, vec![Scope::Full]).await;
+
+    // B's GET never sees A's config.
+    let (get_status, get_body, get_raw) = get_oidc_config_http(&app_b, &token_b).await;
+    assert_eq!(get_status, StatusCode::NOT_FOUND);
+    assert_eq!(get_body, serde_json::Value::Null);
+    assert!(!get_raw.contains("idp.acme.example"));
+
+    // B's DELETE (no config of its own yet) 404s rather than removing A's row.
+    let delete_status = delete_oidc_config_http(&app_b, &token_b).await;
+    assert_eq!(delete_status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        store.get_oidc_config(tenant_a).await.unwrap().as_ref(),
+        Some(&config_a),
+        "tenant A's config must survive tenant B's DELETE"
+    );
+
+    // B's PUT creates B's OWN row; A's config is untouched.
+    let (put_status, put_body, _) = put_oidc_config_http(&app_b, &token_b, put_body()).await;
+    assert_eq!(put_status, StatusCode::OK);
+    assert_eq!(put_body["issuer"], "https://idp.acme.example"); // same fixture body, different tenant row
+    let stored_a = store.get_oidc_config(tenant_a).await.unwrap().unwrap();
+    assert_eq!(
+        stored_a, config_a,
+        "tenant A's config must be unchanged after tenant B's PUT"
+    );
+    let stored_b = store.get_oidc_config(tenant_b).await.unwrap().unwrap();
+    assert_eq!(stored_b.tenant_id, tenant_b);
+
+    // B's own subsequent GET now sees B's row, still never A's.
+    let (get_status2, get_body2, _) = get_oidc_config_http(&app_b, &token_b).await;
+    assert_eq!(get_status2, StatusCode::OK);
+    assert_eq!(get_body2["client_id"], "acme-client");
+}
+
+/// The env break-glass admin token still authorizes `Scope::Full` at tenant 0
+/// (`DEFAULT_TENANT`) exactly as before, even when some OTHER tenant has its
+/// own per-tenant OIDC config on file. Driven through `GET
+/// /admin/oidc-config` itself: the break-glass token resolves a `Principal`
+/// at `DEFAULT_TENANT` regardless of OIDC-per-tenant state elsewhere, so it
+/// reaches the "no config for tenant 0" branch (`404`) rather than being
+/// rejected by `admin_guard` (`401`/`403`) — proof the authorization step
+/// itself is unaffected.
+#[tokio::test]
+#[serial]
+async fn breakglass_admin_token_unaffected_by_other_tenants_oidc_config() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let configured_tenant = make_tenant(&store, "oidc-breakglass-configured").await;
+    store
+        .put_oidc_config(&cfg(configured_tenant, "https://idp.acme.example"))
+        .await
+        .unwrap();
+
+    let app = admin_app_with_breakglass_token(store.clone(), "breakglass-secret").await;
+    let (status, _, _) = get_oidc_config_http(&app, "breakglass-secret").await;
+    // DEFAULT_TENANT (0) has no config of its own: reaching 404 here (not
+    // 401/403) proves admin_guard authorized the break-glass token at
+    // DEFAULT_TENANT with Scope::Full, unaffected by `configured_tenant`'s
+    // own per-tenant OIDC config existing.
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Sanity: a wrong token is still rejected (401), so the 404 above is not
+    // just "auth is a no-op in this test wiring".
+    let (wrong_status, _, _) = get_oidc_config_http(&app, "not-the-right-token").await;
+    assert_eq!(wrong_status, StatusCode::UNAUTHORIZED);
+
+    // And the OTHER tenant's config is completely undisturbed.
+    let still_there = store.get_oidc_config(configured_tenant).await.unwrap();
+    assert!(still_there.is_some());
+}

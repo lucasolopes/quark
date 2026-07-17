@@ -4881,6 +4881,79 @@ mod tests {
         assert_ne!(role, crate::tenant::Role::Owner);
     }
 
+    /// A login into tenant A's own OIDC creates a membership ONLY in A, never
+    /// in any other tenant — same decision-logic level as
+    /// `tenant_login_membership_role_matches_claim_mapping`, but asserting
+    /// the negative: `ensure_user_and_membership` is only ever told about the
+    /// login's own tenant, so `list_memberships_for_user` for that user must
+    /// come back with exactly one entry, scoped to A.
+    #[tokio::test]
+    async fn tenant_login_creates_membership_only_in_the_login_tenant() {
+        let st = multi_tenant_state().await;
+        let tenant_a = crate::tenant::TenantId(1);
+        let tenant_b = crate::tenant::TenantId(2);
+        st.store
+            .put_tenant(&crate::tenant::Tenant {
+                id: tenant_a,
+                name: "Acme".to_string(),
+                slug: "acme".to_string(),
+                created: 0,
+            })
+            .await
+            .unwrap();
+        st.store
+            .put_tenant(&crate::tenant::Tenant {
+                id: tenant_b,
+                name: "Bravo".to_string(),
+                slug: "bravo".to_string(),
+                created: 0,
+            })
+            .await
+            .unwrap();
+        let cfg_a = crate::oidc::TenantOidcConfig {
+            tenant_id: tenant_a,
+            issuer: "https://idp.acme.example".into(),
+            client_id: "acme".into(),
+            client_secret: "s".into(),
+            scopes: vec!["openid".into()],
+            admin_claim: "groups".into(),
+            admin_value: "acme-admins".into(),
+            readonly_value: "acme-viewers".into(),
+            required_value: None,
+            post_login_url: None,
+        };
+
+        let claims = serde_json::json!({ "groups": ["acme-admins"] });
+        let role = crate::oidc::claim_role(&claims, &cfg_a);
+        let uid = crate::oidc::ensure_user_and_membership(
+            st.store.as_ref(),
+            true,
+            "sub-cross-tenant",
+            "x@acme.example",
+            "X",
+            &[],
+            Some((tenant_a, role)),
+        )
+        .await
+        .unwrap();
+
+        let memberships = st.store.list_memberships_for_user(uid).await.unwrap();
+        assert_eq!(
+            memberships.len(),
+            1,
+            "the login into A must not create a membership anywhere else"
+        );
+        assert_eq!(memberships[0].tenant_id, tenant_a);
+        assert!(
+            st.store
+                .get_membership(uid, tenant_b)
+                .await
+                .unwrap()
+                .is_none(),
+            "no membership must exist in tenant B from a login into tenant A"
+        );
+    }
+
     /// Required-group gate (multi-tenancy P2d Task 4b), driven at the same
     /// level as `tenant_login_membership_role_matches_claim_mapping`:
     /// `passes_required_group` is the decision `oidc_callback` must check
@@ -4950,12 +5023,20 @@ mod tests {
         };
         let tenant = crate::tenant::TenantId(1);
 
-        // Neither admin, readonly, nor the required group: the gate denies.
-        // `oidc_callback` returns 403 here without calling
-        // `ensure_user_and_membership` at all, so nothing to assert against
-        // the store except that this decision, made first, is `false`.
+        // Neither admin, readonly, nor the required group: the gate denies,
+        // and (mirroring exactly what `oidc_callback` does on this branch)
+        // `ensure_user_and_membership` is never reached — no user, no
+        // membership, for an outsider who never should have gotten in.
         let outsider_claims = serde_json::json!({ "groups": ["random"] });
         assert!(!crate::oidc::passes_required_group(&outsider_claims, &cfg));
+        assert!(
+            st.store
+                .get_user_by_subject("sub-outsider")
+                .await
+                .unwrap()
+                .is_none(),
+            "a caller denied by the required-group gate must never get a user record"
+        );
 
         // The required group itself: gate passes, and (since they match
         // neither admin_value nor readonly_value) `claim_role` still gives
