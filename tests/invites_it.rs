@@ -10,7 +10,7 @@ use quark::cache::Cache;
 use quark::dns::NullDns;
 use quark::invite::Invite;
 use quark::store::postgres::PostgresStore;
-use quark::store::Store;
+use quark::store::{open_backends, Store};
 use quark::tenant::{Membership, Role, Tenant, TenantId, User};
 use quark::webhooks::delivery::WebhookDispatcher;
 use serial_test::serial;
@@ -790,4 +790,163 @@ async fn accept_invite_404_in_oss() {
     let app = session_app_over(store.clone(), false);
     let (status, _) = accept_invite(&app, "raw-whatever", Some(&raw)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// --- Task 4: OSS parity (ungated, LMDB) + security sweep -------------------
+//
+// The test below runs over an LMDB-backed store, never gated on
+// `QUARK_TEST_DATABASE_URL`: the point is that OSS deployments (no Postgres,
+// no cloud flag) get a 404 on every invite surface without needing a test
+// database at all, mirroring `oss_workspace_endpoints_are_404` in
+// `tests/workspace_it.rs`.
+
+/// Builds a full quark router over a dyn `Store`, with a given `multi_tenant`
+/// mode. Used only for the ungated LMDB test below.
+fn app_over(
+    store: Arc<dyn Store>,
+    sink: Arc<dyn quark::analytics::AnalyticsSink>,
+    multi_tenant: bool,
+) -> axum::Router {
+    let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: true,
+        multi_tenant,
+        cache,
+        store,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    router(state)
+}
+
+/// All three `/admin/invites` surfaces (`POST /admin/invites`,
+/// `GET /admin/invites`, `POST /admin/invites/:token/accept`) 404 in OSS
+/// (`multi_tenant = false`) with no Postgres configured at all and no
+/// credential presented: the flag gate runs before authentication, so this
+/// must always run, not just when a test Postgres happens to be available.
+#[tokio::test]
+async fn oss_invites_endpoints_are_404_without_postgres() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    let app = app_over(store, sink, false);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/invites")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"email":"x@acme.com","role":"member"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let resp = app
+        .clone()
+        .oneshot(Request::get("/admin/invites").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let resp = app
+        .oneshot(
+            Request::post("/admin/invites/whatever-token/accept")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// `GET /admin/invites` and `DELETE /admin/invites/:id`, exercised at the HTTP
+/// layer with a real (non-superuser) per-tenant API token: tenant B's token
+/// never sees tenant A's pending invite in the list, and a delete attempt
+/// against tenant A's invite id 404s exactly as an unknown id would (the
+/// store-level equivalent is already covered by `list_invites_is_tenant_scoped`
+/// and `delete_invite_is_tenant_scoped` above; this closes the gap at the HTTP
+/// boundary, where `admin_guard` resolves the tenant from the caller's own
+/// token rather than a test taking it on faith).
+#[tokio::test]
+#[serial]
+async fn list_and_delete_invites_http_are_tenant_scoped_for_non_superuser() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant_a = make_tenant(&store, "invites-http-scope-a").await;
+    let tenant_b = make_tenant(&store, "invites-http-scope-b").await;
+    let invite_id = make_invite(
+        &store,
+        tenant_a,
+        "scoped@acme.com",
+        "raw-http-scope-a",
+        100,
+        1_000,
+    )
+    .await;
+
+    let (_app_a, _token_a) =
+        admin_app_with_scopes(store.clone(), true, tenant_a, 9107, vec![Scope::Full]).await;
+    let (app_b, token_b) =
+        admin_app_with_scopes(store.clone(), true, tenant_b, 9108, vec![Scope::Full]).await;
+
+    let resp = app_b
+        .clone()
+        .oneshot(
+            Request::get("/admin/invites")
+                .header("x-admin-token", &token_b)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json.as_array().unwrap().is_empty(),
+        "tenant B must not see tenant A's pending invite over HTTP"
+    );
+
+    let resp = app_b
+        .oneshot(
+            Request::delete(format!("/admin/invites/{invite_id}"))
+                .header("x-admin-token", &token_b)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "tenant B must not be able to delete tenant A's invite over HTTP"
+    );
+
+    // Tenant A's own invite is untouched by tenant B's failed attempt.
+    assert_eq!(store.list_invites(tenant_a).await.unwrap().len(), 1);
 }
