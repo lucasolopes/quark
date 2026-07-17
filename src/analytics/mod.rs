@@ -1,5 +1,6 @@
 use crate::pixel::{self, PixelBases, PixelConfig};
 use crate::store::{Store, StoreError};
+use crate::tenant::TenantId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -337,9 +338,9 @@ pub trait AnalyticsSink: Send + Sync + 'static {
 /// Batch size that triggers an immediate flush (in addition to the 5s timer).
 pub const BATCH: usize = 500;
 
-/// How long a pixel-snapshot refresh (`store.list_pixels(crate::tenant::DEFAULT_TENANT)`) is allowed to
-/// run before it's abandoned in favor of the previous snapshot (fail-open:
-/// a wedged store must never stall the worker).
+/// How long a full pixel-snapshot refresh (`list_tenants` + `list_pixels` per
+/// tenant) is allowed to run before it's abandoned in favor of the previous
+/// snapshot (fail-open: a wedged store must never stall the worker).
 const PIXEL_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Background worker: accumulates `ClickEvent`s from the channel and flushes
@@ -371,7 +372,10 @@ pub fn spawn_worker(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut buf: Vec<ClickEvent> = Vec::with_capacity(BATCH);
-        let mut pixels: Vec<PixelConfig> = Vec::new();
+        // Snapshot de pixels agrupado por tenant. Cada clique é encaminhado só
+        // aos pixels do seu próprio tenant (isolamento cross-tenant), então o
+        // tenant dono precisa viajar junto: `PixelConfig` não carrega tenant.
+        let mut pixels: Vec<(TenantId, Vec<PixelConfig>)> = Vec::new();
         refresh_pixel_snapshot(&store, &mut pixels).await;
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -400,19 +404,32 @@ pub fn spawn_worker(
     })
 }
 
-/// Refreshes the cached pixel-config snapshot from `store`, bounded by
-/// `PIXEL_SNAPSHOT_TIMEOUT`. Fail-open: on a store error or a timeout, the
-/// previous snapshot (`pixels`) is left untouched and the failure is only
-/// logged — a wedged or erroring store never stalls the worker and never
-/// empties out a snapshot that was previously known-good.
-async fn refresh_pixel_snapshot(store: &Arc<dyn Store>, pixels: &mut Vec<PixelConfig>) {
-    match tokio::time::timeout(
-        PIXEL_SNAPSHOT_TIMEOUT,
-        store.list_pixels(crate::tenant::DEFAULT_TENANT),
-    )
-    .await
-    {
-        Ok(Ok(configs)) => *pixels = configs,
+/// Refreshes the cached pixel-config snapshot from `store`, across every
+/// tenant, bounded by `PIXEL_SNAPSHOT_TIMEOUT`. Fail-open: on a store error
+/// (listing tenants or any tenant's pixels) or a timeout, the previous
+/// snapshot (`pixels`) is left untouched and the failure is only logged, so a
+/// wedged or erroring store never stalls the worker and never empties out a
+/// snapshot that was previously known-good.
+///
+/// In OSS/single-tenant mode `list_tenants` returns only the default tenant,
+/// so this degrades to exactly the old single-tenant behavior.
+async fn refresh_pixel_snapshot(
+    store: &Arc<dyn Store>,
+    pixels: &mut Vec<(TenantId, Vec<PixelConfig>)>,
+) {
+    let load = async {
+        let tenants = store.list_tenants().await?;
+        let mut out: Vec<(TenantId, Vec<PixelConfig>)> = Vec::with_capacity(tenants.len());
+        for t in tenants {
+            let configs = store.list_pixels(t.id).await?;
+            if !configs.is_empty() {
+                out.push((t.id, configs));
+            }
+        }
+        Ok::<_, StoreError>(out)
+    };
+    match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, load).await {
+        Ok(Ok(snapshot)) => *pixels = snapshot,
         Ok(Err(e)) => {
             eprintln!("{}", serde_json::json!({"pixel_list_error": e.to_string()}));
         }
@@ -428,7 +445,7 @@ async fn refresh_pixel_snapshot(store: &Arc<dyn Store>, pixels: &mut Vec<PixelCo
 async fn flush(
     sink: &Arc<dyn AnalyticsSink>,
     buf: &mut Vec<ClickEvent>,
-    pixels: &[PixelConfig],
+    pixels: &[(TenantId, Vec<PixelConfig>)],
     client: &reqwest::Client,
     key: u64,
     bases: &PixelBases,
@@ -447,27 +464,45 @@ async fn flush(
 }
 
 /// Forwards the flushed batch to every active pixel config in the cached
-/// `pixels` snapshot (no store access on this path — see `spawn_worker`).
+/// `pixels` snapshot (no store access on this path, see `spawn_worker`).
+///
+/// Tenant isolation: the batch mixes clicks from every tenant, so for each
+/// tenant we forward only that tenant's own events to that tenant's pixels.
+/// A tenant's conversion data never reaches another tenant's provider.
+///
 /// Fail-open: a per-provider forward failure is only logged, never
 /// propagated (never affects the sink write above nor the redirect hot path,
 /// which has already returned by the time this runs).
 async fn forward_to_pixels(
-    pixels: &[PixelConfig],
+    pixels: &[(TenantId, Vec<PixelConfig>)],
     client: &reqwest::Client,
     key: u64,
     bases: &PixelBases,
     events: &[ClickEvent],
 ) {
-    for config in pixels.iter().filter(|c| c.active) {
-        let base = bases.base_for(config.provider);
-        if let Err(e) = pixel::forward(client, base, config, events, key).await {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "pixel_forward_error": e.to_string(),
-                    "pixel_id": config.id,
-                })
-            );
+    for (tenant, configs) in pixels {
+        if !configs.iter().any(|c| c.active) {
+            continue;
+        }
+        let scoped: Vec<ClickEvent> = events
+            .iter()
+            .filter(|e| e.tenant_id == tenant.0)
+            .cloned()
+            .collect();
+        if scoped.is_empty() {
+            continue;
+        }
+        for config in configs.iter().filter(|c| c.active) {
+            let base = bases.base_for(config.provider);
+            if let Err(e) = pixel::forward(client, base, config, &scoped, key).await {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "pixel_forward_error": e.to_string(),
+                        "pixel_id": config.id,
+                    })
+                );
+            }
         }
     }
 }
