@@ -22,6 +22,12 @@ describe("Members", () => {
     expect(screen.getByText("Admin")).toBeInTheDocument();
   });
 
+  it("shows a dedicated permission message on 403", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 403 }));
+    render(withProviders(<Members />, { withRouter: false }));
+    expect(await screen.findByText(/don't have permission to view members/i)).toBeInTheDocument();
+  });
+
   it("empty state", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse([]));
     render(withProviders(<Members />, { withRouter: false }));

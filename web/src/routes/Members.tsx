@@ -102,7 +102,16 @@ export function Members() {
 
       {query.isPending && <MembersSkeleton />}
 
-      {query.isError && (
+      {query.isError && query.error instanceof ApiError && query.error.status === 403 && (
+        <Card className="border-destructive/30">
+          <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
+            <AlertTriangle className="size-8 text-destructive" aria-hidden="true" />
+            <p className="font-medium">{t("invites.forbidden")}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {query.isError && !(query.error instanceof ApiError && query.error.status === 403) && (
         <Card className="border-destructive/30">
           <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
             <AlertTriangle className="size-8 text-destructive" aria-hidden="true" />
