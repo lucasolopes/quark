@@ -1678,3 +1678,194 @@ async fn oss_create_still_stamps_default_tenant_and_shared_domain() {
         .expect("OSS create must land under DEFAULT_TENANT");
     assert_eq!(rec.tenant_id, quark::tenant::DEFAULT_TENANT);
 }
+
+// --- P3-completion Task 2b: admin stats + delete-by-alias must resolve the
+// alias in the caller's tenant default domain, matching where `create` (Task
+// 2/5) now stamps it, instead of the stale hardcoded `SHARED_DOMAIN_ID`.
+
+/// Registers a `Full`-scoped API token for `tenant` (covers both `Analytics`
+/// and `LinksWrite`, needed to drive both the stats and delete-by-alias
+/// admin paths from one token).
+async fn seed_admin_token(store: &Arc<PostgresStore>, tenant: TenantId, token_id: u64) -> String {
+    let raw = format!("qtok_admin_{}", token_id);
+    store
+        .put_api_token(
+            tenant,
+            &ApiToken {
+                id: token_id,
+                name: "admin-alias-test-token".to_string(),
+                token_hash: hash_token(&raw),
+                scopes: vec![Scope::Full],
+                rate_limit_per_min: None,
+                created: 0,
+                tenant_id: tenant,
+            },
+        )
+        .await
+        .unwrap();
+    raw
+}
+
+async fn get_stats(app: &axum::Router, token: &str, code: &str) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::get(format!("/{code}/stats"))
+                .header("x-admin-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+async fn delete_admin_link(app: &axum::Router, token: &str, code: &str) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::delete(format!("/admin/links/{code}"))
+                .header("x-admin-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+/// A cloud tenant creates an aliased link, which (per Task 2) lands the alias
+/// in the tenant's own subdomain, not `SHARED_DOMAIN_ID`. Admin stats and
+/// admin delete-by-alias, authenticated as that same tenant, must resolve it
+/// (not 404) -- they now look up the alias in the caller's tenant default
+/// domain, mirroring `create`.
+#[tokio::test]
+#[serial]
+async fn cloud_admin_stats_and_delete_resolve_alias_in_tenant_default_domain() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let suffix = "quarkus.test";
+    let tenant = make_tenant(&store, "admin-alias-tenant").await;
+    quark::api::seed_tenant_subdomain(
+        &(store.clone() as Arc<dyn Store>),
+        tenant,
+        "admin-alias-tenant",
+        suffix,
+    )
+    .await
+    .unwrap();
+    let token = seed_admin_token(&store, tenant, 9201).await;
+
+    let app = cloud_app_with_suffix(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        None,
+        Some(suffix.to_string()),
+    );
+
+    let (status, body) = app_create_with_alias(
+        &app,
+        &token,
+        "https://example.com/admin-alias",
+        "admin-alias",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "aliased create must succeed: {body:?}"
+    );
+
+    let status = get_stats(&app, &token, "admin-alias").await;
+    assert_ne!(
+        status,
+        StatusCode::NOT_FOUND,
+        "admin stats must resolve the alias in the tenant's own subdomain namespace"
+    );
+    assert_eq!(status, StatusCode::OK);
+
+    let status = delete_admin_link(&app, &token, "admin-alias").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "admin delete-by-alias must resolve the alias in the tenant's own subdomain namespace"
+    );
+
+    // Deleted: a second stats lookup for the same alias is gone.
+    let status = get_stats(&app, &token, "admin-alias").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// OSS / shared-domain regression: `default_domain_id` falls back to
+/// `SHARED_DOMAIN_ID` for `DEFAULT_TENANT`, so an aliased link created there
+/// must still resolve for admin stats and delete-by-alias exactly as before
+/// this task.
+#[tokio::test]
+#[serial]
+async fn oss_admin_stats_and_delete_still_resolve_alias_in_shared_domain() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let token = seed_admin_token(&store, quark::tenant::DEFAULT_TENANT, 9202).await;
+
+    let cache = Cache::new(store.clone() as Arc<dyn Store>, 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone() as Arc<dyn Store>,
+        None,
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: false,
+        multi_tenant: false,
+        tenant_domain_suffix: None,
+        cache,
+        store: store.clone() as Arc<dyn Store>,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink: store.clone() as Arc<dyn AnalyticsSink>,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    let app = router(state);
+
+    let (status, body) = app_create_with_alias(
+        &app,
+        &token,
+        "https://example.com/oss-admin-alias",
+        "oss-admin-alias",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "aliased create must succeed: {body:?}"
+    );
+
+    let status = get_stats(&app, &token, "oss-admin-alias").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "admin stats must still resolve the alias via the shared domain in OSS"
+    );
+
+    let status = delete_admin_link(&app, &token, "oss-admin-alias").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "admin delete-by-alias must still resolve the alias via the shared domain in OSS"
+    );
+}

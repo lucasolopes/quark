@@ -1367,10 +1367,12 @@ async fn stats(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
-    // Admin `stats` resolves aliases through the shared domain, same as
-    // before `resolve_code` took a `domain_id` (custom-domain admin lookup is
-    // not wired yet).
-    let id = match resolve_code(&st, SHARED_DOMAIN_ID, &code).await {
+    // Admin `stats` resolves aliases through the caller's tenant default
+    // domain, matching where `create` stamps the alias (subdomain on cloud,
+    // `SHARED_DOMAIN_ID` on OSS/default tenant). Numeric codes decode
+    // globally regardless, via `resolve_code`'s base62 fast path.
+    let domain_id = default_domain_id(&st, p.tenant).await;
+    let id = match resolve_code(&st, domain_id, &code).await {
         Ok(Some(id)) => id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -3032,19 +3034,23 @@ async fn admin_folders_list(State(st): State<Arc<AppState>>, headers: HeaderMap)
 /// Resolves the code into (id, optional_alias). If the code is numeric, there's no
 /// alias to remove; if it's an alias string, returns the alias to delete alongside it.
 ///
-/// `tenant` is currently unused: alias lookup is scoped by domain
-/// (`SHARED_DOMAIN_ID` for now), not by tenant. See `resolve_code`.
+/// Alias lookup is scoped by the caller's tenant default domain (subdomain on
+/// cloud, `SHARED_DOMAIN_ID` on OSS/default tenant) — the same namespace
+/// `create` stamps the alias into. See `default_domain_id`, `resolve_code`.
 async fn resolve_for_admin(
     st: &AppState,
-    _tenant: crate::tenant::TenantId,
+    tenant: crate::tenant::TenantId,
     code: &str,
 ) -> Result<Option<(u64, Option<String>)>, StoreError> {
     match codec::from_base62(code) {
         Some(c) if c <= permute::MAX_ID => Ok(Some((permute::decode(c, st.key), None))),
-        _ => match st.store.get_alias(SHARED_DOMAIN_ID, code).await? {
-            Some(id) => Ok(Some((id, Some(code.to_string())))),
-            None => Ok(None),
-        },
+        _ => {
+            let domain_id = default_domain_id(st, tenant).await;
+            match st.store.get_alias(domain_id, code).await? {
+                Some(id) => Ok(Some((id, Some(code.to_string())))),
+                None => Ok(None),
+            }
+        }
     }
 }
 
