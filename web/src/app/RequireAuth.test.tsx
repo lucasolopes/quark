@@ -46,6 +46,18 @@ describe("RequireAuth workspace gate", () => {
     });
   });
 
+  it("falls through to onboarding when the single-membership auto-switch fails", async () => {
+    // The switch is rate-limited (429): the gate must not strand the user on the
+    // spinner — it shows the chooser, where the workspace is a clickable retry.
+    vi.spyOn(globalThis, "fetch").mockImplementation((url) => {
+      if (String(url).includes("/admin/workspace/switch")) return Promise.resolve(new Response("", { status: 429 }));
+      return Promise.resolve(meResponse({ authenticated: true, oidc_enabled: true, memberships: [{ tenant_id: 9, name: "Solo", slug: "solo", role: "Owner" }], current_tenant: null }));
+    });
+    render(withProviders(<RequireAuth>{child}</RequireAuth>));
+    expect(await screen.findByText("Solo")).toBeInTheDocument();
+    expect(screen.queryByText("APP CONTENT")).not.toBeInTheDocument();
+  });
+
   it("cloud with two memberships and no current shows the chooser", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       meResponse({ authenticated: true, oidc_enabled: true, memberships: [
