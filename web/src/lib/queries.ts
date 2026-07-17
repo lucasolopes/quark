@@ -10,6 +10,7 @@ const FOLDERS_QUERY_KEY = ["folders"];
 const TOKENS_QUERY_KEY = ["tokens"];
 const PIXELS_QUERY_KEY = ["pixels"];
 const SHEETS_STATUS_QUERY_KEY = ["sheets", "status"];
+const INVITES_QUERY_KEY = ["invites"];
 
 /**
  * The application's single TanStack Query client. `retry: false` because a
@@ -338,5 +339,44 @@ export function useDeleteWellknown(name: WellknownName) {
   return useMutation({
     mutationFn: () => api.deleteWellknown(name),
     onSuccess: () => { void client.invalidateQueries({ queryKey: wellknownKey(name) }); },
+  });
+}
+
+/** Pending and accepted team invites for the current workspace, for the Members screen (cloud only). */
+export function useInvites() {
+  return useQuery({
+    queryKey: INVITES_QUERY_KEY,
+    queryFn: () => api.listInvites(),
+  });
+}
+
+/** Creates a team invite; on success invalidates `useInvites`. The response carries the raw token once. */
+export function useCreateInvite() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ email, role }: { email: string; role: string }) => api.createInvite(email, role),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: INVITES_QUERY_KEY }); },
+  });
+}
+
+/** Revokes a pending invite; on success invalidates `useInvites`. */
+export function useRevokeInvite() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.revokeInvite(id),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: INVITES_QUERY_KEY }); },
+  });
+}
+
+/**
+ * Accepts an invite by token; the user just joined a tenant, so invalidate ALL
+ * queries — `["me"]` must refetch (new membership, possibly new current
+ * workspace) and every per-tenant list needs to reload against it.
+ */
+export function useAcceptInvite() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (token: string) => api.acceptInvite(token),
+    onSuccess: () => { void client.invalidateQueries(); },
   });
 }
