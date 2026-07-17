@@ -340,17 +340,22 @@ fn cache_control_for(expiry: Option<u64>, now: u64) -> String {
 
 /// Requires the admin token to create — but only when a token is configured.
 /// Without QUARK_ADMIN_TOKEN, create remains public (open shortener).
-async fn require_admin_for_create(st: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
+async fn require_admin_for_create(
+    st: &AppState,
+    headers: &HeaderMap,
+) -> Result<Principal, StatusCode> {
     // Open shortener: create stays public ONLY when no auth mechanism is
     // configured. When either a token or OIDC is set, create requires a
     // credential covering LinksWrite (env token / API token / OIDC session),
     // reusing the same authorization as every other write.
     if st.admin_token.is_none() && !st.oidc_configured {
-        return Ok(());
+        return Ok(Principal {
+            tenant: crate::tenant::DEFAULT_TENANT,
+            user_id: None,
+            scopes: vec![Scope::Full],
+        });
     }
-    admin_guard(st, headers, Scope::LinksWrite)
-        .await
-        .map(|_| ())
+    admin_guard(st, headers, Scope::LinksWrite).await
 }
 
 /// Reasons `create_link_core` can fail. The `create` handler and the
@@ -383,6 +388,7 @@ pub enum CreateError {
 pub async fn create_link_core(
     st: &AppState,
     tenant: crate::tenant::TenantId,
+    domain_id: u64,
     url: &str,
     alias: Option<&str>,
     ttl: Option<u64>,
@@ -455,7 +461,7 @@ pub async fn create_link_core(
         let rows = st.webhooks.lifecycle_deliveries(tenant, &ev).await;
         match st
             .store
-            .put_alias_and_link_tx(tenant, SHARED_DOMAIN_ID, alias, id, &rec, &rows)
+            .put_alias_and_link_tx(tenant, domain_id, alias, id, &rec, &rows)
             .await
         {
             Ok(true) => {}
@@ -531,15 +537,38 @@ fn create_error_reason(err: &CreateError) -> &'static str {
     }
 }
 
+/// The `domains` row a newly created link's alias should land in: on cloud,
+/// with a suffix configured and a real (non-default) tenant, the tenant's
+/// own subdomain — so `<slug>.<suffix>/<alias>` resolves. Any miss (OSS,
+/// suffix unset, `DEFAULT_TENANT`, tenant/domain row not found) falls back
+/// to `SHARED_DOMAIN_ID`, which is also the OSS byte-for-byte behavior.
+async fn default_domain_id(st: &AppState, tenant: crate::tenant::TenantId) -> u64 {
+    if !st.multi_tenant || tenant == crate::tenant::DEFAULT_TENANT {
+        return SHARED_DOMAIN_ID;
+    }
+    let Some(suffix) = st.tenant_domain_suffix.as_deref() else {
+        return SHARED_DOMAIN_ID;
+    };
+    let Ok(Some(t)) = st.store.get_tenant(tenant).await else {
+        return SHARED_DOMAIN_ID;
+    };
+    let host = subdomain_host(&t.slug, suffix);
+    match st.store.get_domain_by_host(&host).await {
+        Ok(Some(domain)) => domain.id,
+        _ => SHARED_DOMAIN_ID,
+    }
+}
+
 async fn create(
     State(st): State<Arc<AppState>>,
     conn: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
     Json(req): Json<CreateReq>,
 ) -> Response {
-    if let Err(status) = require_admin_for_create(&st, &headers).await {
-        return status.into_response();
-    }
+    let p = match require_admin_for_create(&st, &headers).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
     let ip = client_ip(&headers, &st.real_ip_header, conn.as_ref());
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
@@ -595,9 +624,11 @@ async fn create(
         }
         None => None,
     };
+    let domain_id = default_domain_id(&st, p.tenant).await;
     match create_link_core(
         &st,
-        crate::tenant::DEFAULT_TENANT,
+        p.tenant,
+        domain_id,
         &req.url,
         req.alias.as_deref(),
         req.ttl,
@@ -665,12 +696,14 @@ async fn admin_import(
         return (StatusCode::BAD_REQUEST, "too many rows").into_response();
     }
 
+    let domain_id = default_domain_id(&st, p.tenant).await;
     let mut imported = 0usize;
     let mut failed = Vec::new();
     for (index, row) in rows.into_iter().enumerate() {
         match create_link_core(
             &st,
             p.tenant,
+            domain_id,
             &row.url,
             row.alias.as_deref(),
             row.ttl,
@@ -4311,6 +4344,7 @@ mod tests {
         let code = create_link_core(
             &st,
             tenant,
+            SHARED_DOMAIN_ID,
             "https://example.com/numeric",
             None,
             None,
@@ -4358,6 +4392,7 @@ mod tests {
         let code = create_link_core(
             &st,
             tenant,
+            SHARED_DOMAIN_ID,
             "https://example.com/alias",
             Some("my-alias"),
             None,

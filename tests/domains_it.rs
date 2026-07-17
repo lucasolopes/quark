@@ -1404,3 +1404,277 @@ fn cloud_app_with_suffix(
     });
     router(state)
 }
+
+// --- P3-completion Task 2: create-flow fix — stamps the caller's real
+// tenant and lands the alias in that tenant's default (subdomain) domain,
+// instead of the pre-fix hardcode (tenant 0 / SHARED_DOMAIN_ID for every
+// cloud caller).
+
+/// Registers a `LinksWrite`-scoped API token for `tenant` and returns the
+/// raw token to send as `x-admin-token`.
+async fn seed_write_token(store: &Arc<PostgresStore>, tenant: TenantId, token_id: u64) -> String {
+    let raw = format!("qtok_create_{}", token_id);
+    store
+        .put_api_token(
+            tenant,
+            &ApiToken {
+                id: token_id,
+                name: "create-flow-test-token".to_string(),
+                token_hash: hash_token(&raw),
+                scopes: vec![Scope::LinksWrite],
+                rate_limit_per_min: None,
+                created: 0,
+                tenant_id: tenant,
+            },
+        )
+        .await
+        .unwrap();
+    raw
+}
+
+async fn post_create(
+    app: &axum::Router,
+    token: &str,
+    url: &str,
+) -> (StatusCode, serde_json::Value) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", token)
+                .body(Body::from(format!(r#"{{"url":"{url}"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null)
+    };
+    (status, json)
+}
+
+async fn get_with_host(app: &axum::Router, host: &str, path: &str) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::get(path)
+                .header("host", host)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+/// A cloud caller authenticated as tenant B (via a scoped API token) creates
+/// a link through `POST /`. The stored `Record.tenant_id` must be B, not
+/// `DEFAULT_TENANT` — the bug this task fixes — and the link (numeric code
+/// and its custom alias) must resolve on B's own subdomain, not on a
+/// different tenant's subdomain.
+#[tokio::test]
+#[serial]
+async fn cloud_create_stamps_callers_tenant_and_resolves_on_its_subdomain() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let suffix = "quarkus.test";
+    let tenant_b = make_tenant(&store, "create-flow-b").await;
+    let tenant_other = make_tenant(&store, "create-flow-other").await;
+    quark::api::seed_tenant_subdomain(
+        &(store.clone() as Arc<dyn Store>),
+        tenant_b,
+        "create-flow-b",
+        suffix,
+    )
+    .await
+    .unwrap();
+    quark::api::seed_tenant_subdomain(
+        &(store.clone() as Arc<dyn Store>),
+        tenant_other,
+        "create-flow-other",
+        suffix,
+    )
+    .await
+    .unwrap();
+    let token = seed_write_token(&store, tenant_b, 9101).await;
+
+    let app = cloud_app_with_suffix(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        None,
+        Some(suffix.to_string()),
+    );
+
+    let (status, body) = post_create(&app, &token, "https://example.com/create-flow").await;
+    assert_eq!(status, StatusCode::OK, "create must succeed: {body:?}");
+    let code = body["code"].as_str().expect("code in response").to_string();
+
+    // The link is stamped under tenant B, not DEFAULT_TENANT.
+    let permuted = quark::codec::from_base62(&code).expect("numeric code decodes");
+    let id = quark::permute::decode(permuted, KEY);
+    let rec = store
+        .get_link(tenant_b, id)
+        .await
+        .unwrap()
+        .expect("link must be visible under tenant B");
+    assert_eq!(rec.tenant_id, tenant_b);
+    assert!(
+        store
+            .get_link(quark::tenant::DEFAULT_TENANT, id)
+            .await
+            .unwrap()
+            .is_none(),
+        "the link must NOT land under DEFAULT_TENANT"
+    );
+
+    // Resolves via B's own subdomain.
+    let host_b = quark::api::subdomain_host("create-flow-b", suffix);
+    let status = get_with_host(&app, &host_b, &format!("/{code}")).await;
+    assert!(
+        status == StatusCode::FOUND || status == StatusCode::MOVED_PERMANENTLY,
+        "numeric code must resolve on the caller's own subdomain, got {status}"
+    );
+
+    // Does NOT resolve on a different tenant's subdomain.
+    let host_other = quark::api::subdomain_host("create-flow-other", suffix);
+    let status = get_with_host(&app, &host_other, &format!("/{code}")).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the numeric code is global, but the record lookup is tenant-scoped by the resolved \
+         route -- another tenant's subdomain must not serve it"
+    );
+
+    // Now with a custom alias: it must land in B's subdomain namespace and
+    // resolve via `b.<suffix>/<alias>`, but not via another tenant's host.
+    let (status, body) =
+        app_create_with_alias(&app, &token, "https://example.com/aliased", "flow-alias").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "aliased create must succeed: {body:?}"
+    );
+
+    let status = get_with_host(&app, &host_b, "/flow-alias").await;
+    assert!(
+        status == StatusCode::FOUND || status == StatusCode::MOVED_PERMANENTLY,
+        "the alias must resolve on the tenant's own subdomain, got {status}"
+    );
+    let status = get_with_host(&app, &host_other, "/flow-alias").await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the same alias must not resolve on a different tenant's subdomain"
+    );
+}
+
+async fn app_create_with_alias(
+    app: &axum::Router,
+    token: &str,
+    url: &str,
+    alias: &str,
+) -> (StatusCode, serde_json::Value) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", token)
+                .body(Body::from(format!(
+                    r#"{{"url":"{url}","alias":"{alias}"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null)
+    };
+    (status, json)
+}
+
+/// OSS parity (regression guard): with `multi_tenant = false` (or a suffix
+/// unset in cloud), `POST /` still stamps `DEFAULT_TENANT` and lands the
+/// alias in `SHARED_DOMAIN_ID`, byte-for-byte as before this task.
+#[tokio::test]
+#[serial]
+async fn oss_create_still_stamps_default_tenant_and_shared_domain() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let cache = Cache::new(store.clone() as Arc<dyn Store>, 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone() as Arc<dyn Store>,
+        None,
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: false,
+        multi_tenant: false,
+        tenant_domain_suffix: None,
+        cache,
+        store: store.clone() as Arc<dyn Store>,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink: store.clone() as Arc<dyn AnalyticsSink>,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    let app = router(state);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"url":"https://example.com/oss-create-flow"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = body["code"].as_str().unwrap().to_string();
+
+    let permuted = quark::codec::from_base62(&code).expect("numeric code decodes");
+    let id = quark::permute::decode(permuted, KEY);
+    let rec = store
+        .get_link(quark::tenant::DEFAULT_TENANT, id)
+        .await
+        .unwrap()
+        .expect("OSS create must land under DEFAULT_TENANT");
+    assert_eq!(rec.tenant_id, quark::tenant::DEFAULT_TENANT);
+}
