@@ -249,8 +249,9 @@ fn row_to_sso_domain(r: &PgRow) -> Result<SsoEmailDomain, StoreError> {
 }
 
 /// The shape of `oidc_configs.blob`: every `TenantOidcConfig` field except the
-/// two that ride as their own columns (`tenant_id`, `issuer`). Mirrors the
-/// `sheets_connection` precedent — `client_secret` included, plaintext.
+/// two that ride as their own columns (`tenant_id`, `issuer`). `client_secret`
+/// is sealed via `secretbox` when `QUARK_ENCRYPTION_KEY` is set (LUC-48),
+/// plaintext otherwise.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct OidcConfigBlob {
     client_id: String,

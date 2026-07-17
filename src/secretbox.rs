@@ -1,5 +1,7 @@
-//! Encryption at rest for stored secrets (webhook signing secrets, OIDC
-//! client secrets, etc.), opt-in via `QUARK_ENCRYPTION_KEY`.
+//! Encryption at rest for stored third-party secrets — the per-tenant OIDC
+//! `client_secret` and the Sheets `refresh_token` (LUC-48) — opt-in via
+//! `QUARK_ENCRYPTION_KEY`. (Other stored values, e.g. webhook signing secrets,
+//! are not covered by this module.)
 //!
 //! Sealed values are tagged `enc:v1:<base64(nonce || ciphertext)>`. Values
 //! without that prefix are treated as legacy plaintext and passed through
