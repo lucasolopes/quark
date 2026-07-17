@@ -22,6 +22,8 @@ export const ptBR: Messages = {
     sessionStarted: "Sessão iniciada.",
     or: "ou",
     oidcButton: "Entrar com provedor",
+    orgHeader: "Organização: {org}",
+    orgButton: "Entrar em {org}",
     invalidToken: "Token inválido. Verifique e tente novamente.",
     connectionError: "Não foi possível conectar. Tente novamente.",
   },

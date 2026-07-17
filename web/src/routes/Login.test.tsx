@@ -57,4 +57,52 @@ describe("Login", () => {
     expect(await screen.findByText(/could not connect/i)).toBeInTheDocument();
     expect(screen.queryByText(/invalid token/i)).not.toBeInTheDocument();
   });
+
+  it("with ?org= and OIDC enabled, shows the org header and a per-tenant sign-in button", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ authenticated: false, oidc_enabled: true }), { status: 200 }),
+      ),
+    );
+    render(withProviders(<Login />, { initialEntries: ["/login?org=acme"] }));
+    expect(await screen.findByText(/organization: acme/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in to acme/i })).toBeInTheDocument();
+    // Token form stays present alongside the org-aware provider button.
+    expect(screen.getByLabelText(/token/i)).toBeInTheDocument();
+  });
+
+  it("clicking the per-tenant button navigates to /admin/login?org=acme", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ authenticated: false, oidc_enabled: true }), { status: 200 }),
+      ),
+    );
+    const originalLocation = window.location;
+    // @ts-expect-error -- replacing window.location for assertion, restored below.
+    delete window.location;
+    window.location = { ...originalLocation, href: "" } as Location;
+    render(withProviders(<Login />, { initialEntries: ["/login?org=acme"] }));
+    await userEvent.click(await screen.findByRole("button", { name: /sign in to acme/i }));
+    expect(window.location.href).toContain("/admin/login?org=acme");
+    window.location = originalLocation;
+  });
+
+  it("without ?org=, the shared provider button still navigates to /admin/login with no org (regression)", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ authenticated: false, oidc_enabled: true }), { status: 200 }),
+      ),
+    );
+    const originalLocation = window.location;
+    // @ts-expect-error -- replacing window.location for assertion, restored below.
+    delete window.location;
+    window.location = { ...originalLocation, href: "" } as Location;
+    render(withProviders(<Login />, { initialEntries: ["/login"] }));
+    await userEvent.click(await screen.findByRole("button", { name: /provider/i }));
+    expect(window.location.href).toContain("/admin/login");
+    expect(window.location.href).not.toContain("org=");
+    // Token form is still present.
+    expect(screen.getByLabelText(/token/i)).toBeInTheDocument();
+    window.location = originalLocation;
+  });
 });
