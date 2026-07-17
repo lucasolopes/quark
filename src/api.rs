@@ -58,6 +58,11 @@ pub struct AppState {
     /// Multi-tenant (cloud) mode, from `QUARK_MULTI_TENANT`. Plumbing only for
     /// now — nothing reads this yet (no FORCE RLS, no per-tenant tx).
     pub multi_tenant: bool,
+    /// Maps a request `Host` header to `{domain_id, tenant_id}` for custom
+    /// domains (multi-tenancy P3). In OSS/single-tenant mode every host still
+    /// resolves through `public_host` to the shared route; nothing reads this
+    /// yet on the redirect path (that wiring is a later task).
+    pub host_router: Arc<crate::domain_router::HostRouter>,
 }
 
 #[derive(Deserialize)]
@@ -3484,6 +3489,11 @@ mod tests {
             .await
             .unwrap();
         let cache = crate::cache::Cache::new(store.clone(), 1000, None);
+        let host_router = Arc::new(crate::domain_router::HostRouter::new(
+            store.clone(),
+            None,
+            None,
+        ));
         let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
         let (tx, _wrx) = tokio::sync::mpsc::channel(1);
         let webhooks = Arc::new(crate::webhooks::delivery::WebhookDispatcher::new(
@@ -3509,6 +3519,7 @@ mod tests {
             real_ip_header: "cf-connecting-ip".to_string(),
             webhooks,
             multi_tenant: false,
+            host_router,
         })
     }
 

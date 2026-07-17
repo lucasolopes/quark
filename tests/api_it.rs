@@ -11,6 +11,11 @@ async fn app() -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -30,6 +35,7 @@ async fn app() -> axum::Router {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     router(state)
 }
@@ -783,6 +789,11 @@ async fn unlock_post_is_rate_limited() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -802,6 +813,7 @@ async fn unlock_post_is_rate_limited() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     let app = router(state);
     let code = create_protected(&app, "https://secret.example.com", "hunter2").await;
@@ -884,6 +896,11 @@ async fn rate_limit_429_after_exceeding() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -903,6 +920,7 @@ async fn rate_limit_429_after_exceeding() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     let app = router(state);
     let mk = || {
@@ -1013,6 +1031,11 @@ async fn app_admin(token: &str) -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -1032,6 +1055,7 @@ async fn app_admin(token: &str) -> axum::Router {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     router(state)
 }
@@ -1486,6 +1510,11 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (analytics_tx, rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -1505,6 +1534,7 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     (router(state), rx)
 }
@@ -2183,6 +2213,11 @@ async fn cors_header_present_when_configured() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -2202,6 +2237,7 @@ async fn cors_header_present_when_configured() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".into(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     let app = quark::api::router_with_cors(state, vec!["https://panel.example".into()]);
     let resp = app
@@ -2513,6 +2549,11 @@ async fn admin_links_reports_health_and_broken_filter() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -2532,6 +2573,7 @@ async fn admin_links_reports_health_and_broken_filter() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     let app = router(state);
 
@@ -2631,6 +2673,11 @@ async fn session_cookie_authorizes_admin_by_scope() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -2650,6 +2697,7 @@ async fn session_cookie_authorizes_admin_by_scope() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     let app = router(state);
     let now = 1_000_000u64;
@@ -2764,6 +2812,11 @@ async fn admin_me_reports_session_and_oidc_state() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -2783,6 +2836,7 @@ async fn admin_me_reports_session_and_oidc_state() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     let app = router(state);
 
@@ -2848,6 +2902,11 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -2867,6 +2926,7 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     let app = router(state);
     let now = 1_000_000u64;
@@ -2962,6 +3022,11 @@ async fn logout_requires_csrf_header_and_revokes_session() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -2981,6 +3046,7 @@ async fn logout_requires_csrf_header_and_revokes_session() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     let app = router(state);
     store
@@ -3043,6 +3109,11 @@ async fn session_cookie_is_ignored_when_oidc_not_configured() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let state = Arc::new(AppState {
         oidc: None,
@@ -3063,6 +3134,7 @@ async fn session_cookie_is_ignored_when_oidc_not_configured() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     let app = router(state);
     // A previously issued, still-unexpired full-scope session.
@@ -3115,6 +3187,11 @@ async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let cfg = quark::sheets::SheetsConfig::from_parts(
         "cid",
@@ -3141,6 +3218,7 @@ async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     // Seed a connection whose refresh token must never appear in a response.
     store
@@ -3225,6 +3303,11 @@ async fn sheets_callback_requires_the_state_cookie() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let cfg = quark::sheets::SheetsConfig::from_parts(
         "cid",
@@ -3251,6 +3334,7 @@ async fn sheets_callback_requires_the_state_cookie() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     let app = router(state);
 
@@ -3305,6 +3389,11 @@ async fn sheets_connect_binds_the_state_cookie_to_the_callers_tenant() {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let cfg = quark::sheets::SheetsConfig::from_parts(
         "cid",
@@ -3332,6 +3421,7 @@ async fn sheets_connect_binds_the_state_cookie_to_the_callers_tenant() {
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     });
     let tenant = quark::tenant::TenantId(42);
     store

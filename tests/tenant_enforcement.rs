@@ -270,6 +270,11 @@ fn test_webhook_dispatcher() -> Arc<WebhookDispatcher> {
 /// `admin_guard`'s OIDC-session branch derives scopes from membership role.
 fn cloud_state(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>) -> Arc<AppState> {
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     Arc::new(AppState {
         oidc: None,
@@ -289,6 +294,7 @@ fn cloud_state(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>) -> Arc<AppSt
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks: test_webhook_dispatcher(),
+        host_router,
     })
 }
 

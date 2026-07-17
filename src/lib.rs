@@ -6,6 +6,7 @@ pub mod cache;
 pub mod cluster;
 pub mod codec;
 pub mod domain;
+pub mod domain_router;
 pub mod health;
 pub mod import;
 pub mod invalidate;

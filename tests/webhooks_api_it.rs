@@ -23,6 +23,11 @@ async fn app_admin_with_dispatcher(
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let (wh_tx, wh_rx) = tokio::sync::mpsc::channel(100);
     let webhooks = Arc::new(WebhookDispatcher::new(
@@ -48,6 +53,7 @@ async fn app_admin_with_dispatcher(
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks,
+        host_router,
     });
     (router(state), wh_rx)
 }
@@ -65,6 +71,11 @@ async fn app_admin_with_dispatcher_clicked_subscribed(
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
     let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
     let (wh_tx, wh_rx) = tokio::sync::mpsc::channel(100);
     let webhooks = Arc::new(WebhookDispatcher::new(
@@ -90,6 +101,7 @@ async fn app_admin_with_dispatcher_clicked_subscribed(
         public_host: None,
         real_ip_header: "cf-connecting-ip".to_string(),
         webhooks,
+        host_router,
     });
     (router(state), wh_rx)
 }

@@ -53,6 +53,11 @@ async fn node(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>, url: &str) ->
         conn: Some(mux(url).await),
     });
     let cache = Cache::new(store.clone(), 1000, Some(inv.clone()));
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     Arc::new(AppState {
         oidc: None,
@@ -72,6 +77,7 @@ async fn node(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>, url: &str) ->
         public_host: None,
         real_ip_header: "cf-connecting-ip".into(),
         webhooks: webhooks(),
+        host_router,
     })
 }
 

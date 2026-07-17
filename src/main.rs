@@ -264,6 +264,15 @@ async fn main() {
     }
     let sheets = sheets_config.map(Arc::new);
 
+    // Custom-domain host routing (multi-tenancy P3). Meaningful only in cloud
+    // (`multi_tenant`); in OSS every host still resolves through `public_host`
+    // to the shared route, since no domain is ever `Verified` there.
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        public_host.clone(),
+        None,
+    ));
+
     let state = Arc::new(AppState {
         cache,
         store,
@@ -282,6 +291,7 @@ async fn main() {
         sheets,
         sheets_api: Some(sheets_api),
         multi_tenant,
+        host_router,
     });
     match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {
