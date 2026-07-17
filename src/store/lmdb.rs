@@ -1009,7 +1009,7 @@ impl Store for LmdbStore {
         _id: u64,
         _accepted_by: u64,
         _now: u64,
-    ) -> Result<(), StoreError> {
+    ) -> Result<bool, StoreError> {
         Err(StoreError::Unsupported)
     }
 

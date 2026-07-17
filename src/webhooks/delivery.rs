@@ -1257,7 +1257,7 @@ mod tests {
             _id: u64,
             _accepted_by: u64,
             _now: u64,
-        ) -> Result<(), StoreError> {
+        ) -> Result<bool, StoreError> {
             unimplemented!()
         }
         async fn list_invites(

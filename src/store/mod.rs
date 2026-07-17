@@ -600,12 +600,20 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<Option<Invite>, StoreError>;
     /// Marks an invite accepted by `accepted_by` at `now`. Runs on the bare
     /// pool, same reasoning as `create_invite`/`get_invite_by_hash`.
+    ///
+    /// This is the single-use claim: the update only takes effect when the
+    /// row is still pending (`accepted_at IS NULL`), so two concurrent
+    /// accepts of the same token race on this one row and only one wins.
+    /// Returns `true` when this call claimed the row (`rows_affected() ==
+    /// 1`), `false` when it lost the race or the invite was already
+    /// consumed. Callers must not grant membership before this returns
+    /// `true`.
     async fn mark_invite_accepted(
         &self,
         id: u64,
         accepted_by: u64,
         now: u64,
-    ) -> Result<(), StoreError>;
+    ) -> Result<bool, StoreError>;
     /// Lists pending invites owned by `tenant`.
     async fn list_invites(&self, tenant: TenantId) -> Result<Vec<Invite>, StoreError>;
     /// Deletes an invite, scoped to `tenant`.
