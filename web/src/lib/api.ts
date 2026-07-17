@@ -64,6 +64,15 @@ export const api = {
   async logout(): Promise<void> {
     await req("/admin/logout", { method: "POST" });
   },
+  /** Creates a workspace (cloud only) and re-points the session at it. 409 if the slug is taken, 429 if rate-limited. */
+  async createWorkspace(name: string, slug: string): Promise<{ id: number; name: string; slug: string; created: number }> {
+    return jsonOrThrow(await req("/admin/tenants", { method: "POST", body: JSON.stringify({ name, slug }) }));
+  },
+  /** Switches the session's current workspace (cloud only). 403 if the user has no membership in `tenantId`. */
+  async switchWorkspace(tenantId: number): Promise<void> {
+    const res = await req("/admin/workspace/switch", { method: "POST", body: JSON.stringify({ tenant_id: tenantId }) });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
   async createLink(body: CreateLinkRequest): Promise<CreateLinkResponse> {
     return jsonOrThrow(await req("/", { method: "POST", body: JSON.stringify(body) }));
   },

@@ -64,8 +64,22 @@ export interface Aggregates {
   per_variant: Record<string, number>;
 }
 export interface Stats { aggregates: Aggregates; recent: ClickEvent[]; }
-/** Response of `GET /admin/me`: current principal + whether OIDC is configured. */
-export interface MeResponse { authenticated: boolean; oidc_enabled: boolean; display?: string; scopes?: string[]; }
+/** One workspace the current user belongs to (cloud only). */
+export interface Membership { tenant_id: number; name: string; slug: string; role: string; }
+/**
+ * Response of `GET /admin/me`: current principal + whether OIDC is configured.
+ * `memberships`/`current_tenant` are present only in cloud mode; their absence
+ * means OSS (single-tenant), where the onboarding gate and switcher never show.
+ * `current_tenant` is null when the session has no workspace selected yet.
+ */
+export interface MeResponse {
+  authenticated: boolean;
+  oidc_enabled: boolean;
+  display?: string;
+  scopes?: string[];
+  memberships?: Membership[];
+  current_tenant?: number | null;
+}
 export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; variants?: Variant[]; app_ios?: string | null; app_android?: string | null; folder?: string | null; fallback_url?: string | null; password?: string | null; }
 
 /** The 5 link lifecycle events a webhook subscription can be notified about. */
