@@ -1,4 +1,4 @@
-import { Blocks, KeyRound, Link2, LogOut, Moon, Radio, Smartphone, Sun, Upload, Users, Webhook } from "lucide-react";
+import { Blocks, KeyRound, Link2, LogOut, Moon, Radio, ShieldCheck, Smartphone, Sun, Upload, Users, Webhook } from "lucide-react";
 import { useTheme } from "next-themes";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { QuarkMark } from "@/components/brand/QuarkMark";
@@ -22,10 +22,12 @@ export function Shell() {
   const toggle = () => setTheme(isDark ? "light" : "dark");
   const me = useMe();
 
-  // Members is cloud-only (`memberships` absent in OSS) and restricted to the
-  // current tenant's Owner/Admin — Member/Viewer never sees the nav item.
+  // Members and SSO domains are cloud-only (`memberships` absent in OSS) and
+  // restricted to the current tenant's Owner/Admin — Member/Viewer never
+  // sees either nav item.
   const currentRole = me.data?.memberships?.find((m) => m.tenant_id === me.data?.current_tenant)?.role;
   const canManageMembers = me.data?.memberships !== undefined && currentRole != null && MEMBERS_MANAGER_ROLES.has(currentRole);
+  const canManageSsoDomains = canManageMembers;
 
   const navGroups = [
     {
@@ -52,6 +54,7 @@ export function Shell() {
         { to: "/tokens", label: t("shell.navTokens"), icon: KeyRound },
         { to: "/app-links", label: t("shell.navAppLinks"), icon: Smartphone },
         ...(canManageMembers ? [{ to: "/members", label: t("shell.navMembers"), icon: Users }] : []),
+        ...(canManageSsoDomains ? [{ to: "/sso-domains", label: t("shell.navSsoDomains"), icon: ShieldCheck }] : []),
       ],
     },
   ];

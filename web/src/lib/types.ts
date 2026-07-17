@@ -75,6 +75,10 @@ export interface Membership { tenant_id: number; name: string; slug: string; rol
 export interface MeResponse {
   authenticated: boolean;
   oidc_enabled: boolean;
+  /** True when the server runs in cloud (multi-tenant) mode. Present pre-auth,
+   * so the login screen can gate cloud-only affordances like email-first SSO
+   * discovery (meaningless in single-tenant OSS). */
+  multi_tenant?: boolean;
   display?: string;
   scopes?: string[];
   memberships?: Membership[];
@@ -191,4 +195,24 @@ export interface SheetsStatus {
   last_sync?: number;
   last_status: { state: "never" | "ok" | "error"; detail?: string };
   unavailable?: boolean;
+}
+
+/** Verification state of a custom domain or SSO email domain. */
+export type DomainStatus = "pending" | "verified";
+
+/**
+ * An SSO email domain plus the DNS instructions needed to verify it
+ * (`GET`/`POST /admin/sso-domains`, `POST /admin/sso-domains/:id/verify`).
+ * `txt_name`/`txt_value` are the record a workspace admin must publish at
+ * their DNS provider; they stay the same across `verify` calls until the
+ * domain is removed and re-added.
+ */
+export interface SsoDomainView {
+  id: number;
+  domain: string;
+  status: DomainStatus;
+  created: number;
+  verified_at: number | null;
+  txt_name: string;
+  txt_value: string;
 }

@@ -7,6 +7,7 @@ import { LinkStats } from "@/routes/LinkStats";
 import { Links } from "@/routes/Links";
 import { Login } from "@/routes/Login";
 import { Members } from "@/routes/Members";
+import { SsoDomains } from "@/routes/SsoDomains";
 import { Webhooks } from "@/routes/Webhooks";
 import { Tokens } from "@/routes/Tokens";
 import { Pixels } from "@/routes/Pixels";
@@ -35,6 +36,7 @@ export const router = createBrowserRouter([
       { path: "tokens", element: <Tokens /> },
       { path: "pixels", element: <Pixels /> },
       { path: "members", element: <Members /> },
+      { path: "sso-domains", element: <SsoDomains /> },
       { path: "app-links", element: <AppLinks /> },
     ],
   },

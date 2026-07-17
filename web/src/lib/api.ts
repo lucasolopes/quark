@@ -9,6 +9,7 @@ import type {
   ListPixelsResponse, CreatePixelRequest, Pixel,
   WellknownName, MeResponse, SheetsStatus,
   InviteView, CreateInviteResponse,
+  SsoDomainView,
 } from "./types";
 
 /**
@@ -229,5 +230,49 @@ export const api = {
    */
   async acceptInvite(token: string): Promise<{ status?: string; login_url?: string }> {
     return jsonOrThrow(await req(`/admin/invites/${encodeURIComponent(token)}/accept`, { method: "POST" }));
+  },
+  /**
+   * Looks up the SSO org for an email's domain, for the email-first login
+   * step. Uniform 200 either way — `{org}` when the domain is a verified SSO
+   * domain of an oidc-configured tenant, else `{}`. The email is an untrusted
+   * UX hint we just forward; the server owns whether it means anything.
+   */
+  async discoverSso(email: string): Promise<{ org?: string }> {
+    return jsonOrThrow(await req(`/admin/sso/discover?email=${encodeURIComponent(email)}`));
+  },
+  /**
+   * Whether the current workspace has its own OIDC provider configured — the
+   * prerequisite for SSO email domains to route anywhere. A plain fetch, not
+   * `req`: an unconfigured workspace is a normal 404 here, not an auth
+   * failure, so this must not trigger the global `onUnauthorized` redirect
+   * (mirrors `sheetsStatus`).
+   */
+  async oidcConfigured(): Promise<boolean> {
+    const headers = new Headers();
+    const token = getToken();
+    if (token) headers.set("x-admin-token", token);
+    const res = await fetch(BASE + "/admin/oidc-config", { headers, credentials: "include" });
+    return res.ok;
+  },
+  /** Lists the current workspace's SSO email domains with their DNS verification instructions (cloud only). */
+  async listSsoDomains(): Promise<SsoDomainView[]> {
+    return jsonOrThrow(await req("/admin/sso-domains"));
+  },
+  /**
+   * Registers an email domain for SSO discovery under the current workspace,
+   * pending DNS verification. 409 if the domain is taken or the workspace has
+   * no OIDC provider configured yet; 400 on an implausible domain.
+   */
+  async createSsoDomain(domain: string): Promise<SsoDomainView> {
+    return jsonOrThrow(await req("/admin/sso-domains", { method: "POST", body: JSON.stringify({ domain }) }));
+  },
+  /** Checks the domain's `_quark-sso.<domain>` TXT record and flips it to verified on a match; returns the domain either way. */
+  async verifySsoDomain(id: number): Promise<SsoDomainView> {
+    return jsonOrThrow(await req(`/admin/sso-domains/${id}/verify`, { method: "POST" }));
+  },
+  /** Removes an SSO email domain from the current workspace. */
+  async deleteSsoDomain(id: number): Promise<void> {
+    const res = await req(`/admin/sso-domains/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
 };

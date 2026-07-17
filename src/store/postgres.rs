@@ -4,6 +4,7 @@ use crate::domain::{Domain, DomainStatus};
 use crate::invite::Invite;
 use crate::oidc::TenantOidcConfig;
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
+use crate::sso::SsoEmailDomain;
 use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant};
 use crate::tenant::{Membership, Role, Tenant, TenantId, User};
 use crate::webhooks::{SubscriptionKind, WebhookSubscription};
@@ -88,7 +89,7 @@ const CLAIM_LEASE_SECS: u64 = 60;
 
 /// Every tenant-owned table: gets a `tenant_id` column and an RLS policy.
 /// (Global counters/sequences and lease tables are intentionally absent.)
-const TENANT_OWNED_TABLES: [&str; 16] = [
+const TENANT_OWNED_TABLES: [&str; 17] = [
     "links",
     "aliases",
     "link_health",
@@ -105,6 +106,7 @@ const TENANT_OWNED_TABLES: [&str; 16] = [
     "domains",
     "invites",
     "oidc_configs",
+    "sso_email_domains",
 ];
 
 /// Maps a Postgres unique-constraint violation (SQLSTATE 23505) to
@@ -214,6 +216,30 @@ fn row_to_domain(r: &PgRow) -> Result<Domain, StoreError> {
         id: id as u64,
         tenant_id: crate::tenant::TenantId(tenant_id as u64),
         host,
+        token,
+        status,
+        created: created as u64,
+        verified_at: verified_at.map(|v| v as u64),
+    })
+}
+
+/// Maps an `sso_email_domains` row into an `SsoEmailDomain`.
+fn row_to_sso_domain(r: &PgRow) -> Result<SsoEmailDomain, StoreError> {
+    let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+    let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
+    let domain: String = r.try_get("domain").map_err(StoreError::backend)?;
+    let token: String = r.try_get("token").map_err(StoreError::backend)?;
+    let status: String = r.try_get("status").map_err(StoreError::backend)?;
+    let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    let verified_at: Option<i64> = r.try_get("verified_at").map_err(StoreError::backend)?;
+    let status = match status.as_str() {
+        "verified" => DomainStatus::Verified,
+        _ => DomainStatus::Pending,
+    };
+    Ok(SsoEmailDomain {
+        id: id as u64,
+        tenant_id: crate::tenant::TenantId(tenant_id as u64),
+        domain,
         token,
         status,
         created: created as u64,
@@ -637,6 +663,11 @@ impl PostgresStore {
                 "CREATE SEQUENCE IF NOT EXISTS quark_oidc_config_id_seq START WITH 1",
                 "CREATE TABLE IF NOT EXISTS oidc_configs (id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL DEFAULT 0, issuer TEXT NOT NULL, blob JSONB NOT NULL, created BIGINT NOT NULL)",
                 "CREATE UNIQUE INDEX IF NOT EXISTS oidc_configs_tenant_idx ON oidc_configs (tenant_id)",
+                // --- SSO email-domain discovery (LUC-57) ---
+                // `domain` is UNIQUE across tenants: one tenant per email domain
+                // (a verified domain routes discovery, so it can have one owner).
+                "CREATE SEQUENCE IF NOT EXISTS quark_sso_domain_id_seq START WITH 1",
+                "CREATE TABLE IF NOT EXISTS sso_email_domains (id BIGINT PRIMARY KEY, tenant_id BIGINT NOT NULL DEFAULT 0, domain TEXT NOT NULL UNIQUE, token TEXT NOT NULL, status TEXT NOT NULL, created BIGINT NOT NULL, verified_at BIGINT)",
             ] {
                 sqlx::query(ddl)
                     .execute(&mut *conn)
@@ -841,11 +872,11 @@ impl PostgresStore {
             // `app.tenant_id` set — FORCE would make that lookup fail closed
             // and break every invite acceptance.
             //
-            // RLS stays merely ENABLED (not FORCED) on all nine; the app-level
+            // RLS stays merely ENABLED (not FORCED) on all of these; the app-level
             // `WHERE tenant_id`/`WHERE domain_id` predicate remains the
             // isolation layer for their scoped methods and for the bare-pool
             // accessors above.
-            const NOT_FORCED: [&str; 10] = [
+            const NOT_FORCED: [&str; 11] = [
                 "api_tokens",
                 "sessions",
                 "click_counters",
@@ -855,6 +886,10 @@ impl PostgresStore {
                 "domains",
                 "aliases",
                 "invites",
+                // Discovery resolves the tenant from the email domain on the
+                // bare pool (`get_sso_domain_bare`) before any `app.tenant_id`
+                // RLS context — same reasoning as `domains`/`invites` above.
+                "sso_email_domains",
                 // Login/callback resolves the tenant from the URL slug (via
                 // `get_tenant_by_slug`) and reads the config on the bare pool
                 // (`get_oidc_config_bare`) before there is any `app.tenant_id`
@@ -922,7 +957,7 @@ impl PostgresStore {
     /// OSS/default-tenant path keeps working after a reset).
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships, domains, invites, oidc_configs RESTART IDENTITY",
+            "TRUNCATE links, aliases, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships, domains, invites, oidc_configs, sso_email_domains RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
@@ -2234,6 +2269,152 @@ impl Store for PostgresStore {
     async fn delete_domain(&self, tenant: TenantId, id: u64) -> Result<(), StoreError> {
         with_write!(self, tenant, |c| {
             sqlx::query("DELETE FROM domains WHERE tenant_id = $1 AND id = $2")
+                .bind(tenant.0 as i64)
+                .bind(id as i64)
+                .execute(&mut *c)
+                .await
+        });
+        Ok(())
+    }
+
+    // --- SSO email-domain discovery (LUC-57), cloud-only ---
+    async fn next_sso_domain_id(&self) -> Result<u64, StoreError> {
+        let row = sqlx::query("SELECT nextval('quark_sso_domain_id_seq') AS id")
+            .fetch_one(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
+        Ok(id as u64)
+    }
+
+    async fn get_sso_domain_bare(
+        &self,
+        domain: &str,
+    ) -> Result<Option<SsoEmailDomain>, StoreError> {
+        // Deliberately bare: discovery only has the email's domain before it
+        // knows the tenant, so this runs on the read pool directly
+        // (`sso_email_domains` is in `NOT_FORCED` for exactly this reason).
+        let row = sqlx::query(
+            "SELECT id, tenant_id, domain, token, status, created, verified_at FROM sso_email_domains WHERE domain = $1",
+        )
+        .bind(domain)
+        .fetch_optional(&self.read)
+        .await
+        .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => Ok(Some(row_to_sso_domain(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_sso_domain(
+        &self,
+        tenant: TenantId,
+        id: u64,
+    ) -> Result<Option<SsoEmailDomain>, StoreError> {
+        let row = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, tenant_id, domain, token, status, created, verified_at FROM sso_email_domains WHERE tenant_id = $1 AND id = $2",
+            )
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .fetch_optional(&mut *c)
+            .await
+        });
+        match row {
+            Some(r) => Ok(Some(row_to_sso_domain(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_sso_domains(&self, tenant: TenantId) -> Result<Vec<SsoEmailDomain>, StoreError> {
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT id, tenant_id, domain, token, status, created, verified_at FROM sso_email_domains WHERE tenant_id = $1 ORDER BY id",
+            )
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
+        rows.iter().map(row_to_sso_domain).collect()
+    }
+
+    async fn put_sso_domain(&self, domain: &SsoEmailDomain) -> Result<(), StoreError> {
+        let status = match domain.status {
+            DomainStatus::Pending => "pending",
+            DomainStatus::Verified => "verified",
+        };
+        const SQL: &str =
+            "INSERT INTO sso_email_domains (id, tenant_id, domain, token, status, created, verified_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7) \
+             ON CONFLICT (id) DO UPDATE SET \
+               tenant_id = EXCLUDED.tenant_id, domain = EXCLUDED.domain, token = EXCLUDED.token, \
+               status = EXCLUDED.status, created = EXCLUDED.created, verified_at = EXCLUDED.verified_at";
+        // `id` is a fresh sequence value (never conflicts), so the only
+        // constraint this insert can hit is the `domain` UNIQUE — a Postgres
+        // unique-violation (SQLSTATE 23505) surfaces distinctly so the caller
+        // can map it to 409, same as `put_domain`'s `host`. Written by hand
+        // (not `with_write!`) because that macro folds every error into
+        // `StoreError::Backend`, losing the SQLSTATE this needs.
+        if self.multi_tenant {
+            let mut tx = self.begin_tenant_tx(domain.tenant_id).await?;
+            sqlx::query(SQL)
+                .bind(domain.id as i64)
+                .bind(domain.tenant_id.0 as i64)
+                .bind(&domain.domain)
+                .bind(&domain.token)
+                .bind(status)
+                .bind(domain.created as i64)
+                .bind(domain.verified_at.map(|v| v as i64))
+                .execute(&mut *tx)
+                .await
+                .map_err(map_unique_violation)?;
+            tx.commit().await.map_err(StoreError::backend)?;
+        } else {
+            let mut conn = self.write.acquire().await.map_err(StoreError::backend)?;
+            sqlx::query(SQL)
+                .bind(domain.id as i64)
+                .bind(domain.tenant_id.0 as i64)
+                .bind(&domain.domain)
+                .bind(&domain.token)
+                .bind(status)
+                .bind(domain.created as i64)
+                .bind(domain.verified_at.map(|v| v as i64))
+                .execute(&mut *conn)
+                .await
+                .map_err(map_unique_violation)?;
+        }
+        Ok(())
+    }
+
+    async fn set_sso_domain_status(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        status: DomainStatus,
+        verified_at: Option<u64>,
+    ) -> Result<(), StoreError> {
+        let status = match status {
+            DomainStatus::Pending => "pending",
+            DomainStatus::Verified => "verified",
+        };
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "UPDATE sso_email_domains SET status = $1, verified_at = $2 WHERE tenant_id = $3 AND id = $4",
+            )
+            .bind(status)
+            .bind(verified_at.map(|v| v as i64))
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .execute(&mut *c)
+            .await
+        });
+        Ok(())
+    }
+
+    async fn delete_sso_domain(&self, tenant: TenantId, id: u64) -> Result<(), StoreError> {
+        with_write!(self, tenant, |c| {
+            sqlx::query("DELETE FROM sso_email_domains WHERE tenant_id = $1 AND id = $2")
                 .bind(tenant.0 as i64)
                 .bind(id as i64)
                 .execute(&mut *c)
