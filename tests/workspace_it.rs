@@ -76,6 +76,8 @@ fn app_over_with_suffix(
         multi_tenant,
         tenant_domain_suffix,
         oidc_tenants: quark::oidc::TenantOidcCache::new(),
+        keycloak: None,
+        keycloak_base_url: None,
         cache,
         store,
         key: 0x1234,

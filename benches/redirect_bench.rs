@@ -77,6 +77,8 @@ fn bench(c: &mut Criterion) {
             multi_tenant: false,
             tenant_domain_suffix: None,
             oidc_tenants: quark::oidc::TenantOidcCache::new(),
+            keycloak: None,
+            keycloak_base_url: None,
             cache,
             store: store.clone(),
             key,

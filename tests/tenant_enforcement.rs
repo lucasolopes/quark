@@ -286,6 +286,8 @@ fn cloud_state(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>) -> Arc<AppSt
         multi_tenant: true,
         tenant_domain_suffix: None,
         oidc_tenants: quark::oidc::TenantOidcCache::new(),
+        keycloak: None,
+        keycloak_base_url: None,
         cache,
         store,
         key: 0x1234,

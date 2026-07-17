@@ -79,6 +79,14 @@ pub struct AppState {
     /// login and cached here, keyed by tenant id. Invalidated (best-effort) by
     /// `admin_oidc_config_put`/`_delete`; also self-expires via TTL.
     pub oidc_tenants: crate::oidc::TenantOidcCache,
+    /// Keycloak admin runtime (multi-tenancy P2e), present only when
+    /// `QUARK_KEYCLOAK_BASE_URL` is configured. `None` disables the whole
+    /// feature; provisioning logic that calls this is Task 2, not built here.
+    pub keycloak: Option<Arc<dyn crate::keycloak::KeycloakAdmin>>,
+    /// Base URL Keycloak is reachable at, kept alongside `keycloak` so a
+    /// tenant's issuer can be derived (`keycloak::derive_issuer`) without
+    /// re-reading the environment.
+    pub keycloak_base_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -4512,6 +4520,8 @@ mod tests {
             dns: Arc::new(crate::dns::NullDns),
             tenant_domain_suffix: None,
             oidc_tenants: crate::oidc::TenantOidcCache::new(),
+            keycloak: None,
+            keycloak_base_url: None,
         })
     }
 
@@ -4563,6 +4573,8 @@ mod tests {
             dns: Arc::new(crate::dns::NullDns),
             tenant_domain_suffix: None,
             oidc_tenants: crate::oidc::TenantOidcCache::new(),
+            keycloak: None,
+            keycloak_base_url: None,
         })
     }
 
