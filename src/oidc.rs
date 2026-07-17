@@ -5,12 +5,13 @@
 
 use crate::auth::Scope;
 use crate::store::{Store, StoreError};
-use crate::tenant::{Membership, Role, User, DEFAULT_TENANT};
+use crate::tenant::{Membership, Role, TenantId, User, DEFAULT_TENANT};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as b64url, Engine as _};
 use hmac::{Hmac, KeyInit, Mac};
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -58,6 +59,34 @@ impl OidcConfig {
                 .unwrap_or_else(|| "/".to_string()),
         })
     }
+}
+
+/// A tenant's own OIDC IdP (multi-tenancy P2d, cloud-only). One per tenant
+/// (`oidc_configs.tenant_id` is UNIQUE); `issuer` is a plain column, the rest
+/// rides in the `blob` (see `Store::put_oidc_config`/`get_oidc_config`).
+/// `client_secret` is stored plaintext at rest, mirroring the `sheets_connection`
+/// precedent (refresh token); encrypting it is a separate hardening follow-up.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TenantOidcConfig {
+    pub tenant_id: TenantId,
+    pub issuer: String,
+    pub client_id: String,
+    pub client_secret: String,
+    /// Space-separated-at-request-time scopes, kept as a list here.
+    pub scopes: Vec<String>,
+    pub admin_claim: String,
+    pub admin_value: String,
+    pub readonly_value: String,
+    /// Optional required-group gate (multi-tenancy P2d Task 4b), default-open
+    /// when unset: `claim_role`'s open Member default (any authenticated
+    /// tenant IdP user gets in) is unchanged. When set to a non-empty value,
+    /// `passes_required_group` denies anyone whose claim contains neither
+    /// `admin_value`, `readonly_value`, nor this value — the tenant opts into
+    /// default-closed login. `#[serde(default)]` so a blob written before
+    /// this field existed still deserializes.
+    #[serde(default)]
+    pub required_value: Option<String>,
+    pub post_login_url: Option<String>,
 }
 
 /// The subset of the IdP's `.well-known/openid-configuration` we use.
@@ -297,27 +326,73 @@ pub fn verify_id_token(
     })
 }
 
+/// Whether `claims[claim_name]` contains `needle`, as either a single string
+/// claim or an array claim (the two shapes IdPs commonly use for group/role
+/// claims). Shared by `map_scopes` and `claim_role`.
+fn claim_contains(claims: &serde_json::Value, claim_name: &str, needle: &str) -> bool {
+    match claims.get(claim_name) {
+        Some(serde_json::Value::String(s)) => s == needle,
+        Some(serde_json::Value::Array(arr)) => arr.iter().any(|v| v.as_str() == Some(needle)),
+        _ => false,
+    }
+}
+
 /// Maps verified claims to granted scopes, default-closed: only the configured
 /// admin value grants `Full`; the optional read-only value grants
 /// `LinksRead`+`Analytics`; anything else grants nothing.
 pub fn map_scopes(claims: &serde_json::Value, cfg: &OidcConfig) -> Vec<Scope> {
-    let claim = claims.get(&cfg.admin_claim);
-    let has = |needle: &str| -> bool {
-        match claim {
-            Some(serde_json::Value::String(s)) => s == needle,
-            Some(serde_json::Value::Array(arr)) => arr.iter().any(|v| v.as_str() == Some(needle)),
-            _ => false,
-        }
-    };
-    if !cfg.admin_value.is_empty() && has(&cfg.admin_value) {
+    if !cfg.admin_value.is_empty() && claim_contains(claims, &cfg.admin_claim, &cfg.admin_value) {
         return vec![Scope::Full];
     }
     if let Some(ro) = &cfg.readonly_value {
-        if has(ro) {
+        if claim_contains(claims, &cfg.admin_claim, ro) {
             return vec![Scope::LinksRead, Scope::Analytics];
         }
     }
     Vec::new()
+}
+
+/// Maps a tenant IdP's group claim to a `Membership` role (multi-tenancy P2d,
+/// per-tenant login). Mirrors `map_scopes`'s claim shape handling, but targets
+/// a `Role` rather than a `Scope`: `admin_value` present in the claim grants
+/// `Role::Admin`, `readonly_value` grants `Role::Viewer`, and anything else
+/// (including a claim that matches neither) grants the default `Role::Member`
+/// — every authenticated tenant IdP user gets at least member access, never
+/// none, unlike the default-closed OSS/global `map_scopes`. `Role::Owner` is
+/// never returned here: Owner comes only from creating the tenant, never from
+/// an IdP claim.
+pub fn claim_role(claims: &serde_json::Value, cfg: &TenantOidcConfig) -> Role {
+    if !cfg.admin_value.is_empty() && claim_contains(claims, &cfg.admin_claim, &cfg.admin_value) {
+        return Role::Admin;
+    }
+    if !cfg.readonly_value.is_empty()
+        && claim_contains(claims, &cfg.admin_claim, &cfg.readonly_value)
+    {
+        return Role::Viewer;
+    }
+    Role::Member
+}
+
+/// The required-group gate (multi-tenancy P2d Task 4b), separate from
+/// `claim_role`: `claim_role` always resolves to *some* role (Admin, Viewer,
+/// or the open Member default), but whether that login is admitted at all is
+/// this function's call. When `cfg.required_value` is unset (or empty), the
+/// gate is open — every authenticated tenant IdP user is admitted, matching
+/// today's behavior before this field existed. When set, only a user whose
+/// claim contains `admin_value`, `readonly_value`, or `required_value` is
+/// admitted; a claim matching none of the three is denied. Matching goes
+/// through `claim_contains` (exact value match, not substring), the same
+/// helper `claim_role`/`map_scopes` use. The caller (`oidc_callback`) must
+/// check this BEFORE creating any membership or session — a denial here
+/// grants nothing.
+pub fn passes_required_group(claims: &serde_json::Value, cfg: &TenantOidcConfig) -> bool {
+    let Some(required) = cfg.required_value.as_deref().filter(|r| !r.is_empty()) else {
+        return true;
+    };
+    (!cfg.admin_value.is_empty() && claim_contains(claims, &cfg.admin_claim, &cfg.admin_value))
+        || (!cfg.readonly_value.is_empty()
+            && claim_contains(claims, &cfg.admin_claim, &cfg.readonly_value))
+        || claim_contains(claims, &cfg.admin_claim, required)
 }
 
 /// Resolves the `User` for a verified login (creating one on first login, keyed
@@ -326,12 +401,21 @@ pub fn map_scopes(claims: &serde_json::Value, cfg: &OidcConfig) -> Vec<Scope> {
 ///
 /// OSS (`multi_tenant == false`): also upserts the `Membership` in
 /// `DEFAULT_TENANT`, with a `role` aligned to the same IdP group that produced
-/// `scopes`. Cloud (`multi_tenant == true`): creates no membership — a cloud
-/// user starts with 0 memberships until they create or are invited to a
-/// workspace (P2b/P2c).
+/// `scopes`. `tenant_membership` is ignored in this mode (the caller never
+/// passes one for the OSS/global login path).
 ///
-/// Authorization is unaffected by this: it is decided by `scopes` (from
-/// `map_scopes`) alone, unchanged; the stored `role` is a record, not a gate.
+/// Cloud (`multi_tenant == true`): the global env-IdP login (`tenant_membership
+/// == None`) creates no membership — a cloud user starts with 0 memberships
+/// until they create or are invited to a workspace (P2b/P2c). A per-tenant
+/// login (multi-tenancy P2d, `?org=<slug>`) passes `Some((tenant, role))`,
+/// where `role` came from `claim_role` against that tenant's own IdP config;
+/// this upserts a `Membership(user, tenant, role)` so signing in through the
+/// tenant's own IdP is itself how a member joins that tenant.
+///
+/// Authorization is unaffected by this: for OSS it is decided by `scopes`
+/// (from `map_scopes`); for cloud it is decided by the membership role at
+/// request time (`admin_guard`); the stored `role` here is what grants that
+/// authorization for the tenant path, not merely a record.
 pub async fn ensure_user_and_membership(
     store: &dyn Store,
     multi_tenant: bool,
@@ -339,6 +423,7 @@ pub async fn ensure_user_and_membership(
     email: &str,
     display: &str,
     scopes: &[Scope],
+    tenant_membership: Option<(TenantId, Role)>,
 ) -> Result<u64, StoreError> {
     let user = match store.get_user_by_subject(subject).await? {
         Some(u) => u,
@@ -357,7 +442,8 @@ pub async fn ensure_user_and_membership(
     };
     if !multi_tenant {
         // OSS: single implicit tenant 0. Cloud: no membership until the user
-        // creates or is invited to a workspace (P2b/P2c).
+        // creates or is invited to a workspace (P2b/P2c), unless this is a
+        // per-tenant login (see `tenant_membership` below).
         let role = if scopes.iter().any(|s| *s == Scope::Full) {
             Role::Admin
         } else {
@@ -368,6 +454,26 @@ pub async fn ensure_user_and_membership(
                 user_id: user.id,
                 tenant_id: DEFAULT_TENANT,
                 role,
+                created: crate::now(),
+            })
+            .await?;
+    } else if let Some((tenant, role)) = tenant_membership {
+        // Never let a login claim downgrade an existing Owner. `claim_role`
+        // can't produce `Role::Owner` on its own, so the only way a user has
+        // it is a prior explicit grant (workspace creation, invite accept) —
+        // preserve it rather than overwrite it with whatever the IdP group
+        // maps to today. Any other existing role (or none yet) still follows
+        // the claim, so group changes keep reflecting for non-owners.
+        let existing = store.get_membership(user.id, tenant).await?;
+        let effective_role = match existing {
+            Some(m) if m.role == Role::Owner => Role::Owner,
+            _ => role,
+        };
+        store
+            .put_membership(&Membership {
+                user_id: user.id,
+                tenant_id: tenant,
+                role: effective_role,
                 created: crate::now(),
             })
             .await?;
@@ -387,6 +493,39 @@ pub struct OidcRuntime {
 impl OidcRuntime {
     /// Resolves discovery and the initial JWKS for `config`.
     pub async fn init(config: OidcConfig) -> Result<OidcRuntime, String> {
+        Self::build(config).await
+    }
+
+    /// Builds a runtime from a tenant's stored OIDC config (multi-tenancy
+    /// P2d): same discovery + JWKS init as `init`, from a `TenantOidcConfig`
+    /// instead of the env-sourced `OidcConfig`. The redirect URL is not part
+    /// of the stored per-tenant config — every tenant's IdP redirects to the
+    /// same `/admin/callback` route, which resolves the tenant from the
+    /// signed login-state cookie rather than from a per-tenant redirect
+    /// URI — so it still comes from `QUARK_OIDC_REDIRECT_URL`.
+    pub async fn from_config(cfg: &TenantOidcConfig) -> Result<OidcRuntime, String> {
+        let config = OidcConfig {
+            issuer: cfg.issuer.trim_end_matches('/').to_string(),
+            client_id: cfg.client_id.clone(),
+            client_secret: cfg.client_secret.clone(),
+            redirect_url: std::env::var("QUARK_OIDC_REDIRECT_URL").unwrap_or_default(),
+            scopes: if cfg.scopes.is_empty() {
+                "openid profile email".to_string()
+            } else {
+                cfg.scopes.join(" ")
+            },
+            admin_claim: cfg.admin_claim.clone(),
+            admin_value: cfg.admin_value.clone(),
+            readonly_value: (!cfg.readonly_value.is_empty()).then(|| cfg.readonly_value.clone()),
+            post_login_url: cfg
+                .post_login_url
+                .clone()
+                .unwrap_or_else(|| "/".to_string()),
+        };
+        Self::build(config).await
+    }
+
+    async fn build(config: OidcConfig) -> Result<OidcRuntime, String> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
@@ -451,30 +590,114 @@ impl OidcRuntime {
     }
 }
 
+/// Per-tenant `OidcRuntime` cache (multi-tenancy P2d): each tenant's own IdP
+/// gets its own discovery + JWKS, built lazily on first use (`get_or_build`)
+/// and cached for `TTL_SECS` so a reconfigured IdP is picked up within a
+/// bounded window even if the explicit `invalidate` call on `PUT`/`DELETE
+/// /admin/oidc-config` is missed (invalidation is best-effort by design — a
+/// miss just means the next login re-fetches the current stored config).
+pub struct TenantOidcCache {
+    cache: moka::future::Cache<TenantId, Arc<OidcRuntime>>,
+}
+
+/// How long a built runtime is trusted before a rebuild is forced, bounding
+/// how stale a tenant's cached IdP config (issuer, JWKS, claim mapping) can
+/// get after a reconfiguration that missed the explicit invalidation.
+const TENANT_OIDC_TTL_SECS: u64 = 300;
+
+impl TenantOidcCache {
+    pub fn new() -> TenantOidcCache {
+        TenantOidcCache {
+            cache: moka::future::Cache::builder()
+                .time_to_live(std::time::Duration::from_secs(TENANT_OIDC_TTL_SECS))
+                .build(),
+        }
+    }
+
+    /// Returns the cached runtime for `tenant`, building (discovery + JWKS,
+    /// via `OidcRuntime::from_config`) and caching it on a miss.
+    pub async fn get_or_build(
+        &self,
+        tenant: TenantId,
+        cfg: &TenantOidcConfig,
+    ) -> Result<Arc<OidcRuntime>, String> {
+        if let Some(rt) = self.cache.get(&tenant).await {
+            return Ok(rt);
+        }
+        let rt = Arc::new(OidcRuntime::from_config(cfg).await?);
+        self.cache.insert(tenant, rt.clone()).await;
+        Ok(rt)
+    }
+
+    /// Drops the cached runtime for `tenant`. Called (best-effort) by the
+    /// `PUT`/`DELETE /admin/oidc-config` handlers so a reconfigured or
+    /// removed IdP isn't served from a stale cache entry; a miss here is
+    /// harmless since the entry also expires via the TTL.
+    pub async fn invalidate(&self, tenant: TenantId) {
+        self.cache.invalidate(&tenant).await;
+    }
+}
+
+impl Default for TenantOidcCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Signs the login-attempt state (`state.verifier.nonce`, all base64url so they
 /// contain no `.`) with an HMAC, for the short-lived cookie that carries it from
-/// `/admin/login` to `/admin/callback`. Value: `"state.verifier.nonce.mac"`.
-pub fn sign_login_state(key: &[u8], state: &str, verifier: &str, nonce: &str) -> String {
-    let payload = format!("{state}.{verifier}.{nonce}");
+/// `/admin/login` to `/admin/callback`. `tenant` is `Some` for a per-tenant
+/// login (`?org=<slug>`, multi-tenancy P2d) and `None` for the global/OSS
+/// login; when present it rides in the HMAC-signed payload as a 4th field, so
+/// `verify_login_state` can trust it came from this login attempt and was not
+/// substituted in transit. Value: `"state.verifier.nonce.tenant.mac"` (tenant
+/// empty when absent, still covered by the MAC), back-compat with the old
+/// 3-field callers via `None`.
+pub fn sign_login_state(
+    key: &[u8],
+    state: &str,
+    verifier: &str,
+    nonce: &str,
+    tenant: Option<TenantId>,
+) -> String {
+    let tenant_field = tenant.map(|t| t.0.to_string()).unwrap_or_default();
+    let payload = format!("{state}.{verifier}.{nonce}.{tenant_field}");
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     format!("{payload}.{}", b64url.encode(mac.finalize().into_bytes()))
 }
 
 /// Verifies and unpacks a login-state cookie, returning `(state, verifier,
-/// nonce)` when the HMAC checks out.
-pub fn verify_login_state(key: &[u8], cookie: &str) -> Option<(String, String, String)> {
+/// nonce, tenant)` when the HMAC checks out. `tenant` is `None` when the login
+/// was global (no `?org`), `Some` when it was a per-tenant login — recomputed
+/// from the same payload the MAC was computed over, so a tampered tenant field
+/// fails verification rather than being silently accepted.
+pub fn verify_login_state(
+    key: &[u8],
+    cookie: &str,
+) -> Option<(String, String, String, Option<TenantId>)> {
     let parts: Vec<&str> = cookie.split('.').collect();
-    if parts.len() != 4 {
+    if parts.len() != 5 {
         return None;
     }
-    let (state, verifier, nonce, mac_b64) = (parts[0], parts[1], parts[2], parts[3]);
+    let (state, verifier, nonce, tenant_field, mac_b64) =
+        (parts[0], parts[1], parts[2], parts[3], parts[4]);
     let provided = b64url.decode(mac_b64).ok()?;
-    let payload = format!("{state}.{verifier}.{nonce}");
+    let payload = format!("{state}.{verifier}.{nonce}.{tenant_field}");
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     mac.verify_slice(&provided).ok()?;
-    Some((state.to_string(), verifier.to_string(), nonce.to_string()))
+    let tenant = if tenant_field.is_empty() {
+        None
+    } else {
+        Some(TenantId(tenant_field.parse::<u64>().ok()?))
+    };
+    Some((
+        state.to_string(),
+        verifier.to_string(),
+        nonce.to_string(),
+        tenant,
+    ))
 }
 
 #[cfg(test)]
@@ -528,10 +751,10 @@ mod tests {
     #[test]
     fn login_state_cookie_round_trip_and_tamper() {
         let key = b"login-state-signing-key-0123456789";
-        let cookie = sign_login_state(key, "st8", "verif", "nnc");
+        let cookie = sign_login_state(key, "st8", "verif", "nnc", None);
         assert_eq!(
             verify_login_state(key, &cookie),
-            Some(("st8".into(), "verif".into(), "nnc".into()))
+            Some(("st8".into(), "verif".into(), "nnc".into(), None))
         );
         // Wrong key rejected.
         assert!(verify_login_state(b"another-key-abcdefghijklmnopqrstuv", &cookie).is_none());
@@ -540,6 +763,90 @@ mod tests {
         assert!(verify_login_state(key, &tampered).is_none());
         // Malformed rejected.
         assert!(verify_login_state(key, "garbage").is_none());
+    }
+
+    #[test]
+    fn login_state_cookie_carries_tenant_and_tamper_is_rejected() {
+        let key = b"login-state-signing-key-0123456789";
+        let tenant = TenantId(42);
+        let cookie = sign_login_state(key, "st8", "verif", "nnc", Some(tenant));
+        assert_eq!(
+            verify_login_state(key, &cookie),
+            Some(("st8".into(), "verif".into(), "nnc".into(), Some(tenant)))
+        );
+
+        // Absent tenant (global login) round-trips as None.
+        let global_cookie = sign_login_state(key, "st8", "verif", "nnc", None);
+        assert_eq!(
+            verify_login_state(key, &global_cookie).unwrap().3,
+            None,
+            "absent tenant must mean global login"
+        );
+
+        // Tampering the tenant field (swap 42 for 43) must fail the MAC, not
+        // silently authenticate as a different tenant.
+        let tampered = cookie.replacen(".42.", ".43.", 1);
+        assert_ne!(tampered, cookie);
+        assert!(
+            verify_login_state(key, &tampered).is_none(),
+            "tampered tenant field must be rejected, not accepted as tenant 43"
+        );
+    }
+
+    #[tokio::test]
+    async fn tenant_oidc_cache_builds_once_and_invalidate_drops_it() {
+        // `from_config` requires network discovery, so this test exercises
+        // cache keying/reuse/invalidate directly against a pre-built runtime
+        // rather than going through `get_or_build` (which is exercised only
+        // by the ignored integration-style test below).
+        let cache = TenantOidcCache::new();
+        let tenant = TenantId(7);
+        assert!(cache.cache.get(&tenant).await.is_none());
+
+        // Simulate what `get_or_build` does on a miss.
+        let rt = Arc::new(fake_runtime());
+        cache.cache.insert(tenant, rt.clone()).await;
+        assert!(cache.cache.get(&tenant).await.is_some());
+
+        cache.invalidate(tenant).await;
+        assert!(
+            cache.cache.get(&tenant).await.is_none(),
+            "invalidate must drop the cached runtime"
+        );
+    }
+
+    /// Builds an `OidcRuntime` without any network access, for cache tests
+    /// that only need *a* runtime value, not a correctly-discovered one.
+    fn fake_runtime() -> OidcRuntime {
+        OidcRuntime {
+            config: cfg(),
+            client: reqwest::Client::new(),
+            discovery: Discovery {
+                authorization_endpoint: "https://idp.example/authorize".into(),
+                token_endpoint: "https://idp.example/token".into(),
+                jwks_uri: "https://idp.example/jwks".into(),
+            },
+            jwks: tokio::sync::RwLock::new(Jwks { keys: Vec::new() }),
+        }
+    }
+
+    #[ignore = "hits the network (discovery + JWKS); run explicitly against a real/test IdP"]
+    #[tokio::test]
+    async fn from_config_builds_runtime_from_tenant_config() {
+        let cfg = TenantOidcConfig {
+            tenant_id: TenantId(1),
+            issuer: "https://idp.example".into(),
+            client_id: "quark".into(),
+            client_secret: "secret".into(),
+            scopes: vec!["openid".into(), "profile".into()],
+            admin_claim: "groups".into(),
+            admin_value: "quark-admins".into(),
+            readonly_value: String::new(),
+            required_value: None,
+            post_login_url: None,
+        };
+        let rt = OidcRuntime::from_config(&cfg).await.unwrap();
+        assert_eq!(rt.config.scopes, "openid profile");
     }
 
     #[test]
@@ -578,6 +885,7 @@ mod tests {
             "sub1@example.com",
             "Sub One",
             &[Scope::Full],
+            None,
         )
         .await
         .unwrap();
@@ -599,6 +907,7 @@ mod tests {
             "sub1@example.com",
             "Sub One",
             &[Scope::LinksRead, Scope::Analytics],
+            None,
         )
         .await
         .unwrap();
@@ -618,6 +927,7 @@ mod tests {
             "sub2@example.com",
             "Sub Two",
             &[Scope::LinksRead, Scope::Analytics],
+            None,
         )
         .await
         .unwrap();
@@ -637,9 +947,10 @@ mod tests {
     async fn cloud_login_creates_user_but_no_default_membership() {
         let dir = tempfile::tempdir().unwrap();
         let store = crate::store::lmdb::LmdbStore::open_with_node_id(dir.path(), None).unwrap();
-        let uid = ensure_user_and_membership(&store, true, "sub-cloud", "e@x", "E", &[Scope::Full])
-            .await
-            .unwrap();
+        let uid =
+            ensure_user_and_membership(&store, true, "sub-cloud", "e@x", "E", &[Scope::Full], None)
+                .await
+                .unwrap();
         assert!(store
             .get_user_by_subject("sub-cloud")
             .await
@@ -651,5 +962,150 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    // Cloud, per-tenant login (multi-tenancy P2d): passing `tenant_membership`
+    // creates the Membership in that tenant with the given role — this is how
+    // signing in through a tenant's own IdP joins the tenant.
+    #[tokio::test]
+    async fn cloud_login_with_tenant_creates_membership_with_claim_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::store::lmdb::LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let tenant = TenantId(9);
+
+        let uid = ensure_user_and_membership(
+            &store,
+            true,
+            "sub-tenant-admin",
+            "e@x",
+            "E",
+            &[],
+            Some((tenant, Role::Admin)),
+        )
+        .await
+        .unwrap();
+
+        let membership = store.get_membership(uid, tenant).await.unwrap().unwrap();
+        assert_eq!(membership.role, Role::Admin);
+        // Still no membership in the default tenant from this login.
+        assert!(store
+            .get_membership(uid, DEFAULT_TENANT)
+            .await
+            .unwrap()
+            .is_none());
+
+        // A second login with a different claim-mapped role updates the role
+        // rather than duplicating the membership.
+        let uid2 = ensure_user_and_membership(
+            &store,
+            true,
+            "sub-tenant-admin",
+            "e@x",
+            "E",
+            &[],
+            Some((tenant, Role::Viewer)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(uid2, uid);
+        let membership = store.get_membership(uid, tenant).await.unwrap().unwrap();
+        assert_eq!(membership.role, Role::Viewer);
+    }
+
+    #[test]
+    fn claim_role_maps_admin_and_readonly_and_defaults_to_member() {
+        let cfg = TenantOidcConfig {
+            tenant_id: TenantId(1),
+            issuer: "https://idp.acme.example".into(),
+            client_id: "acme".into(),
+            client_secret: "s".into(),
+            scopes: vec!["openid".into()],
+            admin_claim: "groups".into(),
+            admin_value: "acme-admins".into(),
+            readonly_value: "acme-viewers".into(),
+            required_value: None,
+            post_login_url: None,
+        };
+
+        let admin = serde_json::json!({ "groups": ["x", "acme-admins"] });
+        assert_eq!(claim_role(&admin, &cfg), Role::Admin);
+
+        let ro = serde_json::json!({ "groups": ["acme-viewers"] });
+        assert_eq!(claim_role(&ro, &cfg), Role::Viewer);
+
+        // string claim form
+        let admin_str = serde_json::json!({ "groups": "acme-admins" });
+        assert_eq!(claim_role(&admin_str, &cfg), Role::Admin);
+
+        // neither value present -> Member (not empty, unlike map_scopes)
+        let none = serde_json::json!({ "groups": ["random"] });
+        assert_eq!(claim_role(&none, &cfg), Role::Member);
+
+        // missing claim entirely -> Member
+        let missing = serde_json::json!({ "sub": "x" });
+        assert_eq!(claim_role(&missing, &cfg), Role::Member);
+
+        // Owner is never granted by a claim, no matter what the claim says.
+        for claims in [&admin, &ro, &admin_str, &none, &missing] {
+            assert_ne!(claim_role(claims, &cfg), Role::Owner);
+        }
+    }
+
+    fn cfg_with_required(required_value: Option<&str>) -> TenantOidcConfig {
+        TenantOidcConfig {
+            tenant_id: TenantId(1),
+            issuer: "https://idp.acme.example".into(),
+            client_id: "acme".into(),
+            client_secret: "s".into(),
+            scopes: vec!["openid".into()],
+            admin_claim: "groups".into(),
+            admin_value: "acme-admins".into(),
+            readonly_value: "acme-viewers".into(),
+            required_value: required_value.map(str::to_string),
+            post_login_url: None,
+        }
+    }
+
+    // Without `required_value` set, the gate is open: any authenticated
+    // tenant IdP user is admitted, matching the pre-Task-4b behavior exactly.
+    #[test]
+    fn passes_required_group_is_open_when_unset() {
+        let cfg = cfg_with_required(None);
+        let none = serde_json::json!({ "groups": ["random"] });
+        assert!(passes_required_group(&none, &cfg));
+
+        // Empty string is treated the same as unset (default-open), not as
+        // "required group is the empty string".
+        let cfg_empty = cfg_with_required(Some(""));
+        assert!(passes_required_group(&none, &cfg_empty));
+    }
+
+    // With `required_value` set, admin/readonly members pass the gate (their
+    // claim already satisfies it independent of the required group), a
+    // member of the required group passes, and anyone in none of the three
+    // is denied.
+    #[test]
+    fn passes_required_group_is_closed_when_set() {
+        let cfg = cfg_with_required(Some("acme-contractors"));
+
+        let admin = serde_json::json!({ "groups": ["acme-admins"] });
+        assert!(passes_required_group(&admin, &cfg));
+
+        let readonly = serde_json::json!({ "groups": ["acme-viewers"] });
+        assert!(passes_required_group(&readonly, &cfg));
+
+        let required = serde_json::json!({ "groups": ["acme-contractors"] });
+        assert!(passes_required_group(&required, &cfg));
+
+        let neither = serde_json::json!({ "groups": ["random"] });
+        assert!(!passes_required_group(&neither, &cfg));
+
+        let missing_claim = serde_json::json!({ "sub": "x" });
+        assert!(!passes_required_group(&missing_claim, &cfg));
+
+        // Exact match only, never substring: a group that merely contains
+        // the required value as a substring must not pass.
+        let substring = serde_json::json!({ "groups": ["acme-contractors-alumni"] });
+        assert!(!passes_required_group(&substring, &cfg));
     }
 }
