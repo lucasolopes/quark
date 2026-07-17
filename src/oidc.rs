@@ -77,6 +77,15 @@ pub struct TenantOidcConfig {
     pub admin_claim: String,
     pub admin_value: String,
     pub readonly_value: String,
+    /// Optional required-group gate (multi-tenancy P2d Task 4b), default-open
+    /// when unset: `claim_role`'s open Member default (any authenticated
+    /// tenant IdP user gets in) is unchanged. When set to a non-empty value,
+    /// `passes_required_group` denies anyone whose claim contains neither
+    /// `admin_value`, `readonly_value`, nor this value — the tenant opts into
+    /// default-closed login. `#[serde(default)]` so a blob written before
+    /// this field existed still deserializes.
+    #[serde(default)]
+    pub required_value: Option<String>,
     pub post_login_url: Option<String>,
 }
 
@@ -362,6 +371,28 @@ pub fn claim_role(claims: &serde_json::Value, cfg: &TenantOidcConfig) -> Role {
         return Role::Viewer;
     }
     Role::Member
+}
+
+/// The required-group gate (multi-tenancy P2d Task 4b), separate from
+/// `claim_role`: `claim_role` always resolves to *some* role (Admin, Viewer,
+/// or the open Member default), but whether that login is admitted at all is
+/// this function's call. When `cfg.required_value` is unset (or empty), the
+/// gate is open — every authenticated tenant IdP user is admitted, matching
+/// today's behavior before this field existed. When set, only a user whose
+/// claim contains `admin_value`, `readonly_value`, or `required_value` is
+/// admitted; a claim matching none of the three is denied. Matching goes
+/// through `claim_contains` (exact value match, not substring), the same
+/// helper `claim_role`/`map_scopes` use. The caller (`oidc_callback`) must
+/// check this BEFORE creating any membership or session — a denial here
+/// grants nothing.
+pub fn passes_required_group(claims: &serde_json::Value, cfg: &TenantOidcConfig) -> bool {
+    let Some(required) = cfg.required_value.as_deref().filter(|r| !r.is_empty()) else {
+        return true;
+    };
+    (!cfg.admin_value.is_empty() && claim_contains(claims, &cfg.admin_claim, &cfg.admin_value))
+        || (!cfg.readonly_value.is_empty()
+            && claim_contains(claims, &cfg.admin_claim, &cfg.readonly_value))
+        || claim_contains(claims, &cfg.admin_claim, required)
 }
 
 /// Resolves the `User` for a verified login (creating one on first login, keyed
@@ -800,6 +831,7 @@ mod tests {
             admin_claim: "groups".into(),
             admin_value: "quark-admins".into(),
             readonly_value: String::new(),
+            required_value: None,
             post_login_url: None,
         };
         let rt = OidcRuntime::from_config(&cfg).await.unwrap();
@@ -980,6 +1012,7 @@ mod tests {
             admin_claim: "groups".into(),
             admin_value: "acme-admins".into(),
             readonly_value: "acme-viewers".into(),
+            required_value: None,
             post_login_url: None,
         };
 
@@ -1005,5 +1038,63 @@ mod tests {
         for claims in [&admin, &ro, &admin_str, &none, &missing] {
             assert_ne!(claim_role(claims, &cfg), Role::Owner);
         }
+    }
+
+    fn cfg_with_required(required_value: Option<&str>) -> TenantOidcConfig {
+        TenantOidcConfig {
+            tenant_id: TenantId(1),
+            issuer: "https://idp.acme.example".into(),
+            client_id: "acme".into(),
+            client_secret: "s".into(),
+            scopes: vec!["openid".into()],
+            admin_claim: "groups".into(),
+            admin_value: "acme-admins".into(),
+            readonly_value: "acme-viewers".into(),
+            required_value: required_value.map(str::to_string),
+            post_login_url: None,
+        }
+    }
+
+    // Without `required_value` set, the gate is open: any authenticated
+    // tenant IdP user is admitted, matching the pre-Task-4b behavior exactly.
+    #[test]
+    fn passes_required_group_is_open_when_unset() {
+        let cfg = cfg_with_required(None);
+        let none = serde_json::json!({ "groups": ["random"] });
+        assert!(passes_required_group(&none, &cfg));
+
+        // Empty string is treated the same as unset (default-open), not as
+        // "required group is the empty string".
+        let cfg_empty = cfg_with_required(Some(""));
+        assert!(passes_required_group(&none, &cfg_empty));
+    }
+
+    // With `required_value` set, admin/readonly members pass the gate (their
+    // claim already satisfies it independent of the required group), a
+    // member of the required group passes, and anyone in none of the three
+    // is denied.
+    #[test]
+    fn passes_required_group_is_closed_when_set() {
+        let cfg = cfg_with_required(Some("acme-contractors"));
+
+        let admin = serde_json::json!({ "groups": ["acme-admins"] });
+        assert!(passes_required_group(&admin, &cfg));
+
+        let readonly = serde_json::json!({ "groups": ["acme-viewers"] });
+        assert!(passes_required_group(&readonly, &cfg));
+
+        let required = serde_json::json!({ "groups": ["acme-contractors"] });
+        assert!(passes_required_group(&required, &cfg));
+
+        let neither = serde_json::json!({ "groups": ["random"] });
+        assert!(!passes_required_group(&neither, &cfg));
+
+        let missing_claim = serde_json::json!({ "sub": "x" });
+        assert!(!passes_required_group(&missing_claim, &cfg));
+
+        // Exact match only, never substring: a group that merely contains
+        // the required value as a substring must not pass.
+        let substring = serde_json::json!({ "groups": ["acme-contractors-alumni"] });
+        assert!(!passes_required_group(&substring, &cfg));
     }
 }

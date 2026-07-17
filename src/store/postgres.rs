@@ -232,6 +232,10 @@ struct OidcConfigBlob {
     admin_claim: String,
     admin_value: String,
     readonly_value: String,
+    /// Optional required-group gate (multi-tenancy P2d Task 4b). `#[serde(default)]`
+    /// so a blob written before this field existed still deserializes.
+    #[serde(default)]
+    required_value: Option<String>,
     post_login_url: Option<String>,
 }
 
@@ -243,6 +247,7 @@ fn oidc_config_blob(cfg: &TenantOidcConfig) -> serde_json::Value {
         admin_claim: cfg.admin_claim.clone(),
         admin_value: cfg.admin_value.clone(),
         readonly_value: cfg.readonly_value.clone(),
+        required_value: cfg.required_value.clone(),
         post_login_url: cfg.post_login_url.clone(),
     })
     .expect("OidcConfigBlob has no non-serializable fields")
@@ -264,6 +269,7 @@ fn row_to_oidc_config(r: &PgRow) -> Result<TenantOidcConfig, StoreError> {
         admin_claim: b.admin_claim,
         admin_value: b.admin_value,
         readonly_value: b.readonly_value,
+        required_value: b.required_value,
         post_login_url: b.post_login_url,
     })
 }

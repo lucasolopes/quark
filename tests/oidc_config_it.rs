@@ -46,6 +46,7 @@ fn cfg(tenant_id: TenantId, issuer: &str) -> TenantOidcConfig {
         admin_claim: "groups".to_string(),
         admin_value: "acme-admins".to_string(),
         readonly_value: "acme-viewers".to_string(),
+        required_value: None,
         post_login_url: Some("/dashboard".to_string()),
     }
 }
@@ -116,6 +117,33 @@ async fn bare_read_returns_config_before_any_tenant_context() {
         .unwrap()
         .expect("bare read must find the config");
     assert_eq!(got, config);
+}
+
+/// `required_value` (multi-tenancy P2d Task 4b) round-trips through the
+/// JSONB `blob` exactly like every other field, both set and unset (the
+/// `#[serde(default)]` compatibility path for blobs written before the field
+/// existed is exercised in `store::postgres` unit-style via deserialization,
+/// but the round trip through a real Postgres write/read is asserted here).
+#[tokio::test]
+#[serial]
+async fn required_value_round_trips_set_and_unset() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let a = make_tenant(&store, "oidc-required-a").await;
+    let mut with_required = cfg(a, "https://idp.acme.example");
+    with_required.required_value = Some("acme-contractors".to_string());
+    store.put_oidc_config(&with_required).await.unwrap();
+    let got = store.get_oidc_config(a).await.unwrap().unwrap();
+    assert_eq!(got.required_value, Some("acme-contractors".to_string()));
+
+    let b = make_tenant(&store, "oidc-required-b").await;
+    let without_required = cfg(b, "https://idp.acme.example");
+    assert_eq!(without_required.required_value, None);
+    store.put_oidc_config(&without_required).await.unwrap();
+    let got_b = store.get_oidc_config(b).await.unwrap().unwrap();
+    assert_eq!(got_b.required_value, None);
 }
 
 /// Putting a second config for the same tenant replaces the first (UPSERT on
@@ -422,6 +450,46 @@ async fn put_oidc_config_http_upserts_and_round_trips_secret() {
     let stored2 = store.get_oidc_config(tenant).await.unwrap().unwrap();
     assert_eq!(stored2.issuer, "https://idp2.acme.example");
     assert_eq!(stored2.client_secret, "second-secret");
+}
+
+/// `required_value` (multi-tenancy P2d Task 4b) is accepted on `PUT` and
+/// reflected on `GET` — it is not secret, so unlike `client_secret` it rides
+/// in the redacted view unchanged.
+#[tokio::test]
+#[serial]
+async fn required_value_accepted_on_put_and_reflected_on_get() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "oidc-cfg-required-http-a").await;
+    let (app, token) =
+        admin_app_with_scopes(store.clone(), true, tenant, 9207, vec![Scope::Full]).await;
+
+    let body = Body::from(
+        r#"{
+            "issuer": "https://idp.acme.example",
+            "client_id": "acme-client",
+            "client_secret": "top-secret-value",
+            "scopes": ["openid"],
+            "admin_claim": "groups",
+            "admin_value": "acme-admins",
+            "readonly_value": "acme-viewers",
+            "required_value": "acme-contractors"
+        }"#
+        .to_string(),
+    );
+    let (status, put_body, _) = put_oidc_config_http(&app, &token, body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(put_body["required_value"], "acme-contractors");
+
+    let (get_status, get_body, _) = get_oidc_config_http(&app, &token).await;
+    assert_eq!(get_status, StatusCode::OK);
+    assert_eq!(get_body["required_value"], "acme-contractors");
+
+    let stored = store.get_oidc_config(tenant).await.unwrap().unwrap();
+    assert_eq!(stored.required_value, Some("acme-contractors".to_string()));
 }
 
 /// `PUT` with an empty (or whitespace-only) `issuer` or `client_id` is
