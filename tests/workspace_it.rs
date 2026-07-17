@@ -61,6 +61,33 @@ fn app_over_with_suffix(
     multi_tenant: bool,
     tenant_domain_suffix: Option<String>,
 ) -> axum::Router {
+    app_over_full(store, sink, multi_tenant, tenant_domain_suffix, None, None)
+}
+
+/// Same as `app_over`, but with a `KeycloakAdmin` wired in (multi-tenancy
+/// P2e): the auto realm provisioning on `admin_tenants_create` only fires
+/// when `keycloak` is `Some`, exactly like the real `AppState`.
+fn app_over_with_keycloak(
+    store: Arc<dyn Store>,
+    sink: Arc<dyn AnalyticsSink>,
+    multi_tenant: bool,
+    keycloak: Option<Arc<dyn quark::keycloak::KeycloakAdmin>>,
+    keycloak_base_url: Option<String>,
+) -> axum::Router {
+    app_over_full(store, sink, multi_tenant, None, keycloak, keycloak_base_url)
+}
+
+/// Shared builder behind `app_over`/`app_over_with_suffix`/
+/// `app_over_with_keycloak`: every knob those defer to the default (`None`)
+/// funnels through here.
+fn app_over_full(
+    store: Arc<dyn Store>,
+    sink: Arc<dyn AnalyticsSink>,
+    multi_tenant: bool,
+    tenant_domain_suffix: Option<String>,
+    keycloak: Option<Arc<dyn quark::keycloak::KeycloakAdmin>>,
+    keycloak_base_url: Option<String>,
+) -> axum::Router {
     let cache = Cache::new(store.clone(), 1000, None);
     let host_router = Arc::new(quark::domain_router::HostRouter::new(
         store.clone(),
@@ -76,6 +103,8 @@ fn app_over_with_suffix(
         multi_tenant,
         tenant_domain_suffix,
         oidc_tenants: quark::oidc::TenantOidcCache::new(),
+        keycloak,
+        keycloak_base_url,
         cache,
         store,
         key: 0x1234,
@@ -210,6 +239,84 @@ async fn create_tenant_self_serve() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// `POST /admin/tenants` with `slug = "master"` (a Keycloak built-in realm
+/// name) must be rejected before any tenant row is created, since P2e turns
+/// the slug into the realm name (final-review finding).
+#[tokio::test]
+#[serial]
+async fn create_tenant_rejects_reserved_slug() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_user_id, raw) = seed_session(&store, "reserved-slug-subject").await;
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/admin/tenants")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::from(r#"{"name":"Evil","slug":"master"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        store.get_tenant_by_slug("master").await.unwrap().is_none(),
+        "no tenant row must be created for a rejected slug"
+    );
+}
+
+/// `POST /admin/tenants` with a slug that fails the charset/length rule
+/// (case, underscore, punctuation, path separator, whitespace, or length)
+/// must be rejected — a bad slug becomes a malformed Keycloak realm name,
+/// Admin-API path, and OIDC issuer URL under P2e.
+#[tokio::test]
+#[serial]
+async fn create_tenant_rejects_malformed_slug() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_user_id, raw) = seed_session(&store, "malformed-slug-subject").await;
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store as Arc<dyn AnalyticsSink>,
+        true,
+    );
+
+    let too_long: String = "a".repeat(64);
+    let bad_slugs = ["Bad_Slug!", "a/b", " ", too_long.as_str(), "-x"];
+    for slug in bad_slugs {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/admin/tenants")
+                    .header("content-type", "application/json")
+                    .header("cookie", format!("qk_session={raw}"))
+                    .body(Body::from(
+                        serde_json::json!({"name": "Bad", "slug": slug}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "slug {slug:?} must be rejected"
+        );
+    }
 }
 
 /// No session cookie at all -> 401, not 404 (cloud endpoint exists, just
@@ -669,5 +776,392 @@ async fn create_tenant_seeds_no_subdomain_without_suffix() {
             .unwrap()
             .is_none(),
         "with no suffix configured, no subdomain row must ever be seeded"
+    );
+}
+
+// --- Keycloak realm provisioning on create + boot backfill (multi-tenancy
+// P2e Task 2) ---
+
+/// `POST /admin/tenants` (cloud, with a `KeycloakAdmin` configured): creating
+/// a tenant provisions its Keycloak realm end to end, in order — realm,
+/// client (pointed at the shared `/admin/callback` redirect), groups+mapper,
+/// the owner user (in `quark-admins`, email = the creating Principal's), the
+/// set-password email — and then writes the tenant's `oidc_config` with the
+/// issuer derived from the realm, `client_id` "quark", an EMPTY
+/// `client_secret` (public client + PKCE, no secret to store), and the
+/// admin/readonly group values. Every `KeycloakAdmin` call is idempotent
+/// (`409` = ok in the real client), so this order is safe to replay.
+#[tokio::test]
+#[serial]
+async fn create_tenant_provisions_keycloak_realm() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_user_id, raw) = seed_session(&store, "kc-provision-subject").await;
+
+    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    mock.set_next_user_id("kc-user-1");
+    let app = app_over_with_keycloak(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some("https://kc.example.com".to_string()),
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/admin/tenants")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::from(r#"{"name":"Kc Co","slug":"kc-provision-co"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let tenant: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let tenant_id = tenant["id"].as_u64().unwrap();
+
+    assert_eq!(
+        mock.calls(),
+        vec![
+            "ensure_realm(kc-provision-co)".to_string(),
+            "ensure_client(kc-provision-co,)".to_string(),
+            "ensure_groups_and_mapper(kc-provision-co)".to_string(),
+            "ensure_user(kc-provision-co,kc-provision-subject@example.com,quark-admins)"
+                .to_string(),
+            "send_set_password_email(kc-provision-co,kc-user-1)".to_string(),
+        ],
+        "provisioning must run realm -> client -> groups/mapper -> owner user -> set-password email, in that order"
+    );
+
+    let cfg = store
+        .get_oidc_config_bare(TenantId(tenant_id))
+        .await
+        .unwrap()
+        .expect("creating a tenant with keycloak configured must write its oidc_config");
+    assert_eq!(cfg.issuer, "https://kc.example.com/realms/kc-provision-co");
+    assert_eq!(cfg.client_id, "quark");
+    assert_eq!(
+        cfg.client_secret, "",
+        "the quark client is public + PKCE: no client secret must ever be stored"
+    );
+    assert_eq!(cfg.admin_claim, "groups");
+    assert_eq!(cfg.admin_value, "quark-admins");
+    assert_eq!(cfg.readonly_value, "quark-readers");
+    assert!(
+        cfg.required_value.is_some(),
+        "the group gate must default-closed for an auto-provisioned tenant"
+    );
+}
+
+/// OSS/cloud-without-Keycloak parity: with `st.keycloak = None`, creating a
+/// tenant makes zero Keycloak calls (there is no mock to call, by
+/// construction) and writes no `oidc_config` at all — byte-for-byte the same
+/// outcome as before this task (P2d-A).
+#[tokio::test]
+#[serial]
+async fn create_tenant_without_keycloak_writes_no_oidc_config() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_user_id, raw) = seed_session(&store, "no-kc-subject").await;
+
+    let app = app_over_with_keycloak(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+        None,
+        None,
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/admin/tenants")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::from(r#"{"name":"No Kc Co","slug":"no-kc-co"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let tenant: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let tenant_id = tenant["id"].as_u64().unwrap();
+
+    assert!(
+        store
+            .get_oidc_config_bare(TenantId(tenant_id))
+            .await
+            .unwrap()
+            .is_none(),
+        "without a configured KeycloakAdmin, no oidc_config must ever be written"
+    );
+}
+
+/// Boot backfill (`quark::api::backfill_keycloak_provisioning`): a tenant
+/// created before Keycloak was configured (no `oidc_config` yet) gets
+/// provisioned on the backfill pass; a tenant that already has one is left
+/// alone (no extra calls), and the count returned matches how many were
+/// actually provisioned.
+#[tokio::test]
+#[serial]
+async fn backfill_provisions_tenants_missing_oidc_config() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store: Arc<dyn Store> = Arc::new(store);
+
+    // `reset_for_tests` always seeds the default tenant (id 0); mark it
+    // already-provisioned too so the assertions below are only about the two
+    // tenants this test cares about.
+    store
+        .put_oidc_config(&quark::oidc::TenantOidcConfig {
+            tenant_id: TenantId(0),
+            issuer: "https://kc.example.com/realms/default".to_string(),
+            client_id: "quark".to_string(),
+            client_secret: String::new(),
+            scopes: vec!["openid".to_string()],
+            admin_claim: "groups".to_string(),
+            admin_value: "quark-admins".to_string(),
+            readonly_value: "quark-readers".to_string(),
+            required_value: Some("quark-readers".to_string()),
+            post_login_url: None,
+        })
+        .await
+        .unwrap();
+
+    let missing_id = store.next_tenant_id().await.unwrap();
+    store
+        .put_tenant(&quark::tenant::Tenant {
+            id: TenantId(missing_id),
+            name: "Backfill Missing".to_string(),
+            slug: "backfill-missing".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+
+    let already_id = store.next_tenant_id().await.unwrap();
+    store
+        .put_tenant(&quark::tenant::Tenant {
+            id: TenantId(already_id),
+            name: "Backfill Already".to_string(),
+            slug: "backfill-already".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    store
+        .put_oidc_config(&quark::oidc::TenantOidcConfig {
+            tenant_id: TenantId(already_id),
+            issuer: "https://kc.example.com/realms/backfill-already".to_string(),
+            client_id: "quark".to_string(),
+            client_secret: String::new(),
+            scopes: vec!["openid".to_string()],
+            admin_claim: "groups".to_string(),
+            admin_value: "quark-admins".to_string(),
+            readonly_value: "quark-readers".to_string(),
+            required_value: Some("quark-readers".to_string()),
+            post_login_url: None,
+        })
+        .await
+        .unwrap();
+
+    let mock: Arc<dyn quark::keycloak::KeycloakAdmin> =
+        Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+
+    let provisioned =
+        quark::api::backfill_keycloak_provisioning(&store, &mock, "https://kc.example.com")
+            .await
+            .unwrap();
+    assert_eq!(
+        provisioned, 1,
+        "only the tenant missing an oidc_config must be (re-)provisioned"
+    );
+
+    let cfg = store
+        .get_oidc_config_bare(TenantId(missing_id))
+        .await
+        .unwrap()
+        .expect("backfill must write the oidc_config for the tenant that lacked one");
+    assert_eq!(cfg.issuer, "https://kc.example.com/realms/backfill-missing");
+
+    // Idempotent: running the backfill again provisions nothing new.
+    let provisioned_again =
+        quark::api::backfill_keycloak_provisioning(&store, &mock, "https://kc.example.com")
+            .await
+            .unwrap();
+    assert_eq!(provisioned_again, 0);
+}
+
+/// Security sweep: provisioning a tenant only ever touches that tenant's own
+/// slug. Two different users self-serve two different tenants against the
+/// same `KeycloakAdmin`; every recorded call carries exactly one of the two
+/// slugs, never both, and each tenant's own slug shows up in its own calls.
+#[tokio::test]
+#[serial]
+async fn create_tenant_provisions_only_its_own_slug() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_x_user, raw_x) = seed_session(&store, "kc-sweep-x-subject").await;
+    let (_y_user, raw_y) = seed_session(&store, "kc-sweep-y-subject").await;
+
+    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let app = app_over_with_keycloak(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some("https://kc.example.com".to_string()),
+    );
+
+    for (raw, name, slug) in [
+        (&raw_x, "Sweep X", "kc-sweep-x"),
+        (&raw_y, "Sweep Y", "kc-sweep-y"),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::post("/admin/tenants")
+                    .header("content-type", "application/json")
+                    .header("cookie", format!("qk_session={raw}"))
+                    .body(Body::from(
+                        serde_json::json!({"name": name, "slug": slug}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    let calls = mock.calls();
+    assert!(
+        calls.contains(&"ensure_realm(kc-sweep-x)".to_string()),
+        "tenant X's own slug must be provisioned"
+    );
+    assert!(
+        calls.contains(&"ensure_realm(kc-sweep-y)".to_string()),
+        "tenant Y's own slug must be provisioned"
+    );
+    for call in &calls {
+        let has_x = call.contains("kc-sweep-x");
+        let has_y = call.contains("kc-sweep-y");
+        assert!(
+            !(has_x && has_y),
+            "a single provisioning call must never reference both tenants' slugs: {call}"
+        );
+    }
+}
+
+/// Best-effort provisioning: a `KeycloakAdmin` whose `ensure_realm` always
+/// errors must not stop tenant creation. The tenant and its Owner membership
+/// are already committed by the time provisioning runs, so the response
+/// (and the created tenant/membership) must be exactly as if Keycloak had
+/// never been configured — the boot backfill is what retries it.
+struct EnsureRealmFailsKeycloakAdmin;
+
+#[async_trait::async_trait]
+impl quark::keycloak::KeycloakAdmin for EnsureRealmFailsKeycloakAdmin {
+    async fn ensure_realm(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+        Err(quark::keycloak::KcError("ensure_realm unavailable".into()))
+    }
+    async fn ensure_client(
+        &self,
+        _slug: &str,
+        _redirect_uri: &str,
+    ) -> Result<(), quark::keycloak::KcError> {
+        unreachable!("provisioning must stop at ensure_realm's failure")
+    }
+    async fn ensure_groups_and_mapper(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+        unreachable!("provisioning must stop at ensure_realm's failure")
+    }
+    async fn ensure_user(
+        &self,
+        _slug: &str,
+        _email: &str,
+        _group: &str,
+    ) -> Result<String, quark::keycloak::KcError> {
+        unreachable!("provisioning must stop at ensure_realm's failure")
+    }
+    async fn send_set_password_email(
+        &self,
+        _slug: &str,
+        _user_id: &str,
+    ) -> Result<(), quark::keycloak::KcError> {
+        unreachable!("provisioning must stop at ensure_realm's failure")
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn create_tenant_survives_ensure_realm_failure() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (user_id, raw) = seed_session(&store, "kc-realm-fail-subject").await;
+
+    let app = app_over_with_keycloak(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+        Some(Arc::new(EnsureRealmFailsKeycloakAdmin) as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some("https://kc.example.com".to_string()),
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/admin/tenants")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::from(
+                    r#"{"name":"Realm Fail Co","slug":"kc-realm-fail-co"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "a Keycloak provisioning failure must never fail tenant creation"
+    );
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let tenant: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let tenant_id = tenant["id"].as_u64().unwrap();
+
+    let membership = store
+        .get_membership(user_id, TenantId(tenant_id))
+        .await
+        .unwrap()
+        .expect("the Owner membership must still be committed");
+    assert_eq!(membership.role, quark::tenant::Role::Owner);
+    assert!(
+        store
+            .get_oidc_config_bare(TenantId(tenant_id))
+            .await
+            .unwrap()
+            .is_none(),
+        "with ensure_realm failing, no oidc_config must be written (the backfill retries it)"
     );
 }

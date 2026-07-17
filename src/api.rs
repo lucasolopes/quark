@@ -79,6 +79,14 @@ pub struct AppState {
     /// login and cached here, keyed by tenant id. Invalidated (best-effort) by
     /// `admin_oidc_config_put`/`_delete`; also self-expires via TTL.
     pub oidc_tenants: crate::oidc::TenantOidcCache,
+    /// Keycloak admin runtime (multi-tenancy P2e), present only when
+    /// `QUARK_KEYCLOAK_BASE_URL` is configured. `None` disables the whole
+    /// feature; provisioning logic that calls this is Task 2, not built here.
+    pub keycloak: Option<Arc<dyn crate::keycloak::KeycloakAdmin>>,
+    /// Base URL Keycloak is reachable at, kept alongside `keycloak` so a
+    /// tenant's issuer can be derived (`keycloak::derive_issuer`) without
+    /// re-reading the environment.
+    pub keycloak_base_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2100,6 +2108,137 @@ pub async fn seed_tenant_subdomain(
     }
 }
 
+/// Logs one failed provisioning step as a single-line JSON error, the same
+/// shape `admin_tenants_create`'s subdomain seed already uses for its own
+/// best-effort failures.
+fn log_keycloak_step_error(tenant_id: u64, step: &str, err: impl std::fmt::Display) {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "keycloak_provision_error": err.to_string(),
+            "step": step,
+            "tenant_id": tenant_id,
+        })
+    );
+}
+
+/// Runs the full per-tenant Keycloak provisioning sequence (multi-tenancy
+/// P2e): realm, then client, then groups/mapper, then the owner user (in
+/// `quark-admins`) and their set-password email, then the tenant's
+/// `oidc_config`. Every step is best-effort: a failure is logged and
+/// provisioning stops at that step (the caller — `admin_tenants_create` or
+/// the boot backfill — never fails because of it), and every `KeycloakAdmin`
+/// method is idempotent (`409` = success in the real client), so calling
+/// this again on an already-provisioned tenant is a safe no-op, which is
+/// exactly how the boot backfill retries a tenant whose earlier attempt only
+/// got partway.
+///
+/// `owner_user_id` is `Some` when the caller (`admin_tenants_create`) knows
+/// who just became Owner — their email drives `ensure_user`. It is `None`
+/// for the boot backfill, which has no way to look up "the tenant's Owner"
+/// outside of that request context; in that case the admin-user step (and its
+/// set-password email) is skipped, but the realm/client/groups/`oidc_config`
+/// still get provisioned. The same skip happens when the owner's `User` row
+/// has no email on file.
+pub async fn provision_tenant_keycloak(
+    store: &Arc<dyn Store>,
+    kc: &dyn crate::keycloak::KeycloakAdmin,
+    base_url: &str,
+    tenant: &crate::tenant::Tenant,
+    owner_user_id: Option<u64>,
+) {
+    let redirect_uri = std::env::var("QUARK_OIDC_REDIRECT_URL").unwrap_or_default();
+    if let Err(e) = kc.ensure_realm(&tenant.slug).await {
+        log_keycloak_step_error(tenant.id.0, "ensure_realm", e);
+        return;
+    }
+    if let Err(e) = kc.ensure_client(&tenant.slug, &redirect_uri).await {
+        log_keycloak_step_error(tenant.id.0, "ensure_client", e);
+        return;
+    }
+    if let Err(e) = kc.ensure_groups_and_mapper(&tenant.slug).await {
+        log_keycloak_step_error(tenant.id.0, "ensure_groups_and_mapper", e);
+        return;
+    }
+    if let Some(uid) = owner_user_id {
+        match store.get_user_by_id(uid).await {
+            Ok(Some(u)) if !u.email.is_empty() => {
+                match kc.ensure_user(&tenant.slug, &u.email, "quark-admins").await {
+                    Ok(kc_user_id) => {
+                        if let Err(e) = kc.send_set_password_email(&tenant.slug, &kc_user_id).await
+                        {
+                            log_keycloak_step_error(tenant.id.0, "send_set_password_email", e);
+                        }
+                    }
+                    Err(e) => log_keycloak_step_error(tenant.id.0, "ensure_user", e),
+                }
+            }
+            Ok(_) => eprintln!(
+                "{}",
+                serde_json::json!({
+                    "keycloak_provision_skip": "owner email unavailable",
+                    "tenant_id": tenant.id.0,
+                })
+            ),
+            Err(e) => log_keycloak_step_error(tenant.id.0, "get_user_by_id", e),
+        }
+    }
+    // Public client + PKCE (see `HttpKeycloakAdmin::ensure_client`): no
+    // client secret exists for quark to hold, so this is always empty.
+    let cfg = crate::oidc::TenantOidcConfig {
+        tenant_id: tenant.id,
+        issuer: crate::keycloak::derive_issuer(base_url, &tenant.slug),
+        client_id: "quark".to_string(),
+        client_secret: String::new(),
+        scopes: vec![
+            "openid".to_string(),
+            "profile".to_string(),
+            "email".to_string(),
+        ],
+        admin_claim: "groups".to_string(),
+        admin_value: "quark-admins".to_string(),
+        readonly_value: "quark-readers".to_string(),
+        // Default-closed: only quark-admins/quark-readers members are
+        // admitted (see `oidc::passes_required_group`), never the open
+        // `Role::Member` fallback `claim_role` would otherwise grant to any
+        // authenticated realm user.
+        required_value: Some("quark-readers".to_string()),
+        post_login_url: None,
+    };
+    if let Err(e) = store.put_oidc_config(&cfg).await {
+        log_keycloak_step_error(tenant.id.0, "put_oidc_config", e);
+    }
+}
+
+/// Boot backfill (multi-tenancy P2e): provisions Keycloak for every tenant
+/// that has no `oidc_config` yet, via `provision_tenant_keycloak` — the same
+/// steps `admin_tenants_create` runs, so a tenant whose creation-time attempt
+/// only got partway is retried to completion here. Returns how many tenants
+/// were (re-)provisioned this pass. Mirrors the shape of the per-tenant
+/// subdomain backfill next to it in `main.rs`.
+pub async fn backfill_keycloak_provisioning(
+    store: &Arc<dyn Store>,
+    keycloak: &Arc<dyn crate::keycloak::KeycloakAdmin>,
+    base_url: &str,
+) -> Result<usize, StoreError> {
+    let tenants = store.list_tenants().await?;
+    let mut provisioned = 0usize;
+    for t in &tenants {
+        match store.get_oidc_config_bare(t.id).await {
+            Ok(Some(_)) => {} // already provisioned
+            Ok(None) => {
+                provision_tenant_keycloak(store, keycloak.as_ref(), base_url, t, None).await;
+                provisioned += 1;
+            }
+            Err(e) => eprintln!(
+                "{}",
+                serde_json::json!({ "keycloak_backfill_error": e.to_string(), "tenant_id": t.id.0 })
+            ),
+        }
+    }
+    Ok(provisioned)
+}
+
 #[derive(Deserialize)]
 struct CreateTenantReq {
     name: String,
@@ -2125,6 +2264,12 @@ async fn admin_tenants_create(
     let ip = client_ip(&headers, &st.real_ip_header, None);
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+    }
+    // Reject before any side effect: P2e turns the slug verbatim into a
+    // Keycloak realm name, an Admin-API URL path, and the derived OIDC
+    // issuer, so a bad slug must never reach the store or Keycloak.
+    if !crate::tenant::is_valid_slug(&req.slug) {
+        return (StatusCode::BAD_REQUEST, "invalid slug").into_response();
     }
     let id = match st.store.next_tenant_id().await {
         Ok(i) => i,
@@ -2168,6 +2313,20 @@ async fn admin_tenants_create(
                 serde_json::json!({ "tenant_subdomain_seed_error": e.to_string(), "tenant_id": id })
             ),
         }
+    }
+    // Keycloak realm auto-provisioning (multi-tenancy P2e): same best-effort
+    // shape as the subdomain seed above — the tenant and its Owner membership
+    // are already committed, so a provisioning failure here must not fail
+    // this 201 (the boot backfill retries it).
+    if let Some(kc) = &st.keycloak {
+        provision_tenant_keycloak(
+            &st.store,
+            kc.as_ref(),
+            st.keycloak_base_url.as_deref().unwrap_or_default(),
+            &tenant,
+            Some(user_id),
+        )
+        .await;
     }
     set_session_tenant(&st, &headers, crate::tenant::TenantId(id)).await;
     Json(tenant).into_response()
@@ -2496,6 +2655,36 @@ async fn admin_invites_create(
     if let Err(e) = st.store.create_invite(&invite).await {
         return conflict_or_503(e).into_response();
     }
+    // Keycloak realm provisioning (multi-tenancy P2e Task 3): best-effort,
+    // same shape as `provision_tenant_keycloak` — the invite row above is
+    // already committed, so a Keycloak failure here must never fail this
+    // response; the Owner can re-trigger by re-issuing the invite
+    // (`ensure_user`/`send_set_password_email` are idempotent). Model B never
+    // grants membership here: that only happens at first OIDC login, off the
+    // group claim (see `admin_invites_accept`'s split below).
+    if let Some(kc) = &st.keycloak {
+        let group = match req.role {
+            crate::tenant::Role::Admin => "quark-admins",
+            // `Role::Owner` is rejected above; Member and Viewer both land in
+            // the default-closed readers group so every invited role is
+            // admitted by the group gate `provision_tenant_keycloak` writes
+            // (`required_value: Some("quark-readers")`).
+            crate::tenant::Role::Member | crate::tenant::Role::Viewer => "quark-readers",
+            crate::tenant::Role::Owner => unreachable!("owner invites are rejected above"),
+        };
+        match st.store.get_tenant(p.tenant).await {
+            Ok(Some(tenant)) => match kc.ensure_user(&tenant.slug, &email, group).await {
+                Ok(kc_user_id) => {
+                    if let Err(e) = kc.send_set_password_email(&tenant.slug, &kc_user_id).await {
+                        log_keycloak_step_error(tenant.id.0, "send_set_password_email", e);
+                    }
+                }
+                Err(e) => log_keycloak_step_error(tenant.id.0, "ensure_user", e),
+            },
+            Ok(None) => log_keycloak_step_error(p.tenant.0, "get_tenant", "tenant not found"),
+            Err(e) => log_keycloak_step_error(p.tenant.0, "get_tenant", e),
+        }
+    }
     Json(CreateInviteResp {
         id,
         token,
@@ -2769,6 +2958,29 @@ async fn admin_invites_accept(
     // never causes a false mismatch.
     if user.email.to_ascii_lowercase() != inv.email {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    // Model B split (multi-tenancy P2e Task 3): with a `KeycloakAdmin`
+    // configured, membership is born at first OIDC login off the group claim
+    // (the P2d-A callback), never from accepting an invite. The checks above
+    // already confirmed the token is valid and belongs to this session's
+    // email, so this is a legitimate invite, but acceptance stops here: no
+    // `mark_invite_accepted` claim, no `put_membership`. The invite stays
+    // pending (re-acceptable) and the caller is pointed at their org's login
+    // instead. Model A (no Keycloak, P2c) is completely unchanged below.
+    if st.keycloak.is_some() {
+        let slug = match st.store.get_tenant(inv.tenant_id).await {
+            Ok(Some(t)) => t.slug,
+            // Data-integrity gap, not a backend failure: the invite points at
+            // a tenant that no longer exists. Fall back to an empty org hint
+            // rather than fail the whole accept.
+            Ok(None) => String::new(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
+        return Json(serde_json::json!({
+            "status": "login_required",
+            "login_url": format!("/admin/login?org={slug}"),
+        }))
+        .into_response();
     }
     match st.store.get_membership(user_id, inv.tenant_id).await {
         Ok(Some(_)) => return StatusCode::CONFLICT.into_response(),
@@ -4512,6 +4724,8 @@ mod tests {
             dns: Arc::new(crate::dns::NullDns),
             tenant_domain_suffix: None,
             oidc_tenants: crate::oidc::TenantOidcCache::new(),
+            keycloak: None,
+            keycloak_base_url: None,
         })
     }
 
@@ -4563,6 +4777,8 @@ mod tests {
             dns: Arc::new(crate::dns::NullDns),
             tenant_domain_suffix: None,
             oidc_tenants: crate::oidc::TenantOidcCache::new(),
+            keycloak: None,
+            keycloak_base_url: None,
         })
     }
 

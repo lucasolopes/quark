@@ -332,6 +332,43 @@ async fn main() {
     let dns: Arc<dyn quark::dns::Dns> =
         Arc::new(quark::dns::HickoryDns::new().expect("failed to build DNS resolver"));
 
+    // Keycloak-hosted auth (multi-tenancy P2e, opt-in via
+    // QUARK_KEYCLOAK_BASE_URL). Foundation only here: the trait + HTTP client +
+    // config. The provisioning flow that calls it on tenant creation is a
+    // later task.
+    let keycloak_config = quark::keycloak::KeycloakConfig::from_env();
+    let keycloak_base_url = keycloak_config.as_ref().map(|c| c.base_url.clone());
+    let keycloak: Option<Arc<dyn quark::keycloak::KeycloakAdmin>> = match keycloak_config {
+        Some(cfg) => {
+            let base = cfg.base_url.clone();
+            eprintln!("keycloak admin: enabled (base {base})");
+            Some(Arc::new(quark::keycloak::client::HttpKeycloakAdmin::new(
+                cfg,
+                quark::keycloak::client::keycloak_client(),
+            )))
+        }
+        None => {
+            eprintln!("keycloak admin: disabled (set QUARK_KEYCLOAK_BASE_URL to enable)");
+            None
+        }
+    };
+
+    // Keycloak tenant provisioning boot backfill (multi-tenancy P2e Task 2):
+    // every tenant that has no `oidc_config` yet (created before Keycloak was
+    // configured, or whose creation-time attempt only got partway) gets
+    // (re-)provisioned here. Idempotent and cheap, like the subdomain
+    // backfill above — safe to run on every replica.
+    if multi_tenant {
+        if let (Some(kc), Some(base)) = (&keycloak, &keycloak_base_url) {
+            match quark::api::backfill_keycloak_provisioning(&store, kc, base).await {
+                Ok(n) => eprintln!("keycloak tenant backfill: {n} provisioned"),
+                Err(e) => eprintln!(
+                    "WARNING: keycloak tenant backfill skipped (list_tenants failed: {e})"
+                ),
+            }
+        }
+    }
+
     let state = Arc::new(AppState {
         cache,
         store,
@@ -354,6 +391,8 @@ async fn main() {
         dns,
         tenant_domain_suffix,
         oidc_tenants: quark::oidc::TenantOidcCache::new(),
+        keycloak,
+        keycloak_base_url,
     });
     match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {

@@ -37,6 +37,8 @@ async fn pg_replica(url: &str) -> axum::Router {
         multi_tenant: false,
         tenant_domain_suffix: None,
         oidc_tenants: quark::oidc::TenantOidcCache::new(),
+        keycloak: None,
+        keycloak_base_url: None,
         cache,
         store,
         key: 0x1234,

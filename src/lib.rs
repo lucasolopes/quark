@@ -12,6 +12,7 @@ pub mod health;
 pub mod import;
 pub mod invalidate;
 pub mod invite;
+pub mod keycloak;
 pub mod oidc;
 pub mod password;
 pub mod permute;

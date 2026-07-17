@@ -35,6 +35,8 @@ async fn app_with_token(admin_token: Option<&str>) -> axum::Router {
         multi_tenant: false,
         tenant_domain_suffix: None,
         oidc_tenants: quark::oidc::TenantOidcCache::new(),
+        keycloak: None,
+        keycloak_base_url: None,
         cache,
         store,
         key: 0x1234,
