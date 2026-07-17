@@ -8,6 +8,7 @@ import type {
   ListTokensResponse, CreateTokenRequest, CreateTokenResponse,
   ListPixelsResponse, CreatePixelRequest, Pixel,
   WellknownName, MeResponse, SheetsStatus,
+  InviteView, CreateInviteResponse,
 } from "./types";
 
 /**
@@ -199,5 +200,22 @@ export const api = {
   async sheetsDisconnect(): Promise<void> {
     const res = await req("/admin/integrations/sheets", { method: "DELETE" });
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  /** Pending and accepted team invites for the current workspace (cloud only). */
+  async listInvites(): Promise<InviteView[]> {
+    return jsonOrThrow(await req("/admin/invites"));
+  },
+  /** Invites an email to the current workspace with the given role. Returns the invite plus its raw token (shown once, the copyable invite link). */
+  async createInvite(email: string, role: string): Promise<CreateInviteResponse> {
+    return jsonOrThrow(await req("/admin/invites", { method: "POST", body: JSON.stringify({ email, role }) }));
+  },
+  /** Revokes a pending invite. */
+  async revokeInvite(id: number): Promise<void> {
+    const res = await req(`/admin/invites/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  /** Accepts an invite by token, granting the current user membership in its workspace. 409 if already a member, 410/404 if expired or unknown. */
+  async acceptInvite(token: string): Promise<{ tenant_id: number; role: string }> {
+    return jsonOrThrow(await req(`/admin/invites/${encodeURIComponent(token)}/accept`, { method: "POST" }));
   },
 };

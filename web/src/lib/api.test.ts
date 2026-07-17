@@ -96,3 +96,38 @@ describe("workspace endpoints", () => {
     await expect(api.switchWorkspace(7)).rejects.toMatchObject({ status: 403 });
   });
 });
+
+describe("invite endpoints", () => {
+  beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+
+  it("createInvite posts email+role to /admin/invites and returns the token", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ id: 1, token: "inv_abc", email: "a@b.com", role: "member", expires: 123 }),
+        { status: 200 },
+      ),
+    );
+    const r = await api.createInvite("a@b.com", "member");
+    expect(r.token).toBe("inv_abc");
+    const [url, init] = spy.mock.calls[0];
+    expect(String(url)).toContain("/admin/invites");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ email: "a@b.com", role: "member" });
+  });
+
+  it("acceptInvite posts to the token accept path and returns the membership", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ tenant_id: 9, role: "member" }), { status: 200 }),
+    );
+    const r = await api.acceptInvite("inv_abc");
+    expect(r).toEqual({ tenant_id: 9, role: "member" });
+    const [url, init] = spy.mock.calls[0];
+    expect(String(url)).toContain("/admin/invites/inv_abc/accept");
+    expect(init?.method).toBe("POST");
+  });
+
+  it("acceptInvite throws ApiError(409) when the user is already a member", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 409 }));
+    await expect(api.acceptInvite("inv_abc")).rejects.toMatchObject({ status: 409 });
+  });
+});

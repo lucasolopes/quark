@@ -80,6 +80,23 @@ export interface MeResponse {
   memberships?: Membership[];
   current_tenant?: number | null;
 }
+/** A pending or accepted team invite (cloud only), for the Members screen. */
+export interface InviteView {
+  id: number;
+  email: string;
+  role: string;
+  expires: number;
+  created: number;
+}
+/** Response of `POST /admin/invites`: the invite record plus the raw token, shown once (the copyable invite link). */
+export interface CreateInviteResponse {
+  id: number;
+  token: string;
+  email: string;
+  role: string;
+  expires: number;
+}
+
 export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; variants?: Variant[]; app_ios?: string | null; app_android?: string | null; folder?: string | null; fallback_url?: string | null; password?: string | null; }
 
 /** The 5 link lifecycle events a webhook subscription can be notified about. */
