@@ -283,6 +283,7 @@ fn cloud_state(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>) -> Arc<AppSt
         sheets_api: None,
         oidc_configured: true,
         multi_tenant: true,
+        tenant_domain_suffix: None,
         cache,
         store,
         key: 0x1234,

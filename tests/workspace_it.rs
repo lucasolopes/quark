@@ -49,6 +49,18 @@ fn app_over(
     sink: Arc<dyn AnalyticsSink>,
     multi_tenant: bool,
 ) -> axum::Router {
+    app_over_with_suffix(store, sink, multi_tenant, None)
+}
+
+/// Same as `app_over`, but with a configurable `tenant_domain_suffix`
+/// (multi-tenancy P3-completion): the auto per-tenant subdomain seed on
+/// `admin_tenants_create` only fires when this is `Some`.
+fn app_over_with_suffix(
+    store: Arc<dyn Store>,
+    sink: Arc<dyn AnalyticsSink>,
+    multi_tenant: bool,
+    tenant_domain_suffix: Option<String>,
+) -> axum::Router {
     let cache = Cache::new(store.clone(), 1000, None);
     let host_router = Arc::new(quark::domain_router::HostRouter::new(
         store.clone(),
@@ -62,6 +74,7 @@ fn app_over(
         sheets_api: None,
         oidc_configured: true,
         multi_tenant,
+        tenant_domain_suffix,
         cache,
         store,
         key: 0x1234,
@@ -569,5 +582,91 @@ async fn oss_admin_me_shape_unchanged() {
         me["current_tenant"],
         serde_json::Value::Null,
         "OSS must never surface a current_tenant"
+    );
+}
+
+/// `POST /admin/tenants` (cloud, with `QUARK_TENANT_DOMAIN_SUFFIX` set): the
+/// self-serve create seeds the tenant's automatic subdomain as a Verified
+/// `domains` row, end to end through the real handler (not just the store
+/// helper directly). `get_domain_by_host` resolves it to the new tenant.
+#[tokio::test]
+#[serial]
+async fn create_tenant_seeds_subdomain_when_suffix_configured() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_user_id, raw) = seed_session(&store, "subdomain-seed-subject").await;
+
+    let app = app_over_with_suffix(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+        Some("quarkus.test".to_string()),
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/admin/tenants")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::from(
+                    r#"{"name":"Subdomain Co","slug":"subdomain-co"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let domain = store
+        .get_domain_by_host("subdomain-co.quarkus.test")
+        .await
+        .unwrap()
+        .expect("creating a tenant must seed its automatic subdomain");
+    assert_eq!(domain.status, quark::domain::DomainStatus::Verified);
+}
+
+/// OSS/no-suffix parity: without `tenant_domain_suffix` configured, creating
+/// a tenant never seeds any subdomain row — the gate is the config, not the
+/// mode.
+#[tokio::test]
+#[serial]
+async fn create_tenant_seeds_no_subdomain_without_suffix() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_user_id, raw) = seed_session(&store, "no-suffix-subject").await;
+
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/admin/tenants")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::from(
+                    r#"{"name":"No Suffix Co","slug":"no-suffix-co"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    assert!(
+        store
+            .get_domain_by_host("no-suffix-co.quarkus.test")
+            .await
+            .unwrap()
+            .is_none(),
+        "with no suffix configured, no subdomain row must ever be seeded"
     );
 }

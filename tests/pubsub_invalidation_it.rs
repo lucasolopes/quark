@@ -66,6 +66,7 @@ async fn node(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>, url: &str) ->
         sheets_api: None,
         oidc_configured: false,
         multi_tenant: false,
+        tenant_domain_suffix: None,
         cache,
         store,
         key: 0,

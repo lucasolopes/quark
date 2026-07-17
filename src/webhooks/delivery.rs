@@ -1161,6 +1161,9 @@ mod tests {
         ) -> Result<Option<crate::tenant::Tenant>, StoreError> {
             unimplemented!()
         }
+        async fn list_tenants(&self) -> Result<Vec<crate::tenant::Tenant>, StoreError> {
+            unimplemented!()
+        }
         async fn next_user_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }

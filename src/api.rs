@@ -69,6 +69,11 @@ pub struct AppState {
     /// TXT lookup seam for custom-domain verification (multi-tenancy P3).
     /// Only `admin_domains_verify` calls it; never on the redirect path.
     pub dns: Arc<dyn Dns>,
+    /// Base suffix for the auto per-tenant subdomain (multi-tenancy P3-completion),
+    /// e.g. `quarkus.com.br` from `QUARK_TENANT_DOMAIN_SUFFIX`. Cloud-only; `None`
+    /// disables the whole subdomain-auto feature (no seed on create, no boot
+    /// backfill, `/admin/me` reports `null`).
+    pub tenant_domain_suffix: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1769,12 +1774,17 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
                 "oidc_enabled": oidc_enabled,
                 "memberships": memberships,
                 "current_tenant": current_tenant,
+                "tenant_domain_suffix": st.tenant_domain_suffix,
             }))
             .into_response();
         }
     }
-    Json(serde_json::json!({ "authenticated": false, "oidc_enabled": oidc_enabled }))
-        .into_response()
+    Json(serde_json::json!({
+        "authenticated": false,
+        "oidc_enabled": oidc_enabled,
+        "tenant_domain_suffix": st.tenant_domain_suffix,
+    }))
+    .into_response()
 }
 
 /// Resolves the session cookie to its `user_id`, independent of scopes. Used
@@ -1820,6 +1830,49 @@ fn conflict_or_503(e: StoreError) -> StatusCode {
     match e {
         StoreError::UniqueViolation => StatusCode::CONFLICT,
         _ => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+/// The host of a tenant's automatic subdomain (multi-tenancy P3-completion),
+/// e.g. `subdomain_host("acme", "quarkus.com.br") == "acme.quarkus.com.br"`.
+/// Lowercased so it matches the lookup convention every other host in
+/// `domains` follows (`get_domain_by_host`/`HostRouter` always query lowercase).
+pub fn subdomain_host(slug: &str, suffix: &str) -> String {
+    format!("{slug}.{suffix}").to_ascii_lowercase()
+}
+
+/// Ensures the tenant's automatic subdomain exists as a Verified `domains`
+/// row (multi-tenancy P3-completion). Called both on tenant creation and by
+/// the boot-time backfill (`main.rs`) for pre-existing tenants.
+///
+/// Deliberately blind-inserts via `next_domain_id()` + `put_domain` rather
+/// than checking `get_domain_by_host` first: the id comes from the same
+/// sequence real custom domains use, so a fresh id never collides, and the
+/// `host` UNIQUE constraint is the actual idempotency guard — a second seed
+/// attempt hits `StoreError::UniqueViolation`, which is treated as success
+/// (the row already exists, nothing left to do). Subdomains aren't
+/// DNS-verified (there's no TXT record to check — the app itself owns
+/// `*.<suffix>`), so `token` is empty and `status` starts `Verified`.
+pub async fn seed_tenant_subdomain(
+    store: &Arc<dyn Store>,
+    tenant_id: crate::tenant::TenantId,
+    slug: &str,
+    suffix: &str,
+) -> Result<(), StoreError> {
+    let id = store.next_domain_id().await?;
+    let ts = now();
+    let domain = Domain {
+        id,
+        tenant_id,
+        host: subdomain_host(slug, suffix),
+        token: String::new(),
+        status: DomainStatus::Verified,
+        created: ts,
+        verified_at: Some(ts),
+    };
+    match store.put_domain(&domain).await {
+        Ok(()) | Err(StoreError::UniqueViolation) => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
@@ -1874,6 +1927,23 @@ async fn admin_tenants_create(
         .is_err()
     {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    // Auto per-tenant subdomain (multi-tenancy P3-completion): best-effort —
+    // a failure here must not fail the tenant creation itself, since the
+    // tenant and its Owner membership are already committed. The panel falls
+    // back to the shared host until this is retried (boot backfill covers it).
+    if let Some(suffix) = &st.tenant_domain_suffix {
+        match seed_tenant_subdomain(&st.store, tenant.id, &tenant.slug, suffix).await {
+            Ok(()) => {
+                st.host_router
+                    .invalidate(&subdomain_host(&tenant.slug, suffix))
+                    .await
+            }
+            Err(e) => eprintln!(
+                "{}",
+                serde_json::json!({ "tenant_subdomain_seed_error": e.to_string(), "tenant_id": id })
+            ),
+        }
     }
     set_session_tenant(&st, &headers, crate::tenant::TenantId(id)).await;
     Json(tenant).into_response()
@@ -4065,6 +4135,7 @@ mod tests {
             multi_tenant: false,
             host_router,
             dns: Arc::new(crate::dns::NullDns),
+            tenant_domain_suffix: None,
         })
     }
 

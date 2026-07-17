@@ -859,6 +859,16 @@ impl Store for LmdbStore {
         }
     }
 
+    async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        for entry in self.tenants.iter(&rtxn)? {
+            let (_, bytes) = entry?;
+            out.push(serde_json::from_slice(bytes)?);
+        }
+        Ok(out)
+    }
+
     async fn next_user_id(&self) -> Result<u64, StoreError> {
         let mut wtxn = self.env.write_txn()?;
         let cur = self.meta.get(&wtxn, "next_user_id")?.unwrap_or(0);

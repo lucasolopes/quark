@@ -211,6 +211,7 @@ fn cloud_app(
         sheets_api: None,
         oidc_configured: false,
         multi_tenant: true,
+        tenant_domain_suffix: None,
         cache,
         store,
         key: KEY,
@@ -572,6 +573,7 @@ async fn admin_app_for_tenant(
         sheets_api: None,
         oidc_configured: false,
         multi_tenant,
+        tenant_domain_suffix: None,
         cache,
         store: store_dyn,
         key: KEY,
@@ -1059,6 +1061,7 @@ async fn wellknown_ignores_host_in_oss() {
         sheets_api: None,
         oidc_configured: false,
         multi_tenant: false,
+        tenant_domain_suffix: None,
         cache,
         store: store_dyn,
         key: KEY,
@@ -1133,4 +1136,271 @@ async fn create_blocks_target_matching_any_registered_domain() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+// --- P3-completion Task 1: auto per-tenant subdomain -----------------------
+// A tenant's subdomain is just a normal Verified `domains` row (`host =
+// <slug>.<suffix>`), seeded via `quark::api::seed_tenant_subdomain`. Since
+// it's a real `domains` row, `get_domain_by_host` (isolation, wellknown, SSRF)
+// already works unchanged — these tests only cover the seeding itself.
+
+/// `subdomain_host` lowercases and joins slug + suffix exactly like every
+/// other host `get_domain_by_host`/`HostRouter` looks up.
+#[test]
+fn subdomain_host_lowercases_and_joins() {
+    assert_eq!(
+        quark::api::subdomain_host("Acme", "Quarkus.COM.br"),
+        "acme.quarkus.com.br"
+    );
+}
+
+/// Seeding a tenant's subdomain materializes a Verified `domains` row that
+/// `get_domain_by_host` resolves to the right tenant.
+#[tokio::test]
+#[serial]
+async fn seed_tenant_subdomain_materializes_verified_domain() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store: Arc<dyn Store> = Arc::new(store);
+    let tenant_id = {
+        let id = store.next_tenant_id().await.unwrap();
+        let tenant_id = TenantId(id);
+        store
+            .put_tenant(&Tenant {
+                id: tenant_id,
+                name: "Seed Co".to_string(),
+                slug: "seed-co".to_string(),
+                created: 0,
+            })
+            .await
+            .unwrap();
+        tenant_id
+    };
+
+    quark::api::seed_tenant_subdomain(&store, tenant_id, "seed-co", "quarkus.test")
+        .await
+        .unwrap();
+
+    let domain = store
+        .get_domain_by_host("seed-co.quarkus.test")
+        .await
+        .unwrap()
+        .expect("subdomain must resolve via get_domain_by_host");
+    assert_eq!(domain.tenant_id, tenant_id);
+    assert_eq!(domain.status, DomainStatus::Verified);
+    assert!(domain.verified_at.is_some());
+    assert_eq!(
+        domain.token, "",
+        "subdomains aren't DNS-verified, so the token is empty"
+    );
+}
+
+/// Seeding the same tenant's subdomain twice is idempotent: the second call
+/// hits the `host` UNIQUE constraint (mapped to `StoreError::UniqueViolation`)
+/// and is treated as success, leaving exactly one row.
+#[tokio::test]
+#[serial]
+async fn seed_tenant_subdomain_is_idempotent() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store: Arc<dyn Store> = Arc::new(store);
+    let tenant_id = {
+        let id = store.next_tenant_id().await.unwrap();
+        let tenant_id = TenantId(id);
+        store
+            .put_tenant(&Tenant {
+                id: tenant_id,
+                name: "Twice Co".to_string(),
+                slug: "twice-co".to_string(),
+                created: 0,
+            })
+            .await
+            .unwrap();
+        tenant_id
+    };
+
+    quark::api::seed_tenant_subdomain(&store, tenant_id, "twice-co", "quarkus.test")
+        .await
+        .unwrap();
+    // 2nd seed of the same tenant: must succeed (not surface the unique
+    // violation to the caller) and must not create a 2nd row.
+    quark::api::seed_tenant_subdomain(&store, tenant_id, "twice-co", "quarkus.test")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store.list_domains(tenant_id).await.unwrap().len(),
+        1,
+        "seeding twice must not duplicate the subdomain row"
+    );
+}
+
+/// A `list_tenants` + "seed the ones missing a subdomain" pass — the shape
+/// the boot backfill in `main.rs` runs — seeds a pre-existing tenant exactly
+/// once, whether it runs once or twice (mirrors the idempotent boot).
+#[tokio::test]
+#[serial]
+async fn backfill_shape_seeds_preexisting_tenant_idempotently() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store: Arc<dyn Store> = Arc::new(store);
+    let id = store.next_tenant_id().await.unwrap();
+    let tenant_id = TenantId(id);
+    store
+        .put_tenant(&Tenant {
+            id: tenant_id,
+            name: "Backfill Co".to_string(),
+            slug: "backfill-co".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+
+    let suffix = "quarkus.test";
+    async fn run_backfill_pass(store: &Arc<dyn Store>, suffix: &str) {
+        for t in store.list_tenants().await.unwrap() {
+            let host = quark::api::subdomain_host(&t.slug, suffix);
+            if store.get_domain_by_host(&host).await.unwrap().is_none() {
+                quark::api::seed_tenant_subdomain(store, t.id, &t.slug, suffix)
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    // Other tenants that may already exist in this fresh DB (e.g. the seeded
+    // default tenant 0) must not confuse the assertion below, so scope it to
+    // just the one we created.
+    run_backfill_pass(&store, suffix).await;
+    run_backfill_pass(&store, suffix).await;
+
+    assert_eq!(
+        store.list_domains(tenant_id).await.unwrap().len(),
+        1,
+        "running the backfill pass twice must not duplicate the subdomain row"
+    );
+    let domain = store
+        .get_domain_by_host("backfill-co.quarkus.test")
+        .await
+        .unwrap()
+        .expect("backfill must seed the pre-existing tenant's subdomain");
+    assert_eq!(domain.tenant_id, tenant_id);
+}
+
+/// `/admin/me` reports the configured suffix (or `null` when unset) so the
+/// panel can build subdomain URLs without its own env var.
+#[tokio::test]
+#[serial]
+async fn admin_me_reports_tenant_domain_suffix() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let user_id = store.next_user_id().await.unwrap();
+    store
+        .put_user(&quark::tenant::User {
+            id: user_id,
+            subject: "admin-me-suffix-subject".to_string(),
+            email: "admin-me-suffix@example.com".to_string(),
+            display: "Suffix Tester".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    let raw = quark::auth::generate_token();
+    let session = quark::auth::Session {
+        token_hash: hash_token(&raw),
+        subject: "admin-me-suffix-subject".to_string(),
+        display: "Suffix Tester".to_string(),
+        scopes: vec![],
+        created: 0,
+        expires: quark::now() + 3600,
+        tenant_id: TenantId(0),
+        user_id,
+    };
+    store.put_session(TenantId(0), &session).await.unwrap();
+
+    let app = cloud_app_with_suffix(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        None,
+        Some("quarkus.test".to_string()),
+    );
+    let resp = app
+        .oneshot(
+            Request::get("/admin/me")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["tenant_domain_suffix"], "quarkus.test");
+}
+
+/// OSS/no-suffix parity: `seed_tenant_subdomain` is simply never called when
+/// `tenant_domain_suffix` is `None` — no row is seeded, no behavior changes.
+/// This is the ungated (no DB needed) half of the contract: the gate lives at
+/// the call sites (`admin_tenants_create`, the boot backfill), not in the
+/// helper itself, so this just documents the "unset -> no seed" invariant
+/// callers rely on.
+#[test]
+fn no_suffix_means_no_seed_call_site_contract() {
+    let suffix: Option<String> = None;
+    let mut seeded = false;
+    if let Some(_s) = &suffix {
+        seeded = true;
+    }
+    assert!(!seeded, "with no suffix configured, seeding must never run");
+}
+
+/// Same `cloud_app` builder as above, but with a `tenant_domain_suffix`.
+fn cloud_app_with_suffix(
+    store: Arc<dyn Store>,
+    sink: Arc<dyn AnalyticsSink>,
+    public_host: Option<String>,
+    tenant_domain_suffix: Option<String>,
+) -> axum::Router {
+    let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        public_host.clone(),
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: true,
+        multi_tenant: true,
+        tenant_domain_suffix,
+        cache,
+        store,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host,
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    router(state)
 }
