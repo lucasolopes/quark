@@ -4,6 +4,7 @@ pub mod postgres;
 use crate::analytics::AnalyticsSink;
 use crate::auth::ApiToken;
 use crate::domain::{Domain, DomainStatus};
+use crate::invite::Invite;
 use crate::pixel::PixelConfig;
 use crate::tenant::{Membership, Tenant, TenantId, User};
 use crate::webhooks::WebhookSubscription;
@@ -577,6 +578,36 @@ pub trait Store: Send + Sync + 'static {
     /// Deletes a domain, scoped to `tenant`.
     async fn delete_domain(&self, tenant: TenantId, id: u64) -> Result<(), StoreError>;
 
+    // --- Team invites (multi-tenancy P2c), cloud-only ---
+    /// Allocates the next global invite id.
+    async fn next_invite_id(&self) -> Result<u64, StoreError>;
+    /// Inserts an invite. Runs on the bare pool: the accept flow is
+    /// tenant-agnostic until the invite is looked up.
+    async fn create_invite(&self, inv: &Invite) -> Result<(), StoreError>;
+    /// Looks up a pending, unexpired invite by its token hash, across all
+    /// tenants. Runs on the bare pool with no tenant scoping (mirrors
+    /// `get_domain_by_host`/`get_api_token_by_hash`): the accept flow only has
+    /// the raw token before it knows which tenant the invite belongs to.
+    /// Returns `None` for an invite that was already accepted
+    /// (`accepted_at IS NOT NULL`) or has expired (`expires < now`).
+    async fn get_invite_by_hash(
+        &self,
+        token_hash: &str,
+        now: u64,
+    ) -> Result<Option<Invite>, StoreError>;
+    /// Marks an invite accepted by `accepted_by` at `now`. Runs on the bare
+    /// pool, same reasoning as `create_invite`/`get_invite_by_hash`.
+    async fn mark_invite_accepted(
+        &self,
+        id: u64,
+        accepted_by: u64,
+        now: u64,
+    ) -> Result<(), StoreError>;
+    /// Lists pending invites owned by `tenant`.
+    async fn list_invites(&self, tenant: TenantId) -> Result<Vec<Invite>, StoreError>;
+    /// Deletes an invite, scoped to `tenant`.
+    async fn delete_invite(&self, tenant: TenantId, id: u64) -> Result<(), StoreError>;
+
     /// Durable webhook outbox (scale-audit #3), Postgres-only. Inserts one
     /// delivery row per (event, subscription) with `ON CONFLICT (delivery_key)
     /// DO NOTHING`, so a duplicate enqueue of the same (event, sub) is a no-op.
@@ -819,6 +850,12 @@ impl ScopedStore {
     }
     pub async fn delete_wellknown(&self, name: &str) -> Result<(), StoreError> {
         self.inner.delete_wellknown(self.tenant, name).await
+    }
+    pub async fn list_invites(&self) -> Result<Vec<Invite>, StoreError> {
+        self.inner.list_invites(self.tenant).await
+    }
+    pub async fn delete_invite(&self, id: u64) -> Result<(), StoreError> {
+        self.inner.delete_invite(self.tenant, id).await
     }
 }
 

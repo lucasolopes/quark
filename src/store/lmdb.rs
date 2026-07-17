@@ -968,6 +968,46 @@ impl Store for LmdbStore {
         Err(StoreError::Unsupported)
     }
 
+    // Team invites (P2c) are cloud-only, same reasoning as custom domains
+    // above: OSS is single-tenant (no one to invite), and the invite
+    // endpoints are gated behind `multi_tenant`, so these are never actually
+    // invoked on this backend.
+    async fn next_invite_id(&self) -> Result<u64, StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn create_invite(&self, _inv: &crate::invite::Invite) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn get_invite_by_hash(
+        &self,
+        _token_hash: &str,
+        _now: u64,
+    ) -> Result<Option<crate::invite::Invite>, StoreError> {
+        Ok(None)
+    }
+
+    async fn mark_invite_accepted(
+        &self,
+        _id: u64,
+        _accepted_by: u64,
+        _now: u64,
+    ) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn list_invites(
+        &self,
+        _tenant: TenantId,
+    ) -> Result<Vec<crate::invite::Invite>, StoreError> {
+        Ok(Vec::new())
+    }
+
+    async fn delete_invite(&self, _tenant: TenantId, _id: u64) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
     // The durable webhook outbox is Postgres-only. On the single-node LMDB
     // backend every event (lifecycle and clicked) rides the in-memory
     // best-effort channel, and `main.rs` never spawns the relay nor routes
