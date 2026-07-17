@@ -2654,6 +2654,10 @@ async fn admin_sso_domains_create(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
+    let ip = client_ip(&headers, &st.real_ip_header, None);
+    if !st.ratelimiter.check(&ip, now()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+    }
     match st.store.get_oidc_config_bare(p.tenant).await {
         Ok(Some(_)) => {}
         Ok(None) => return (StatusCode::CONFLICT, "SSO not configured").into_response(),
@@ -2749,6 +2753,77 @@ async fn admin_sso_domains_delete(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Deserialize)]
+struct DiscoverParams {
+    email: Option<String>,
+}
+
+/// Response for `GET /admin/sso/discover`. Deliberately carries only the
+/// tenant's slug (already public via `/admin/login?org=<slug>`) and never
+/// `tenant_id`, and is shaped identically whether the email is malformed, the
+/// domain is unknown, still pending, or its tenant lost its `oidc_config` --
+/// an unauthenticated caller must not be able to tell those cases apart
+/// (anti-enumeration; mirrors `org_login_not_found`'s uniform-404 intent, but
+/// this endpoint is a lookup so it stays `200` throughout).
+#[derive(Serialize, Default)]
+struct DiscoverResp {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    org: Option<String>,
+}
+
+/// `GET /admin/sso/discover?email=<email>`: Home Realm Discovery (cloud
+/// only, PUBLIC -- no `admin_guard`). Given an email, resolves its domain to
+/// a verified SSO email domain and returns the owning tenant's slug so the
+/// login UI can send the user straight to `/admin/login?org=<slug>`.
+///
+/// Routes ONLY on a `Verified` domain whose tenant still has an
+/// `oidc_config` and a resolvable slug; every other outcome (missing/
+/// malformed email, unknown domain, still-`Pending`, or a tenant that lost
+/// its `oidc_config`/no longer exists) returns the same empty `{}` -- never a
+/// 404 or a distinguishable error, so this endpoint cannot be used to probe
+/// which domains or tenants exist.
+async fn sso_discover(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(params): Query<DiscoverParams>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let ip = client_ip(&headers, &st.real_ip_header, None);
+    if !st.ratelimiter.check(&ip, now()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+    }
+    let empty = || Json(DiscoverResp::default()).into_response();
+    let Some(email) = params.email else {
+        return empty();
+    };
+    let Some(domain) = normalize_email_domain(&email) else {
+        return empty();
+    };
+    let row = match st.store.get_sso_domain_bare(&domain).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return empty(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if row.status != DomainStatus::Verified {
+        return empty();
+    }
+    match st.store.get_oidc_config_bare(row.tenant_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return empty(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    match st.store.get_tenant(row.tenant_id).await {
+        Ok(Some(tenant)) => Json(DiscoverResp {
+            org: Some(tenant.slug),
+        })
+        .into_response(),
+        Ok(None) => empty(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
 }
 
 // --- Team invites (multi-tenancy P2c), cloud-only ---
@@ -4742,6 +4817,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             "/admin/sso-domains/:id/verify",
             post(admin_sso_domains_verify),
         )
+        .route("/admin/sso/discover", get(sso_discover))
         .route(
             "/admin/invites",
             get(admin_invites_list).post(admin_invites_create),

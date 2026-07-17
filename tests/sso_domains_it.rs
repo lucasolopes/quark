@@ -796,3 +796,335 @@ async fn insufficient_scope_is_403() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+// --- LUC-57 Task 3: public discovery endpoint -------------------------------
+
+/// Builds a router for the PUBLIC `/admin/sso/discover` endpoint: no API
+/// token is seeded (the endpoint takes none), but the caller picks the
+/// rate limiter so both the permissive default and a tripped-burst case can
+/// be exercised.
+fn discover_app(
+    store: Arc<PostgresStore>,
+    multi_tenant: bool,
+    ratelimiter: quark::abuse::ratelimit::RateLimiter,
+) -> axum::Router {
+    let store_dyn: Arc<dyn Store> = store.clone();
+    let sink_dyn: Arc<dyn AnalyticsSink> = store;
+    let cache = Cache::new(store_dyn.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store_dyn.clone(),
+        Some("quark.example.com".to_string()),
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: false,
+        multi_tenant,
+        tenant_domain_suffix: None,
+        oidc_tenants: quark::oidc::TenantOidcCache::new(),
+        keycloak: None,
+        keycloak_base_url: None,
+        cache,
+        store: store_dyn,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink: sink_dyn,
+        admin_token: None,
+        ratelimiter,
+        block_private: true,
+        public_host: Some("quark.example.com".to_string()),
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    router(state)
+}
+
+async fn discover(app: &axum::Router, email: &str) -> (StatusCode, serde_json::Value, String) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/admin/sso/discover?email={}",
+                urlencoding_light(email)
+            ))
+            .header("cf-connecting-ip", "5.5.5.5")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let raw = String::from_utf8_lossy(&body).to_string();
+    let json = if body.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null)
+    };
+    (status, json, raw)
+}
+
+/// Minimal query-param encoding sufficient for the test emails used here
+/// (only `@` needs escaping to survive as a single query value).
+fn urlencoding_light(s: &str) -> String {
+    s.replace('@', "%40")
+}
+
+/// A verified domain whose tenant has an `oidc_config` resolves to that
+/// tenant's slug, and the response body carries `org` only -- no
+/// `tenant_id` anywhere.
+#[tokio::test]
+#[serial]
+async fn discover_verified_with_oidc_returns_org_slug() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "discover-a").await;
+    seed_oidc_config(&store, tenant).await;
+    let id = put(&store, tenant, "acme.com").await;
+    store
+        .set_sso_domain_status(tenant, id, DomainStatus::Verified, Some(1))
+        .await
+        .unwrap();
+
+    let app = discover_app(
+        store,
+        true,
+        quark::abuse::ratelimit::RateLimiter::disabled(),
+    );
+    let (status, body, raw) = discover(&app, "user@acme.com").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["org"], "discover-a");
+    assert!(!raw.contains("tenant_id"), "must never leak tenant_id");
+}
+
+/// A `Pending` (unverified) domain must never route -- anti-hijack
+/// guarantee -- so discovery returns the uniform empty body.
+#[tokio::test]
+#[serial]
+async fn discover_pending_domain_returns_empty() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "discover-pending").await;
+    seed_oidc_config(&store, tenant).await;
+    put(&store, tenant, "pending.com").await; // left Pending
+
+    let app = discover_app(
+        store,
+        true,
+        quark::abuse::ratelimit::RateLimiter::disabled(),
+    );
+    let (status, body, raw) = discover(&app, "user@pending.com").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!({}));
+    assert!(!raw.contains("tenant_id"));
+}
+
+/// An unknown domain returns the same uniform empty body as every other
+/// non-match -- an unauthenticated caller cannot distinguish "no such
+/// domain" from "domain exists but isn't ready".
+#[tokio::test]
+#[serial]
+async fn discover_unknown_domain_returns_empty() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let app = discover_app(
+        store,
+        true,
+        quark::abuse::ratelimit::RateLimiter::disabled(),
+    );
+    let (status, body, raw) = discover(&app, "user@nowhere.example").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!({}));
+    assert!(!raw.contains("tenant_id"));
+}
+
+/// A verified domain whose tenant subsequently lost its `oidc_config` (SSO
+/// disabled) must not route either -- there'd be nowhere for the login to
+/// go, and this would otherwise reveal that the domain is claimed.
+#[tokio::test]
+#[serial]
+async fn discover_verified_without_oidc_config_returns_empty() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "discover-noconf").await;
+    seed_oidc_config(&store, tenant).await;
+    let id = put(&store, tenant, "noconf.com").await;
+    store
+        .set_sso_domain_status(tenant, id, DomainStatus::Verified, Some(1))
+        .await
+        .unwrap();
+    // The tenant later drops its OIDC config (SSO disabled).
+    store.delete_oidc_config(tenant).await.unwrap();
+
+    let app = discover_app(
+        store,
+        true,
+        quark::abuse::ratelimit::RateLimiter::disabled(),
+    );
+    let (status, body, raw) = discover(&app, "user@noconf.com").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!({}));
+    assert!(!raw.contains("tenant_id"));
+}
+
+/// A malformed email (no `@`, or otherwise not `normalize_email_domain`-able)
+/// returns the same uniform empty body -- never a 400.
+#[tokio::test]
+#[serial]
+async fn discover_malformed_email_returns_empty() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let app = discover_app(
+        store,
+        true,
+        quark::abuse::ratelimit::RateLimiter::disabled(),
+    );
+    let (status, body, raw) = discover(&app, "nope").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!({}));
+    assert!(!raw.contains("tenant_id"));
+}
+
+/// OSS (`multi_tenant = false`) 404s the discovery endpoint entirely.
+#[tokio::test]
+#[serial]
+async fn discover_404_in_oss() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let app = discover_app(
+        store,
+        false,
+        quark::abuse::ratelimit::RateLimiter::disabled(),
+    );
+    let (status, _, _) = discover(&app, "user@acme.com").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Per-IP rate limiting is consulted on the discovery path: with a
+/// one-request burst, the first call succeeds and the second (same IP)
+/// trips `429` (mirrors `api_it::rate_limit_429_after_exceeding`).
+#[tokio::test]
+#[serial]
+async fn discover_rate_limit_429_after_exceeding() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let app = discover_app(store, true, quark::abuse::ratelimit::RateLimiter::memory(1));
+    let (status1, _, _) = discover(&app, "user@acme.com").await;
+    assert_eq!(status1, StatusCode::OK);
+    let (status2, _, _) = discover(&app, "user@acme.com").await;
+    assert_eq!(status2, StatusCode::TOO_MANY_REQUESTS);
+}
+
+/// Fold-in (Task 2 review, Minor): `POST /admin/sso-domains` is now
+/// rate-limited like its P3 mirror `admin_domains_create`. With a
+/// one-request burst the first create succeeds and a second immediately
+/// after (same IP) trips `429` before ever reaching the store.
+#[tokio::test]
+#[serial]
+async fn create_is_rate_limited() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "http-sso-ratelimited").await;
+    seed_oidc_config(&store, tenant).await;
+
+    let raw = "qtok_sso_ratelimit_test".to_string();
+    store
+        .put_api_token(
+            tenant,
+            &ApiToken {
+                id: 9114,
+                name: "sso-domains-ratelimit-token".to_string(),
+                token_hash: hash_token(&raw),
+                scopes: vec![Scope::Full],
+                rate_limit_per_min: None,
+                created: 0,
+                tenant_id: tenant,
+            },
+        )
+        .await
+        .unwrap();
+
+    let store_dyn: Arc<dyn Store> = store.clone();
+    let sink_dyn: Arc<dyn AnalyticsSink> = store.clone();
+    let cache = Cache::new(store_dyn.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store_dyn.clone(),
+        Some("quark.example.com".to_string()),
+        None,
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: false,
+        multi_tenant: true,
+        tenant_domain_suffix: None,
+        oidc_tenants: quark::oidc::TenantOidcCache::new(),
+        keycloak: None,
+        keycloak_base_url: None,
+        cache,
+        store: store_dyn,
+        key: KEY,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink: sink_dyn,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::memory(1),
+        block_private: true,
+        public_host: Some("quark.example.com".to_string()),
+        real_ip_header: "cf-connecting-ip".to_string(),
+        webhooks: test_webhook_dispatcher(),
+        host_router,
+        dns: Arc::new(NullDns),
+    });
+    let app = router(state);
+
+    let mk = |domain: &str| {
+        Request::post("/admin/sso-domains")
+            .header("content-type", "application/json")
+            .header("x-admin-token", &raw)
+            .header("cf-connecting-ip", "7.7.7.7")
+            .body(Body::from(format!(r#"{{"domain":"{domain}"}}"#)))
+            .unwrap()
+    };
+    let resp1 = app.clone().oneshot(mk("burst-a.com")).await.unwrap();
+    assert_eq!(resp1.status(), StatusCode::OK);
+    let resp2 = app.oneshot(mk("burst-b.com")).await.unwrap();
+    assert_eq!(resp2.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // The second (rate-limited) call must not have created a row.
+    assert_eq!(store.list_sso_domains(tenant).await.unwrap().len(), 1);
+}
