@@ -2121,6 +2121,248 @@ async fn admin_domains_delete(
     StatusCode::NO_CONTENT.into_response()
 }
 
+// --- Team invites (multi-tenancy P2c), cloud-only ---
+
+/// How long a team invite stays valid before it must be re-sent.
+const INVITE_TTL_SECS: u64 = 7 * 24 * 3600;
+
+#[derive(Deserialize)]
+struct CreateInviteReq {
+    email: String,
+    role: crate::tenant::Role,
+}
+
+#[derive(Serialize)]
+struct CreateInviteResp {
+    id: u64,
+    token: String,
+    email: String,
+    role: crate::tenant::Role,
+    expires: u64,
+}
+
+/// `POST /admin/invites {email, role}`: invite an email to join the caller's
+/// tenant with `role` (cloud only, Owner/Admin required). Rejects `role:
+/// "owner"` — an invite can never grant ownership, only Admin/Member/Viewer.
+/// Returns the plaintext token once, same precedent as `admin_tokens_create`:
+/// only the hash is persisted, so the caller must capture it from this
+/// response (or the invite link it builds around it).
+async fn admin_invites_create(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let ip = client_ip(&headers, &st.real_ip_header, None);
+    if !st.ratelimiter.check(&ip, now()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+    }
+    let req: CreateInviteReq = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
+    };
+    if req.role == crate::tenant::Role::Owner {
+        return (
+            StatusCode::BAD_REQUEST,
+            "cannot invite a new member as owner",
+        )
+            .into_response();
+    }
+    let email = req.email.trim().to_ascii_lowercase();
+    let token = generate_token();
+    let id = match st.store.next_invite_id().await {
+        Ok(i) => i,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let created = now();
+    let expires = created + INVITE_TTL_SECS;
+    let invite = crate::invite::Invite {
+        id,
+        tenant_id: p.tenant,
+        email: email.clone(),
+        role: req.role,
+        token_hash: hash_token(&token),
+        // An API-token principal carries no `user_id` (`None`); `0` records
+        // "invited by the tenant's token" rather than a real user.
+        invited_by: p.user_id.unwrap_or(0),
+        created,
+        expires,
+        accepted_at: None,
+        accepted_by: None,
+    };
+    if let Err(e) = st.store.create_invite(&invite).await {
+        return conflict_or_503(e).into_response();
+    }
+    Json(CreateInviteResp {
+        id,
+        token,
+        email,
+        role: req.role,
+        expires,
+    })
+    .into_response()
+}
+
+#[derive(Serialize)]
+struct InviteView {
+    id: u64,
+    email: String,
+    role: crate::tenant::Role,
+    expires: u64,
+    created: u64,
+}
+
+/// `GET /admin/invites`: pending invites for the caller's tenant (cloud only,
+/// Owner/Admin required). Never includes `token_hash`.
+async fn admin_invites_list(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.store.list_invites(p.tenant).await {
+        Ok(invites) => Json(
+            invites
+                .iter()
+                .map(|i| InviteView {
+                    id: i.id,
+                    email: i.email.clone(),
+                    role: i.role,
+                    expires: i.expires,
+                    created: i.created,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// `DELETE /admin/invites/:id`: revoke a pending invite for the caller's
+/// tenant (cloud only, Owner/Admin required). `delete_invite` itself is not
+/// row-count aware, so existence is checked against `list_invites` first to
+/// give a real `404` for an unknown or already-consumed id.
+async fn admin_invites_delete(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let existing = match st.store.list_invites(p.tenant).await {
+        Ok(list) => list,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if !existing.iter().any(|i| i.id == id) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if st.store.delete_invite(p.tenant, id).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    StatusCode::OK.into_response()
+}
+
+#[derive(Serialize)]
+struct AcceptInviteResp {
+    tenant_id: u64,
+    role: crate::tenant::Role,
+}
+
+/// `POST /admin/invites/:token/accept` (cloud only): the invited user
+/// redeems the token, joining the invite's tenant at the invited role.
+///
+/// Reached via `session_user_id`, not `admin_guard`: a brand-new user with
+/// zero memberships anywhere must still be able to accept an invite (the
+/// same reasoning as `admin_tenants_create`). The tenant and role granted
+/// ALWAYS come from the invite row, never from the request: the token is
+/// the only thing the caller supplies.
+///
+/// Checks run in an order where no membership is ever granted on a failure
+/// path: cloud gate, session, rate limit, invite lookup (covers unknown,
+/// expired, and already-accepted tokens alike, since `get_invite_by_hash`
+/// hides all three), email match, then existing-membership conflict.
+async fn admin_invites_accept(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(user_id) = session_user_id(&st, &headers).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let ip = client_ip(&headers, &st.real_ip_header, None);
+    if !st.ratelimiter.check(&ip, now()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+    }
+    let inv = match st
+        .store
+        .get_invite_by_hash(&hash_token(&token), now())
+        .await
+    {
+        Ok(Some(inv)) => inv,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let user = match st.store.get_user_by_id(user_id).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    // The invite's email is already lowercased at creation time; the
+    // session's user email is normalized the same way here so casing alone
+    // never causes a false mismatch.
+    if user.email.to_ascii_lowercase() != inv.email {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match st.store.get_membership(user_id, inv.tenant_id).await {
+        Ok(Some(_)) => return StatusCode::CONFLICT.into_response(),
+        Ok(None) => {}
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    if st
+        .store
+        .put_membership(&crate::tenant::Membership {
+            user_id,
+            tenant_id: inv.tenant_id,
+            role: inv.role,
+            created: now(),
+        })
+        .await
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if st
+        .store
+        .mark_invite_accepted(inv.id, user_id, now())
+        .await
+        .is_err()
+    {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    set_session_tenant(&st, &headers, inv.tenant_id).await;
+    Json(AcceptInviteResp {
+        tenant_id: inv.tenant_id.0,
+        role: inv.role,
+    })
+    .into_response()
+}
+
 /// Name of the short-lived cookie holding the signed Sheets OAuth `state`,
 /// binding the connect flow to the browser that started it (anti login-CSRF).
 const SHEETS_STATE_COOKIE: &str = "qk_sheets_state";
@@ -3648,6 +3890,15 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             axum::routing::delete(admin_domains_delete),
         )
         .route("/admin/domains/:id/verify", post(admin_domains_verify))
+        .route(
+            "/admin/invites",
+            get(admin_invites_list).post(admin_invites_create),
+        )
+        .route(
+            "/admin/invites/:id",
+            axum::routing::delete(admin_invites_delete),
+        )
+        .route("/admin/invites/:token/accept", post(admin_invites_accept))
         .route("/admin/integrations/sheets/connect", get(sheets_connect))
         .route("/admin/integrations/sheets/callback", get(sheets_callback))
         .route("/admin/integrations/sheets/sync", post(sheets_sync))

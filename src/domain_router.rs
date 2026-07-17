@@ -452,6 +452,9 @@ mod tests {
         async fn get_user_by_subject(&self, _subject: &str) -> Result<Option<User>, StoreError> {
             unimplemented!()
         }
+        async fn get_user_by_id(&self, _id: u64) -> Result<Option<User>, StoreError> {
+            unimplemented!()
+        }
         async fn put_membership(&self, _m: &Membership) -> Result<(), StoreError> {
             unimplemented!()
         }
@@ -498,6 +501,36 @@ mod tests {
             unimplemented!()
         }
         async fn delete_domain(&self, _tenant: TenantId, _id: u64) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn next_invite_id(&self) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
+        async fn create_invite(&self, _inv: &crate::invite::Invite) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn get_invite_by_hash(
+            &self,
+            _token_hash: &str,
+            _now: u64,
+        ) -> Result<Option<crate::invite::Invite>, StoreError> {
+            unimplemented!()
+        }
+        async fn mark_invite_accepted(
+            &self,
+            _id: u64,
+            _accepted_by: u64,
+            _now: u64,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn list_invites(
+            &self,
+            _tenant: TenantId,
+        ) -> Result<Vec<crate::invite::Invite>, StoreError> {
+            unimplemented!()
+        }
+        async fn delete_invite(&self, _tenant: TenantId, _id: u64) -> Result<(), StoreError> {
             unimplemented!()
         }
         async fn enqueue_deliveries(&self, _rows: &[OutboxRow]) -> Result<(), StoreError> {
