@@ -141,6 +141,7 @@ fn bench(c: &mut Criterion) {
                     ip: None,
                     fbc: None,
                     variant: None,
+                    tenant_id: 0,
                 };
                 let _ = tx.try_send(black_box(ev));
             }

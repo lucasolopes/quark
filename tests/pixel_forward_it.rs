@@ -72,6 +72,7 @@ fn ev(id: u64, ts: u64) -> ClickEvent {
         ip: None,
         fbc: None,
         variant: None,
+        tenant_id: 0,
     }
 }
 

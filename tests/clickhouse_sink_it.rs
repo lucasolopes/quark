@@ -21,6 +21,7 @@ fn ev(id: u64, ts: u64, c: &str, ua: &str) -> ClickEvent {
         ip: None,
         fbc: None,
         variant: None,
+        tenant_id: 0,
     }
 }
 fn ev_full(id: u64, ts: u64, ua: &str, referer: Option<&str>, city: Option<&str>) -> ClickEvent {
@@ -36,6 +37,7 @@ fn ev_full(id: u64, ts: u64, ua: &str, referer: Option<&str>, city: Option<&str>
         ip: None,
         fbc: None,
         variant: None,
+        tenant_id: 0,
     }
 }
 

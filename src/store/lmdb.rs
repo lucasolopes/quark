@@ -1178,6 +1178,28 @@ impl AnalyticsSink for LmdbStore {
             recent,
         }))
     }
+
+    /// Analytics on this backend is single-tenant (see the comment on
+    /// `record_batch`): every link's `stats` entry lives under the
+    /// `DEFAULT_TENANT` prefix regardless of which tenant actually owns the
+    /// link, so there is no per-link tenant to filter by. `DEFAULT_TENANT`
+    /// (OSS) is the only tenant this can honestly aggregate — merging every
+    /// link's `Aggregates` under that prefix; any other tenant id gets
+    /// `Aggregates::default()`, matching OSS semantics (there is no other
+    /// tenant's data here to return, so nothing leaks).
+    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError> {
+        if tenant != DEFAULT_TENANT.0 {
+            return Ok(Aggregates::default());
+        }
+        let rtxn = self.env.read_txn()?;
+        let mut total = Aggregates::default();
+        for item in self.stats.prefix_iter(&rtxn, &tprefix(DEFAULT_TENANT))? {
+            let (_, bytes) = item?;
+            let agg: Aggregates = serde_json::from_slice(bytes)?;
+            total.merge(&agg);
+        }
+        Ok(total)
+    }
 }
 
 #[cfg(test)]

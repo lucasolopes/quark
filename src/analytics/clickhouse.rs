@@ -20,6 +20,7 @@ struct ClickRow<'a> {
     bot: u8,
     /// A/B variant index served, or -1 when the link has no variants.
     variant: i32,
+    tenant_id: u64,
 }
 
 #[derive(Row, Deserialize)]
@@ -100,9 +101,16 @@ impl ClickHouseSink {
     }
 
     async fn init_schema(&self) -> Result<(), StoreError> {
+        // `ORDER BY (tenant_id, id, ts)` applies to a fresh table only:
+        // ClickHouse cannot change the sort key of an existing table via
+        // `ALTER`. An existing pre-tenant table keeps `ORDER BY (id, ts)`
+        // even after the `ADD COLUMN` migration below backfills the column
+        // with the default `0` — rebuilding the table (new engine, `INSERT
+        // INTO ... SELECT`, swap) to pick up the new sort key is P4b work,
+        // once a real server exists to do it against.
         self.client
             .query(
-                "CREATE TABLE IF NOT EXISTS clicks (id UInt64, ts UInt64, country String, device String, referer String, os String, browser String, city String, referer_host String, bot UInt8, variant Int32 DEFAULT -1) ENGINE = MergeTree ORDER BY (id, ts)"
+                "CREATE TABLE IF NOT EXISTS clicks (id UInt64, ts UInt64, country String, device String, referer String, os String, browser String, city String, referer_host String, bot UInt8, variant Int32 DEFAULT -1, tenant_id UInt64 DEFAULT 0) ENGINE = MergeTree ORDER BY (tenant_id, id, ts)"
             )
             .execute()
             .await
@@ -132,6 +140,15 @@ impl ClickHouseSink {
         // existed (#17). Same idempotent `IF NOT EXISTS` pattern.
         self.client
             .query("ALTER TABLE clicks ADD COLUMN IF NOT EXISTS variant Int32 DEFAULT -1")
+            .execute()
+            .await
+            .map_err(StoreError::backend)?;
+        // Migration for tables created before the `tenant_id` column existed
+        // (P4a). Same idempotent `IF NOT EXISTS` pattern. Existing rows
+        // backfill to `0` (the OSS default tenant) — see `init_schema`'s
+        // doc comment about the `ORDER BY` staying `(id, ts)` on such tables.
+        self.client
+            .query("ALTER TABLE clicks ADD COLUMN IF NOT EXISTS tenant_id UInt64 DEFAULT 0")
             .execute()
             .await
             .map_err(StoreError::backend)
@@ -172,6 +189,7 @@ impl AnalyticsSink for ClickHouseSink {
                 referer_host: host,
                 bot,
                 variant: e.variant.map(|v| v as i32).unwrap_or(-1),
+                tenant_id: e.tenant_id,
             };
             insert.write(&row).await.map_err(StoreError::backend)?;
         }
@@ -345,6 +363,7 @@ impl AnalyticsSink for ClickHouseSink {
                 } else {
                     None
                 },
+                tenant_id: 0,
             })
             .collect();
 
@@ -352,6 +371,145 @@ impl AnalyticsSink for ClickHouseSink {
             aggregates: agg,
             recent,
         }))
+    }
+
+    /// Mirrors the Postgres `stats_for_tenant` shape (same aggregates, no
+    /// `recent` — that stays per-link only): every query below is scoped by
+    /// `WHERE tenant_id = ?`, so once a real ClickHouse server exists (P4b)
+    /// this isolates one tenant's aggregate from another's, the same way
+    /// `stats(id)` isolates one link's. Not exercised against a live server
+    /// yet — see `tests/clickhouse_sink_it.rs`, gated on
+    /// `QUARK_TEST_CLICKHOUSE_URL`.
+    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError> {
+        let totals: Totals = self
+            .client
+            .query(
+                "SELECT count() AS total, min(ts) AS first_ts, max(ts) AS last_ts, \
+                 countIf(bot = 1) AS bots FROM clicks WHERE tenant_id = ?",
+            )
+            .bind(tenant)
+            .fetch_one()
+            .await
+            .map_err(StoreError::backend)?;
+        if totals.total == 0 {
+            return Ok(Aggregates::default());
+        }
+
+        let mut agg = Aggregates {
+            total: totals.total,
+            first_ts: totals.first_ts,
+            last_ts: totals.last_ts,
+            bots: totals.bots,
+            ..Default::default()
+        };
+
+        let per_day: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT formatDateTime(toDateTime(ts,'UTC'),'%F') AS k, count() AS c FROM clicks WHERE tenant_id = ? AND bot = 0 GROUP BY k",
+            )
+            .bind(tenant)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_day {
+            agg.per_day.insert(kv.k, kv.c);
+        }
+
+        let per_country: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT country AS k, count() AS c FROM clicks WHERE tenant_id = ? AND bot = 0 GROUP BY k",
+            )
+            .bind(tenant)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_country {
+            if !kv.k.is_empty() {
+                agg.per_country.insert(kv.k, kv.c);
+            }
+        }
+
+        let per_device: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT device AS k, count() AS c FROM clicks WHERE tenant_id = ? AND bot = 0 GROUP BY k",
+            )
+            .bind(tenant)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_device {
+            agg.per_device.insert(kv.k, kv.c);
+        }
+
+        let per_os: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT if(os = '', 'Other', os) AS k, count() AS c FROM clicks WHERE tenant_id = ? AND bot = 0 GROUP BY k",
+            )
+            .bind(tenant)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_os {
+            agg.per_os.insert(kv.k, kv.c);
+        }
+
+        let per_browser: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT if(browser = '', 'Other', browser) AS k, count() AS c FROM clicks WHERE tenant_id = ? AND bot = 0 GROUP BY k",
+            )
+            .bind(tenant)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_browser {
+            agg.per_browser.insert(kv.k, kv.c);
+        }
+
+        let per_referer: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT if(referer_host = '', 'direct', referer_host) AS k, count() AS c FROM clicks WHERE tenant_id = ? AND bot = 0 GROUP BY k",
+            )
+            .bind(tenant)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_referer {
+            agg.per_referer.insert(kv.k, kv.c);
+        }
+
+        let per_city: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT city AS k, count() AS c FROM clicks WHERE tenant_id = ? AND city != '' AND bot = 0 GROUP BY k",
+            )
+            .bind(tenant)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_city {
+            agg.per_city.insert(kv.k, kv.c);
+        }
+
+        let per_variant: Vec<Kv> = self
+            .client
+            .query(
+                "SELECT toString(variant) AS k, count() AS c FROM clicks WHERE tenant_id = ? AND variant >= 0 GROUP BY k",
+            )
+            .bind(tenant)
+            .fetch_all()
+            .await
+            .map_err(StoreError::backend)?;
+        for kv in per_variant {
+            agg.per_variant.insert(kv.k, kv.c);
+        }
+
+        Ok(agg)
     }
 }
 

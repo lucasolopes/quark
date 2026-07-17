@@ -291,6 +291,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         }
     }
 
@@ -413,6 +414,7 @@ mod tests {
                 ip: Some("203.0.113.5".into()),
                 fbc: Some("fb.1.200000.abc".into()),
                 variant: None,
+                tenant_id: 0,
             },
             ev(21, 201, Some("US")),
         ];

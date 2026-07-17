@@ -41,6 +41,12 @@ pub struct ClickEvent {
     /// has no variants (the common case).
     #[serde(default)]
     pub variant: Option<u32>,
+    /// Owning tenant of the link this click hit, stamped from the
+    /// authoritative `Record` at redirect time. `serde(default)` keeps old
+    /// persisted/cached blobs (pre multi-tenancy P4a) deserializing as 0,
+    /// the default tenant.
+    #[serde(default)]
+    pub tenant_id: u64,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -102,6 +108,54 @@ impl Aggregates {
         }
         if let Some(variant) = ev.variant {
             *self.per_variant.entry(variant.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// Folds another `Aggregates`'s counts into `self` — combines several
+    /// per-link aggregates into one per-tenant aggregate. Used by backends
+    /// (LMDB's `stats_for_tenant`) that have no query engine to do the
+    /// summing for them; Postgres/ClickHouse do this with `SUM()`/`GROUP BY`
+    /// instead and never call this.
+    ///
+    /// `first_ts`/`last_ts` are timestamps, not counts: an `other` with no
+    /// events (`total == 0`) carries meaningless zeros there and is skipped
+    /// for those two fields specifically, so an empty aggregate can never
+    /// drag `first_ts` down to 0 or leave `last_ts` unmoved incorrectly.
+    pub fn merge(&mut self, other: &Aggregates) {
+        let self_had_data = self.total > 0;
+        self.total += other.total;
+        self.bots += other.bots;
+        if other.total > 0 {
+            if !self_had_data || other.first_ts < self.first_ts {
+                self.first_ts = other.first_ts;
+            }
+            if other.last_ts > self.last_ts {
+                self.last_ts = other.last_ts;
+            }
+        }
+        for (k, v) in &other.per_day {
+            *self.per_day.entry(k.clone()).or_insert(0) += v;
+        }
+        for (k, v) in &other.per_country {
+            *self.per_country.entry(k.clone()).or_insert(0) += v;
+        }
+        for (k, v) in &other.per_device {
+            *self.per_device.entry(k.clone()).or_insert(0) += v;
+        }
+        for (k, v) in &other.per_os {
+            *self.per_os.entry(k.clone()).or_insert(0) += v;
+        }
+        for (k, v) in &other.per_browser {
+            *self.per_browser.entry(k.clone()).or_insert(0) += v;
+        }
+        for (k, v) in &other.per_referer {
+            *self.per_referer.entry(k.clone()).or_insert(0) += v;
+        }
+        for (k, v) in &other.per_city {
+            *self.per_city.entry(k.clone()).or_insert(0) += v;
+        }
+        for (k, v) in &other.per_variant {
+            *self.per_variant.entry(k.clone()).or_insert(0) += v;
         }
     }
 }
@@ -272,6 +326,12 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 pub trait AnalyticsSink: Send + Sync + 'static {
     async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), StoreError>;
     async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError>;
+    /// Aggregate analytics across every link owned by `tenant` — the "all my
+    /// links" view behind `GET /admin/stats` (multi-tenancy P4a). Unlike
+    /// `stats`, there's no single link to key `recent` off of, so this
+    /// returns aggregates only, and it never returns `None`: a tenant with no
+    /// clicks yet gets `Aggregates::default()`, not a missing-record signal.
+    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError>;
 }
 
 /// Batch size that triggers an immediate flush (in addition to the 5s timer).
@@ -429,6 +489,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         }
     }
 
@@ -511,6 +572,7 @@ mod tests {
                 ip: None,
                 fbc: None,
                 variant: None,
+                tenant_id: 0,
             })
             .await
             .unwrap();
@@ -551,6 +613,7 @@ mod tests {
             ip: Some("203.0.113.9".into()),
             fbc: Some("fb.1.100000.abc123".into()),
             variant: None,
+            tenant_id: 0,
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert!(!json.contains("203.0.113.9"));
@@ -574,6 +637,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -587,6 +651,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         });
         assert_eq!(a.first_ts, 0);
         assert_eq!(a.last_ts, 5_000_000_000);
@@ -689,6 +754,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -704,6 +770,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -720,6 +787,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         });
 
         assert_eq!(a.per_os.get("iOS"), Some(&1));
@@ -841,6 +909,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: Some(0),
+            tenant_id: 0,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -854,6 +923,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: Some(0),
+            tenant_id: 0,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -867,6 +937,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: Some(1),
+            tenant_id: 0,
         });
         a.apply(&ClickEvent {
             id: 1,
@@ -880,6 +951,7 @@ mod tests {
             ip: None,
             fbc: None,
             variant: None,
+            tenant_id: 0,
         });
         assert_eq!(a.per_variant.get("0"), Some(&2));
         assert_eq!(a.per_variant.get("1"), Some(&1));
@@ -899,5 +971,52 @@ mod tests {
             r#"{"total":1,"first_ts":1,"last_ts":1,"per_day":{},"per_country":{},"per_device":{}}"#;
         let a: Aggregates = serde_json::from_str(old).unwrap();
         assert!(a.per_variant.is_empty());
+    }
+
+    #[test]
+    fn merge_sums_counts_and_widens_ts_range() {
+        let mut a = Aggregates::default();
+        a.apply(&ev(1, 100, "BR", "Mozilla/5.0 (iPhone)"));
+        a.apply(&ev(1, 200, "BR", "Mozilla/5.0 (Windows NT 10.0)"));
+
+        let mut b = Aggregates::default();
+        b.apply(&ev(2, 50, "US", "Mozilla/5.0 (iPhone)"));
+        b.apply(&ev(2, 300, "JP", "Googlebot/2.1"));
+
+        a.merge(&b);
+        assert_eq!(a.total, 4);
+        assert_eq!(a.bots, 1, "b's bot click must carry over");
+        assert_eq!(a.first_ts, 50, "widened down to b's earlier first_ts");
+        assert_eq!(a.last_ts, 300, "widened up to b's later last_ts");
+        assert_eq!(a.per_country.get("BR"), Some(&2));
+        assert_eq!(a.per_country.get("US"), Some(&1));
+        assert!(
+            !a.per_country.contains_key("JP"),
+            "bot's country must stay excluded from the breakdown after merge"
+        );
+    }
+
+    #[test]
+    fn merge_empty_other_leaves_self_unchanged() {
+        let mut a = Aggregates::default();
+        a.apply(&ev(1, 100, "BR", "Mozilla/5.0 (iPhone)"));
+        let before = a.clone();
+
+        a.merge(&Aggregates::default());
+        assert_eq!(a.total, before.total);
+        assert_eq!(a.first_ts, before.first_ts);
+        assert_eq!(a.last_ts, before.last_ts);
+    }
+
+    #[test]
+    fn merge_into_empty_self_adopts_other_ts_range() {
+        let mut a = Aggregates::default();
+        let mut b = Aggregates::default();
+        b.apply(&ev(1, 900, "BR", "Mozilla/5.0 (iPhone)"));
+
+        a.merge(&b);
+        assert_eq!(a.total, 1);
+        assert_eq!(a.first_ts, 900);
+        assert_eq!(a.last_ts, 900);
     }
 }

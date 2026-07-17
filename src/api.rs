@@ -1323,6 +1323,7 @@ async fn redirect(
                 fbc: fbclid_from_query(raw_query.as_deref())
                     .map(|fbclid| format!("fb.1.{}.{}", now.saturating_mul(1000), fbclid)),
                 variant,
+                tenant_id: rec.tenant_id.0,
             };
             // Gate already read above into `clicked_subscribed`. The payload
             // build reads `ev`'s fields (and `rec.url`, which is only still
@@ -1394,6 +1395,24 @@ async fn stats(
             recent: Vec::new(),
         })
         .into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// `GET /admin/stats`: aggregate analytics across every link owned by the
+/// caller's tenant — the "all my links" view (multi-tenancy P4a Task 2),
+/// distinct from `GET /:code/stats`'s single-link view above. There's no
+/// link to check ownership of here; the tenant scope comes entirely from
+/// `admin_guard`'s `Principal`, which the sink filters on internally. On
+/// OSS, `p.tenant` is always `DEFAULT_TENANT`, so this aggregates everything
+/// — the existing single-tenant behavior.
+async fn admin_stats(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let p = match admin_guard(&st, &headers, Scope::Analytics).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    match st.sink.stats_for_tenant(p.tenant.0).await {
+        Ok(agg) => Json(agg).into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
@@ -4285,6 +4304,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route("/health", get(health))
         .route("/:code", get(redirect).post(unlock))
         .route("/:code/stats", get(stats))
+        .route("/admin/stats", get(admin_stats))
         .route("/admin/links", get(admin_links_list))
         .route("/admin/import", post(admin_import))
         .route(
