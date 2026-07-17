@@ -2162,15 +2162,18 @@ impl Store for PostgresStore {
         id: u64,
         accepted_by: u64,
         now: u64,
-    ) -> Result<(), StoreError> {
-        sqlx::query("UPDATE invites SET accepted_at = $1, accepted_by = $2 WHERE id = $3")
-            .bind(now as i64)
-            .bind(accepted_by as i64)
-            .bind(id as i64)
-            .execute(&self.write)
-            .await
-            .map_err(StoreError::backend)?;
-        Ok(())
+    ) -> Result<bool, StoreError> {
+        let result = sqlx::query(
+            "UPDATE invites SET accepted_at = $1, accepted_by = $2 \
+             WHERE id = $3 AND accepted_at IS NULL",
+        )
+        .bind(now as i64)
+        .bind(accepted_by as i64)
+        .bind(id as i64)
+        .execute(&self.write)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(result.rows_affected() == 1)
     }
 
     async fn list_invites(&self, tenant: TenantId) -> Result<Vec<Invite>, StoreError> {

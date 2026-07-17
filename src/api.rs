@@ -2175,6 +2175,9 @@ async fn admin_invites_create(
             .into_response();
     }
     let email = req.email.trim().to_ascii_lowercase();
+    if email.is_empty() || !email.contains('@') {
+        return (StatusCode::BAD_REQUEST, "invalid email").into_response();
+    }
     let token = generate_token();
     let id = match st.store.next_invite_id().await {
         Ok(i) => i,
@@ -2293,7 +2296,11 @@ struct AcceptInviteResp {
 /// Checks run in an order where no membership is ever granted on a failure
 /// path: cloud gate, session, rate limit, invite lookup (covers unknown,
 /// expired, and already-accepted tokens alike, since `get_invite_by_hash`
-/// hides all three), email match, then existing-membership conflict.
+/// hides all three), email match, existing-membership conflict, then the
+/// single-winner claim on the invite row itself. `mark_invite_accepted` runs
+/// before `put_membership` so the DB row is the atomic single-use gate: two
+/// concurrent accepts of the same token both pass the checks above, but only
+/// one wins the claim, and only the winner grants membership.
 async fn admin_invites_accept(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -2334,6 +2341,13 @@ async fn admin_invites_accept(
         Ok(None) => {}
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
+    match st.store.mark_invite_accepted(inv.id, user_id, now()).await {
+        Ok(true) => {}
+        // Lost the race, or the invite was already consumed between the
+        // lookup above and here: treat it the same as an unknown token.
+        Ok(false) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
     if st
         .store
         .put_membership(&crate::tenant::Membership {
@@ -2342,14 +2356,6 @@ async fn admin_invites_accept(
             role: inv.role,
             created: now(),
         })
-        .await
-        .is_err()
-    {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
-    if st
-        .store
-        .mark_invite_accepted(inv.id, user_id, now())
         .await
         .is_err()
     {

@@ -102,6 +102,46 @@ async fn invite_accept_hides_it_from_hash_lookup() {
     );
 }
 
+/// `mark_invite_accepted` is a single-winner claim: once an invite is
+/// accepted, a second call against the same row returns `false` rather than
+/// silently re-accepting it. This is the store-level half of the TOCTOU fix;
+/// the HTTP-level half is `accept_invite_grants_membership_and_repoints_session`
+/// below, which asserts the second accept returns 404 and grants no second
+/// membership.
+#[tokio::test]
+#[serial]
+async fn mark_invite_accepted_is_single_winner() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let tenant = make_tenant(&store, "invites-claim-a").await;
+    let id = make_invite(
+        &store,
+        tenant,
+        "claim@acme.com",
+        "raw-claim-token",
+        quark::now(),
+        quark::now() + 3600,
+    )
+    .await;
+
+    let first = store
+        .mark_invite_accepted(id, 42, quark::now())
+        .await
+        .unwrap();
+    assert!(first, "the first claim on a pending invite must win");
+
+    let second = store
+        .mark_invite_accepted(id, 99, quark::now())
+        .await
+        .unwrap();
+    assert!(
+        !second,
+        "a second claim on an already-accepted invite must lose"
+    );
+}
+
 /// An invite whose `expires` is before `now` is invisible to the hash lookup,
 /// even though it was never accepted.
 #[tokio::test]
@@ -330,6 +370,30 @@ async fn create_invite_with_owner_role_is_400() {
 
     let (status, _) = create_invite(&app, &token, "boss@acme.com", "owner").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(store.list_invites(tenant).await.unwrap().is_empty());
+}
+
+/// Create with an empty (or whitespace-only) email is rejected: such an
+/// invite could never be redeemed since accept matches on the session's
+/// user email.
+#[tokio::test]
+#[serial]
+async fn create_invite_with_empty_email_is_400() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-http-empty-email-a").await;
+    let (app, token) =
+        admin_app_with_scopes(store.clone(), true, tenant, 9109, vec![Scope::Full]).await;
+
+    let (status, _) = create_invite(&app, &token, "", "member").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status2, _) = create_invite(&app, &token, "   ", "member").await;
+    assert_eq!(status2, StatusCode::BAD_REQUEST);
+
     assert!(store.list_invites(tenant).await.unwrap().is_empty());
 }
 
