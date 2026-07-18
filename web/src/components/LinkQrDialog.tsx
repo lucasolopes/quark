@@ -96,7 +96,10 @@ export function LinkQrDialog({ code, url, open, onOpenChange }: LinkQrDialogProp
     const svgString = new XMLSerializer().serializeToString(svg);
     const svgBlobUrl = URL.createObjectURL(new Blob([svgString], { type: "image/svg+xml;charset=utf-8" }));
     triggerDownload(svgBlobUrl, `quark-${code}.svg`);
-    URL.revokeObjectURL(svgBlobUrl);
+    // Revoke on a deferred tick instead of immediately after click(): some
+    // browsers (Firefox in particular) can cancel the download if the blob
+    // URL is revoked before the download actually starts.
+    setTimeout(() => URL.revokeObjectURL(svgBlobUrl), 0);
   }
 
   return (
