@@ -270,7 +270,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
+      <DialogContent className="sm:max-w-2xl">
         <form onSubmit={handleSubmit} className="flex max-h-[85vh] flex-col">
           <DialogHeader className="shrink-0">
             <DialogTitle>{t("dialogs.create.title")}</DialogTitle>
