@@ -2,11 +2,14 @@
 
 # Google Sheets sync
 
-quark can mirror your whole link catalog into a Google spreadsheet you own. You
-connect a Google account once from the panel, and quark keeps a sheet up to date
-with one row per link: the short code, the short URL, the destination, when it
-was created, its click count, its tags, and its folder. Sync runs on demand from
-the Extensions page and, optionally, on a schedule.
+quark can mirror your link catalog into a Google spreadsheet you own. In
+self-hosted (OSS) quark this is a single connection: one operator connects one
+Google account once from the panel. In the cloud product each tenant connects
+its own Google account and gets its own spreadsheet; syncing one tenant's
+catalog never reads or writes another tenant's links. Either way, quark keeps
+the sheet up to date with one row per link: the short code, the short URL, the
+destination, when it was created, its click count, its tags, and its folder.
+Sync runs on demand from the Extensions page and, optionally, on a schedule.
 
 This is opt-in: the connector is off until you set the three `QUARK_SHEETS_*`
 credentials below. When it is off, the Google Sheets card on the Extensions page
@@ -77,9 +80,12 @@ be replayed to inject another Google account.
 - **On demand:** the "Sync now" button on the Extensions page runs one sync and
   reports the result (success, or the error detail).
 - **Scheduled:** set `QUARK_SHEETS_SYNC_SECS` to sync on an interval. The
-  interval is floored to 60 seconds. On a multi-replica deployment the scheduled
-  sync is lease-coordinated through Postgres, so only one replica runs each tick.
-  A single-binary (LMDB) deployment always runs it.
+  interval is floored to 60 seconds. Each tick syncs every tenant that has a
+  connection, one after another, each into its own spreadsheet; a failure for
+  one tenant is logged and does not stop the rest from syncing. On a
+  multi-replica deployment the scheduled sync is lease-coordinated through
+  Postgres, so only one replica runs each tick. A single-binary (LMDB)
+  deployment always runs it, and OSS just has the one tenant to iterate.
 
 ## The refresh token
 

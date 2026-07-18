@@ -3538,6 +3538,7 @@ async fn sheets_sync(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Res
                     &mut conn,
                     &access_token,
                     now(),
+                    p.tenant,
                 )
                 .await
             }

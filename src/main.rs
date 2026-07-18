@@ -482,47 +482,60 @@ async fn main() {
                     {
                         continue;
                     }
-                    let Ok(Some(mut conn)) = store
-                        .get_sheets_connection(quark::tenant::DEFAULT_TENANT)
-                        .await
-                    else {
-                        continue;
-                    };
-                    let outcome = match quark::sheets::refresh_access_token(
-                        &client,
-                        &cfg,
-                        &conn.refresh_token,
-                    )
-                    .await
-                    {
-                        Ok(token) => {
-                            quark::sheets::sync(
-                                &store,
-                                api.as_ref(),
-                                key,
-                                &base_url,
-                                &mut conn,
-                                &token,
-                                quark::now(),
-                            )
-                            .await
+                    let tenants = match store.list_tenants().await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            eprintln!(
+                                "{}",
+                                serde_json::json!({ "sheets_sync_list_tenants_error": e.to_string() })
+                            );
+                            continue;
                         }
-                        Err(e) => Err(e),
                     };
-                    if let Err(e) = &outcome {
-                        conn.last_status = quark::sheets::SyncStatus::Error(e.clone());
-                        eprintln!("{}", serde_json::json!({ "sheets_sync_error": e }));
-                    } else {
-                        eprintln!("{}", serde_json::json!({ "sheets_sync": "ok" }));
-                    }
-                    if let Err(e) = store
-                        .put_sheets_connection(quark::tenant::DEFAULT_TENANT, &conn)
+                    for t in tenants {
+                        let Ok(Some(mut conn)) = store.get_sheets_connection(t.id).await else {
+                            continue;
+                        };
+                        let outcome = match quark::sheets::refresh_access_token(
+                            &client,
+                            &cfg,
+                            &conn.refresh_token,
+                        )
                         .await
-                    {
-                        eprintln!(
-                            "{}",
-                            serde_json::json!({ "sheets_sync_persist_error": e.to_string() })
-                        );
+                        {
+                            Ok(token) => {
+                                quark::sheets::sync(
+                                    &store,
+                                    api.as_ref(),
+                                    key,
+                                    &base_url,
+                                    &mut conn,
+                                    &token,
+                                    quark::now(),
+                                    t.id,
+                                )
+                                .await
+                            }
+                            Err(e) => Err(e),
+                        };
+                        if let Err(e) = &outcome {
+                            conn.last_status = quark::sheets::SyncStatus::Error(e.clone());
+                            eprintln!(
+                                "{}",
+                                serde_json::json!({ "sheets_sync_error": e, "tenant": t.id.0 })
+                            );
+                        } else {
+                            eprintln!(
+                                "{}",
+                                serde_json::json!({ "sheets_sync": "ok", "tenant": t.id.0 })
+                            );
+                        }
+                        if let Err(e) = store.put_sheets_connection(t.id, &conn).await {
+                            eprintln!(
+                                "{}",
+                                serde_json::json!({ "sheets_sync_persist_error": e.to_string(), "tenant": t.id.0 })
+                            );
+                        }
                     }
                 }
             });

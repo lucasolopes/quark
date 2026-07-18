@@ -2,11 +2,15 @@
 
 # Sincronização com o Google Sheets
 
-O quark consegue espelhar todo o seu catálogo de links numa planilha do Google
-que é sua. Você conecta uma conta Google uma vez pelo painel e o quark mantém a
-planilha atualizada com uma linha por link: o short code, a short URL, o destino,
-quando foi criado, a contagem de cliques, as tags e a pasta. A sincronização roda
-sob demanda pela página de Extensões e, se quiser, num intervalo agendado.
+O quark consegue espelhar o seu catálogo de links numa planilha do Google que é
+sua. No quark self-hosted (OSS) isso é uma conexão só: um operador conecta uma
+conta Google uma vez pelo painel. No produto cloud, cada tenant conecta a sua
+própria conta Google e ganha a sua própria planilha; sincronizar o catálogo de
+um tenant nunca lê nem escreve os links de outro tenant. Nos dois casos, o quark
+mantém a planilha atualizada com uma linha por link: o short code, a short URL,
+o destino, quando foi criado, a contagem de cliques, as tags e a pasta. A
+sincronização roda sob demanda pela página de Extensões e, se quiser, num
+intervalo agendado.
 
 É opt-in: o conector fica desligado até você setar as três credenciais
 `QUARK_SHEETS_*` abaixo. Enquanto está desligado, o card do Google Sheets na
@@ -79,9 +83,12 @@ Google.
 - **Sob demanda:** o botão "Sincronizar agora" na página de Extensões roda uma
   sincronização e reporta o resultado (sucesso, ou o detalhe do erro).
 - **Agendada:** sete `QUARK_SHEETS_SYNC_SECS` pra sincronizar num intervalo. O
-  intervalo tem piso de 60 segundos. Num deploy com várias réplicas a
+  intervalo tem piso de 60 segundos. Cada tick sincroniza todo tenant que tem
+  conexão, um de cada vez, cada um na sua própria planilha; falha num tenant é
+  logada e não impede os demais de sincronizar. Num deploy com várias réplicas a
   sincronização agendada é coordenada por lease no Postgres, então só uma réplica
-  roda a cada tick. Um deploy de binário único (LMDB) sempre roda.
+  roda a cada tick. Um deploy de binário único (LMDB) sempre roda, e no OSS só
+  existe um tenant pra iterar.
 
 ## O refresh token
 

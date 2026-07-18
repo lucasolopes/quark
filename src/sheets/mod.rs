@@ -80,8 +80,9 @@ pub enum SyncStatus {
     Error(String),
 }
 
-/// The single persisted Sheets connection (OSS is single-tenant: one operator,
-/// one Google account, one spreadsheet).
+/// A persisted Sheets connection. Stored per tenant: in OSS (single-tenant)
+/// there is one operator with one Google account and one spreadsheet; in cloud
+/// each tenant has its own connection, synced in isolation from the others.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SheetsConnection {
     pub refresh_token: String,
@@ -224,6 +225,10 @@ pub fn catalog_rows(
 /// overwrite the sheet. `access_token` is already refreshed by the caller (the
 /// refresh is a network call kept out of this function so it stays mockable).
 /// Updates `conn` in place; the caller persists it.
+// The parameters are all independent inputs (store, api, key, base URL, the
+// connection, the access token, the clock, and the tenant); bundling them into
+// a struct would not clarify the call sites, so allow the arity here.
+#[allow(clippy::too_many_arguments)]
 pub async fn sync(
     store: &std::sync::Arc<dyn crate::store::Store>,
     api: &dyn client::SheetsApi,
@@ -232,6 +237,7 @@ pub async fn sync(
     conn: &mut SheetsConnection,
     access_token: &str,
     now: u64,
+    tenant: crate::tenant::TenantId,
 ) -> Result<(), String> {
     if conn.spreadsheet_id.is_none() {
         let id = api
@@ -249,7 +255,7 @@ pub async fn sync(
     let mut after: Option<u64> = None;
     loop {
         let page = store
-            .list_links(crate::tenant::DEFAULT_TENANT, after, SYNC_PAGE, None, None)
+            .list_links(tenant, after, SYNC_PAGE, None, None)
             .await
             .map_err(|e| format!("list_links: {e:?}"))?;
         let got = page.len();
@@ -269,7 +275,7 @@ pub async fn sync(
 
     let mut visits = std::collections::HashMap::with_capacity(links.len());
     for (id, _) in &links {
-        if let Ok(v) = store.visits(crate::tenant::DEFAULT_TENANT, *id).await {
+        if let Ok(v) = store.visits(tenant, *id).await {
             visits.insert(*id, v);
         }
     }
