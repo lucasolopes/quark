@@ -136,6 +136,17 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
     void runBulk(op, bulkValue.trim());
   }
 
+  // Guard the empty value: a blank folder would clear the folder on every
+  // selected link at once, silently. Bulk mass-clear is not an intended
+  // action from this button, so require a non-empty folder name.
+  function runSetFolder() {
+    if (bulkValue.trim() === "") {
+      toast.error(t("linkTable.bulkNeedsValue"));
+      return;
+    }
+    void runBulk("set_folder", bulkValue.trim());
+  }
+
   async function handleCopy(link: Link) {
     try {
       await navigator.clipboard.writeText(buildShortUrl(link.code, tenantDomain));
@@ -396,7 +407,7 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
             variant="outline"
             size="sm"
             disabled={bulkLinks.isPending}
-            onClick={() => void runBulk("set_folder", bulkValue.trim())}
+            onClick={runSetFolder}
           >
             {t("linkTable.bulkSetFolder")}
           </Button>
