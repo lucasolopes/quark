@@ -80,8 +80,9 @@ pub enum SyncStatus {
     Error(String),
 }
 
-/// The single persisted Sheets connection (OSS is single-tenant: one operator,
-/// one Google account, one spreadsheet).
+/// A persisted Sheets connection. Stored per tenant: in OSS (single-tenant)
+/// there is one operator with one Google account and one spreadsheet; in cloud
+/// each tenant has its own connection, synced in isolation from the others.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SheetsConnection {
     pub refresh_token: String,
