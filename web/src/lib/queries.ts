@@ -1,7 +1,7 @@
 import { QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import { hasToken } from "./auth";
-import type { CreateLinkRequest, CreatePixelRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest, WellknownName } from "./types";
+import type { BulkOp, CreateLinkRequest, CreatePixelRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest, WellknownName } from "./types";
 
 const LINKS_QUERY_KEY = ["links"];
 const WEBHOOKS_QUERY_KEY = ["webhooks"];
@@ -153,6 +153,24 @@ export function useDeleteLink() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (code: string) => api.deleteLink(code),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY });
+      void client.invalidateQueries({ queryKey: TAGS_QUERY_KEY });
+      void client.invalidateQueries({ queryKey: FOLDERS_QUERY_KEY });
+    },
+  });
+}
+
+/**
+ * Applies a bulk operation to a batch of links; on success invalidates
+ * `useLinks`, `useTags` and `useFolders` (tags/folders may have changed).
+ * Resolves with the partial report so the caller can toast ok/failed.
+ */
+export function useBulkLinks() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ codes, op, value }: { codes: string[]; op: BulkOp; value?: string }) =>
+      api.bulkLinks(codes, op, value),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: LINKS_QUERY_KEY });
       void client.invalidateQueries({ queryKey: TAGS_QUERY_KEY });

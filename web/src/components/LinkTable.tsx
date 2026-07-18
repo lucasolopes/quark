@@ -1,23 +1,35 @@
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { BarChart3, Check, Copy, Folder, Lock, MoreHorizontal, Pencil, QrCode, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { BarChart3, Check, Copy, Folder, Lock, MoreHorizontal, Pencil, QrCode, Trash2, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { LinkQrDialog } from "@/components/LinkQrDialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useT } from "@/i18n";
 import { formatDate } from "@/lib/format";
-import { useMe } from "@/lib/queries";
+import { useBulkLinks, useMe } from "@/lib/queries";
 import { tagColor } from "@/lib/tag-color";
-import type { Link } from "@/lib/types";
+import type { BulkOp, Link } from "@/lib/types";
 
 /**
  * The public base for short links is the API host itself (it resolves `/:code`);
@@ -59,10 +71,70 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
   const t = useT();
   const [justCopiedId, setJustCopiedId] = useState<number | null>(null);
   const [qrLink, setQrLink] = useState<Link | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkValue, setBulkValue] = useState("");
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
   const navigate = useNavigate();
   const { data: me } = useMe();
+  const bulkLinks = useBulkLinks();
   const currentMembership = me?.memberships?.find((m) => m.tenant_id === me.current_tenant);
   const tenantDomain: TenantDomain = { slug: currentMembership?.slug, suffix: me?.tenant_domain_suffix };
+
+  const pageCodes = links.map((l) => l.code);
+  const allSelected = pageCodes.length > 0 && pageCodes.every((c) => selected.has(c));
+  const someSelected = pageCodes.some((c) => selected.has(c)) && !allSelected;
+
+  // Prune the selection to codes still present after the list refetches (a
+  // bulk delete or a filter change can drop rows out from under a stale set).
+  useEffect(() => {
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((c) => pageCodes.includes(c)));
+      return next.size === prev.size ? prev : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [links]);
+
+  function toggleRow(code: string, checked: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(code);
+      else next.delete(code);
+      return next;
+    });
+  }
+
+  function toggleAll(checked: boolean) {
+    setSelected(checked ? new Set(pageCodes) : new Set());
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+  }
+
+  async function runBulk(op: BulkOp, value?: string) {
+    const codes = [...selected];
+    if (codes.length === 0) return;
+    try {
+      const report = await bulkLinks.mutateAsync({ codes, op, value });
+      if (report.failed > 0) {
+        toast.warning(t("linkTable.bulkPartial", { ok: report.ok, failed: report.failed }));
+      } else {
+        toast.success(t("linkTable.bulkDone", { ok: report.ok }));
+      }
+      setBulkValue("");
+      clearSelection();
+    } catch {
+      toast.error(t("linkTable.bulkError"));
+    }
+  }
+
+  function runTagOp(op: "add_tag" | "remove_tag") {
+    if (bulkValue.trim() === "") {
+      toast.error(t("linkTable.bulkNeedsValue"));
+      return;
+    }
+    void runBulk(op, bulkValue.trim());
+  }
 
   async function handleCopy(link: Link) {
     try {
@@ -76,6 +148,24 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
   }
 
   const columns: ColumnDef<Link>[] = [
+    {
+      id: "select",
+      header: () => (
+        <Checkbox
+          checked={allSelected}
+          indeterminate={someSelected}
+          onCheckedChange={(checked) => toggleAll(checked === true)}
+          aria-label={t("linkTable.selectAllAria")}
+        />
+      ),
+      cell: ({ row }) => (
+        <Checkbox
+          checked={selected.has(row.original.code)}
+          onCheckedChange={(checked) => toggleRow(row.original.code, checked === true)}
+          aria-label={t("linkTable.selectRowAria", { code: row.original.code })}
+        />
+      ),
+    },
     {
       accessorKey: "code",
       header: t("linkTable.columnCode"),
@@ -268,6 +358,60 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
 
   return (
     <>
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
+          <span className="text-sm font-medium">
+            {t("linkTable.selected", { count: selected.size })}
+          </span>
+          <Button variant="ghost" size="sm" onClick={clearSelection}>
+            <X className="size-3.5" />
+            {t("linkTable.clearSelection")}
+          </Button>
+          <div className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+          <Input
+            value={bulkValue}
+            onChange={(e) => setBulkValue(e.target.value)}
+            placeholder={t("linkTable.bulkValuePlaceholder")}
+            aria-label={t("linkTable.bulkValuePlaceholder")}
+            className="h-8 w-48"
+            disabled={bulkLinks.isPending}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={bulkLinks.isPending}
+            onClick={() => runTagOp("add_tag")}
+          >
+            {t("linkTable.bulkAddTag")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={bulkLinks.isPending}
+            onClick={() => runTagOp("remove_tag")}
+          >
+            {t("linkTable.bulkRemoveTag")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={bulkLinks.isPending}
+            onClick={() => void runBulk("set_folder", bulkValue.trim())}
+          >
+            {t("linkTable.bulkSetFolder")}
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={bulkLinks.isPending}
+            onClick={() => setConfirmingBulkDelete(true)}
+          >
+            <Trash2 className="size-3.5" />
+            {t("linkTable.bulkDelete")}
+          </Button>
+        </div>
+      )}
+
       <Table>
         <caption className="sr-only">{t("linkTable.caption")}</caption>
         <TableHeader>
@@ -302,6 +446,31 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
           }}
         />
       )}
+
+      <AlertDialog
+        open={confirmingBulkDelete}
+        onOpenChange={(open) => !open && setConfirmingBulkDelete(false)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("linkTable.bulkDeleteTitle", { count: selected.size })}</AlertDialogTitle>
+            <AlertDialogDescription>{t("linkTable.bulkDeleteDescription")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bulkLinks.isPending}>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={bulkLinks.isPending}
+              onClick={() => {
+                setConfirmingBulkDelete(false);
+                void runBulk("delete");
+              }}
+            >
+              {t("linkTable.bulkConfirmDelete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

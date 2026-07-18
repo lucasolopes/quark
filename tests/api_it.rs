@@ -3548,3 +3548,195 @@ async fn sheets_connect_binds_the_state_cookie_to_the_callers_tenant() {
         "the state cookie must carry the calling principal's tenant"
     );
 }
+
+// --- LUC-37: bulk operations (POST /admin/links/bulk) ---------------------
+
+/// Fetches a single link row from the admin list by its code (or None).
+async fn find_link(app: &axum::Router, code: &str) -> Option<serde_json::Value> {
+    let r = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/links?limit=500")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    v["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["code"].as_str() == Some(code))
+        .cloned()
+}
+
+/// POSTs a bulk request and returns (status, parsed json body).
+async fn bulk(app: &axum::Router, body: &str) -> (StatusCode, serde_json::Value) {
+    let r = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/links/bulk")
+                .header("x-admin-token", "secret")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = r.status();
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, v)
+}
+
+#[tokio::test]
+async fn admin_bulk_add_tag_applies_to_all() {
+    let app = app_admin("secret").await;
+    let a = create_and_get_code(&app, "https://a.com").await;
+    let b = create_and_get_code(&app, "https://b.com").await;
+    let c = create_and_get_code(&app, "https://c.com").await;
+
+    let (status, v) = bulk(
+        &app,
+        &format!(r#"{{"codes":["{a}","{b}","{c}"],"op":"add_tag","value":"Promo"}}"#),
+    )
+    .await;
+
+    // Also proves POST /admin/links/bulk routes to the bulk handler (not `:code`).
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["ok"], 3);
+    assert_eq!(v["failed"], 0);
+    for code in [&a, &b, &c] {
+        let link = find_link(&app, code).await.unwrap();
+        assert_eq!(link["tags"], serde_json::json!(["promo"]));
+    }
+}
+
+#[tokio::test]
+async fn admin_bulk_add_tag_is_idempotent() {
+    let app = app_admin("secret").await;
+    let a = create_and_get_code(&app, "https://a.com").await;
+    let body = format!(r#"{{"codes":["{a}"],"op":"add_tag","value":"promo"}}"#);
+    let _ = bulk(&app, &body).await;
+    let _ = bulk(&app, &body).await;
+    let link = find_link(&app, &a).await.unwrap();
+    assert_eq!(link["tags"], serde_json::json!(["promo"]));
+}
+
+#[tokio::test]
+async fn admin_bulk_delete_mixed_reports_partial() {
+    let app = app_admin("secret").await;
+    let a = create_and_get_code(&app, "https://a.com").await;
+    let b = create_and_get_code(&app, "https://b.com").await;
+
+    let (status, v) = bulk(
+        &app,
+        &format!(r#"{{"codes":["{a}","0000000","{b}"],"op":"delete"}}"#),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["ok"], 2);
+    assert_eq!(v["failed"], 1);
+    let results = v["results"].as_array().unwrap();
+    // The missing code is reported failed with an error, the reals succeed.
+    let missing = results.iter().find(|r| r["code"] == "0000000").unwrap();
+    assert_eq!(missing["ok"], false);
+    assert_eq!(missing["error"], "not found");
+    // The valid links are gone.
+    assert!(find_link(&app, &a).await.is_none());
+    assert!(find_link(&app, &b).await.is_none());
+}
+
+#[tokio::test]
+async fn admin_bulk_requires_token_401() {
+    let app = app_admin("secret").await;
+    let a = create_and_get_code(&app, "https://a.com").await;
+    let r = app
+        .oneshot(
+            Request::post("/admin/links/bulk")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"codes":["{a}"],"op":"delete"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_bulk_set_folder_moves_and_clears() {
+    let app = app_admin("secret").await;
+    let a = create_and_get_code(&app, "https://a.com").await;
+
+    let (status, v) = bulk(
+        &app,
+        &format!(r#"{{"codes":["{a}"],"op":"set_folder","value":"Marketing"}}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["ok"], 1);
+    assert_eq!(find_link(&app, &a).await.unwrap()["folder"], "Marketing");
+
+    // Empty value clears the folder.
+    let (_status, _v) = bulk(
+        &app,
+        &format!(r#"{{"codes":["{a}"],"op":"set_folder","value":""}}"#),
+    )
+    .await;
+    assert!(find_link(&app, &a).await.unwrap()["folder"].is_null());
+}
+
+#[tokio::test]
+async fn admin_bulk_remove_tag_removes() {
+    let app = app_admin("secret").await;
+    let a = create_and_get_code(&app, "https://a.com").await;
+    let _ = bulk(
+        &app,
+        &format!(r#"{{"codes":["{a}"],"op":"add_tag","value":"keep"}}"#),
+    )
+    .await;
+    let _ = bulk(
+        &app,
+        &format!(r#"{{"codes":["{a}"],"op":"add_tag","value":"drop"}}"#),
+    )
+    .await;
+    let (status, v) = bulk(
+        &app,
+        &format!(r#"{{"codes":["{a}"],"op":"remove_tag","value":"drop"}}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["ok"], 1);
+    assert_eq!(
+        find_link(&app, &a).await.unwrap()["tags"],
+        serde_json::json!(["keep"])
+    );
+}
+
+#[tokio::test]
+async fn admin_bulk_add_tag_without_value_400() {
+    let app = app_admin("secret").await;
+    let a = create_and_get_code(&app, "https://a.com").await;
+    let (status, _v) = bulk(&app, &format!(r#"{{"codes":["{a}"],"op":"add_tag"}}"#)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn admin_bulk_too_many_codes_400() {
+    let app = app_admin("secret").await;
+    let codes: Vec<String> = (0..501).map(|i| format!("\"c{i}\"")).collect();
+    let (status, _v) = bulk(
+        &app,
+        &format!(r#"{{"codes":[{}],"op":"delete"}}"#, codes.join(",")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

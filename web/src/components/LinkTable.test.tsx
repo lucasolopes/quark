@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LinkTable } from "./LinkTable";
 import { withProviders } from "@/test-utils";
+import { api } from "@/lib/api";
 import type { Link } from "@/lib/types";
 
 const link: Link = {
@@ -180,6 +181,59 @@ describe("LinkTable — visits", () => {
     const unlimited: Link = { ...link, visits: 7 };
     render(withProviders(<LinkTable links={[unlimited]} onEdit={() => {}} onDelete={() => {}} />));
     expect(screen.getByText("7")).toBeInTheDocument();
+  });
+});
+
+describe("LinkTable — bulk selection", () => {
+  const a: Link = { ...link, id: 1, code: "aaa1111" };
+  const b: Link = { ...link, id: 2, code: "bbb2222" };
+
+  it("adds a tag to all selected links via bulkLinks", async () => {
+    const spy = vi
+      .spyOn(api, "bulkLinks")
+      .mockResolvedValue({ ok: 2, failed: 0, results: [] });
+    await renderTable([a, b]);
+
+    // Select all rows on the page.
+    await userEvent.click(screen.getByRole("checkbox", { name: /select all on this page/i }));
+    // Type a tag and apply.
+    await userEvent.type(screen.getByLabelText(/tag or folder name/i), "promo");
+    await userEvent.click(screen.getByRole("button", { name: /^add tag$/i }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledWith(["aaa1111", "bbb2222"], "add_tag", "promo"));
+  });
+
+  it("moves selected links to a folder via bulkLinks", async () => {
+    const spy = vi
+      .spyOn(api, "bulkLinks")
+      .mockResolvedValue({ ok: 1, failed: 0, results: [] });
+    await renderTable([a, b]);
+
+    await userEvent.click(screen.getByRole("checkbox", { name: /select bbb2222/i }));
+    await userEvent.type(screen.getByLabelText(/tag or folder name/i), "Marketing");
+    await userEvent.click(screen.getByRole("button", { name: /move to folder/i }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledWith(["bbb2222"], "set_folder", "Marketing"));
+  });
+
+  it("deletes selected links after confirming in the dialog", async () => {
+    const spy = vi
+      .spyOn(api, "bulkLinks")
+      .mockResolvedValue({ ok: 2, failed: 0, results: [] });
+    await renderTable([a, b]);
+
+    await userEvent.click(screen.getByRole("checkbox", { name: /select all on this page/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    // Confirm inside the alert dialog (scoped, so we don't hit the bar button).
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledWith(["aaa1111", "bbb2222"], "delete", undefined));
+  });
+
+  it("shows no bulk bar when nothing is selected", async () => {
+    await renderTable([a, b]);
+    expect(screen.queryByRole("button", { name: /^add tag$/i })).not.toBeInTheDocument();
   });
 });
 

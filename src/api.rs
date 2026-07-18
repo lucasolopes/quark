@@ -4113,6 +4113,205 @@ async fn admin_link_patch(
     StatusCode::OK.into_response()
 }
 
+/// Max codes accepted in a single `POST /admin/links/bulk` request. Aligned
+/// with the list page size so a "select all on this page" never overflows it;
+/// beyond this the request is rejected with 400 rather than processed.
+const MAX_BULK: usize = 500;
+
+/// The bulk operation to apply to each selected link.
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum BulkOp {
+    Delete,
+    AddTag,
+    RemoveTag,
+    SetFolder,
+}
+
+#[derive(Deserialize)]
+struct BulkReq {
+    codes: Vec<String>,
+    op: BulkOp,
+    #[serde(default)]
+    value: Option<String>,
+}
+
+#[derive(Serialize)]
+struct BulkItemResult {
+    code: String,
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct BulkResp {
+    ok: usize,
+    failed: usize,
+    results: Vec<BulkItemResult>,
+}
+
+/// Applies one bulk operation to a single link, reusing the exact per-link
+/// mutation path of `admin_link_delete` / `admin_link_patch`: resolve → get →
+/// mutate `rec` → lifecycle `WebhookEvent` → `put_link_tx`/`delete_link_tx` →
+/// cache invalidate → `emit_if_in_memory`. Errors are returned per item so the
+/// caller can keep going with the rest of the batch.
+async fn bulk_apply_one(
+    st: &AppState,
+    tenant: crate::tenant::TenantId,
+    code: &str,
+    op: BulkOp,
+    value: Option<&str>,
+) -> Result<(), String> {
+    let (id, alias) = match resolve_for_admin(st, tenant, code).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return Err("not found".to_string()),
+        Err(_) => return Err("store error".to_string()),
+    };
+    let mut rec = match st.store.get_link(tenant, id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return Err("not found".to_string()),
+        Err(_) => return Err("store error".to_string()),
+    };
+    let canonical_code = codec::to_base62(permute::encode(id, st.key));
+
+    if op == BulkOp::Delete {
+        let ev = WebhookEvent {
+            event_type: EventType::LinkDeleted,
+            body: webhook_event_payload(
+                EventType::LinkDeleted,
+                &canonical_code,
+                &rec.url,
+                alias.as_deref(),
+                rec.expiry,
+                rec.created,
+                None,
+            ),
+            tenant_id: tenant,
+        };
+        let rows = st.webhooks.lifecycle_deliveries(tenant, &ev).await;
+        if st.store.delete_link_tx(tenant, id, &rows).await.is_err() {
+            return Err("store error".to_string());
+        }
+        if let Some(a) = &alias {
+            let _ = st.store.delete_alias(tenant, a).await;
+        }
+        st.cache.invalidate(id).await;
+        st.webhooks.emit_if_in_memory(ev);
+        return Ok(());
+    }
+
+    // add_tag / remove_tag / set_folder: all `LinkUpdated`.
+    match op {
+        BulkOp::AddTag => {
+            // `normalize_tags` over the whole set is idempotent when the tag is
+            // already present, and canonicalizes the new one (trim/lowercase).
+            let mut tags = rec.tags.clone();
+            tags.push(value.unwrap_or_default().to_string());
+            rec.tags = normalize_tags(tags);
+        }
+        BulkOp::RemoveTag => {
+            // Normalize the target the same way stored tags are, so it matches.
+            if let Some(target) = normalize_tags(vec![value.unwrap_or_default().to_string()])
+                .into_iter()
+                .next()
+            {
+                rec.tags.retain(|t| t != &target);
+            }
+        }
+        BulkOp::SetFolder => {
+            // Empty/None clears the folder (`normalize_folder` maps it to None).
+            rec.folder = normalize_folder(value.map(|s| s.to_string()));
+        }
+        BulkOp::Delete => unreachable!("delete handled above"),
+    }
+
+    let ev = WebhookEvent {
+        event_type: EventType::LinkUpdated,
+        body: webhook_event_payload(
+            EventType::LinkUpdated,
+            &canonical_code,
+            &rec.url,
+            alias.as_deref(),
+            rec.expiry,
+            rec.created,
+            None,
+        ),
+        tenant_id: tenant,
+    };
+    let rows = st.webhooks.lifecycle_deliveries(tenant, &ev).await;
+    if st.store.put_link_tx(tenant, id, &rec, &rows).await.is_err() {
+        return Err("store error".to_string());
+    }
+    st.cache.invalidate(id).await;
+    st.webhooks.emit_if_in_memory(ev);
+    Ok(())
+}
+
+/// `POST /admin/links/bulk`: apply one operation (`delete` / `add_tag` /
+/// `remove_tag` / `set_folder`) to a batch of links. Reuses the per-link
+/// mutation primitives; a per-item failure (not found, store error) does not
+/// abort the rest. Responds 200 with a partial report `{ ok, failed, results }`
+/// in the spirit of the importer.
+async fn admin_links_bulk(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let p = match admin_guard(&st, &headers, Scope::LinksWrite).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let req: BulkReq = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),
+    };
+    if req.codes.is_empty() {
+        return (StatusCode::BAD_REQUEST, "codes must not be empty").into_response();
+    }
+    if req.codes.len() > MAX_BULK {
+        return (StatusCode::BAD_REQUEST, "too many codes").into_response();
+    }
+    // `value` is required for the tag ops (an empty tag is meaningless). For
+    // `set_folder`, a missing/empty value is allowed and means "remove from
+    // folder"; `delete` ignores it.
+    if matches!(req.op, BulkOp::AddTag | BulkOp::RemoveTag)
+        && req.value.as_deref().map(str::trim).unwrap_or("").is_empty()
+    {
+        return (StatusCode::BAD_REQUEST, "value required").into_response();
+    }
+
+    let mut results = Vec::with_capacity(req.codes.len());
+    let mut ok = 0usize;
+    let mut failed = 0usize;
+    for code in &req.codes {
+        match bulk_apply_one(&st, p.tenant, code, req.op, req.value.as_deref()).await {
+            Ok(()) => {
+                ok += 1;
+                results.push(BulkItemResult {
+                    code: code.clone(),
+                    ok: true,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                failed += 1;
+                results.push(BulkItemResult {
+                    code: code.clone(),
+                    ok: false,
+                    error: Some(e),
+                });
+            }
+        }
+    }
+    Json(BulkResp {
+        ok,
+        failed,
+        results,
+    })
+    .into_response()
+}
+
 #[derive(Deserialize)]
 struct WebhookCreateReq {
     url: String,
@@ -4808,6 +5007,11 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route("/admin/stats", get(admin_stats))
         .route("/admin/links", get(admin_links_list))
         .route("/admin/import", post(admin_import))
+        // Static `bulk` and the `:code` param route coexist: matchit (axum's
+        // router) gives the static segment priority, so `POST /admin/links/bulk`
+        // hits this handler and never matches `:code` (which only serves
+        // DELETE/PATCH anyway). Verified by `admin_bulk_add_tag_*` tests.
+        .route("/admin/links/bulk", post(admin_links_bulk))
         .route(
             "/admin/links/:code",
             axum::routing::delete(admin_link_delete).patch(admin_link_patch),
