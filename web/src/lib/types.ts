@@ -105,6 +105,15 @@ export interface CreateInviteResponse {
 
 export interface PatchLinkRequest { url?: string; ttl?: number | null; tags?: string[]; max_visits?: number | null; rules?: Rule[]; variants?: Variant[]; app_ios?: string | null; app_android?: string | null; folder?: string | null; fallback_url?: string | null; password?: string | null; }
 
+/** The bulk operation applied to a batch of links via `POST /admin/links/bulk`. */
+export type BulkOp = "delete" | "add_tag" | "remove_tag" | "set_folder";
+
+/** Per-item outcome in a bulk response. */
+export interface BulkItemResult { code: string; ok: boolean; error?: string; }
+
+/** Partial report from `POST /admin/links/bulk`: successes, failures, per-item detail. */
+export interface BulkResponse { ok: number; failed: number; results: BulkItemResult[]; }
+
 /** The 5 link lifecycle events a webhook subscription can be notified about. */
 export const WEBHOOK_EVENTS = [
   "link.created",

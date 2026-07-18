@@ -5,6 +5,7 @@ import type {
   ListWebhooksResponse, CreateWebhookRequest, CreateWebhookResponse,
   PatchWebhookRequest, TestWebhookResponse,
   ImportSummary, TagsResponse, FoldersResponse,
+  BulkOp, BulkResponse,
   ListTokensResponse, CreateTokenRequest, CreateTokenResponse,
   ListPixelsResponse, CreatePixelRequest, Pixel,
   WellknownName, MeResponse, SheetsStatus,
@@ -105,6 +106,17 @@ export const api = {
       method: "PATCH", body: JSON.stringify(body),
     });
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
+  /**
+   * Applies one operation (`delete`/`add_tag`/`remove_tag`/`set_folder`) to a
+   * batch of links. `value` is the tag or folder (omit for `delete`; empty on
+   * `set_folder` clears the folder). Returns a partial report — a per-item
+   * failure does not fail the request.
+   */
+  async bulkLinks(codes: string[], op: BulkOp, value?: string): Promise<BulkResponse> {
+    return jsonOrThrow(
+      await req("/admin/links/bulk", { method: "POST", body: JSON.stringify({ codes, op, value }) }),
+    );
   },
   async getStats(code: string): Promise<Stats> {
     return jsonOrThrow(await req(`/${encodeURIComponent(code)}/stats`));
