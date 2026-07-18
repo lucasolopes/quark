@@ -76,6 +76,85 @@ fn ev(id: u64, ts: u64) -> ClickEvent {
     }
 }
 
+fn ev_t(id: u64, ts: u64, tenant: u64) -> ClickEvent {
+    ClickEvent {
+        tenant_id: tenant,
+        ..ev(id, ts)
+    }
+}
+
+#[tokio::test]
+async fn worker_forwards_only_matching_tenant_events_to_each_pixel() {
+    let (mock_base, captured) = mock_server("/mp/collect").await;
+    let dir = tempfile::tempdir().unwrap();
+    let (store, sink) = open_backends(dir.path(), true).await.unwrap();
+
+    // Tenant A = DEFAULT_TENANT (0), semeado no boot. Tenant B = 1, criado agora.
+    let tenant_b = quark::tenant::Tenant {
+        id: quark::tenant::TenantId(1),
+        name: "Tenant B".into(),
+        slug: "tenant-b".into(),
+        created: 0,
+    };
+    store.put_tenant(&tenant_b).await.unwrap();
+
+    store
+        .put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1))
+        .await
+        .unwrap();
+    store
+        .put_pixel(quark::tenant::TenantId(1), &ga4_config(1))
+        .await
+        .unwrap();
+
+    let bases = PixelBases {
+        ga4: mock_base,
+        meta: "http://127.0.0.1:1".to_string(),
+    };
+    let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(100);
+    let handle = spawn_worker(
+        rx,
+        sink.clone(),
+        store.clone(),
+        reqwest::Client::new(),
+        KEY,
+        bases,
+    );
+
+    tx.send(ev_t(10, 1_752_300_000, 0)).await.unwrap(); // tenant A
+    tx.send(ev_t(20, 1_752_300_001, 1)).await.unwrap(); // tenant B
+    drop(tx);
+    handle.await.unwrap();
+
+    let code_a = codec::to_base62(permute::encode(10, KEY));
+    let code_b = codec::to_base62(permute::encode(20, KEY));
+
+    let calls = captured.lock().unwrap();
+    // Uma chamada por pixel (dois pixels), não uma só com o batch inteiro.
+    assert_eq!(calls.len(), 2, "cada pixel encaminha uma vez");
+
+    for (_, body) in calls.iter() {
+        let events = body["events"].as_array().unwrap();
+        let codes: Vec<&str> = events
+            .iter()
+            .map(|e| e["params"]["link_code"].as_str().unwrap())
+            .collect();
+        assert_eq!(codes.len(), 1, "cada chamada tem só o clique do seu tenant");
+        assert!(
+            codes[0] == code_a || codes[0] == code_b,
+            "code inesperado: {:?}",
+            codes[0]
+        );
+    }
+
+    let seen: Vec<&str> = calls
+        .iter()
+        .map(|(_, b)| b["events"][0]["params"]["link_code"].as_str().unwrap())
+        .collect();
+    assert!(seen.contains(&code_a.as_str()), "tenant A não encaminhado");
+    assert!(seen.contains(&code_b.as_str()), "tenant B não encaminhado");
+}
+
 #[tokio::test]
 async fn worker_flush_forwards_batch_to_active_pixel_with_real_short_code() {
     let (mock_base, captured) = mock_server("/mp/collect").await;

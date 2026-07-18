@@ -31,6 +31,13 @@ configurações de pixel vivem sob a conta do operador, e todo clique é
 encaminhado pra cada uma que estiver ativa. Ainda não há mira por link (veja
 a nota de follow-up no final).
 
+Em deploys cloud (multi-tenant), os pixels são configurados **por tenant**:
+cada tenant tem seus próprios pixels de GA4/Meta, e um clique só é
+encaminhado aos pixels do tenant dono do link, nunca aos de outro tenant. No
+OSS/self-host (single-tenant) existe só um tenant, o operador, então o
+comportamento é o mesmo de antes: todo clique encaminha pra cada pixel
+ativo.
+
 ### Como conseguir o API secret do Measurement Protocol (GA4)
 
 1. No GA4, vá em **Admin > Data Streams** e escolha o stream da sua
@@ -97,8 +104,11 @@ O encaminhamento roda a partir do **worker de analytics** que já existe no
 quark, o mesmo caminho em background que já grava os eventos de clique no
 sink de analytics. Ele **não** roda junto com o redirect: um clique recebe a
 resposta 302 imediatamente, independente de GA4 ou Meta estarem
-configurados, alcançáveis ou lentos. O worker agrupa os cliques em lote e
-encaminha cada lote pra cada configuração de pixel ativa, depois do fato.
+configurados, alcançáveis ou lentos. O worker agrupa os cliques em lote e,
+pra cada lote, encaminha cada clique só pros pixels ativos do seu próprio
+tenant, depois do fato. Um lote mistura cliques de tenants diferentes, mas o
+worker filtra por tenant antes de enviar, então o dado de conversão de um
+tenant nunca chega aos pixels de outro.
 
 Isso também é **fail-open**: se um provedor está fora do ar, limitando taxa
 do quark, ou retorna erro, essa falha é logada e descartada. Ela nunca afeta
