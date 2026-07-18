@@ -1991,6 +1991,13 @@ async fn oidc_logout(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Res
 /// state. Never guarded: it reports `authenticated: false` instead of erroring.
 async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let oidc_enabled = st.oidc.is_some();
+    // The optional custom label for the shared OIDC login button (from
+    // `QUARK_OIDC_BUTTON_LABEL`), read off the live runtime's config. Absent
+    // when unset so the panel falls back to its i18n label.
+    let oidc_button_label = st
+        .oidc
+        .as_ref()
+        .and_then(|rt| rt.config.button_label.clone());
     if let Some(raw) = cookie_value(&headers, SESSION_COOKIE) {
         if let Ok(Some(session)) = st.store.get_session_by_hash(&hash_token(raw), now()).await {
             let memberships = if st.multi_tenant {
@@ -2035,6 +2042,7 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
                 "display": session.display,
                 "scopes": session.scopes,
                 "oidc_enabled": oidc_enabled,
+                "oidc_button_label": oidc_button_label,
                 "multi_tenant": st.multi_tenant,
                 "memberships": memberships,
                 "current_tenant": current_tenant,
@@ -2046,6 +2054,7 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
     Json(serde_json::json!({
         "authenticated": false,
         "oidc_enabled": oidc_enabled,
+        "oidc_button_label": oidc_button_label,
         "multi_tenant": st.multi_tenant,
         "tenant_domain_suffix": st.tenant_domain_suffix,
     }))

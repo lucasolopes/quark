@@ -16,6 +16,9 @@ export function Login() {
   const t = useT();
   const [value, setValue] = useState("");
   const [oidcEnabled, setOidcEnabled] = useState(false);
+  // Optional operator-configured label for the shared OIDC button
+  // (`QUARK_OIDC_BUTTON_LABEL`); null means fall back to the i18n label.
+  const [oidcButtonLabel, setOidcButtonLabel] = useState<string | null>(null);
   const [multiTenant, setMultiTenant] = useState(false);
   const [email, setEmail] = useState("");
   // Set once email discovery comes back with no org: reveals the shared
@@ -45,6 +48,7 @@ export function Login() {
         if (me.authenticated) navigate("/links", { replace: true });
         else {
           setOidcEnabled(me.oidc_enabled);
+          setOidcButtonLabel(me.oidc_button_label ?? null);
           setMultiTenant(me.multi_tenant ?? false);
         }
       })
@@ -203,7 +207,7 @@ export function Login() {
                     window.location.href = oidcLoginUrl();
                   }}
                 >
-                  {t("login.oidcButton")}
+                  {oidcButtonLabel ?? t("login.oidcButton")}
                 </Button>
               )}
             </>
