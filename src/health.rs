@@ -196,7 +196,14 @@ where
     let mut first_chunk = true;
     loop {
         let page = store
-            .list_links(crate::tenant::DEFAULT_TENANT, after, LIST_PAGE, None, None)
+            .list_links(
+                crate::tenant::DEFAULT_TENANT,
+                after,
+                LIST_PAGE,
+                None,
+                None,
+                false,
+            )
             .await
             .map_err(|e| e.to_string())?;
         let n = page.len();

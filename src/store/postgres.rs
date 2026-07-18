@@ -1206,8 +1206,13 @@ impl Store for PostgresStore {
         limit: usize,
         tag: Option<&str>,
         folder: Option<&str>,
+        active_only: bool,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let tag_json = tag.map(|t| serde_json::json!([t]));
+        // Single WHERE clause (no N+1): when `active_only`, keep only links that
+        // are unexpired and under their visit cap. `$6` toggles the predicate so
+        // the default path is unchanged.
+        let now = crate::now() as i64;
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
                 "SELECT id, url, expiry, created, tags, max_visits, rules, variants, app_ios, app_android, folder, fallback_url, password_hash, tenant_id FROM links \
@@ -1215,6 +1220,7 @@ impl Store for PostgresStore {
                    AND ($1::bigint IS NULL OR id > $1) \
                    AND ($2::jsonb IS NULL OR tags @> $2) \
                    AND ($4::text IS NULL OR lower(folder) = lower($4)) \
+                   AND (NOT $6 OR ((expiry IS NULL OR expiry > $7) AND (max_visits IS NULL OR visits < max_visits))) \
                  ORDER BY id LIMIT $3",
             )
             .bind(after.map(|a| a as i64))
@@ -1222,12 +1228,15 @@ impl Store for PostgresStore {
             .bind(limit as i64)
             .bind(folder)
             .bind(tenant.0 as i64)
+            .bind(active_only)
+            .bind(now)
             .fetch_all(&mut *c)
             .await
         });
         rows.iter().map(row_to_link).collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn search_links(
         &self,
         tenant: TenantId,
@@ -1236,9 +1245,11 @@ impl Store for PostgresStore {
         limit: usize,
         tag: Option<&str>,
         folder: Option<&str>,
+        active_only: bool,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let pattern = format!("%{}%", like_escape(q));
         let tag_json = tag.map(|t| serde_json::json!([t]));
+        let now = crate::now() as i64;
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
                 "SELECT DISTINCT l.id, l.url, l.expiry, l.created, l.tags, l.max_visits, l.rules, l.variants, l.app_ios, l.app_android, l.folder, l.fallback_url, l.password_hash, l.tenant_id \
@@ -1248,6 +1259,7 @@ impl Store for PostgresStore {
                    AND (l.url ILIKE $2 OR a.alias ILIKE $2) \
                    AND ($3::jsonb IS NULL OR l.tags @> $3) \
                    AND ($5::text IS NULL OR lower(l.folder) = lower($5)) \
+                   AND (NOT $7 OR ((l.expiry IS NULL OR l.expiry > $8) AND (l.max_visits IS NULL OR l.visits < l.max_visits))) \
                  ORDER BY l.id LIMIT $4",
             )
             .bind(after.map(|a| a as i64))
@@ -1256,6 +1268,8 @@ impl Store for PostgresStore {
             .bind(limit as i64)
             .bind(folder)
             .bind(tenant.0 as i64)
+            .bind(active_only)
+            .bind(now)
             .fetch_all(&mut *c)
             .await
         });

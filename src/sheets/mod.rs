@@ -255,7 +255,7 @@ pub async fn sync(
     let mut after: Option<u64> = None;
     loop {
         let page = store
-            .list_links(tenant, after, SYNC_PAGE, None, None)
+            .list_links(tenant, after, SYNC_PAGE, None, None, false)
             .await
             .map_err(|e| format!("list_links: {e:?}"))?;
         let got = page.len();

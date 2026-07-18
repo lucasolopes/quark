@@ -86,20 +86,24 @@ const LINKS_PAGE_SIZE = 50;
  * `tag` and `folder` filter the list server-side (`GET /admin/links?tag=`,
  * `?folder=`, combinable); both are part of the query key alongside `q` so
  * switching a filter refetches instead of reusing a stale cache entry.
+ * `status` (`active`) narrows the list to active links (unexpired and under
+ * their visit cap) the same way, and is likewise part of the query key.
  */
 export function useLinks(
   q?: string,
   tag?: string,
   folder?: string,
   health?: string,
+  status?: string,
   options: { enabled?: boolean } = {},
 ) {
   const term = q?.trim() ?? "";
   const tagTerm = tag?.trim() ?? "";
   const folderTerm = folder?.trim() ?? "";
   const healthTerm = health?.trim() ?? "";
+  const statusTerm = status?.trim() ?? "";
   return useInfiniteQuery({
-    queryKey: [...LINKS_QUERY_KEY, term, tagTerm, folderTerm, healthTerm],
+    queryKey: [...LINKS_QUERY_KEY, term, tagTerm, folderTerm, healthTerm, statusTerm],
     queryFn: ({ pageParam }) =>
       api.listLinks({
         after: pageParam ?? undefined,
@@ -108,6 +112,7 @@ export function useLinks(
         tag: tagTerm || undefined,
         folder: folderTerm || undefined,
         health: healthTerm || undefined,
+        status: statusTerm || undefined,
       }),
     initialPageParam: null as number | null,
     // Rely on the server cursor, not page length: with the `broken` filter a

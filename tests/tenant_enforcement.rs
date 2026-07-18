@@ -71,12 +71,18 @@ async fn cloud_force_rls_is_fail_closed() {
         "other tenant must not see the link"
     );
     assert_eq!(
-        t2.list_links(None, 100, None, None).await.unwrap().len(),
+        t2.list_links(None, 100, None, None, false)
+            .await
+            .unwrap()
+            .len(),
         0,
         "other tenant must list zero links"
     );
     assert_eq!(
-        t1.list_links(None, 100, None, None).await.unwrap().len(),
+        t1.list_links(None, 100, None, None, false)
+            .await
+            .unwrap()
+            .len(),
         1,
         "owning tenant must list its own link"
     );

@@ -70,7 +70,15 @@ async fn search_matches_url_and_alias() {
     )
     .await;
     let hits = store
-        .search_links(quark::tenant::DEFAULT_TENANT, "rust", None, 50, None, None)
+        .search_links(
+            quark::tenant::DEFAULT_TENANT,
+            "rust",
+            None,
+            50,
+            None,
+            None,
+            false,
+        )
         .await
         .unwrap();
     let urls: Vec<&str> = hits.iter().map(|(_, r)| r.url.as_str()).collect();
@@ -103,7 +111,15 @@ async fn search_escapes_wildcards() {
     )
     .await;
     let hits = store
-        .search_links(quark::tenant::DEFAULT_TENANT, "50%", None, 50, None, None)
+        .search_links(
+            quark::tenant::DEFAULT_TENANT,
+            "50%",
+            None,
+            50,
+            None,
+            None,
+            false,
+        )
         .await
         .unwrap();
     let urls: Vec<&str> = hits.iter().map(|(_, r)| r.url.as_str()).collect();
@@ -132,7 +148,15 @@ async fn search_is_case_insensitive() {
     )
     .await;
     let hits = store
-        .search_links(quark::tenant::DEFAULT_TENANT, "RUST", None, 50, None, None)
+        .search_links(
+            quark::tenant::DEFAULT_TENANT,
+            "RUST",
+            None,
+            50,
+            None,
+            None,
+            false,
+        )
         .await
         .unwrap();
     assert!(
@@ -162,7 +186,15 @@ async fn search_keyset_pagination() {
     )
     .await;
     let page1 = store
-        .search_links(quark::tenant::DEFAULT_TENANT, "alfa", None, 2, None, None)
+        .search_links(
+            quark::tenant::DEFAULT_TENANT,
+            "alfa",
+            None,
+            2,
+            None,
+            None,
+            false,
+        )
         .await
         .unwrap();
     assert_eq!(page1.len(), 2);
@@ -175,6 +207,7 @@ async fn search_keyset_pagination() {
             2,
             None,
             None,
+            false,
         )
         .await
         .unwrap();
