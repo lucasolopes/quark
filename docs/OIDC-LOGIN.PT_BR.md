@@ -53,6 +53,7 @@ Set essas variáveis em toda instância que serve a API do painel. OIDC liga qua
 | `QUARK_OIDC_ADMIN_VALUE` | Valor nesse claim que concede acesso total (ex. `quark-admins`). |
 | `QUARK_OIDC_READONLY_VALUE` | Valor opcional que concede somente-leitura (leitura de links + analytics). |
 | `QUARK_OIDC_POST_LOGIN_URL` | Pra onde mandar o navegador depois do login (default `/`). Set com a URL do painel quando ele fica numa origem diferente da API. |
+| `QUARK_OIDC_BUTTON_LABEL` | Rótulo opcional pro botão de login OIDC do painel (ex. `Entrar com Google`). Cai no rótulo embutido do painel quando não setado. Só de exibição, nunca afeta a autorização. |
 
 O cookie de sessão é assinado com `QUARK_SIGNING_KEY` (o mesmo segredo dos cookies
 de senha de link); set e compartilhe entre réplicas pra um deploy multi-instância
@@ -80,13 +81,49 @@ prepare um claim de grupo/role pra `QUARK_OIDC_ADMIN_CLAIM` /
 
 ### Google
 
-1. Google Cloud Console, APIs e Serviços, Credenciais, crie um OAuth 2.0 Client
-   ID do tipo "Aplicativo Web".
-2. Adicione o redirect URI acima.
-3. `QUARK_OIDC_ISSUER=https://accounts.google.com`, client id/secret do console.
-   O Google não emite claim de grupo por padrão, então restrinja a uma conta com
-   `QUARK_OIDC_ADMIN_CLAIM=email` e `QUARK_OIDC_ADMIN_VALUE=voce@exemplo.com` (ou
-   use grupos do Workspace).
+O Google é um provedor OIDC padrão, então o fluxo existente funciona sem
+mudança de código. Não existe um SDK separado do Google; você aponta o quark
+pro issuer do Google.
+
+1. No Google Cloud Console, vá em APIs e Serviços, Credenciais, e crie um OAuth
+   2.0 Client ID do tipo "Aplicativo Web".
+2. Em "URIs de redirecionamento autorizados", adicione seu
+   `QUARK_OIDC_REDIRECT_URL` exatamente (`https://<host-quark>/admin/callback`).
+   Copie o client id e o client secret gerados.
+3. Configure o env:
+
+   ```
+   QUARK_OIDC_ISSUER=https://accounts.google.com
+   QUARK_OIDC_CLIENT_ID=<client id>
+   QUARK_OIDC_CLIENT_SECRET=<client secret>
+   QUARK_OIDC_REDIRECT_URL=https://<host-quark>/admin/callback
+   QUARK_OIDC_SCOPES=openid email profile
+   ```
+
+**Autorização.** O Google não emite claim `groups`, então o default de fábrica
+(`QUARK_OIDC_ADMIN_CLAIM=groups`) não casa com nada e nega todo mundo, que é o
+comportamento default-closed pretendido. Escolha um dos dois claims que o Google
+emite:
+
+- Admin único, qualquer conta Google: restrinja pelo claim de email.
+
+  ```
+  QUARK_OIDC_ADMIN_CLAIM=email
+  QUARK_OIDC_ADMIN_VALUE=voce@exemplo.com
+  ```
+
+- Um Workspace inteiro do Google: restrinja pelo claim de domínio hospedado
+  (`hd`, presente só em contas Workspace), pra que todo mundo do seu domínio
+  seja admin.
+
+  ```
+  QUARK_OIDC_ADMIN_CLAIM=hd
+  QUARK_OIDC_ADMIN_VALUE=dominio-do-seu-workspace.com
+  ```
+
+Nos dois casos a autorização segue default-closed: uma conta que não casa com
+nenhum dos dois não tem acesso. Pra rotular o botão do painel como "Entrar com
+Google", set `QUARK_OIDC_BUTTON_LABEL="Entrar com Google"`.
 
 ### GitHub
 

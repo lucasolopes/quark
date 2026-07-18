@@ -53,6 +53,7 @@ Set these on every instance that serves the panel API. OIDC turns on when
 | `QUARK_OIDC_ADMIN_VALUE` | Value in that claim granting full access (e.g. `quark-admins`). |
 | `QUARK_OIDC_READONLY_VALUE` | Optional value granting read-only (links-read + analytics). |
 | `QUARK_OIDC_POST_LOGIN_URL` | Where to send the browser after login (default `/`). Set to the panel URL when the panel is on a different origin than the API. |
+| `QUARK_OIDC_BUTTON_LABEL` | Optional label for the panel's OIDC login button (e.g. `Sign in with Google`). Falls back to the panel's built-in label when unset. Display only, never affects authorization. |
 
 The session cookie is signed with `QUARK_SIGNING_KEY` (the same secret used for
 link-password cookies); set it and share it across replicas for a stable
@@ -79,13 +80,47 @@ scopes, and arrange for a group/role claim so `QUARK_OIDC_ADMIN_CLAIM` /
 
 ### Google
 
-1. Google Cloud Console, APIs and Services, Credentials, create an OAuth 2.0
-   Client ID of type "Web application".
-2. Add the redirect URI above.
-3. `QUARK_OIDC_ISSUER=https://accounts.google.com`, client id/secret from the
-   console. Google does not emit group claims by default, so gate on a specific
-   account with `QUARK_OIDC_ADMIN_CLAIM=email` and
-   `QUARK_OIDC_ADMIN_VALUE=you@example.com` (or use Workspace groups).
+Google is a standard OIDC provider, so the existing flow works with no code
+changes. There is no separate Google SDK; you point quark at Google's issuer.
+
+1. In the Google Cloud Console, go to APIs and Services, Credentials, and create
+   an OAuth 2.0 Client ID of type "Web application".
+2. Under "Authorized redirect URIs", add your `QUARK_OIDC_REDIRECT_URL` exactly
+   (`https://<quark-host>/admin/callback`). Copy the generated client id and
+   client secret.
+3. Configure the env:
+
+   ```
+   QUARK_OIDC_ISSUER=https://accounts.google.com
+   QUARK_OIDC_CLIENT_ID=<client id>
+   QUARK_OIDC_CLIENT_SECRET=<client secret>
+   QUARK_OIDC_REDIRECT_URL=https://<quark-host>/admin/callback
+   QUARK_OIDC_SCOPES=openid email profile
+   ```
+
+**Authorization.** Google does not emit a `groups` claim, so the shipped default
+(`QUARK_OIDC_ADMIN_CLAIM=groups`) matches nothing and denies everyone, which is
+the intended default-closed behavior. Pick one of the two claims Google does
+emit:
+
+- Single admin, any Google account: gate on the email claim.
+
+  ```
+  QUARK_OIDC_ADMIN_CLAIM=email
+  QUARK_OIDC_ADMIN_VALUE=you@example.com
+  ```
+
+- A whole Google Workspace: gate on the hosted-domain claim (`hd`, present only
+  for Workspace accounts), so anyone in your domain is an admin.
+
+  ```
+  QUARK_OIDC_ADMIN_CLAIM=hd
+  QUARK_OIDC_ADMIN_VALUE=your-workspace-domain.com
+  ```
+
+Either way authorization stays default-closed: an account that matches neither
+gets no access. To label the panel button "Sign in with Google", set
+`QUARK_OIDC_BUTTON_LABEL="Sign in with Google"`.
 
 ### GitHub
 

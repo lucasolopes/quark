@@ -75,6 +75,10 @@ export interface Membership { tenant_id: number; name: string; slug: string; rol
 export interface MeResponse {
   authenticated: boolean;
   oidc_enabled: boolean;
+  /** Optional custom label for the shared OIDC login button (from
+   * `QUARK_OIDC_BUTTON_LABEL`, e.g. "Sign in with Google"). Null/absent when
+   * unset, in which case the panel uses its own i18n label. */
+  oidc_button_label?: string | null;
   /** True when the server runs in cloud (multi-tenant) mode. Present pre-auth,
    * so the login screen can gate cloud-only affordances like email-first SSO
    * discovery (meaningless in single-tenant OSS). */

@@ -33,6 +33,12 @@ pub struct OidcConfig {
     /// Where to send the browser after a successful login. Default `/` (panel
     /// same-origin); set to the panel URL for a split-origin deployment.
     pub post_login_url: String,
+    /// Optional label for the panel's shared OIDC login button, read from
+    /// `QUARK_OIDC_BUTTON_LABEL`. `None` when unset or empty, in which case the
+    /// panel falls back to its own i18n label. Lets an operator relabel the
+    /// button (e.g. "Sign in with Google") without a rebuild; it is a display
+    /// hint only and never affects authorization.
+    pub button_label: Option<String>,
 }
 
 impl OidcConfig {
@@ -57,6 +63,9 @@ impl OidcConfig {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "/".to_string()),
+            button_label: std::env::var("QUARK_OIDC_BUTTON_LABEL")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 }
@@ -521,6 +530,9 @@ impl OidcRuntime {
                 .post_login_url
                 .clone()
                 .unwrap_or_else(|| "/".to_string()),
+            // The button label is a global/OSS panel affordance (env-sourced);
+            // the per-tenant multi-tenant login path does not carry one.
+            button_label: None,
         };
         Self::build(config).await
     }
@@ -715,6 +727,7 @@ mod tests {
             admin_value: "quark-admins".into(),
             readonly_value: Some("quark-viewers".into()),
             post_login_url: "/".into(),
+            button_label: None,
         }
     }
 
@@ -870,6 +883,46 @@ mod tests {
         // missing claim -> nothing
         let missing = serde_json::json!({ "sub": "x" });
         assert!(map_scopes(&missing, &c).is_empty());
+    }
+
+    // Google login authorization (LUC-16): Google emits no `groups` claim, but
+    // it emits `email` (always) and `hd` (hosted domain, Workspace only), both
+    // as string claims. `claim_contains` already matches a string claim, so the
+    // existing default-closed `map_scopes` authorizes Google with no gate
+    // change. This test documents and locks that: `hd` grants a whole Workspace,
+    // `email` grants a single admin, and the shipped default `admin_claim=groups`
+    // (which Google never sends) grants nothing.
+    #[test]
+    fn map_scopes_authorizes_google_email_and_hd_claims() {
+        let google = serde_json::json!({ "email": "me@acme.com", "hd": "acme.com" });
+
+        // (a) Workspace-wide admin via the hosted-domain claim.
+        let by_hd = OidcConfig {
+            admin_claim: "hd".into(),
+            admin_value: "acme.com".into(),
+            readonly_value: None,
+            ..cfg()
+        };
+        assert_eq!(map_scopes(&google, &by_hd), vec![Scope::Full]);
+
+        // (b) Single-admin via the email claim.
+        let by_email = OidcConfig {
+            admin_claim: "email".into(),
+            admin_value: "me@acme.com".into(),
+            readonly_value: None,
+            ..cfg()
+        };
+        assert_eq!(map_scopes(&google, &by_email), vec![Scope::Full]);
+
+        // (c) Default-closed preserved: the shipped default `admin_claim=groups`
+        // is absent from Google claims, so nothing is granted.
+        let by_default = OidcConfig {
+            admin_claim: "groups".into(),
+            admin_value: "quark-admins".into(),
+            readonly_value: None,
+            ..cfg()
+        };
+        assert!(map_scopes(&google, &by_default).is_empty());
     }
 
     #[tokio::test]
