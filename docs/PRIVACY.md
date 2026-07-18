@@ -1,6 +1,6 @@
 **English** · [Português](PRIVACY.PT_BR.md)
 
-# Privacy (LUC-44 v1)
+# Privacy
 
 This document describes, precisely, what quark captures about a visitor who
 clicks a short link, what it stores, what it sends off-box, and what quark

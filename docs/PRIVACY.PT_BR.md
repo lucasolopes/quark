@@ -1,6 +1,6 @@
 [English](PRIVACY.md) · **Português**
 
-# Privacidade (LUC-44 v1)
+# Privacidade
 
 Este documento descreve, com precisão, o que o quark captura sobre um
 visitante que clica num link curto, o que grava em disco, o que envia pra
