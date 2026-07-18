@@ -1288,6 +1288,17 @@ async fn redirect(
             // `rec.url`, so the common path may only MOVE `rec.url` into the
             // location when no subscriber will need it afterwards.
             let clicked_subscribed = st.webhooks.clicked_subscribed.load(Ordering::Relaxed);
+            // Global Privacy Control (GPC): honored by default, no config
+            // flag. `Sec-GPC: 1` suppresses analytics capture and conversion
+            // forwarding for this click (both fed by the same
+            // `analytics_tx` send below); it does not affect the redirect,
+            // `bump_visits`/`max_visits` enforcement, or the first-party
+            // `link.clicked` operator webhook (gated separately below).
+            let gpc = headers
+                .get("sec-gpc")
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.trim() == "1")
+                .unwrap_or(false);
             let (location, variant): (String, Option<u32>) = if let Some(app) = app_dest {
                 (app, None)
             } else {
@@ -1359,7 +1370,12 @@ async fn redirect(
                 });
             }
 
-            let _ = st.analytics_tx.try_send(ev);
+            // GPC (`sec-gpc` header, read above) suppresses this send: the
+            // same channel feeds both analytics capture and conversion
+            // forwarding, so gating it here covers both per the opt-out.
+            if !gpc {
+                let _ = st.analytics_tx.try_send(ev);
+            }
 
             (
                 StatusCode::FOUND,
