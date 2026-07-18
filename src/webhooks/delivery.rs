@@ -6,7 +6,7 @@
 //! caller (in particular the redirect hot path).
 
 use crate::abuse::{extract_host, is_internal_host};
-use crate::store::{OutboxDelivery, OutboxRow, Store};
+use crate::store::{OutboxDelivery, OutboxRow, Store, StoreError};
 use crate::webhooks::{
     channel_payload, format_message, matches, sign, EventType, SubscriptionKind, WebhookEvent,
     WebhookSubscription,
@@ -178,9 +178,9 @@ fn outbox_event_id(body: &str) -> String {
 }
 
 /// Background worker: mirrors `analytics::spawn_worker`'s `tokio::select!`
-/// shape. On each event it delivers to the cached subscription snapshot; on
-/// the ~10s ticker it refreshes that snapshot and the `clicked`/`expired`
-/// gating atomics from the store.
+/// shape. On each event it delivers to the cached subscription snapshot
+/// (grouped by tenant, LUC-63); on the ~10s ticker it refreshes that
+/// snapshot and the `clicked`/`expired` gating atomics from the store.
 pub fn spawn_webhook_worker(
     mut rx: Receiver<WebhookEvent>,
     store: Arc<dyn Store>,
@@ -194,7 +194,8 @@ pub fn spawn_webhook_worker(
             .build()
             .expect("reqwest client must build");
 
-        let mut subs = refresh_snapshot(&store, &clicked, &expired).await;
+        let mut subs: Vec<(crate::tenant::TenantId, Vec<WebhookSubscription>)> = Vec::new();
+        refresh_snapshot(&store, &clicked, &expired, &mut subs).await;
         let mut ticker = tokio::time::interval(Duration::from_secs(REFRESH_INTERVAL_SECS));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -207,49 +208,85 @@ pub fn spawn_webhook_worker(
                     }
                 }
                 _ = ticker.tick() => {
-                    subs = refresh_snapshot(&store, &clicked, &expired).await;
+                    refresh_snapshot(&store, &clicked, &expired, &mut subs).await;
                 }
             }
         }
     })
 }
 
-/// Re-reads subscriptions from the store, updates the `clicked`/`expired`
-/// atomics (true iff any active subscription includes that event type), and
-/// returns the fresh snapshot. On store error, logs and keeps an empty
-/// snapshot (fail-open: no delivery, no panic).
+/// How long a full subscription-snapshot refresh (`list_tenants` +
+/// `list_webhooks` per tenant) is allowed to run before it's abandoned in
+/// favor of the previous snapshot (fail-open: a wedged store must never
+/// stall the worker, matching the fail-open contract described below).
+/// Mirrors `analytics::PIXEL_SNAPSHOT_TIMEOUT`.
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Re-reads subscriptions from the store across every tenant (LUC-63:
+/// `list_tenants` + `list_webhooks(t)` per tenant, mirroring
+/// `analytics::refresh_pixel_snapshot`), updates the `clicked`/`expired`
+/// atomics (true iff ANY tenant has an active subscription for that event
+/// type), and writes the fresh per-tenant snapshot into `subs`. Fail-open: on
+/// a store error (listing tenants or any tenant's subscriptions) or a
+/// timeout, `*subs` is left untouched and the atomics are not touched either:
+/// a wedged or erroring store never stalls the worker and never empties out
+/// (or falsely degates) a snapshot that was previously known-good.
+///
+/// In OSS/single-tenant mode `list_tenants` returns only the default
+/// tenant, so this degrades to exactly the old single-tenant behavior (one
+/// group, same subs).
 async fn refresh_snapshot(
     store: &Arc<dyn Store>,
     clicked: &AtomicBool,
     expired: &AtomicBool,
-) -> Vec<WebhookSubscription> {
-    match store.list_webhooks(crate::tenant::DEFAULT_TENANT).await {
-        Ok(subs) => {
-            let has_clicked = subs
-                .iter()
-                .any(|s| s.active && s.events.contains(&EventType::LinkClicked));
-            let has_expired = subs
-                .iter()
-                .any(|s| s.active && s.events.contains(&EventType::LinkExpired));
+    subs: &mut Vec<(crate::tenant::TenantId, Vec<WebhookSubscription>)>,
+) {
+    let load = async {
+        let tenants = store.list_tenants().await?;
+        let mut out = Vec::with_capacity(tenants.len());
+        for t in tenants {
+            let s = store.list_webhooks(t.id).await?;
+            out.push((t.id, s));
+        }
+        Ok::<_, StoreError>(out)
+    };
+    match tokio::time::timeout(SNAPSHOT_TIMEOUT, load).await {
+        Ok(Ok(snapshot)) => {
+            let has_clicked = snapshot.iter().any(|(_, subs)| {
+                subs.iter()
+                    .any(|s| s.active && s.events.contains(&EventType::LinkClicked))
+            });
+            let has_expired = snapshot.iter().any(|(_, subs)| {
+                subs.iter()
+                    .any(|s| s.active && s.events.contains(&EventType::LinkExpired))
+            });
             clicked.store(has_clicked, Ordering::Relaxed);
             expired.store(has_expired, Ordering::Relaxed);
-            subs
+            *subs = snapshot;
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             eprintln!(
                 "{}",
                 serde_json::json!({"webhook_snapshot_refresh_error": e.to_string()})
             );
-            Vec::new()
+        }
+        Err(_) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"webhook_snapshot_refresh_error": "timed out refreshing subscription snapshot"})
+            );
         }
     }
 }
 
-/// Delivers `ev` to every subscription in `subs` that matches it, skipping
-/// internal destinations (SSRF guard via `abuse::is_internal_host`).
+/// Delivers `ev` to every subscription in `ev.tenant_id`'s group that
+/// matches it, skipping internal destinations (SSRF guard via
+/// `abuse::is_internal_host`). An event never reaches another tenant's
+/// subscriptions (cross-tenant isolation, LUC-63): only the group whose key
+/// equals `ev.tenant_id` is consulted.
 async fn deliver_to_matching(
     client: &reqwest::Client,
-    subs: &[WebhookSubscription],
+    subs: &[(crate::tenant::TenantId, Vec<WebhookSubscription>)],
     ev: &WebhookEvent,
 ) {
     deliver_to_matching_guarded(client, subs, ev, is_internal_host).await
@@ -265,11 +302,14 @@ async fn deliver_to_matching(
 /// predicate, by `worker_refuses_internal_destination`).
 async fn deliver_to_matching_guarded(
     client: &reqwest::Client,
-    subs: &[WebhookSubscription],
+    subs: &[(crate::tenant::TenantId, Vec<WebhookSubscription>)],
     ev: &WebhookEvent,
     is_blocked: impl Fn(&str) -> bool,
 ) {
-    for sub in subs.iter().filter(|s| matches(s, &ev.event_type)) {
+    let Some((_, tenant_subs)) = subs.iter().find(|(t, _)| *t == ev.tenant_id) else {
+        return;
+    };
+    for sub in tenant_subs.iter().filter(|s| matches(s, &ev.event_type)) {
         let host = match extract_host(&sub.url) {
             Some(h) => h,
             None => {
@@ -603,6 +643,7 @@ async fn deliver_claimed(
     let ev = WebhookEvent {
         event_type,
         body: delivery.payload.clone(),
+        tenant_id: delivery.tenant_id,
     };
     let Some(req) = build_outgoing_request(sub, &ev, Some(&delivery.delivery_key)) else {
         eprintln!(
@@ -733,7 +774,7 @@ fn backoff_with_jitter(attempt: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{Record, StoreError};
+    use crate::store::Record;
     use crate::webhooks::EventType;
     use axum::body::Bytes;
     use axum::extract::State;
@@ -804,21 +845,45 @@ mod tests {
         (format!("http://{addr}/hook"), state)
     }
 
-    /// Minimal `Store` stub: only `list_webhooks` is exercised by the
-    /// delivery worker; every other method is unreachable from these tests.
-    /// `seen_tenant` records the tenant `list_webhooks` was last called with,
-    /// so tests can assert a caller threaded the right tenant through.
+    /// Minimal `Store` stub: only `list_webhooks`/`list_tenants` are
+    /// exercised by the delivery worker; every other method is unreachable
+    /// from these tests. Subscriptions are keyed by tenant so multi-tenant
+    /// snapshot/isolation tests (LUC-63) can give each tenant its own set;
+    /// `list_tenants` returns exactly the keys present. `seen_tenant` records
+    /// the LAST tenant `list_webhooks` was called with, so single-tenant
+    /// tests can assert a caller threaded the right tenant through.
+    /// `fail` lets a test flip the stub to erroring after a good snapshot has
+    /// already been read, for the `refresh_snapshot` fail-open test.
     struct StubStore {
-        subs: Vec<WebhookSubscription>,
+        subs_by_tenant:
+            std::collections::HashMap<crate::tenant::TenantId, Vec<WebhookSubscription>>,
         seen_tenant: std::sync::Mutex<Option<crate::tenant::TenantId>>,
+        fail: std::sync::atomic::AtomicBool,
     }
 
     impl StubStore {
+        /// Single-tenant convenience constructor: `subs` all belong to
+        /// `DEFAULT_TENANT` (the shape every pre-LUC-63 test uses).
         fn new(subs: Vec<WebhookSubscription>) -> Self {
+            Self::new_multi(vec![(crate::tenant::DEFAULT_TENANT, subs)])
+        }
+
+        /// Multi-tenant constructor: each `(tenant, subs)` pair becomes both
+        /// one entry `list_tenants` returns and that tenant's `list_webhooks`
+        /// result. Used by the LUC-63 isolation/gate tests.
+        fn new_multi(pairs: Vec<(crate::tenant::TenantId, Vec<WebhookSubscription>)>) -> Self {
             Self {
-                subs,
+                subs_by_tenant: pairs.into_iter().collect(),
                 seen_tenant: std::sync::Mutex::new(None),
+                fail: std::sync::atomic::AtomicBool::new(false),
             }
+        }
+
+        /// Flips this stub to erroring `list_webhooks` calls (used by the
+        /// `refresh_snapshot` fail-open test, after a first successful
+        /// snapshot has already been taken).
+        fn set_fail(&self, fail: bool) {
+            self.fail.store(fail, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
@@ -944,8 +1009,15 @@ mod tests {
             &self,
             tenant: crate::tenant::TenantId,
         ) -> Result<Vec<WebhookSubscription>, StoreError> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(StoreError::Backend("stub list_webhooks failure".into()));
+            }
             *self.seen_tenant.lock().unwrap() = Some(tenant);
-            Ok(self.subs.clone())
+            Ok(self
+                .subs_by_tenant
+                .get(&tenant)
+                .cloned()
+                .unwrap_or_default())
         }
         async fn get_webhook(
             &self,
@@ -1162,7 +1234,16 @@ mod tests {
             unimplemented!()
         }
         async fn list_tenants(&self) -> Result<Vec<crate::tenant::Tenant>, StoreError> {
-            unimplemented!()
+            Ok(self
+                .subs_by_tenant
+                .keys()
+                .map(|id| crate::tenant::Tenant {
+                    id: *id,
+                    name: format!("tenant-{}", id.0),
+                    slug: format!("t{}", id.0),
+                    created: 0,
+                })
+                .collect())
         }
         async fn get_tenant_by_slug(
             &self,
@@ -1414,7 +1495,10 @@ mod tests {
     async fn worker_delivers_signed_matching_event() {
         let (url, state) = spawn_test_server(vec![200]).await;
         let secret = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw".to_string();
-        let subs = vec![sub(1, &url, vec![EventType::LinkCreated], true, &secret)];
+        let subs = vec![(
+            crate::tenant::DEFAULT_TENANT,
+            vec![sub(1, &url, vec![EventType::LinkCreated], true, &secret)],
+        )];
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
             .redirect(Policy::none())
@@ -1424,6 +1508,7 @@ mod tests {
         let ev = WebhookEvent {
             event_type: EventType::LinkCreated,
             body: body.clone(),
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
 
         deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
@@ -1457,7 +1542,7 @@ mod tests {
         let (url, state) = spawn_test_server(vec![200]).await;
         let mut slack_sub = sub(1, &url, vec![EventType::LinkCreated], true, "");
         slack_sub.kind = SubscriptionKind::Slack;
-        let subs = vec![slack_sub];
+        let subs = vec![(crate::tenant::DEFAULT_TENANT, vec![slack_sub])];
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
             .redirect(Policy::none())
@@ -1468,6 +1553,7 @@ mod tests {
         let ev = WebhookEvent {
             event_type: EventType::LinkCreated,
             body,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
 
         deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
@@ -1494,7 +1580,7 @@ mod tests {
         let (url, state) = spawn_test_server(vec![200]).await;
         let mut discord_sub = sub(1, &url, vec![EventType::LinkCreated], true, "");
         discord_sub.kind = SubscriptionKind::Discord;
-        let subs = vec![discord_sub];
+        let subs = vec![(crate::tenant::DEFAULT_TENANT, vec![discord_sub])];
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
             .redirect(Policy::none())
@@ -1505,6 +1591,7 @@ mod tests {
         let ev = WebhookEvent {
             event_type: EventType::LinkCreated,
             body,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
 
         deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
@@ -1530,7 +1617,7 @@ mod tests {
         let (url, state) = spawn_test_server(vec![200]).await;
         let mut telegram_sub = sub(1, &url, vec![EventType::LinkCreated], true, "");
         telegram_sub.kind = SubscriptionKind::Telegram;
-        let subs = vec![telegram_sub];
+        let subs = vec![(crate::tenant::DEFAULT_TENANT, vec![telegram_sub])];
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
             .redirect(Policy::none())
@@ -1541,6 +1628,7 @@ mod tests {
         let ev = WebhookEvent {
             event_type: EventType::LinkCreated,
             body,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
 
         deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
@@ -1565,22 +1653,25 @@ mod tests {
     #[tokio::test]
     async fn worker_skips_non_matching_and_inactive() {
         let (url, state) = spawn_test_server(vec![200]).await;
-        let subs = vec![
-            sub(
-                1,
-                &url,
-                vec![EventType::LinkDeleted],
-                true,
-                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
-            ),
-            sub(
-                2,
-                &url,
-                vec![EventType::LinkCreated],
-                false,
-                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
-            ),
-        ];
+        let subs = vec![(
+            crate::tenant::DEFAULT_TENANT,
+            vec![
+                sub(
+                    1,
+                    &url,
+                    vec![EventType::LinkDeleted],
+                    true,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                ),
+                sub(
+                    2,
+                    &url,
+                    vec![EventType::LinkCreated],
+                    false,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                ),
+            ],
+        )];
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
             .redirect(Policy::none())
@@ -1589,6 +1680,7 @@ mod tests {
         let ev = WebhookEvent {
             event_type: EventType::LinkCreated,
             body: "{}".to_string(),
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
 
         deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
@@ -1619,6 +1711,7 @@ mod tests {
         dispatcher.emit(WebhookEvent {
             event_type: EventType::LinkCreated,
             body: "{}".to_string(),
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         });
 
         // No server is listening on 127.0.0.1:9 (discard port): if the
@@ -1633,12 +1726,15 @@ mod tests {
     #[tokio::test]
     async fn worker_retries_then_succeeds() {
         let (url, state) = spawn_test_server(vec![500, 200]).await;
-        let subs = vec![sub(
-            1,
-            &url,
-            vec![EventType::LinkCreated],
-            true,
-            "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+        let subs = vec![(
+            crate::tenant::DEFAULT_TENANT,
+            vec![sub(
+                1,
+                &url,
+                vec![EventType::LinkCreated],
+                true,
+                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            )],
         )];
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
@@ -1648,6 +1744,7 @@ mod tests {
         let ev = WebhookEvent {
             event_type: EventType::LinkCreated,
             body: "{}".to_string(),
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
 
         deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
@@ -1675,11 +1772,144 @@ mod tests {
         ]));
         let clicked = Arc::new(AtomicBool::new(false));
         let expired = Arc::new(AtomicBool::new(false));
-        let subs = refresh_snapshot(&store, &clicked, &expired).await;
-        assert_eq!(subs.len(), 2);
+        let mut snapshot = Vec::new();
+        refresh_snapshot(&store, &clicked, &expired, &mut snapshot).await;
+        assert_eq!(
+            snapshot.len(),
+            1,
+            "single tenant group in OSS/single-tenant mode"
+        );
+        assert_eq!(snapshot[0].0, crate::tenant::DEFAULT_TENANT);
+        assert_eq!(snapshot[0].1.len(), 2);
         assert!(clicked.load(Ordering::Relaxed));
         // sub 2 is inactive, so `expired` must stay false.
         assert!(!expired.load(Ordering::Relaxed));
+    }
+
+    /// LUC-63 review fail-open test: a store error on a REFRESH (after a
+    /// first snapshot already succeeded) must leave the previous snapshot
+    /// and the `clicked`/`expired` gates untouched, never empty them out.
+    /// This is the fail-open contract `refresh_snapshot`'s doc-comment
+    /// promises: mirrors `analytics::refresh_pixel_snapshot`'s behavior.
+    #[tokio::test]
+    async fn refresh_snapshot_keeps_previous_on_store_error() {
+        let store = Arc::new(StubStore::new(vec![sub(
+            1,
+            "https://x",
+            vec![EventType::LinkClicked],
+            true,
+            "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+        )]));
+        let dyn_store: Arc<dyn Store> = store.clone();
+        let clicked = Arc::new(AtomicBool::new(false));
+        let expired = Arc::new(AtomicBool::new(false));
+
+        let mut snapshot = Vec::new();
+        refresh_snapshot(&dyn_store, &clicked, &expired, &mut snapshot).await;
+        assert_eq!(
+            snapshot.len(),
+            1,
+            "first refresh must populate the snapshot"
+        );
+        assert_eq!(snapshot[0].1.len(), 1);
+        assert!(clicked.load(Ordering::Relaxed));
+
+        // Simulate a transient store error (or timeout) on the next refresh.
+        store.set_fail(true);
+        refresh_snapshot(&dyn_store, &clicked, &expired, &mut snapshot).await;
+
+        assert_eq!(
+            snapshot.len(),
+            1,
+            "a store error must leave the previous snapshot untouched, not empty it"
+        );
+        assert_eq!(snapshot[0].1.len(), 1);
+        assert!(
+            clicked.load(Ordering::Relaxed),
+            "the clicked gate must not be reset by a failed refresh"
+        );
+        assert!(!expired.load(Ordering::Relaxed));
+    }
+
+    /// LUC-63 gate test: a `link.clicked` subscription that exists ONLY in a
+    /// non-default tenant must still set the any-tenant `clicked_subscribed`
+    /// atomic. Before LUC-63 the worker only ever looked at
+    /// `DEFAULT_TENANT`'s subscriptions, so this would incorrectly stay
+    /// false.
+    #[tokio::test]
+    async fn refresh_snapshot_gate_is_any_tenant() {
+        let tenant_a = crate::tenant::DEFAULT_TENANT;
+        let tenant_b = crate::tenant::TenantId(1);
+        let store: Arc<dyn Store> = Arc::new(StubStore::new_multi(vec![
+            (tenant_a, vec![]),
+            (
+                tenant_b,
+                vec![sub(
+                    1,
+                    "https://tenant-b.example/hook",
+                    vec![EventType::LinkClicked],
+                    true,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                )],
+            ),
+        ]));
+        let clicked = Arc::new(AtomicBool::new(false));
+        let expired = Arc::new(AtomicBool::new(false));
+        let mut snapshot = Vec::new();
+        refresh_snapshot(&store, &clicked, &expired, &mut snapshot).await;
+        assert_eq!(snapshot.len(), 2);
+        assert!(
+            clicked.load(Ordering::Relaxed),
+            "clicked_subscribed must be true: tenant 1 has an active LinkClicked sub"
+        );
+        assert!(!expired.load(Ordering::Relaxed));
+    }
+
+    /// LUC-63 isolation test: two tenants each have an active `link.clicked`
+    /// subscription pointed at their OWN mock server. Delivering an event
+    /// stamped `tenant_id = 1` must reach only tenant 1's server, never
+    /// tenant 0's (a cross-tenant leak would show up as a second capture on
+    /// the wrong server).
+    #[tokio::test]
+    async fn deliver_to_matching_isolates_by_tenant() {
+        let (url_a, state_a) = spawn_test_server(vec![200]).await;
+        let (url_b, state_b) = spawn_test_server(vec![200]).await;
+        let tenant_a = crate::tenant::DEFAULT_TENANT;
+        let tenant_b = crate::tenant::TenantId(1);
+        let secret = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
+        let subs = vec![
+            (
+                tenant_a,
+                vec![sub(1, &url_a, vec![EventType::LinkClicked], true, secret)],
+            ),
+            (
+                tenant_b,
+                vec![sub(2, &url_b, vec![EventType::LinkClicked], true, secret)],
+            ),
+        ];
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
+            .redirect(Policy::none())
+            .build()
+            .unwrap();
+        let ev = WebhookEvent {
+            event_type: EventType::LinkClicked,
+            body: "{}".to_string(),
+            tenant_id: tenant_b,
+        };
+
+        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+
+        assert_eq!(
+            state_b.captured.lock().unwrap().len(),
+            1,
+            "tenant 1's subscription must receive the event"
+        );
+        assert_eq!(
+            state_a.captured.lock().unwrap().len(),
+            0,
+            "tenant 0's subscription must NOT receive tenant 1's event"
+        );
     }
 
     #[test]
@@ -1693,11 +1923,13 @@ mod tests {
         dispatcher.emit(WebhookEvent {
             event_type: EventType::LinkCreated,
             body: "a".to_string(),
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         });
         // Second emit should be dropped (fail-open), not panic or block.
         dispatcher.emit(WebhookEvent {
             event_type: EventType::LinkCreated,
             body: "b".to_string(),
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         });
         drop(rx);
     }
@@ -1707,29 +1939,36 @@ mod tests {
     /// WITHOUT touching the in-memory channel and WITHOUT enqueuing.
     #[tokio::test]
     async fn lifecycle_deliveries_builds_rows_for_matching_active_subs() {
-        let stub = Arc::new(StubStore::new(vec![
-            sub(
-                7,
-                "https://a",
-                vec![EventType::LinkCreated],
-                true,
-                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
-            ),
-            sub(
-                8,
-                "https://b",
-                vec![EventType::LinkDeleted],
-                true,
-                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
-            ),
-            sub(
-                9,
-                "https://c",
-                vec![EventType::LinkCreated],
-                false,
-                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
-            ),
-        ]));
+        // A non-default tenant: this is the exact call shape `create_link_core`/
+        // `admin_link_delete`/`admin_link_patch` use, so the row must be
+        // scoped to (and stamped with) THIS tenant, not `DEFAULT_TENANT`.
+        let tenant = crate::tenant::TenantId(7);
+        let stub = Arc::new(StubStore::new_multi(vec![(
+            tenant,
+            vec![
+                sub(
+                    7,
+                    "https://a",
+                    vec![EventType::LinkCreated],
+                    true,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                ),
+                sub(
+                    8,
+                    "https://b",
+                    vec![EventType::LinkDeleted],
+                    true,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                ),
+                sub(
+                    9,
+                    "https://c",
+                    vec![EventType::LinkCreated],
+                    false,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                ),
+            ],
+        )]));
         let store: Arc<dyn Store> = stub.clone();
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         let dispatcher = WebhookDispatcher::new(
@@ -1739,16 +1978,13 @@ mod tests {
         )
         .with_outbox(store);
 
-        // A non-default tenant: this is the exact call shape `create_link_core`/
-        // `admin_link_delete`/`admin_link_patch` use, so the row must be
-        // scoped to (and stamped with) THIS tenant, not `DEFAULT_TENANT`.
-        let tenant = crate::tenant::TenantId(7);
         let rows = dispatcher
             .lifecycle_deliveries(
                 tenant,
                 &WebhookEvent {
                     event_type: EventType::LinkCreated,
                     body: r#"{"id":"evt_abc","type":"link.created"}"#.to_string(),
+                    tenant_id: tenant,
                 },
             )
             .await;
@@ -1782,6 +2018,7 @@ mod tests {
         let ev = WebhookEvent {
             event_type: EventType::LinkCreated,
             body: "{}".to_string(),
+            tenant_id: crate::tenant::DEFAULT_TENANT,
         };
 
         let rows = dispatcher

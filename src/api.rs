@@ -471,6 +471,7 @@ pub async fn create_link_core(
                 rec.created,
                 None,
             ),
+            tenant_id: tenant,
         };
         let rows = st.webhooks.lifecycle_deliveries(tenant, &ev).await;
         match st
@@ -506,6 +507,7 @@ pub async fn create_link_core(
             rec.created,
             None,
         ),
+        tenant_id: tenant,
     };
     let rows = st.webhooks.lifecycle_deliveries(tenant, &ev).await;
     if st.store.put_link_tx(tenant, id, &rec, &rows).await.is_err() {
@@ -1216,6 +1218,7 @@ async fn redirect(
                                 rec.created,
                                 None,
                             ),
+                            tenant_id: rec.tenant_id,
                         });
                     }
                     return expired_response(rec.fallback_url.as_deref());
@@ -1352,6 +1355,7 @@ async fn redirect(
                         rec.created,
                         Some(&ev),
                     ),
+                    tenant_id: rec.tenant_id,
                 });
             }
 
@@ -3898,6 +3902,7 @@ async fn admin_link_delete(
             rec.created,
             None,
         ),
+        tenant_id: p.tenant,
     };
     let rows = st.webhooks.lifecycle_deliveries(p.tenant, &ev).await;
     if st.store.delete_link_tx(p.tenant, id, &rows).await.is_err() {
@@ -4088,6 +4093,7 @@ async fn admin_link_patch(
             rec.created,
             None,
         ),
+        tenant_id: p.tenant,
     };
     let rows = st.webhooks.lifecycle_deliveries(p.tenant, &ev).await;
     if st
@@ -4667,6 +4673,12 @@ async fn send_test_event_guarded(
     let ev = WebhookEvent {
         event_type: EventType::LinkCreated,
         body,
+        // This synthetic event never goes through the tenant-scoped worker
+        // (`deliver_to_matching`/`lifecycle_deliveries`): it is built once
+        // and sent straight to `sub` via `build_outgoing_request`, which
+        // never reads `tenant_id`. The value here is inert; DEFAULT_TENANT
+        // is used only to satisfy the type.
+        tenant_id: crate::tenant::DEFAULT_TENANT,
     };
     // Same request-shaping as a real delivery (`deliver_one`): Generic gets
     // a signed envelope, channel kinds get an unsigned, channel-formatted

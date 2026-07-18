@@ -244,9 +244,16 @@ where
                     // Persist the new state only once the transition event is
                     // enqueued; if the best-effort channel is full, leave the old
                     // state so the next sweep retries (no permanently-lost alert).
+                    // The sweep itself is scoped to `DEFAULT_TENANT` (both
+                    // `list_link_health` and `list_links` above are called
+                    // with it), so every link seen here already belongs to
+                    // `DEFAULT_TENANT` (no tenant travels with `rec` this
+                    // far into the loop), but hardcoding it is equivalent to
+                    // threading `rec.tenant_id` through.
                     if !webhooks.try_emit(WebhookEvent {
                         event_type: et,
                         body: transition_body(et, &code, &url, health.status),
+                        tenant_id: crate::tenant::DEFAULT_TENANT,
                     }) {
                         continue;
                     }

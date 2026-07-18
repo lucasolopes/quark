@@ -127,11 +127,17 @@ pub struct WebhookSubscription {
 }
 
 /// A concrete event ready to be delivered: the event kind plus the exact
-/// serialized JSON body that gets signed and sent verbatim.
+/// serialized JSON body that gets signed and sent verbatim, plus the tenant
+/// that owns it. `tenant_id` is what lets the in-memory worker's
+/// per-tenant subscription snapshot (LUC-63) route the event only to that
+/// tenant's subscriptions (see `webhooks::delivery::deliver_to_matching`);
+/// the durable outbox path (`lifecycle_deliveries`) stamps the same tenant
+/// onto its `OutboxRow`s independently and does not read this field.
 #[derive(Debug, Clone)]
 pub struct WebhookEvent {
     pub event_type: EventType,
     pub body: String,
+    pub tenant_id: crate::tenant::TenantId,
 }
 
 /// Errors that can occur while signing a webhook payload.
