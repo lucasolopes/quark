@@ -3740,3 +3740,110 @@ async fn admin_bulk_too_many_codes_400() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn sec_gpc_1_suppresses_analytics_capture_but_still_redirects() {
+    let (app, mut rx) = app_with_analytics_rx().await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"url":"https://example.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    // With Sec-GPC: 1, the redirect still happens normally...
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .header("sec-gpc", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    assert_eq!(resp.headers()["location"], "https://example.com");
+    // ...but no ClickEvent is recorded (analytics + forwarding suppressed).
+    assert!(
+        rx.try_recv().is_err(),
+        "Sec-GPC: 1 must suppress the analytics ClickEvent"
+    );
+
+    // Without the header, the same link registers normally.
+    let resp = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    assert!(
+        rx.try_recv().is_ok(),
+        "without Sec-GPC, the redirect should send a ClickEvent"
+    );
+}
+
+#[tokio::test]
+async fn sec_gpc_1_does_not_affect_visit_counting_or_redirect_target() {
+    let app = app_admin("secret").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(
+                    r#"{"url":"https://example.com","max_visits":2}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    // Two visits with Sec-GPC: 1 still count against max_visits and still
+    // redirect to the right destination.
+    for _ in 0..2 {
+        let r = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/{code}"))
+                    .header("sec-gpc", "1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::FOUND);
+        assert_eq!(r.headers()["location"], "https://example.com");
+    }
+    // The third visit is exhausted, proving bump_visits ran even under GPC.
+    let r = app
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .header("sec-gpc", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::GONE);
+}
