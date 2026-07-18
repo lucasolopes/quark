@@ -34,7 +34,7 @@ import { formatDateTime } from "@/lib/format";
 import { isHttpUrl } from "@/lib/codeguard";
 import { isUnauthorized, mutationErrorToast } from "@/lib/mutation-error";
 import { useCreateWebhook, useDeleteWebhook, usePatchWebhook, useTestWebhook, useWebhooks } from "@/lib/queries";
-import { WEBHOOK_EVENTS, WEBHOOK_KINDS, type SubscriptionKind, type Webhook, type WebhookEvent } from "@/lib/types";
+import { WEBHOOK_EVENTS, type SubscriptionKind, type Webhook, type WebhookEvent } from "@/lib/types";
 
 /** Maps each event id to its i18n label key (`webhooks.eventCreated`, etc). */
 const EVENT_LABEL_KEY: Record<WebhookEvent, MessageKey> = {
@@ -45,34 +45,16 @@ const EVENT_LABEL_KEY: Record<WebhookEvent, MessageKey> = {
   "link.clicked": "webhooks.eventClicked",
 };
 
-/** Maps each subscription kind to its i18n label key, used both for the badge and the type select. */
+/**
+ * Maps each subscription kind to its i18n label key, used for the type badge
+ * in the webhooks table. Webhooks created via the API directly can still be
+ * slack/discord/telegram even though the creation UI only offers generic.
+ */
 const KIND_LABEL_KEY: Record<SubscriptionKind, MessageKey> = {
   generic: "webhooks.kindGeneric",
   slack: "webhooks.kindSlack",
   discord: "webhooks.kindDiscord",
   telegram: "webhooks.kindTelegram",
-};
-
-/** URL field label, adapted per kind so the operator knows exactly what to paste. */
-const KIND_URL_LABEL_KEY: Record<SubscriptionKind, MessageKey> = {
-  generic: "webhooks.create.urlLabelGeneric",
-  slack: "webhooks.create.urlLabelSlack",
-  discord: "webhooks.create.urlLabelDiscord",
-  telegram: "webhooks.create.urlLabelTelegram",
-};
-
-const KIND_URL_PLACEHOLDER_KEY: Record<SubscriptionKind, MessageKey> = {
-  generic: "webhooks.create.urlPlaceholderGeneric",
-  slack: "webhooks.create.urlPlaceholderSlack",
-  discord: "webhooks.create.urlPlaceholderDiscord",
-  telegram: "webhooks.create.urlPlaceholderTelegram",
-};
-
-/** Extra hint shown under the URL field for channel kinds (where to find the URL). No hint for generic. */
-const KIND_URL_HINT_KEY: Partial<Record<SubscriptionKind, MessageKey>> = {
-  slack: "webhooks.create.urlHintSlack",
-  discord: "webhooks.create.urlHintDiscord",
-  telegram: "webhooks.create.urlHintTelegram",
 };
 
 interface FormErrors {
@@ -361,7 +343,6 @@ interface CreateWebhookDialogProps {
  */
 function CreateWebhookDialog({ open, onOpenChange, onCreated }: CreateWebhookDialogProps) {
   const t = useT();
-  const [kind, setKind] = useState<SubscriptionKind>("generic");
   const [url, setUrl] = useState("");
   const [events, setEvents] = useState<WebhookEvent[]>([]);
   const [active, setActive] = useState(true);
@@ -369,7 +350,6 @@ function CreateWebhookDialog({ open, onOpenChange, onCreated }: CreateWebhookDia
   const createWebhook = useCreateWebhook();
 
   function reset() {
-    setKind("generic");
     setUrl("");
     setEvents([]);
     setActive(true);
@@ -407,7 +387,7 @@ function CreateWebhookDialog({ open, onOpenChange, onCreated }: CreateWebhookDia
     }
     setErrors({});
     try {
-      const result = await createWebhook.mutateAsync({ url: url.trim(), events, active, kind });
+      const result = await createWebhook.mutateAsync({ url: url.trim(), events, active, kind: "generic" });
       toast.success(t("webhooks.create.successToast"));
       reset();
       onOpenChange(false);
@@ -433,35 +413,16 @@ function CreateWebhookDialog({ open, onOpenChange, onCreated }: CreateWebhookDia
 
           <div className="flex flex-col gap-3 py-3">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="create-webhook-kind">{t("webhooks.create.typeLabel")}</Label>
-              <select
-                id="create-webhook-kind"
-                className="border-input bg-transparent flex h-9 w-full rounded-md border px-3 py-1 text-sm shadow-xs outline-none"
-                value={kind}
-                onChange={(e) => setKind(e.target.value as SubscriptionKind)}
-              >
-                {WEBHOOK_KINDS.map((k) => (
-                  <option key={k} value={k}>
-                    {t(KIND_LABEL_KEY[k])}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="create-webhook-url">{t(KIND_URL_LABEL_KEY[kind])}</Label>
+              <Label htmlFor="create-webhook-url">{t("webhooks.create.urlLabelGeneric")}</Label>
               <Input
                 id="create-webhook-url"
                 type="text"
-                placeholder={t(KIND_URL_PLACEHOLDER_KEY[kind])}
+                placeholder={t("webhooks.create.urlPlaceholderGeneric")}
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 aria-invalid={errors.url != null}
                 autoFocus
               />
-              {KIND_URL_HINT_KEY[kind] && (
-                <p className="text-sm text-muted-foreground">{t(KIND_URL_HINT_KEY[kind]!)}</p>
-              )}
               {errors.url && (
                 <p className="text-sm text-destructive" role="alert">
                   {errors.url}
@@ -469,9 +430,7 @@ function CreateWebhookDialog({ open, onOpenChange, onCreated }: CreateWebhookDia
               )}
             </div>
 
-            <p className="text-sm text-muted-foreground">
-              {kind === "generic" ? t("webhooks.create.secretNoticeGeneric") : t("webhooks.create.secretNoticeChannel")}
-            </p>
+            <p className="text-sm text-muted-foreground">{t("webhooks.create.secretNoticeGeneric")}</p>
 
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium">{t("webhooks.create.eventsLabel")}</span>

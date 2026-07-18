@@ -35,7 +35,7 @@ describe("Webhooks", () => {
     expect(await screen.findByText(/no webhooks yet/i)).toBeInTheDocument();
   });
 
-  it("create flow calls the API and reveals the secret once (generic)", async () => {
+  it("create flow always sends kind: generic (no type selector) and reveals the secret once", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
       const method = init?.method ?? "GET";
       if (method === "POST") return Promise.resolve(jsonResponse({ id: 2, secret: "whsec_rawsecret123" }));
@@ -47,6 +47,7 @@ describe("Webhooks", () => {
 
     await userEvent.click(screen.getAllByRole("button", { name: /add webhook/i })[0]);
     const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByLabelText(/^type$/i)).not.toBeInTheDocument();
     expect(within(dialog).getByText(/a signing secret will be generated/i)).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText(/endpoint url/i), "https://sink.example.com/hook");
     await userEvent.click(screen.getByRole("checkbox", { name: /link created/i }));
@@ -63,33 +64,12 @@ describe("Webhooks", () => {
     expect(screen.getByText(/won't be shown again/i)).toBeInTheDocument();
   });
 
-  it("selecting Slack sends kind: slack, adapts the URL field and hides the secret notice", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
-      const method = init?.method ?? "GET";
-      if (method === "POST") return Promise.resolve(jsonResponse({ id: 3, secret: "" }));
-      return Promise.resolve(jsonResponse({ webhooks: [] }));
-    });
-
+  it("shows the kind badge for webhooks created via the API with a non-generic kind", async () => {
+    const slackWebhook = { ...SAMPLE_WEBHOOK, id: 4, kind: "slack" };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ webhooks: [slackWebhook] }));
     render(withProviders(<Webhooks />, { withRouter: false }));
-    await screen.findByText(/no webhooks yet/i);
-
-    await userEvent.click(screen.getAllByRole("button", { name: /add webhook/i })[0]);
-    const dialog = screen.getByRole("dialog");
-
-    await userEvent.selectOptions(within(dialog).getByLabelText(/^type$/i), "slack");
-
-    expect(within(dialog).getByLabelText(/slack incoming webhook url/i)).toBeInTheDocument();
-    expect(within(dialog).queryByText(/a signing secret will be generated/i)).not.toBeInTheDocument();
-    expect(within(dialog).getByText(/no signing secret/i)).toBeInTheDocument();
-
-    await userEvent.type(within(dialog).getByLabelText(/slack incoming webhook url/i), "https://hooks.slack.com/services/x");
-    await userEvent.click(within(dialog).getByRole("checkbox", { name: /link created/i }));
-    await userEvent.click(within(dialog).getByRole("button", { name: /add webhook/i }));
-
-    const [, requestInit] = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
-    expect(JSON.parse(requestInit!.body as string)).toMatchObject({ kind: "slack" });
-
-    expect(screen.queryByText(/won't be shown again/i)).not.toBeInTheDocument();
+    await screen.findByText("https://example.com/hooks/quark");
+    expect(screen.getByText(/^slack$/i)).toBeInTheDocument();
   });
 
   it("rejects submitting with no event selected", async () => {
