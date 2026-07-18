@@ -122,6 +122,33 @@ describe("Links", () => {
     expect(calledUrls.some((u) => u.includes("folder=Marketing"))).toBe(true);
   });
 
+  it("filters by active status via the API (?status=active in the querystring)", async () => {
+    const base = {
+      links: [
+        { id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1, rules: [], variants: [] },
+        { id: 2, code: "BBB1111", url: "https://dog.com", expiry: null, created: 2, rules: [], variants: [] },
+      ],
+      next_after: null,
+    };
+    const calledUrls: string[] = [];
+    mockFetchByUrl((url) => {
+      calledUrls.push(url);
+      if (url.includes("status=active"))
+        return jsonResponse({ links: base.links.filter((l) => l.code === "AAA0000"), next_after: null });
+      return jsonResponse(base);
+    });
+    render(withProviders(<Links />));
+    await screen.findByText("AAA0000");
+
+    await userEvent.click(screen.getByRole("checkbox", { name: /active only/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("AAA0000")).toBeInTheDocument();
+      expect(screen.queryByText("BBB1111")).not.toBeInTheDocument();
+    });
+    expect(calledUrls.some((u) => u.includes("status=active"))).toBe(true);
+  });
+
   it("filters by tag via the API (?tag= in the querystring)", async () => {
     const base = {
       links: [

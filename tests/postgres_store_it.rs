@@ -401,7 +401,14 @@ async fn tags_round_trip_filter_and_distinct_pg() {
     assert_eq!(got.tags, vec!["rust".to_string(), "web".to_string()]);
 
     let filtered = s
-        .list_links(quark::tenant::DEFAULT_TENANT, None, 50, Some("rust"), None)
+        .list_links(
+            quark::tenant::DEFAULT_TENANT,
+            None,
+            50,
+            Some("rust"),
+            None,
+            false,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -410,7 +417,14 @@ async fn tags_round_trip_filter_and_distinct_pg() {
     );
 
     let both_web = s
-        .list_links(quark::tenant::DEFAULT_TENANT, None, 50, Some("web"), None)
+        .list_links(
+            quark::tenant::DEFAULT_TENANT,
+            None,
+            50,
+            Some("web"),
+            None,
+            false,
+        )
         .await
         .unwrap();
     let mut ids: Vec<u64> = both_web.iter().map(|(id, _)| *id).collect();
@@ -485,6 +499,7 @@ async fn folder_round_trip_filter_and_list_pg() {
             50,
             None,
             Some("marketing"),
+            false,
         )
         .await
         .unwrap();

@@ -3634,6 +3634,9 @@ struct ListParams {
     folder: Option<String>,
     /// `broken` restricts the list to links whose last health probe failed.
     health: Option<String>,
+    /// `active` restricts the list to active links (unexpired and under their
+    /// visit cap); any other value (or absent) lists everything.
+    status: Option<String>,
 }
 
 /// Health of a link's destination as exposed to the panel (never includes
@@ -3698,6 +3701,7 @@ async fn admin_links_list(
     let tag = tag.as_deref();
     let folder = p.folder.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let broken_only = p.health.as_deref() == Some("broken");
+    let active_only = p.status.as_deref() == Some("active");
     // The `broken` filter is driven by the health table (a small set),
     // cursor-paginated by id, so each page carries real broken rows (search `q`
     // is ignored for this filter; tag/folder still apply). Otherwise the normal
@@ -3741,7 +3745,7 @@ async fn admin_links_list(
         let links = match q {
             Some(term) => match st
                 .store
-                .search_links(prin.tenant, term, p.after, limit, tag, folder)
+                .search_links(prin.tenant, term, p.after, limit, tag, folder, active_only)
                 .await
             {
                 Ok(l) => l,
@@ -3750,7 +3754,7 @@ async fn admin_links_list(
             },
             None => match st
                 .store
-                .list_links(prin.tenant, p.after, limit, tag, folder)
+                .list_links(prin.tenant, p.after, limit, tag, folder, active_only)
                 .await
             {
                 Ok(l) => l,

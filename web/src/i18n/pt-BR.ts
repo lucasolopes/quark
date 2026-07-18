@@ -80,6 +80,7 @@ export const ptBR: Messages = {
     folderFilterLabel: "Filtrar por pasta",
     folderFilterAll: "Todas as pastas",
     folderFilterOption: "{name} ({count})",
+    activeFilterLabel: "Só ativos",
     brokenFilterLabel: "Só quebrados",
     loadError: "Não foi possível carregar os links.",
     emptyTitle: "Nenhum link ainda.",

@@ -370,9 +370,13 @@ impl Store for LmdbStore {
         limit: usize,
         tag: Option<&str>,
         folder: Option<&str>,
+        active_only: bool,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let prefix = tprefix(tenant);
+        // Captured once so every record on the page compares `expiry` against the
+        // same instant (a link isn't "active" on one row and "expired" on the next).
+        let now = crate::now();
         let mut out = Vec::new();
         // Iterate only this tenant's contiguous prefix range (keyset by id).
         for item in self.links.prefix_iter(&rtxn, &prefix)? {
@@ -395,6 +399,24 @@ impl Store for LmdbStore {
                     _ => continue,
                 }
             }
+            // "Active" predicate applied BEFORE the `limit` count, so the page
+            // carries only active links and the cursor points at the last one
+            // included. `expiry`: skip when expired (past `now`). `max_visits`:
+            // only Records that opted in pay the (single-node, embedded) visits
+            // lookup; skip when the cap was reached.
+            if active_only {
+                if let Some(exp) = rec.expiry {
+                    if exp <= now {
+                        continue;
+                    }
+                }
+                if let Some(max) = rec.max_visits {
+                    let visits = self.visits.get(&rtxn, &tkey_id(tenant, id))?.unwrap_or(0);
+                    if visits >= max as u64 {
+                        continue;
+                    }
+                }
+            }
             out.push((id, rec));
             if out.len() >= limit {
                 break;
@@ -403,6 +425,7 @@ impl Store for LmdbStore {
         Ok(out)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn search_links(
         &self,
         _tenant: TenantId,
@@ -411,6 +434,7 @@ impl Store for LmdbStore {
         _limit: usize,
         _tag: Option<&str>,
         _folder: Option<&str>,
+        _active_only: bool,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         Err(StoreError::Unsupported)
     }
@@ -1421,6 +1445,7 @@ mod tests {
                 10,
                 None,
                 None,
+                false,
             )
             .await;
         assert!(matches!(r, Err(StoreError::Unsupported)));
@@ -1465,7 +1490,7 @@ mod tests {
         .unwrap();
 
         let p1 = s
-            .list_links(crate::tenant::DEFAULT_TENANT, None, 3, None, None)
+            .list_links(crate::tenant::DEFAULT_TENANT, None, 3, None, None, false)
             .await
             .unwrap();
         assert_eq!(
@@ -1473,7 +1498,7 @@ mod tests {
             vec![1, 2, 3]
         );
         let p2 = s
-            .list_links(crate::tenant::DEFAULT_TENANT, Some(3), 3, None, None)
+            .list_links(crate::tenant::DEFAULT_TENANT, Some(3), 3, None, None, false)
             .await
             .unwrap();
         assert_eq!(
@@ -1500,6 +1525,69 @@ mod tests {
                 .await
                 .unwrap(),
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn list_links_active_only_excludes_expired_and_exhausted() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let now = crate::now();
+        let rec = |expiry: Option<u64>, max_visits: Option<u32>| Record {
+            url: "https://e.com".into(),
+            expiry,
+            created: 0,
+            tags: Vec::new(),
+            max_visits,
+            rules: Vec::new(),
+            variants: Vec::new(),
+            app_ios: None,
+            app_android: None,
+            folder: None,
+            fallback_url: None,
+            password_hash: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
+        };
+        // (a) active simple: no expiry, no cap.
+        s.put_link(crate::tenant::DEFAULT_TENANT, 1, &rec(None, None))
+            .await
+            .unwrap();
+        // (b) expired: expiry in the past.
+        s.put_link(crate::tenant::DEFAULT_TENANT, 2, &rec(Some(now - 1), None))
+            .await
+            .unwrap();
+        // (c) exhausted: max_visits=1, bumped to 1.
+        s.put_link(crate::tenant::DEFAULT_TENANT, 3, &rec(None, Some(1)))
+            .await
+            .unwrap();
+        s.bump_visits(crate::tenant::DEFAULT_TENANT, 3)
+            .await
+            .unwrap();
+        // (d) active with a high cap and a future expiry.
+        s.put_link(
+            crate::tenant::DEFAULT_TENANT,
+            4,
+            &rec(Some(now + 10_000), Some(1000)),
+        )
+        .await
+        .unwrap();
+
+        let all = s
+            .list_links(crate::tenant::DEFAULT_TENANT, None, 50, None, None, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            all.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+
+        let active = s
+            .list_links(crate::tenant::DEFAULT_TENANT, None, 50, None, None, true)
+            .await
+            .unwrap();
+        assert_eq!(
+            active.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![1, 4]
         );
     }
 
@@ -1597,7 +1685,14 @@ mod tests {
         assert_eq!(got.tags, vec!["rust".to_string(), "web".to_string()]);
 
         let filtered = s
-            .list_links(crate::tenant::DEFAULT_TENANT, None, 50, Some("rust"), None)
+            .list_links(
+                crate::tenant::DEFAULT_TENANT,
+                None,
+                50,
+                Some("rust"),
+                None,
+                false,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -1671,6 +1766,7 @@ mod tests {
                 50,
                 None,
                 Some("marketing"),
+                false,
             )
             .await
             .unwrap();

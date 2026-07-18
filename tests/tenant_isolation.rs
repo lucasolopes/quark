@@ -35,8 +35,20 @@ async fn lmdb_scans_are_bounded_to_tenant() {
     a.put_link(1, &r).await.unwrap();
     a.put_link(2, &r).await.unwrap();
     b.put_link(3, &r).await.unwrap();
-    assert_eq!(a.list_links(None, 100, None, None).await.unwrap().len(), 2);
-    assert_eq!(b.list_links(None, 100, None, None).await.unwrap().len(), 1);
+    assert_eq!(
+        a.list_links(None, 100, None, None, false)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        b.list_links(None, 100, None, None, false)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     // Cross-tenant reads at another tenant's id return None.
     assert!(b.get_link(1).await.unwrap().is_none());
     assert!(a.get_link(3).await.unwrap().is_none());
@@ -136,8 +148,20 @@ async fn pg_two_tenants_do_not_see_each_others_links() {
     a.put_link(500, &r).await.unwrap();
     assert!(a.get_link(500).await.unwrap().is_some());
     assert!(b.get_link(500).await.unwrap().is_none());
-    assert_eq!(b.list_links(None, 100, None, None).await.unwrap().len(), 0);
-    assert_eq!(a.list_links(None, 100, None, None).await.unwrap().len(), 1);
+    assert_eq!(
+        b.list_links(None, 100, None, None, false)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        a.list_links(None, 100, None, None, false)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 // --- Full entity sweep: every tenant-owned method, both backends ---
@@ -162,12 +186,15 @@ async fn assert_full_isolation(store: Arc<dyn Store>) {
         "B must not see A's link"
     );
     assert_eq!(
-        a.list_links(None, 100, None, None).await.unwrap().len(),
+        a.list_links(None, 100, None, None, false)
+            .await
+            .unwrap()
+            .len(),
         1,
         "A must list its own link"
     );
     assert!(
-        b.list_links(None, 100, None, None)
+        b.list_links(None, 100, None, None, false)
             .await
             .unwrap()
             .is_empty(),

@@ -28,7 +28,7 @@ export function Analytics() {
   const base = useLinks();
   const dq = useDebounce(term, 300);
   const usingServerSearch = dq !== "" && !clientMode;
-  const search = useLinks(dq, undefined, undefined, undefined, { enabled: usingServerSearch });
+  const search = useLinks(dq, undefined, undefined, undefined, undefined, { enabled: usingServerSearch });
 
   useEffect(() => {
     if (search.error instanceof ApiError && search.error.status === 501) setClientMode(true);

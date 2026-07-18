@@ -370,7 +370,10 @@ pub trait Store: Send + Sync + 'static {
     /// `tag`, when present, restricts the results to links whose `tags`
     /// contain it (exact match, post-normalization). `folder`, when present,
     /// restricts the results to links whose `folder` matches it
-    /// case-insensitively.
+    /// case-insensitively. `active_only`, when `true`, restricts the results to
+    /// active links: `expiry` unset or in the future AND (`max_visits` unset or
+    /// `visits < max_visits`). Each backend reads `crate::now()` internally for
+    /// the `expiry` comparison.
     async fn list_links(
         &self,
         tenant: TenantId,
@@ -378,11 +381,13 @@ pub trait Store: Send + Sync + 'static {
         limit: usize,
         tag: Option<&str>,
         folder: Option<&str>,
+        active_only: bool,
     ) -> Result<Vec<(u64, Record)>, StoreError>;
     /// Paginated server-side search (keyset by id). Matches `url`/`alias`,
     /// case-insensitive, literal term. Backends without search return
-    /// `Err(StoreError::Unsupported)`. `tag` and `folder` narrow the results as
-    /// in `list_links`.
+    /// `Err(StoreError::Unsupported)`. `tag`, `folder` and `active_only` narrow
+    /// the results as in `list_links`.
+    #[allow(clippy::too_many_arguments)]
     async fn search_links(
         &self,
         tenant: TenantId,
@@ -391,6 +396,7 @@ pub trait Store: Send + Sync + 'static {
         limit: usize,
         tag: Option<&str>,
         folder: Option<&str>,
+        active_only: bool,
     ) -> Result<Vec<(u64, Record)>, StoreError>;
     async fn list_aliases(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError>;
     /// Distinct tags across all links with their link counts, sorted by name.
@@ -823,9 +829,10 @@ impl ScopedStore {
         limit: usize,
         tag: Option<&str>,
         folder: Option<&str>,
+        active_only: bool,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         self.inner
-            .list_links(self.tenant, after, limit, tag, folder)
+            .list_links(self.tenant, after, limit, tag, folder, active_only)
             .await
     }
     pub async fn search_links(
@@ -835,9 +842,10 @@ impl ScopedStore {
         limit: usize,
         tag: Option<&str>,
         folder: Option<&str>,
+        active_only: bool,
     ) -> Result<Vec<(u64, Record)>, StoreError> {
         self.inner
-            .search_links(self.tenant, q, after, limit, tag, folder)
+            .search_links(self.tenant, q, after, limit, tag, folder, active_only)
             .await
     }
     pub async fn list_aliases(&self) -> Result<Vec<(String, u64)>, StoreError> {

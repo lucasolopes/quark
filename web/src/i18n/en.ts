@@ -78,6 +78,7 @@ export const en = {
     folderFilterLabel: "Filter by folder",
     folderFilterAll: "All folders",
     folderFilterOption: "{name} ({count})",
+    activeFilterLabel: "Active only",
     brokenFilterLabel: "Broken only",
     loadError: "Could not load links.",
     emptyTitle: "No links yet.",

@@ -230,9 +230,11 @@ mod tests {
             _limit: usize,
             _tag: Option<&str>,
             _folder: Option<&str>,
+            _active_only: bool,
         ) -> Result<Vec<(u64, Record)>, StoreError> {
             unimplemented!()
         }
+        #[allow(clippy::too_many_arguments)]
         async fn search_links(
             &self,
             _tenant: TenantId,
@@ -241,6 +243,7 @@ mod tests {
             _limit: usize,
             _tag: Option<&str>,
             _folder: Option<&str>,
+            _active_only: bool,
         ) -> Result<Vec<(u64, Record)>, StoreError> {
             unimplemented!()
         }
