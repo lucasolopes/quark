@@ -29,6 +29,12 @@ configs live under the operator's account, and every click forwards to each
 one that is active. There is no per-link targeting yet (see the follow-up
 note at the bottom).
 
+In cloud (multi-tenant) deployments, pixels are scoped **per tenant**: each
+tenant configures its own GA4/Meta pixels, and a click only forwards to the
+pixels of the tenant that owns the link, never to another tenant's. In
+OSS/self-host (single-tenant) there is only one tenant, the operator, so this
+is the same as before: every click forwards to every active pixel.
+
 ### Getting a GA4 Measurement Protocol API secret
 
 1. In GA4, go to **Admin > Data Streams**, pick the stream for your property.
@@ -92,8 +98,10 @@ Forwarding runs from quark's existing **analytics worker**, the same
 background path that already writes click events to the analytics sink. It
 does **not** run inline with the redirect: a click gets its 302 response
 immediately, regardless of whether GA4 or Meta are configured, reachable, or
-slow. The worker batches clicks and forwards each batch to every active
-pixel config after the fact.
+slow. The worker batches clicks and, for each batch, forwards every click
+only to its own tenant's active pixel configs after the fact. A batch mixes
+clicks from every tenant, but the worker filters by tenant before sending, so
+a tenant's conversion data never reaches another tenant's pixels.
 
 This is also **fail-open**: if a provider is down, rate-limiting quark, or
 returns an error, that failure is logged and dropped. It never affects the
