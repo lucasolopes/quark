@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -76,20 +76,72 @@ describe("Extensions", () => {
     }
   });
 
-  it("navigates a webhooks-powered card to /webhooks", async () => {
+  it("activating a webhooks-powered card creates a webhook inline with the card's fixed kind", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(typeof input === "string" ? input : (input as Request).url ?? input);
+      if (url.includes("/admin/integrations/sheets/status")) return new Response("", { status: 404 });
+      if (url.includes("/admin/webhooks") && (init as RequestInit | undefined)?.method === "POST") {
+        return new Response(JSON.stringify({ id: 1, secret: "" }), { status: 201 });
+      }
+      return new Response("", { status: 404, statusText: `unexpected ${url}` });
+    });
     renderCatalog();
-    const buttons = screen.getAllByRole("button", { name: /set up via webhooks/i });
-    expect(buttons.length).toBeGreaterThan(0);
-    await userEvent.click(buttons[0]);
-    expect(await screen.findByText("webhooks page")).toBeInTheDocument();
+
+    // Open the Slack card's activation modal (no navigation).
+    const slackCard = screen.getByText("Slack").closest('[data-slot="card"]') as HTMLElement;
+    await userEvent.click(within(slackCard).getByRole("button", { name: /^activate$/i }));
+
+    await userEvent.type(await screen.findByLabelText(/webhook url/i), "https://hooks.slack.com/services/x");
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: /add webhook/i }));
+
+    const call = await vi.waitFor(() => {
+      const c = fetchMock.mock.calls.find(
+        ([u, o]) => String(u).includes("/admin/webhooks") && (o as RequestInit | undefined)?.method === "POST",
+      );
+      if (!c) throw new Error("POST /admin/webhooks not called yet");
+      return c;
+    });
+    const body = JSON.parse(String((call[1] as RequestInit).body));
+    expect(body.kind).toBe("slack");
+    expect(body.url).toBe("https://hooks.slack.com/services/x");
+    expect(body.events).toHaveLength(5);
+    // The catalog stayed put — no navigation to the Webhooks route.
+    expect(screen.queryByText("webhooks page")).not.toBeInTheDocument();
   });
 
-  it("navigates a pixels-powered card to /pixels", async () => {
+  it("activating a pixels-powered card creates a pixel inline with the card's fixed provider", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(typeof input === "string" ? input : (input as Request).url ?? input);
+      if (url.includes("/admin/integrations/sheets/status")) return new Response("", { status: 404 });
+      if (url.includes("/admin/pixels") && (init as RequestInit | undefined)?.method === "POST") {
+        return new Response(JSON.stringify({ id: 1 }), { status: 201 });
+      }
+      return new Response("", { status: 404, statusText: `unexpected ${url}` });
+    });
     renderCatalog();
-    const buttons = screen.getAllByRole("button", { name: /set up via pixels/i });
-    expect(buttons.length).toBeGreaterThan(0);
-    await userEvent.click(buttons[0]);
-    expect(await screen.findByText("pixels page")).toBeInTheDocument();
+
+    const ga4Card = screen.getByText("GA4 Measurement").closest('[data-slot="card"]') as HTMLElement;
+    await userEvent.click(within(ga4Card).getByRole("button", { name: /^activate$/i }));
+
+    await userEvent.type(await screen.findByLabelText(/measurement id/i), "G-ABC123");
+    await userEvent.type(screen.getByLabelText(/api secret/i), "s3cr3t");
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: /add pixel/i }));
+
+    const call = await vi.waitFor(() => {
+      const c = fetchMock.mock.calls.find(
+        ([u, o]) => String(u).includes("/admin/pixels") && (o as RequestInit | undefined)?.method === "POST",
+      );
+      if (!c) throw new Error("POST /admin/pixels not called yet");
+      return c;
+    });
+    const body = JSON.parse(String((call[1] as RequestInit).body));
+    expect(body).toEqual({
+      provider: "ga4",
+      credentials: { measurement_id: "G-ABC123", api_secret: "s3cr3t" },
+    });
+    expect(screen.queryByText("pixels page")).not.toBeInTheDocument();
   });
 
   it("Sheets card shows Connect when the connector is on but not connected", async () => {
