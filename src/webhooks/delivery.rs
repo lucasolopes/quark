@@ -194,7 +194,8 @@ pub fn spawn_webhook_worker(
             .build()
             .expect("reqwest client must build");
 
-        let mut subs = refresh_snapshot(&store, &clicked, &expired).await;
+        let mut subs: Vec<(crate::tenant::TenantId, Vec<WebhookSubscription>)> = Vec::new();
+        refresh_snapshot(&store, &clicked, &expired, &mut subs).await;
         let mut ticker = tokio::time::interval(Duration::from_secs(REFRESH_INTERVAL_SECS));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -207,7 +208,7 @@ pub fn spawn_webhook_worker(
                     }
                 }
                 _ = ticker.tick() => {
-                    subs = refresh_snapshot(&store, &clicked, &expired).await;
+                    refresh_snapshot(&store, &clicked, &expired, &mut subs).await;
                 }
             }
         }
@@ -217,19 +218,19 @@ pub fn spawn_webhook_worker(
 /// How long a full subscription-snapshot refresh (`list_tenants` +
 /// `list_webhooks` per tenant) is allowed to run before it's abandoned in
 /// favor of the previous snapshot (fail-open: a wedged store must never
-/// stall the worker). Mirrors `analytics::PIXEL_SNAPSHOT_TIMEOUT`.
+/// stall the worker, matching the fail-open contract described below).
+/// Mirrors `analytics::PIXEL_SNAPSHOT_TIMEOUT`.
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Re-reads subscriptions from the store across every tenant (LUC-63:
 /// `list_tenants` + `list_webhooks(t)` per tenant, mirroring
 /// `analytics::refresh_pixel_snapshot`), updates the `clicked`/`expired`
 /// atomics (true iff ANY tenant has an active subscription for that event
-/// type), and returns the fresh per-tenant snapshot. Fail-open: on a store
-/// error (listing tenants or any tenant's subscriptions) or a timeout, the
-/// previous snapshot is left untouched and the atomics are not touched
-/// either — a wedged or erroring store never stalls the worker and never
-/// empties out (or falsely degates) a snapshot that was previously
-/// known-good.
+/// type), and writes the fresh per-tenant snapshot into `subs`. Fail-open: on
+/// a store error (listing tenants or any tenant's subscriptions) or a
+/// timeout, `*subs` is left untouched and the atomics are not touched either:
+/// a wedged or erroring store never stalls the worker and never empties out
+/// (or falsely degates) a snapshot that was previously known-good.
 ///
 /// In OSS/single-tenant mode `list_tenants` returns only the default
 /// tenant, so this degrades to exactly the old single-tenant behavior (one
@@ -238,13 +239,14 @@ async fn refresh_snapshot(
     store: &Arc<dyn Store>,
     clicked: &AtomicBool,
     expired: &AtomicBool,
-) -> Vec<(crate::tenant::TenantId, Vec<WebhookSubscription>)> {
+    subs: &mut Vec<(crate::tenant::TenantId, Vec<WebhookSubscription>)>,
+) {
     let load = async {
         let tenants = store.list_tenants().await?;
         let mut out = Vec::with_capacity(tenants.len());
         for t in tenants {
-            let subs = store.list_webhooks(t.id).await?;
-            out.push((t.id, subs));
+            let s = store.list_webhooks(t.id).await?;
+            out.push((t.id, s));
         }
         Ok::<_, StoreError>(out)
     };
@@ -260,21 +262,19 @@ async fn refresh_snapshot(
             });
             clicked.store(has_clicked, Ordering::Relaxed);
             expired.store(has_expired, Ordering::Relaxed);
-            snapshot
+            *subs = snapshot;
         }
         Ok(Err(e)) => {
             eprintln!(
                 "{}",
                 serde_json::json!({"webhook_snapshot_refresh_error": e.to_string()})
             );
-            Vec::new()
         }
         Err(_) => {
             eprintln!(
                 "{}",
                 serde_json::json!({"webhook_snapshot_refresh_error": "timed out refreshing subscription snapshot"})
             );
-            Vec::new()
         }
     }
 }
@@ -852,10 +852,13 @@ mod tests {
     /// `list_tenants` returns exactly the keys present. `seen_tenant` records
     /// the LAST tenant `list_webhooks` was called with, so single-tenant
     /// tests can assert a caller threaded the right tenant through.
+    /// `fail` lets a test flip the stub to erroring after a good snapshot has
+    /// already been read, for the `refresh_snapshot` fail-open test.
     struct StubStore {
         subs_by_tenant:
             std::collections::HashMap<crate::tenant::TenantId, Vec<WebhookSubscription>>,
         seen_tenant: std::sync::Mutex<Option<crate::tenant::TenantId>>,
+        fail: std::sync::atomic::AtomicBool,
     }
 
     impl StubStore {
@@ -872,7 +875,15 @@ mod tests {
             Self {
                 subs_by_tenant: pairs.into_iter().collect(),
                 seen_tenant: std::sync::Mutex::new(None),
+                fail: std::sync::atomic::AtomicBool::new(false),
             }
+        }
+
+        /// Flips this stub to erroring `list_webhooks` calls (used by the
+        /// `refresh_snapshot` fail-open test, after a first successful
+        /// snapshot has already been taken).
+        fn set_fail(&self, fail: bool) {
+            self.fail.store(fail, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
@@ -998,6 +1009,9 @@ mod tests {
             &self,
             tenant: crate::tenant::TenantId,
         ) -> Result<Vec<WebhookSubscription>, StoreError> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(StoreError::Backend("stub list_webhooks failure".into()));
+            }
             *self.seen_tenant.lock().unwrap() = Some(tenant);
             Ok(self
                 .subs_by_tenant
@@ -1758,7 +1772,8 @@ mod tests {
         ]));
         let clicked = Arc::new(AtomicBool::new(false));
         let expired = Arc::new(AtomicBool::new(false));
-        let snapshot = refresh_snapshot(&store, &clicked, &expired).await;
+        let mut snapshot = Vec::new();
+        refresh_snapshot(&store, &clicked, &expired, &mut snapshot).await;
         assert_eq!(
             snapshot.len(),
             1,
@@ -1768,6 +1783,51 @@ mod tests {
         assert_eq!(snapshot[0].1.len(), 2);
         assert!(clicked.load(Ordering::Relaxed));
         // sub 2 is inactive, so `expired` must stay false.
+        assert!(!expired.load(Ordering::Relaxed));
+    }
+
+    /// LUC-63 review fail-open test: a store error on a REFRESH (after a
+    /// first snapshot already succeeded) must leave the previous snapshot
+    /// and the `clicked`/`expired` gates untouched, never empty them out.
+    /// This is the fail-open contract `refresh_snapshot`'s doc-comment
+    /// promises: mirrors `analytics::refresh_pixel_snapshot`'s behavior.
+    #[tokio::test]
+    async fn refresh_snapshot_keeps_previous_on_store_error() {
+        let store = Arc::new(StubStore::new(vec![sub(
+            1,
+            "https://x",
+            vec![EventType::LinkClicked],
+            true,
+            "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+        )]));
+        let dyn_store: Arc<dyn Store> = store.clone();
+        let clicked = Arc::new(AtomicBool::new(false));
+        let expired = Arc::new(AtomicBool::new(false));
+
+        let mut snapshot = Vec::new();
+        refresh_snapshot(&dyn_store, &clicked, &expired, &mut snapshot).await;
+        assert_eq!(
+            snapshot.len(),
+            1,
+            "first refresh must populate the snapshot"
+        );
+        assert_eq!(snapshot[0].1.len(), 1);
+        assert!(clicked.load(Ordering::Relaxed));
+
+        // Simulate a transient store error (or timeout) on the next refresh.
+        store.set_fail(true);
+        refresh_snapshot(&dyn_store, &clicked, &expired, &mut snapshot).await;
+
+        assert_eq!(
+            snapshot.len(),
+            1,
+            "a store error must leave the previous snapshot untouched, not empty it"
+        );
+        assert_eq!(snapshot[0].1.len(), 1);
+        assert!(
+            clicked.load(Ordering::Relaxed),
+            "the clicked gate must not be reset by a failed refresh"
+        );
         assert!(!expired.load(Ordering::Relaxed));
     }
 
@@ -1795,7 +1855,8 @@ mod tests {
         ]));
         let clicked = Arc::new(AtomicBool::new(false));
         let expired = Arc::new(AtomicBool::new(false));
-        let snapshot = refresh_snapshot(&store, &clicked, &expired).await;
+        let mut snapshot = Vec::new();
+        refresh_snapshot(&store, &clicked, &expired, &mut snapshot).await;
         assert_eq!(snapshot.len(), 2);
         assert!(
             clicked.load(Ordering::Relaxed),
@@ -1807,8 +1868,8 @@ mod tests {
     /// LUC-63 isolation test: two tenants each have an active `link.clicked`
     /// subscription pointed at their OWN mock server. Delivering an event
     /// stamped `tenant_id = 1` must reach only tenant 1's server, never
-    /// tenant 0's — a cross-tenant leak would show up as a second capture on
-    /// the wrong server.
+    /// tenant 0's (a cross-tenant leak would show up as a second capture on
+    /// the wrong server).
     #[tokio::test]
     async fn deliver_to_matching_isolates_by_tenant() {
         let (url_a, state_a) = spawn_test_server(vec![200]).await;

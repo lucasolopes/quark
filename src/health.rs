@@ -247,8 +247,8 @@ where
                     // The sweep itself is scoped to `DEFAULT_TENANT` (both
                     // `list_link_health` and `list_links` above are called
                     // with it), so every link seen here already belongs to
-                    // `DEFAULT_TENANT` — no tenant travels with `rec` this
-                    // far into the loop, but hardcoding it is equivalent to
+                    // `DEFAULT_TENANT` (no tenant travels with `rec` this
+                    // far into the loop), but hardcoding it is equivalent to
                     // threading `rec.tenant_id` through.
                     if !webhooks.try_emit(WebhookEvent {
                         event_type: et,
