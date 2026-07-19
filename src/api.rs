@@ -2000,7 +2000,21 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
         .and_then(|rt| rt.config.button_label.clone());
     if let Some(raw) = cookie_value(&headers, SESSION_COOKIE) {
         if let Ok(Some(session)) = st.store.get_session_by_hash(&hash_token(raw), now()).await {
-            let memberships = if st.multi_tenant {
+            let mut body = serde_json::json!({
+                "authenticated": true,
+                "display": session.display,
+                "scopes": session.scopes,
+                "oidc_enabled": oidc_enabled,
+                "oidc_button_label": oidc_button_label,
+                "multi_tenant": st.multi_tenant,
+                "tenant_domain_suffix": st.tenant_domain_suffix,
+            });
+            // Cloud (multi-tenant) only: the panel gates workspace onboarding on
+            // the PRESENCE of `memberships`, so OSS/single-tenant MUST omit both
+            // fields entirely (an empty `[]` would read as cloud and trap the
+            // user on the workspace gate instead of the app). See
+            // `web/src/app/RequireAuth.tsx`.
+            if st.multi_tenant {
                 let ms = st
                     .store
                     .list_memberships_for_user(session.user_id)
@@ -2017,38 +2031,23 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
                         }));
                     }
                 }
-                out
-            } else {
-                Vec::new()
-            };
-            // The current workspace is the session's tenant ONLY when the user
-            // actually has a membership there. A fresh cloud user's session still
-            // carries DEFAULT_TENANT (0) with no membership in it, so report
-            // `null` to signal onboarding rather than a phantom "workspace 0".
-            let current_tenant = if st.multi_tenant {
-                match st
+                // The current workspace is the session's tenant ONLY when the user
+                // actually has a membership there. A fresh cloud user's session
+                // still carries DEFAULT_TENANT (0) with no membership in it, so
+                // report `null` to signal onboarding rather than a phantom
+                // "workspace 0".
+                let current_tenant = match st
                     .store
                     .get_membership(session.user_id, session.tenant_id)
                     .await
                 {
                     Ok(Some(_)) => Some(session.tenant_id.0),
                     _ => None,
-                }
-            } else {
-                None
-            };
-            return Json(serde_json::json!({
-                "authenticated": true,
-                "display": session.display,
-                "scopes": session.scopes,
-                "oidc_enabled": oidc_enabled,
-                "oidc_button_label": oidc_button_label,
-                "multi_tenant": st.multi_tenant,
-                "memberships": memberships,
-                "current_tenant": current_tenant,
-                "tenant_domain_suffix": st.tenant_domain_suffix,
-            }))
-            .into_response();
+                };
+                body["memberships"] = serde_json::json!(out);
+                body["current_tenant"] = serde_json::json!(current_tenant);
+            }
+            return Json(body).into_response();
         }
     }
     Json(serde_json::json!({

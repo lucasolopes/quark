@@ -2929,6 +2929,15 @@ async fn admin_me_reports_session_and_oidc_state() {
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["authenticated"], true);
     assert_eq!(v["display"], "me@example.com");
+    // OSS/single-tenant must OMIT memberships/current_tenant: the panel reads
+    // the presence of `memberships` as cloud mode and would trap an OSS+OIDC
+    // user on the workspace gate. Regression guard (LUC-74).
+    assert_eq!(v["multi_tenant"], false);
+    assert!(v.get("memberships").is_none(), "OSS must omit memberships");
+    assert!(
+        v.get("current_tenant").is_none(),
+        "OSS must omit current_tenant"
+    );
 }
 
 #[tokio::test]
