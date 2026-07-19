@@ -2756,6 +2756,51 @@ impl Store for PostgresStore {
         Ok(result.rows_affected() == 1)
     }
 
+    async fn accept_invite_tx(
+        &self,
+        invite_id: u64,
+        membership: &Membership,
+        now: u64,
+    ) -> Result<bool, StoreError> {
+        // Same claim query as `mark_invite_accepted`, and the same INSERT as
+        // `put_membership`, but both inside one `begin_tenant_tx` transaction
+        // (mirrors `put_link_tx`/the other `_tx` methods): if the membership
+        // INSERT below errors, the `?` returns before `commit()` and the
+        // transaction (including the claim UPDATE) is rolled back on drop, so
+        // a failed grant never leaves the invite consumed.
+        let mut tx = self.begin_tenant_tx(membership.tenant_id).await?;
+        let claim = sqlx::query(
+            "UPDATE invites SET accepted_at = $1, accepted_by = $2 \
+             WHERE id = $3 AND accepted_at IS NULL",
+        )
+        .bind(now as i64)
+        .bind(membership.user_id as i64)
+        .bind(invite_id as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(StoreError::backend)?;
+        if claim.rows_affected() == 0 {
+            // Lost the race / already consumed: nothing to grant. Commit the
+            // (no-op) transaction rather than rolling it back, matching
+            // `mark_invite_accepted`'s Ok(false) semantics.
+            tx.commit().await.map_err(StoreError::backend)?;
+            return Ok(false);
+        }
+        sqlx::query(
+            "INSERT INTO memberships (user_id, tenant_id, role, created) VALUES ($1,$2,$3,$4) \
+             ON CONFLICT (user_id, tenant_id) DO UPDATE SET role=$3, created=$4",
+        )
+        .bind(membership.user_id as i64)
+        .bind(membership.tenant_id.0 as i64)
+        .bind(role_to_str(membership.role))
+        .bind(membership.created as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(StoreError::backend)?;
+        tx.commit().await.map_err(StoreError::backend)?;
+        Ok(true)
+    }
+
     async fn list_invites(&self, tenant: TenantId) -> Result<Vec<Invite>, StoreError> {
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
