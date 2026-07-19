@@ -19,6 +19,8 @@ import { usePatchLink, useLinkAlert, useSetLinkAlert, useDeleteLinkAlert } from 
 import { formatTagsInput, parseTagsInput } from "@/lib/tags";
 import { draftsFromRules, parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import { distributeEvenly, normalizeToPercent, variantsPercentTotal } from "@/lib/variants";
+import { DurationField } from "@/components/DurationField";
+import { DEFAULT_DURATION_UNIT, durationToSeconds } from "@/lib/duration";
 import type { Folder, Link, Variant } from "@/lib/types";
 import { RulesEditor } from "@/components/RulesEditor";
 
@@ -75,6 +77,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
   const t = useT();
   const [url, setUrl] = useState(link.url);
   const [ttl, setTtl] = useState("");
+  const [ttlUnit, setTtlUnit] = useState<string>(DEFAULT_DURATION_UNIT);
   const [removeExpiry, setRemoveExpiry] = useState(false);
   const [tagsInput, setTagsInput] = useState(formatTagsInput(link.tags ?? []));
   const [folder, setFolder] = useState(link.folder ?? "");
@@ -151,12 +154,8 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
     } else if (!isHttpUrl(url)) {
       next.url = t("dialogs.edit.urlInvalid");
     }
-    const trimmedTtl = ttl.trim();
-    if (!removeExpiry && trimmedTtl) {
-      const n = Number(trimmedTtl);
-      if (!Number.isInteger(n) || n <= 0) {
-        next.ttl = t("dialogs.edit.ttlInvalid");
-      }
+    if (!removeExpiry && ttl.trim() && durationToSeconds(ttl, ttlUnit) == null) {
+      next.ttl = t("dialogs.edit.ttlInvalid");
     }
     const trimmedMaxVisits = maxVisits.trim();
     if (trimmedMaxVisits) {
@@ -260,12 +259,13 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
       return;
     }
     setErrors({});
+    const ttlSecs = durationToSeconds(ttl, ttlUnit);
     try {
       await patchLink.mutateAsync({
         code: link.code,
         body: {
           url: url.trim(),
-          ...(removeExpiry ? { ttl: null } : ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
+          ...(removeExpiry ? { ttl: null } : ttlSecs != null ? { ttl: ttlSecs } : {}),
           tags: parseTagsInput(tagsInput),
           ...(maxVisits.trim()
             ? { max_visits: Number(maxVisits.trim()) }
@@ -377,25 +377,18 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
                 <div className="flex flex-col gap-3 pt-1">
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="flex flex-col gap-1.5">
-                      <label htmlFor="edit-link-ttl" className="text-sm font-medium">
-                        {t("dialogs.edit.ttlLabel")} <span className="text-muted-foreground">{t("dialogs.edit.ttlOptional")}</span>
-                      </label>
-                      <Input
+                      <DurationField
                         id="edit-link-ttl"
-                        type="number"
-                        min={1}
-                        step={1}
-                        placeholder={t("dialogs.edit.ttlPlaceholder", { expiry: formatExpiry(link.expiry) })}
+                        label={t("dialogs.edit.ttlLabel")}
+                        hint={t("dialogs.edit.ttlOptional")}
                         value={ttl}
-                        onChange={(e) => setTtl(e.target.value)}
-                        aria-invalid={errors.ttl != null}
+                        unit={ttlUnit}
+                        onValueChange={setTtl}
+                        onUnitChange={setTtlUnit}
+                        placeholder={t("dialogs.edit.ttlPlaceholder", { expiry: formatExpiry(link.expiry) })}
+                        error={errors.ttl}
                         disabled={removeExpiry}
                       />
-                      {errors.ttl && (
-                        <p className="text-sm text-destructive" role="alert">
-                          {errors.ttl}
-                        </p>
-                      )}
                       <label className="flex items-center gap-2 text-sm text-muted-foreground">
                         <input
                           type="checkbox"

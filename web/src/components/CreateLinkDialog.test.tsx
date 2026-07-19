@@ -221,6 +221,24 @@ describe("CreateLinkDialog", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/100%/);
   });
 
+  it("converts the expiration value and unit into seconds", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
+    );
+    render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    await userEvent.type(screen.getByLabelText(/^url$/i), "https://ok.com");
+    await userEvent.click(screen.getByRole("button", { name: /scheduling and limits/i }));
+    await userEvent.type(screen.getByLabelText(/expires in/i), "2");
+    await userEvent.selectOptions(screen.getByLabelText(/time unit/i), "hours");
+
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.ttl).toBe(7200);
+  });
+
   it("renders the app destination inputs and submits the iOS value", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
