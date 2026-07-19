@@ -281,7 +281,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-3xl">
         <form onSubmit={handleSubmit} className="flex max-h-[85vh] flex-col">
           <DialogHeader className="shrink-0">
             <DialogTitle>{t("dialogs.edit.title", { code: link.code })}</DialogTitle>
@@ -308,36 +308,38 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
               )}
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="edit-link-tags" className="text-sm font-medium">
-                {t("dialogs.edit.tagsLabel")} <span className="text-muted-foreground">({t("dialogs.edit.tagsHint")})</span>
-              </label>
-              <Input
-                id="edit-link-tags"
-                type="text"
-                placeholder={t("dialogs.edit.tagsPlaceholder")}
-                value={tagsInput}
-                onChange={(e) => setTagsInput(e.target.value)}
-              />
-            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="edit-link-tags" className="text-sm font-medium">
+                  {t("dialogs.edit.tagsLabel")} <span className="text-muted-foreground">({t("dialogs.edit.tagsHint")})</span>
+                </label>
+                <Input
+                  id="edit-link-tags"
+                  type="text"
+                  placeholder={t("dialogs.edit.tagsPlaceholder")}
+                  value={tagsInput}
+                  onChange={(e) => setTagsInput(e.target.value)}
+                />
+              </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="edit-link-folder" className="text-sm font-medium">
-                {t("dialogs.edit.folderLabel")} <span className="text-muted-foreground">{t("dialogs.edit.folderOptional")}</span>
-              </label>
-              <Input
-                id="edit-link-folder"
-                type="text"
-                list="edit-link-folder-options"
-                placeholder={t("dialogs.edit.folderPlaceholder")}
-                value={folder}
-                onChange={(e) => setFolder(e.target.value)}
-              />
-              <datalist id="edit-link-folder-options">
-                {folders.map((f) => (
-                  <option key={f.name} value={f.name} />
-                ))}
-              </datalist>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="edit-link-folder" className="text-sm font-medium">
+                  {t("dialogs.edit.folderLabel")} <span className="text-muted-foreground">{t("dialogs.edit.folderOptional")}</span>
+                </label>
+                <Input
+                  id="edit-link-folder"
+                  type="text"
+                  list="edit-link-folder-options"
+                  placeholder={t("dialogs.edit.folderPlaceholder")}
+                  value={folder}
+                  onChange={(e) => setFolder(e.target.value)}
+                />
+                <datalist id="edit-link-folder-options">
+                  {folders.map((f) => (
+                    <option key={f.name} value={f.name} />
+                  ))}
+                </datalist>
+              </div>
             </div>
 
             <div className="flex flex-col gap-2 rounded-lg border border-input p-2.5">
@@ -357,59 +359,61 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
 
               {schedulingOpen && (
                 <div className="flex flex-col gap-3 pt-1">
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="edit-link-ttl" className="text-sm font-medium">
-                      {t("dialogs.edit.ttlLabel")} <span className="text-muted-foreground">{t("dialogs.edit.ttlOptional")}</span>
-                    </label>
-                    <Input
-                      id="edit-link-ttl"
-                      type="number"
-                      min={1}
-                      step={1}
-                      placeholder={t("dialogs.edit.ttlPlaceholder", { expiry: formatExpiry(link.expiry) })}
-                      value={ttl}
-                      onChange={(e) => setTtl(e.target.value)}
-                      aria-invalid={errors.ttl != null}
-                      disabled={removeExpiry}
-                    />
-                    {errors.ttl && (
-                      <p className="text-sm text-destructive" role="alert">
-                        {errors.ttl}
-                      </p>
-                    )}
-                    <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <input
-                        type="checkbox"
-                        className="size-4 rounded border-input accent-primary"
-                        checked={removeExpiry}
-                        onChange={(e) => {
-                          setRemoveExpiry(e.target.checked);
-                          if (e.target.checked) setTtl("");
-                        }}
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="edit-link-ttl" className="text-sm font-medium">
+                        {t("dialogs.edit.ttlLabel")} <span className="text-muted-foreground">{t("dialogs.edit.ttlOptional")}</span>
+                      </label>
+                      <Input
+                        id="edit-link-ttl"
+                        type="number"
+                        min={1}
+                        step={1}
+                        placeholder={t("dialogs.edit.ttlPlaceholder", { expiry: formatExpiry(link.expiry) })}
+                        value={ttl}
+                        onChange={(e) => setTtl(e.target.value)}
+                        aria-invalid={errors.ttl != null}
+                        disabled={removeExpiry}
                       />
-                      {t("dialogs.edit.removeExpiryLabel")}
-                    </label>
-                  </div>
+                      {errors.ttl && (
+                        <p className="text-sm text-destructive" role="alert">
+                          {errors.ttl}
+                        </p>
+                      )}
+                      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          className="size-4 rounded border-input accent-primary"
+                          checked={removeExpiry}
+                          onChange={(e) => {
+                            setRemoveExpiry(e.target.checked);
+                            if (e.target.checked) setTtl("");
+                          }}
+                        />
+                        {t("dialogs.edit.removeExpiryLabel")}
+                      </label>
+                    </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="edit-link-max-visits" className="text-sm font-medium">
-                      {t("dialogs.edit.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.edit.maxVisitsOptional")}</span>
-                    </label>
-                    <Input
-                      id="edit-link-max-visits"
-                      type="number"
-                      min={1}
-                      step={1}
-                      placeholder={t("dialogs.edit.maxVisitsPlaceholder", { current: formatCurrentMaxVisits(link.max_visits) })}
-                      value={maxVisits}
-                      onChange={(e) => setMaxVisits(e.target.value)}
-                      aria-invalid={errors.maxVisits != null}
-                    />
-                    {errors.maxVisits && (
-                      <p className="text-sm text-destructive" role="alert">
-                        {errors.maxVisits}
-                      </p>
-                    )}
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="edit-link-max-visits" className="text-sm font-medium">
+                        {t("dialogs.edit.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.edit.maxVisitsOptional")}</span>
+                      </label>
+                      <Input
+                        id="edit-link-max-visits"
+                        type="number"
+                        min={1}
+                        step={1}
+                        placeholder={t("dialogs.edit.maxVisitsPlaceholder", { current: formatCurrentMaxVisits(link.max_visits) })}
+                        value={maxVisits}
+                        onChange={(e) => setMaxVisits(e.target.value)}
+                        aria-invalid={errors.maxVisits != null}
+                      />
+                      {errors.maxVisits && (
+                        <p className="text-sm text-destructive" role="alert">
+                          {errors.maxVisits}
+                        </p>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex flex-col gap-1.5">
@@ -453,41 +457,43 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
               {appRedirectOpen && (
                 <div className="flex flex-col gap-3 pt-1">
                   <p className="text-sm text-muted-foreground">{t("dialogs.edit.appDestNote")}</p>
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="edit-link-app-ios" className="text-sm font-medium">
-                      {t("dialogs.edit.appIosLabel")}
-                    </label>
-                    <Input
-                      id="edit-link-app-ios"
-                      type="text"
-                      placeholder={t("dialogs.edit.appIosPlaceholder")}
-                      value={appIos}
-                      onChange={(e) => setAppIos(e.target.value)}
-                      aria-invalid={errors.appIos != null}
-                    />
-                    {errors.appIos && (
-                      <p className="text-sm text-destructive" role="alert">
-                        {errors.appIos}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="edit-link-app-android" className="text-sm font-medium">
-                      {t("dialogs.edit.appAndroidLabel")}
-                    </label>
-                    <Input
-                      id="edit-link-app-android"
-                      type="text"
-                      placeholder={t("dialogs.edit.appAndroidPlaceholder")}
-                      value={appAndroid}
-                      onChange={(e) => setAppAndroid(e.target.value)}
-                      aria-invalid={errors.appAndroid != null}
-                    />
-                    {errors.appAndroid && (
-                      <p className="text-sm text-destructive" role="alert">
-                        {errors.appAndroid}
-                      </p>
-                    )}
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="edit-link-app-ios" className="text-sm font-medium">
+                        {t("dialogs.edit.appIosLabel")}
+                      </label>
+                      <Input
+                        id="edit-link-app-ios"
+                        type="text"
+                        placeholder={t("dialogs.edit.appIosPlaceholder")}
+                        value={appIos}
+                        onChange={(e) => setAppIos(e.target.value)}
+                        aria-invalid={errors.appIos != null}
+                      />
+                      {errors.appIos && (
+                        <p className="text-sm text-destructive" role="alert">
+                          {errors.appIos}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="edit-link-app-android" className="text-sm font-medium">
+                        {t("dialogs.edit.appAndroidLabel")}
+                      </label>
+                      <Input
+                        id="edit-link-app-android"
+                        type="text"
+                        placeholder={t("dialogs.edit.appAndroidPlaceholder")}
+                        value={appAndroid}
+                        onChange={(e) => setAppAndroid(e.target.value)}
+                        aria-invalid={errors.appAndroid != null}
+                      />
+                      {errors.appAndroid && (
+                        <p className="text-sm text-destructive" role="alert">
+                          {errors.appAndroid}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
