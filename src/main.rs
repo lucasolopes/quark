@@ -220,14 +220,6 @@ async fn main() {
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .expect("build pixel forwarding client");
-    let _worker = spawn_worker(
-        analytics_rx,
-        sink.clone(),
-        store.clone(),
-        pixel_client,
-        key,
-        quark::pixel::PixelBases::default(),
-    );
     let admin_token = std::env::var("QUARK_ADMIN_TOKEN").ok();
     if admin_token.is_none() {
         eprintln!("WARNING: QUARK_ADMIN_TOKEN not set — /stats endpoint disabled.");
@@ -289,6 +281,21 @@ async fn main() {
         eprintln!("webhook delivery: in-memory best-effort channel (LMDB backend)");
         Arc::new(dispatcher)
     };
+
+    // Analytics worker (off the redirect hot path): batches clicks to the sink,
+    // forwards to pixels, and drives the click-threshold alert engine (LUC-38),
+    // emitting `link.threshold_reached` through `webhooks`. `control_conn` is
+    // the shared Valkey counter (`None` -> per-replica in-memory counting).
+    let _worker = spawn_worker(
+        analytics_rx,
+        sink.clone(),
+        store.clone(),
+        pixel_client,
+        key,
+        quark::pixel::PixelBases::default(),
+        webhooks.clone(),
+        control_conn.clone(),
+    );
 
     // OIDC login (opt-in via QUARK_OIDC_ISSUER). A failed init disables login but
     // never blocks startup: the break-glass admin token still works.

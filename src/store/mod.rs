@@ -210,6 +210,17 @@ pub fn pick_variant(variants: &[Variant], rand: u64) -> usize {
     variants.len() - 1
 }
 
+/// A per-link click-threshold alert rule (LUC-38): fire `link.threshold_reached`
+/// when a link is clicked at least `threshold` times within a fixed window of
+/// `window_secs` seconds. Counting is done by a shared fixed-window counter in
+/// the analytics worker (Valkey when present, per-replica memory otherwise),
+/// firing at most once per window.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AlertRule {
+    pub threshold: u32,
+    pub window_secs: u64,
+}
+
 /// A durable webhook delivery to enqueue into the Postgres outbox: one row per
 /// (event, subscription). `delivery_key` is the stable idempotency id
 /// (`"<event_id>.<subscription_id>"`) that a duplicate enqueue collides on
@@ -422,6 +433,26 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<(), StoreError>;
     async fn delete_webhook(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError>;
     async fn next_webhook_id(&self, tenant: TenantId) -> Result<u64, StoreError>;
+    /// Upserts the click-threshold alert rule for a link (LUC-38), keyed by
+    /// `(tenant, link_id)`. Replaces any existing rule for that link.
+    async fn put_alert_rule(
+        &self,
+        tenant: TenantId,
+        link_id: u64,
+        rule: &AlertRule,
+    ) -> Result<(), StoreError>;
+    /// Reads a link's alert rule, or `None` when the link has no rule.
+    async fn get_alert_rule(
+        &self,
+        tenant: TenantId,
+        link_id: u64,
+    ) -> Result<Option<AlertRule>, StoreError>;
+    /// Deletes a link's alert rule; a missing rule is not an error.
+    async fn delete_alert_rule(&self, tenant: TenantId, link_id: u64) -> Result<(), StoreError>;
+    /// Every alert rule owned by `tenant`, as `(link_id, rule)`. Read by the
+    /// analytics worker's per-tick rule snapshot (mirrors `list_pixels`).
+    async fn list_alert_rules(&self, tenant: TenantId)
+        -> Result<Vec<(u64, AlertRule)>, StoreError>;
     async fn list_api_tokens(&self, tenant: TenantId) -> Result<Vec<ApiToken>, StoreError>;
     /// Hash-lookup: tenant-less (the token hash is globally unique); the owning
     /// tenant travels on the row/value.
@@ -1353,5 +1384,85 @@ mod variants_tests {
         let rec: Record = serde_json::from_str(old).unwrap();
         assert_eq!(rec.url, "https://old.com");
         assert!(rec.variants.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod alert_rules_tests {
+    use super::{open_store, AlertRule};
+    use crate::tenant::TenantId;
+
+    #[tokio::test]
+    async fn put_get_list_delete_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path()).await.unwrap();
+        let tenant = TenantId(1);
+
+        assert_eq!(store.get_alert_rule(tenant, 100).await.unwrap(), None);
+
+        let rule = AlertRule {
+            threshold: 5,
+            window_secs: 60,
+        };
+        store.put_alert_rule(tenant, 100, &rule).await.unwrap();
+        assert_eq!(
+            store.get_alert_rule(tenant, 100).await.unwrap(),
+            Some(rule.clone())
+        );
+
+        // A second rule for another link in the same tenant.
+        let rule2 = AlertRule {
+            threshold: 10,
+            window_secs: 300,
+        };
+        store.put_alert_rule(tenant, 200, &rule2).await.unwrap();
+        let mut listed = store.list_alert_rules(tenant).await.unwrap();
+        listed.sort_by_key(|(id, _)| *id);
+        assert_eq!(listed, vec![(100, rule), (200, rule2.clone())]);
+
+        // Overwrite semantics: putting again replaces the rule.
+        let rule3 = AlertRule {
+            threshold: 1,
+            window_secs: 120,
+        };
+        store.put_alert_rule(tenant, 100, &rule3).await.unwrap();
+        assert_eq!(
+            store.get_alert_rule(tenant, 100).await.unwrap(),
+            Some(rule3)
+        );
+
+        store.delete_alert_rule(tenant, 100).await.unwrap();
+        assert_eq!(store.get_alert_rule(tenant, 100).await.unwrap(), None);
+        // Deleting a missing rule is not an error.
+        store.delete_alert_rule(tenant, 100).await.unwrap();
+
+        let remaining = store.list_alert_rules(tenant).await.unwrap();
+        assert_eq!(remaining, vec![(200, rule2)]);
+    }
+
+    #[tokio::test]
+    async fn alert_rules_are_isolated_by_tenant() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(dir.path()).await.unwrap();
+        let rule = AlertRule {
+            threshold: 3,
+            window_secs: 60,
+        };
+        store.put_alert_rule(TenantId(1), 100, &rule).await.unwrap();
+        assert!(store
+            .get_alert_rule(TenantId(1), 100)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_alert_rule(TenantId(2), 100)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .list_alert_rules(TenantId(2))
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

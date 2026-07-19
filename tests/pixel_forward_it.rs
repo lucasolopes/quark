@@ -12,6 +12,17 @@ use tokio::net::TcpListener;
 
 const KEY: u64 = 0x1234;
 
+/// Throwaway webhook dispatcher for the analytics worker: these tests exercise
+/// pixel forwarding, not threshold alerts, so events are dropped.
+fn noop_dispatcher() -> Arc<quark::webhooks::delivery::WebhookDispatcher> {
+    let (wh_tx, _wh_rx) = tokio::sync::mpsc::channel(1);
+    Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
+        wh_tx,
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    ))
+}
+
 type Captured = Arc<Mutex<Vec<(String, Value)>>>;
 
 /// A tiny mock provider: always 200s and records every POST it receives.
@@ -119,6 +130,8 @@ async fn worker_forwards_only_matching_tenant_events_to_each_pixel() {
         reqwest::Client::new(),
         KEY,
         bases,
+        noop_dispatcher(),
+        None,
     );
 
     tx.send(ev_t(10, 1_752_300_000, 0)).await.unwrap(); // tenant A
@@ -177,6 +190,8 @@ async fn worker_flush_forwards_batch_to_active_pixel_with_real_short_code() {
         reqwest::Client::new(),
         KEY,
         bases,
+        noop_dispatcher(),
+        None,
     );
 
     tx.send(ev(42, 1_752_300_000)).await.unwrap();
@@ -219,6 +234,8 @@ async fn worker_flush_skips_inactive_pixel_configs() {
         reqwest::Client::new(),
         KEY,
         bases,
+        noop_dispatcher(),
+        None,
     );
 
     tx.send(ev(1, 1_752_300_000)).await.unwrap();
@@ -251,6 +268,8 @@ async fn worker_flush_is_fail_open_when_provider_is_down() {
         reqwest::Client::new(),
         KEY,
         bases,
+        noop_dispatcher(),
+        None,
     );
 
     tx.send(ev(7, 1_752_300_000)).await.unwrap();
@@ -294,6 +313,8 @@ async fn worker_flush_is_fail_open_when_provider_returns_500() {
         reqwest::Client::new(),
         KEY,
         bases,
+        noop_dispatcher(),
+        None,
     );
 
     tx.send(ev(9, 1_752_300_000)).await.unwrap();
@@ -330,6 +351,8 @@ async fn worker_forwards_to_a_pixel_added_after_start_once_the_snapshot_refreshe
         reqwest::Client::new(),
         KEY,
         bases,
+        noop_dispatcher(),
+        None,
     );
 
     // Added only now, after the worker's initial snapshot load already ran.

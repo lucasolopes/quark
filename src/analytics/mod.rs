@@ -1,9 +1,11 @@
 use crate::pixel::{self, PixelBases, PixelConfig};
-use crate::store::{Store, StoreError};
+use crate::store::{AlertRule, Store, StoreError};
 use crate::tenant::TenantId;
+use crate::webhooks::delivery::WebhookDispatcher;
+use crate::webhooks::{EventType, WebhookEvent};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
@@ -343,6 +345,210 @@ pub const BATCH: usize = 500;
 /// snapshot (fail-open: a wedged store must never stall the worker).
 const PIXEL_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// Per-replica in-memory state for `AlertCounter::Memory`: for each
+/// `(tenant, link_id)`, the current fixed window, the click count in it, and
+/// whether `link.threshold_reached` has already fired this window. The entry
+/// resets when the window rolls over, so the map is bounded by the number of
+/// links that carry a rule (not by time).
+#[derive(Default)]
+struct AlertMemState {
+    map: HashMap<(u64, u64), (u64, u32, bool)>,
+}
+
+/// Shared fixed-window click counter for threshold alerts (LUC-38). Mirrors
+/// `abuse::ratelimit`: Valkey `INCR`+`EXPIRE` keyed by
+/// `quark:alert:cnt:{tenant}:{id}:{window}` when a control connection is
+/// present, else a per-replica in-memory count. Fire-once-per-window is a
+/// `SET NX EX` marker (`quark:alert:fired:...`) on Valkey, or the `fired` flag
+/// in the memory entry. Fail-open: a Valkey error only logs and never fires,
+/// never panics the worker.
+enum AlertCounter {
+    Memory(Mutex<AlertMemState>),
+    Valkey(redis::aio::MultiplexedConnection),
+}
+
+impl AlertCounter {
+    fn memory() -> AlertCounter {
+        AlertCounter::Memory(Mutex::new(AlertMemState::default()))
+    }
+
+    /// `Some(conn)` -> shared Valkey counter; `None` -> per-replica memory.
+    fn new(control: Option<redis::aio::MultiplexedConnection>) -> AlertCounter {
+        match control {
+            Some(conn) => AlertCounter::Valkey(conn),
+            None => AlertCounter::memory(),
+        }
+    }
+
+    /// Records one click against `rule` at time `ts`. Returns `Some(count)`
+    /// exactly once per fixed window: on the click that first brings the
+    /// window's count to `>= rule.threshold`. Subsequent clicks in the same
+    /// window return `None` (already fired); a new window can fire again.
+    async fn observe(&self, tenant: u64, id: u64, rule: &AlertRule, ts: u64) -> Option<u64> {
+        let window_secs = rule.window_secs.max(1);
+        let window = ts / window_secs;
+        match self {
+            AlertCounter::Memory(state) => {
+                let mut st = state.lock().unwrap();
+                let entry = st.map.entry((tenant, id)).or_insert((window, 0, false));
+                if entry.0 != window {
+                    *entry = (window, 0, false);
+                }
+                entry.1 += 1;
+                if entry.1 >= rule.threshold && !entry.2 {
+                    entry.2 = true;
+                    Some(entry.1 as u64)
+                } else {
+                    None
+                }
+            }
+            AlertCounter::Valkey(conn) => {
+                let mut c = conn.clone();
+                let cnt_key = format!("quark:alert:cnt:{tenant}:{id}:{window}");
+                let count: i64 = match redis::cmd("INCR").arg(&cnt_key).query_async(&mut c).await {
+                    Ok(n) => n,
+                    Err(e) => {
+                        eprintln!(
+                            "{}",
+                            serde_json::json!({"alert_counter_error": e.to_string()})
+                        );
+                        return None;
+                    }
+                };
+                if count == 1 {
+                    let _: Result<(), _> = redis::cmd("EXPIRE")
+                        .arg(&cnt_key)
+                        .arg(window_secs as i64 * 2)
+                        .query_async(&mut c)
+                        .await;
+                }
+                if (count as u64) < rule.threshold as u64 {
+                    return None;
+                }
+                // Fire-once marker: SET NX succeeds only for the first crosser
+                // of this window across all replicas.
+                let fired_key = format!("quark:alert:fired:{tenant}:{id}:{window}");
+                let set: Result<Option<String>, _> = redis::cmd("SET")
+                    .arg(&fired_key)
+                    .arg(1)
+                    .arg("NX")
+                    .arg("EX")
+                    .arg(window_secs as i64 * 2)
+                    .query_async(&mut c)
+                    .await;
+                match set {
+                    Ok(Some(_)) => Some(count as u64),
+                    Ok(None) => None,
+                    Err(e) => {
+                        eprintln!(
+                            "{}",
+                            serde_json::json!({"alert_fire_marker_error": e.to_string()})
+                        );
+                        None
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `evt_<32 hex>` event id embedded in an alert payload's `id` field, matching
+/// the shape `api::webhook_event_payload` uses for lifecycle events.
+fn generate_alert_event_id() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("system RNG must be available");
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("evt_{hex}")
+}
+
+/// Builds the `link.threshold_reached` JSON body in the same `{id, type,
+/// timestamp, data}` envelope as the other webhook events. `data` carries the
+/// short `code`, the `count` that crossed the threshold, the configured
+/// `threshold`/`window_secs`, and the triggering click `ts`.
+fn threshold_payload(code: &str, count: u64, threshold: u32, window_secs: u64, ts: u64) -> String {
+    serde_json::json!({
+        "id": generate_alert_event_id(),
+        "type": EventType::LinkThresholdReached.as_str(),
+        "timestamp": crate::now(),
+        "data": {
+            "code": code,
+            "count": count,
+            "threshold": threshold,
+            "window_secs": window_secs,
+            "ts": ts,
+        },
+    })
+    .to_string()
+}
+
+/// For every click whose `(tenant, id)` has a rule in `alerts`, feeds the
+/// shared window counter and, on the first crossing of the window, emits
+/// `link.threshold_reached` through the existing webhook delivery path.
+/// Off the redirect hot path (runs in the flush), best-effort, and fail-open
+/// (the counter itself swallows Valkey errors).
+async fn process_alerts(
+    counter: &AlertCounter,
+    alerts: &[(TenantId, HashMap<u64, AlertRule>)],
+    webhooks: &WebhookDispatcher,
+    key: u64,
+    events: &[ClickEvent],
+) {
+    if alerts.is_empty() {
+        return;
+    }
+    for ev in events {
+        let Some((_, tenant_rules)) = alerts.iter().find(|(t, _)| t.0 == ev.tenant_id) else {
+            continue;
+        };
+        let Some(rule) = tenant_rules.get(&ev.id) else {
+            continue;
+        };
+        if let Some(count) = counter.observe(ev.tenant_id, ev.id, rule, ev.ts).await {
+            let code = crate::codec::to_base62(crate::permute::encode(ev.id, key));
+            let body = threshold_payload(&code, count, rule.threshold, rule.window_secs, ev.ts);
+            webhooks.emit(WebhookEvent {
+                event_type: EventType::LinkThresholdReached,
+                body,
+                tenant_id: TenantId(ev.tenant_id),
+            });
+        }
+    }
+}
+
+/// Refreshes the cached alert-rule snapshot from `store` across every tenant,
+/// bounded by `PIXEL_SNAPSHOT_TIMEOUT`, mirroring `refresh_pixel_snapshot`.
+/// Fail-open: on a store error or timeout the previous snapshot is left
+/// untouched and only a line is logged, so a wedged store never stalls the
+/// worker nor empties a known-good snapshot.
+async fn refresh_alert_snapshot(
+    store: &Arc<dyn Store>,
+    alerts: &mut Vec<(TenantId, HashMap<u64, AlertRule>)>,
+) {
+    let load = async {
+        let tenants = store.list_tenants().await?;
+        let mut out: Vec<(TenantId, HashMap<u64, AlertRule>)> = Vec::with_capacity(tenants.len());
+        for t in tenants {
+            let rules = store.list_alert_rules(t.id).await?;
+            if !rules.is_empty() {
+                out.push((t.id, rules.into_iter().collect()));
+            }
+        }
+        Ok::<_, StoreError>(out)
+    };
+    match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, load).await {
+        Ok(Ok(snapshot)) => *alerts = snapshot,
+        Ok(Err(e)) => {
+            eprintln!("{}", serde_json::json!({"alert_list_error": e.to_string()}));
+        }
+        Err(_) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"alert_list_error": "timed out refreshing alert snapshot"})
+            );
+        }
+    }
+}
+
 /// Background worker: accumulates `ClickEvent`s from the channel and flushes
 /// to the sink when the buffer reaches `BATCH`, every 5s, or when the channel
 /// closes (drains and exits). Each flush also forwards the batch to every
@@ -362,6 +568,13 @@ const PIXEL_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
 /// with no redirects and a timeout by the caller); `key` derives the real
 /// short code used as `link_code` in the forwarded payload; `bases` are the
 /// provider hosts (fixed in production, injectable in tests).
+///
+/// `webhooks` is the shared dispatcher used to emit `link.threshold_reached`
+/// (LUC-38), the same best-effort in-memory path `clicked`/`expired` use;
+/// `control` is the Valkey control connection (`None` -> per-replica in-memory
+/// counting). The alert-rule snapshot is refreshed on the same 5s tick as
+/// pixels, fail-open.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_worker(
     mut rx: Receiver<ClickEvent>,
     sink: Arc<dyn AnalyticsSink>,
@@ -369,6 +582,8 @@ pub fn spawn_worker(
     client: reqwest::Client,
     key: u64,
     bases: PixelBases,
+    webhooks: Arc<WebhookDispatcher>,
+    control: Option<redis::aio::MultiplexedConnection>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut buf: Vec<ClickEvent> = Vec::with_capacity(BATCH);
@@ -377,6 +592,10 @@ pub fn spawn_worker(
         // tenant dono precisa viajar junto: `PixelConfig` não carrega tenant.
         let mut pixels: Vec<(TenantId, Vec<PixelConfig>)> = Vec::new();
         refresh_pixel_snapshot(&store, &mut pixels).await;
+        // Snapshot de regras de limiar por tenant (mesmo molde dos pixels).
+        let mut alerts: Vec<(TenantId, HashMap<u64, AlertRule>)> = Vec::new();
+        refresh_alert_snapshot(&store, &mut alerts).await;
+        let counter = AlertCounter::new(control);
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -386,18 +605,19 @@ pub fn spawn_worker(
                         Some(ev) => {
                             buf.push(ev);
                             if buf.len() >= BATCH {
-                                flush(&sink, &mut buf, &pixels, &client, key, &bases).await;
+                                flush(&sink, &mut buf, &pixels, &client, key, &bases, &counter, &alerts, &webhooks).await;
                             }
                         }
                         None => {
-                            flush(&sink, &mut buf, &pixels, &client, key, &bases).await;
+                            flush(&sink, &mut buf, &pixels, &client, key, &bases, &counter, &alerts, &webhooks).await;
                             break;
                         }
                     }
                 }
                 _ = ticker.tick() => {
                     refresh_pixel_snapshot(&store, &mut pixels).await;
-                    flush(&sink, &mut buf, &pixels, &client, key, &bases).await;
+                    refresh_alert_snapshot(&store, &mut alerts).await;
+                    flush(&sink, &mut buf, &pixels, &client, key, &bases, &counter, &alerts, &webhooks).await;
                 }
             }
         }
@@ -442,6 +662,7 @@ async fn refresh_pixel_snapshot(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn flush(
     sink: &Arc<dyn AnalyticsSink>,
     buf: &mut Vec<ClickEvent>,
@@ -449,6 +670,9 @@ async fn flush(
     client: &reqwest::Client,
     key: u64,
     bases: &PixelBases,
+    counter: &AlertCounter,
+    alerts: &[(TenantId, HashMap<u64, AlertRule>)],
+    webhooks: &WebhookDispatcher,
 ) {
     if buf.is_empty() {
         return;
@@ -460,6 +684,7 @@ async fn flush(
         );
     }
     forward_to_pixels(pixels, client, key, bases, buf).await;
+    process_alerts(counter, alerts, webhooks, key, buf).await;
     buf.clear();
 }
 
@@ -510,6 +735,132 @@ async fn forward_to_pixels(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::webhooks::WebhookEvent;
+    use std::sync::atomic::AtomicBool;
+    use tokio::sync::mpsc::Receiver as MpscReceiver;
+
+    /// Builds a throwaway `WebhookDispatcher` over a fresh channel, returning
+    /// the dispatcher and the receiver so a test can assert on emitted events.
+    fn test_dispatcher() -> (Arc<WebhookDispatcher>, MpscReceiver<WebhookEvent>) {
+        let (tx, rx) = tokio::sync::mpsc::channel::<WebhookEvent>(64);
+        let clicked = Arc::new(AtomicBool::new(false));
+        let expired = Arc::new(AtomicBool::new(false));
+        (Arc::new(WebhookDispatcher::new(tx, clicked, expired)), rx)
+    }
+
+    fn alert_click(id: u64, ts: u64, tenant: u64) -> ClickEvent {
+        ClickEvent {
+            id,
+            event_id: String::new(),
+            ts,
+            referer: None,
+            country: None,
+            user_agent: Some("Mozilla/5.0 (iPhone)".into()),
+            city: None,
+            bot: false,
+            ip: None,
+            fbc: None,
+            variant: None,
+            tenant_id: tenant,
+        }
+    }
+
+    /// N-1 clicks in a window do not fire; the N-th fires exactly one
+    /// `link.threshold_reached`; extra clicks in the SAME window do not
+    /// re-fire; a new window crosses and fires again.
+    #[tokio::test]
+    async fn threshold_engine_fires_once_per_window() {
+        let counter = AlertCounter::memory();
+        let (dispatcher, mut rx) = test_dispatcher();
+        let rule = AlertRule {
+            threshold: 3,
+            window_secs: 60,
+        };
+        let alerts = vec![(TenantId(0), HashMap::from([(7u64, rule)]))];
+        let base = 1_752_300_000u64; // window = base / 60
+
+        // First window: 2 clicks -> nothing.
+        let two = vec![alert_click(7, base, 0), alert_click(7, base + 1, 0)];
+        process_alerts(&counter, &alerts, &dispatcher, 0x1234, &two).await;
+        assert!(rx.try_recv().is_err(), "N-1 clicks must not fire");
+
+        // 3rd click -> exactly one event.
+        process_alerts(
+            &counter,
+            &alerts,
+            &dispatcher,
+            0x1234,
+            &[alert_click(7, base + 2, 0)],
+        )
+        .await;
+        let ev = rx.try_recv().expect("N-th click must fire");
+        assert_eq!(ev.event_type, EventType::LinkThresholdReached);
+        assert_eq!(ev.tenant_id, TenantId(0));
+        assert!(rx.try_recv().is_err(), "only one event on the crossing");
+
+        // More clicks in the SAME window -> no re-fire.
+        let more = vec![alert_click(7, base + 3, 0), alert_click(7, base + 4, 0)];
+        process_alerts(&counter, &alerts, &dispatcher, 0x1234, &more).await;
+        assert!(
+            rx.try_recv().is_err(),
+            "same-window extras must not re-fire"
+        );
+
+        // Next window: 3 fresh clicks -> fires again.
+        let next = base + 60;
+        let three_next = vec![
+            alert_click(7, next, 0),
+            alert_click(7, next + 1, 0),
+            alert_click(7, next + 2, 0),
+        ];
+        process_alerts(&counter, &alerts, &dispatcher, 0x1234, &three_next).await;
+        let ev2 = rx.try_recv().expect("new window must fire again");
+        assert_eq!(ev2.event_type, EventType::LinkThresholdReached);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn threshold_engine_ignores_links_without_a_rule() {
+        let counter = AlertCounter::memory();
+        let (dispatcher, mut rx) = test_dispatcher();
+        let rule = AlertRule {
+            threshold: 1,
+            window_secs: 60,
+        };
+        let alerts = vec![(TenantId(0), HashMap::from([(7u64, rule)]))];
+        // id 99 has no rule; a single click on it must not fire.
+        process_alerts(
+            &counter,
+            &alerts,
+            &dispatcher,
+            0x1234,
+            &[alert_click(99, 100, 0)],
+        )
+        .await;
+        assert!(rx.try_recv().is_err());
+        // id 7 with threshold 1 fires on the first click.
+        process_alerts(
+            &counter,
+            &alerts,
+            &dispatcher,
+            0x1234,
+            &[alert_click(7, 100, 0)],
+        )
+        .await;
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn threshold_payload_carries_code_and_counts() {
+        let body = threshold_payload("abc123", 5, 5, 60, 1_752_300_000);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["type"], "link.threshold_reached");
+        assert_eq!(v["data"]["code"], "abc123");
+        assert_eq!(v["data"]["count"], 5);
+        assert_eq!(v["data"]["threshold"], 5);
+        assert_eq!(v["data"]["window_secs"], 60);
+        assert!(v["id"].as_str().unwrap().starts_with("evt_"));
+    }
 
     fn ev(id: u64, ts: u64, country: &str, ua: &str) -> ClickEvent {
         ClickEvent {
@@ -592,6 +943,8 @@ mod tests {
             reqwest::Client::new(),
             0x1234,
             PixelBases::default(),
+            test_dispatcher().0,
+            None,
         );
 
         for i in 0..250u64 {

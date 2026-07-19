@@ -6,7 +6,9 @@ use crate::oidc::TenantOidcConfig;
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::secretbox::{self, SecretBox};
 use crate::sso::SsoEmailDomain;
-use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant};
+use crate::store::{
+    AlertRule, LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant,
+};
 use crate::tenant::{Membership, Role, Tenant, TenantId, User};
 use crate::webhooks::{SubscriptionKind, WebhookSubscription};
 use sqlx::postgres::{PgPoolOptions, PgRow};
@@ -90,9 +92,10 @@ const CLAIM_LEASE_SECS: u64 = 60;
 
 /// Every tenant-owned table: gets a `tenant_id` column and an RLS policy.
 /// (Global counters/sequences and lease tables are intentionally absent.)
-const TENANT_OWNED_TABLES: [&str; 17] = [
+const TENANT_OWNED_TABLES: [&str; 18] = [
     "links",
     "aliases",
+    "alert_rules",
     "link_health",
     "sessions",
     "webhooks",
@@ -446,6 +449,16 @@ fn row_to_pixel(r: &PgRow) -> Result<PixelConfig, StoreError> {
     })
 }
 
+/// Maps an `alert_rules` row (`threshold`, `window_secs`) into an `AlertRule`.
+fn row_to_alert_rule(r: &PgRow) -> AlertRule {
+    let threshold: i64 = r.get("threshold");
+    let window_secs: i64 = r.get("window_secs");
+    AlertRule {
+        threshold: threshold as u32,
+        window_secs: window_secs as u64,
+    }
+}
+
 /// Upserts a link row inside an open transaction (same SQL as `put_link`).
 /// Shared by the `_tx` mutation methods so the link write and the outbox
 /// enqueue commit atomically.
@@ -634,6 +647,9 @@ impl PostgresStore {
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS visits BIGINT NOT NULL DEFAULT 0",
                 "CREATE SEQUENCE IF NOT EXISTS quark_pixel_id_seq",
                 "CREATE TABLE IF NOT EXISTS pixels (id BIGINT PRIMARY KEY, provider TEXT NOT NULL, credentials JSONB NOT NULL, active BOOLEAN NOT NULL, created BIGINT NOT NULL)",
+                // Per-link click-threshold alert rules (LUC-38). Tenant-owned,
+                // keyed by `(tenant_id, link_id)`.
+                "CREATE TABLE IF NOT EXISTS alert_rules (tenant_id BIGINT NOT NULL DEFAULT 0, link_id BIGINT NOT NULL, threshold BIGINT NOT NULL, window_secs BIGINT NOT NULL, PRIMARY KEY (tenant_id, link_id))",
                 // Idempotent migration for a `links` table created before variants
                 // existed (#17).
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS variants JSONB NOT NULL DEFAULT '[]'",
@@ -978,7 +994,7 @@ impl PostgresStore {
     /// OSS/default-tenant path keeps working after a reset).
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
         for q in [
-            "TRUNCATE links, aliases, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships, domains, invites, oidc_configs, sso_email_domains RESTART IDENTITY",
+            "TRUNCATE links, aliases, alert_rules, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships, domains, invites, oidc_configs, sso_email_domains RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
@@ -1916,6 +1932,79 @@ impl Store for PostgresStore {
             .await
         });
         rows.iter().map(row_to_pixel).collect()
+    }
+
+    async fn put_alert_rule(
+        &self,
+        tenant: TenantId,
+        link_id: u64,
+        rule: &AlertRule,
+    ) -> Result<(), StoreError> {
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "INSERT INTO alert_rules (tenant_id, link_id, threshold, window_secs) VALUES ($1,$2,$3,$4) \
+                 ON CONFLICT (tenant_id, link_id) DO UPDATE SET threshold=$3, window_secs=$4",
+            )
+            .bind(tenant.0 as i64)
+            .bind(link_id as i64)
+            .bind(rule.threshold as i64)
+            .bind(rule.window_secs as i64)
+            .execute(&mut *c)
+            .await
+        });
+        Ok(())
+    }
+
+    async fn get_alert_rule(
+        &self,
+        tenant: TenantId,
+        link_id: u64,
+    ) -> Result<Option<AlertRule>, StoreError> {
+        let row = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT threshold, window_secs FROM alert_rules WHERE tenant_id = $1 AND link_id = $2",
+            )
+            .bind(tenant.0 as i64)
+            .bind(link_id as i64)
+            .fetch_optional(&mut *c)
+            .await
+        });
+        match row {
+            Some(r) => Ok(Some(row_to_alert_rule(&r))),
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_alert_rule(&self, tenant: TenantId, link_id: u64) -> Result<(), StoreError> {
+        with_write!(self, tenant, |c| {
+            sqlx::query("DELETE FROM alert_rules WHERE tenant_id = $1 AND link_id = $2")
+                .bind(tenant.0 as i64)
+                .bind(link_id as i64)
+                .execute(&mut *c)
+                .await
+        });
+        Ok(())
+    }
+
+    async fn list_alert_rules(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<(u64, AlertRule)>, StoreError> {
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query(
+                "SELECT link_id, threshold, window_secs FROM alert_rules WHERE tenant_id = $1 ORDER BY link_id",
+            )
+            .bind(tenant.0 as i64)
+            .fetch_all(&mut *c)
+            .await
+        });
+        Ok(rows
+            .iter()
+            .map(|r| {
+                let link_id: i64 = r.get("link_id");
+                (link_id as u64, row_to_alert_rule(r))
+            })
+            .collect())
     }
 
     async fn get_wellknown(

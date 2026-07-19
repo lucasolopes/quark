@@ -33,6 +33,7 @@ events themselves are delivered.
 | `link.deleted` | A link is removed (`DELETE /admin/links/:code`). |
 | `link.expired` | A redirect resolves a link past its TTL (the `410 Gone` path). There is no background sweeper: expiry is observed on access, same as the rest of quark's TTL handling. |
 | `link.clicked` | A redirect succeeds. Emitted from the async path, never the hot 302 path, and only when at least one active subscription wants it (a cached atomic flag keeps the cost at zero otherwise). |
+| `link.threshold_reached` | A link is clicked at least `threshold` times within a fixed window of `window_secs` seconds, per the link's alert rule. Fires once per window (see [Click-threshold alerts](#click-threshold-alerts)). |
 
 ## Payload
 
@@ -54,7 +55,7 @@ Every delivery has the same envelope:
 ```
 
 - `id`: a random event id, distinct per emission.
-- `type`: one of the five event names above.
+- `type`: one of the event names above.
 - `timestamp`: unix seconds, when the event was generated.
 - `data.alias` and `data.expiry` are omitted (not sent as `null`) when the
   link has no alias or no TTL.
@@ -82,6 +83,28 @@ on top of `code`, `url`, and `created`:
 `country` and `referrer` are omitted when the request didn't carry them.
 `device` is always present (falls back to `"Other"` when the user agent
 can't be classified).
+
+`link.threshold_reached` carries the window that tripped the alert, on top of
+`code`:
+
+```json
+{
+  "id": "evt_...",
+  "type": "link.threshold_reached",
+  "timestamp": 1699999999,
+  "data": {
+    "code": "aB3xZ9k",
+    "count": 100,
+    "threshold": 100,
+    "window_secs": 300,
+    "ts": 1699999999
+  }
+}
+```
+
+- `count`: the click count that crossed the threshold in this window.
+- `threshold` / `window_secs`: the configured rule.
+- `ts`: unix seconds of the click that tripped the alert.
 
 ## Headers
 
@@ -241,7 +264,7 @@ lose an event between the link write and the outbox insert.
 ### Panel
 
 Open the **Webhooks** tab in the admin panel. Add a destination URL, pick
-which of the five events it should receive, and save. The signing secret is
+which events it should receive, and save. The signing secret is
 shown once, at creation time; copy it before leaving the screen, since quark
 never displays it again (only a masked `whsec_••••` afterward).
 
@@ -275,6 +298,97 @@ curl -X POST localhost:8080/admin/webhooks/1/test -H 'x-admin-token: <token>'
 loopback host: the same SSRF guard (`is_internal_host`) that protects link
 destinations applies here, checked both at subscription-create time and
 again at delivery time. A deployment caps out at 50 subscriptions.
+
+## Click-threshold alerts
+
+A link can carry an alert rule: fire `link.threshold_reached` when it is
+clicked at least `threshold` times within a fixed window of `window_secs`
+seconds. This is handy for spotting a link that suddenly goes viral, or for
+catching click fraud early.
+
+Counting uses a fixed-window counter, the same approach as the rate limiter:
+the window is `floor(click_ts / window_secs)`, and the event fires once per
+window, on the click that first brings the window's count to `threshold`.
+Further clicks in that same window do not re-fire; the next window starts a
+fresh count and can fire again. When quark runs against Valkey the counter is
+shared across every replica (exact cluster-wide); without Valkey each replica
+counts on its own (exact on a single node). Counting and delivery run in the
+analytics worker, off the redirect hot path, and are fail-open: a Valkey error
+is logged and never blocks a redirect.
+
+To receive the event, a webhook (or channel) subscription must include
+`link.threshold_reached` in its `events`, exactly like any other event.
+
+### Configuring the rule (API)
+
+The rule is set per link, keyed by the link's short code, under
+`QUARK_ADMIN_TOKEN` (header `x-admin-token`). `threshold` must be `>= 1` and
+`window_secs` must be `>= 60`.
+
+```bash
+# set (or replace) the alert rule for a link:
+# 100 clicks within 5 minutes
+curl -X PUT localhost:8080/admin/links/aB3xZ9k/alert \
+  -H 'x-admin-token: <token>' -H 'content-type: application/json' \
+  -d '{"threshold": 100, "window_secs": 300}'
+# => {"threshold": 100, "window_secs": 300}
+
+# remove the alert rule
+curl -X DELETE localhost:8080/admin/links/aB3xZ9k/alert -H 'x-admin-token: <token>'
+# => 204 No Content
+```
+
+`:code` accepts either the canonical short code or a custom alias, the same as
+the other `/admin/links/:code` endpoints.
+
+### n8n template
+
+Build a flow that reacts to `link.threshold_reached`:
+
+1. **Webhook** node (trigger): method `POST`, copy its Test/Production URL, and
+   register it as a subscription that includes the event:
+
+   ```bash
+   curl -X POST localhost:8080/admin/webhooks \
+     -H 'x-admin-token: <token>' -H 'content-type: application/json' \
+     -d '{"url": "https://<your-n8n-host>/webhook/quark", "events": ["link.threshold_reached"]}'
+   ```
+
+2. **IF** node (optional filter): continue only for a specific link, e.g.
+   expression `{{ $json.body.data.code }}` equals `aB3xZ9k`.
+3. **Action** node: Slack "Send Message", Email, or an HTTP Request. Reference
+   the payload fields directly, for example:
+
+   ```
+   Link {{ $json.body.data.code }} hit {{ $json.body.data.count }} clicks
+   in {{ $json.body.data.window_secs }}s.
+   ```
+
+To verify the signature inside n8n, add a **Code** node before the action and
+port the [Node.js snippet](#nodejs) above, reading `webhook-id`,
+`webhook-timestamp`, and `webhook-signature` from `$json.headers`.
+
+### Zapier template
+
+1. **Trigger**: "Webhooks by Zapier" -> "Catch Hook". Zapier gives you a
+   custom URL; register it as a subscription with the event:
+
+   ```bash
+   curl -X POST localhost:8080/admin/webhooks \
+     -H 'x-admin-token: <token>' -H 'content-type: application/json' \
+     -d '{"url": "https://hooks.zapier.com/hooks/catch/000000/xxxxxx", "events": ["link.threshold_reached"]}'
+   ```
+
+2. **Filter** (optional): "Only continue if..." -> `Data Code` -> `(Text)
+   Exactly matches` -> `aB3xZ9k`.
+3. **Action**: any Zapier app, e.g. Slack "Send Channel Message" or Gmail
+   "Send Email". Map the caught fields `data__code`, `data__count`, and
+   `data__window_secs` into the message body.
+
+Zapier's Catch Hook does not verify the HMAC signature. If you need
+authenticity, use "Catch Raw Hook" and add a Code step that reimplements the
+[verification](#verifying-the-signature), or keep the webhook URL secret and
+rely on it being unguessable.
 
 ## Notification channels
 
@@ -328,6 +442,7 @@ expects:
 | `link.deleted` | `Short link deleted: {code}` |
 | `link.expired` | `Short link expired: {code}` |
 | `link.clicked` | `Click on {code} -> {url}`, with ` ({country})` appended when the click carried a country |
+| `link.threshold_reached` | `Click threshold reached for {code}: {count} clicks in {window_secs}s` |
 
 Slack and Telegram both receive:
 

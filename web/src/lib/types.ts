@@ -118,13 +118,14 @@ export interface BulkItemResult { code: string; ok: boolean; error?: string; }
 /** Partial report from `POST /admin/links/bulk`: successes, failures, per-item detail. */
 export interface BulkResponse { ok: number; failed: number; results: BulkItemResult[]; }
 
-/** The 5 link lifecycle events a webhook subscription can be notified about. */
+/** The link events a webhook subscription can be notified about. */
 export const WEBHOOK_EVENTS = [
   "link.created",
   "link.updated",
   "link.deleted",
   "link.expired",
   "link.clicked",
+  "link.threshold_reached",
 ] as const;
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
 
