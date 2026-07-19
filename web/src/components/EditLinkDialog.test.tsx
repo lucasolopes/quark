@@ -50,9 +50,10 @@ describe("EditLinkDialog — tags", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
     render(withProviders(<EditLinkDialog link={link} open onOpenChange={() => {}} />, { withRouter: false }));
 
-    // Remove the "summer" chip and add "winter" via the picker.
+    // Remove the "summer" chip and create "winter" via the create button.
     await userEvent.click(screen.getByRole("button", { name: /remove summer/i }));
-    await userEvent.type(screen.getByLabelText(/tags/i), "winter{Enter}");
+    await userEvent.click(screen.getByRole("button", { name: /create new tag/i }));
+    await userEvent.type(screen.getByLabelText(/create new tag/i), "winter{Enter}");
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -134,7 +135,8 @@ describe("EditLinkDialog — folder", () => {
     const l = makeLink();
     render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
 
-    await userEvent.type(screen.getByLabelText(/folder/i), "Docs{Enter}");
+    await userEvent.click(screen.getByRole("button", { name: /create new folder/i }));
+    await userEvent.type(screen.getByLabelText(/create new folder/i), "Docs{Enter}");
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());

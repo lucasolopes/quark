@@ -7,12 +7,12 @@ import { withProviders } from "@/test-utils";
 
 function Harness({
   multiple,
-  creatable,
+  createLabel,
   options,
   initial = [],
 }: {
   multiple?: boolean;
-  creatable?: boolean;
+  createLabel?: string;
   options: ComboboxOption[];
   initial?: string[];
 }) {
@@ -24,7 +24,7 @@ function Harness({
         value={value}
         onChange={setValue}
         multiple={multiple}
-        creatable={creatable}
+        createLabel={createLabel}
         ariaLabel="Picker"
       />
       <output data-testid="value">{value.join(",")}</output>
@@ -42,43 +42,52 @@ describe("Combobox", () => {
   it("selects an existing option from the filtered list", async () => {
     render(withProviders(<Harness multiple options={OPTS} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText("Picker"), "bl");
-    await userEvent.click(screen.getByRole("option", { name: "Blue" }));
+    await userEvent.click(screen.getByRole("option", { name: /Blue/ }));
     expect(screen.getByTestId("value")).toHaveTextContent("blue");
   });
 
-  it("does not offer create when not creatable", async () => {
+  it("shows no create button when createLabel is not set", async () => {
     render(withProviders(<Harness multiple options={OPTS} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText("Picker"), "purple");
-    expect(screen.queryByRole("option", { name: /create/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create/i })).not.toBeInTheDocument();
   });
 
-  it("creates a new value when creatable", async () => {
-    render(withProviders(<Harness multiple creatable options={OPTS} />, { withRouter: false }));
-    await userEvent.type(screen.getByLabelText("Picker"), "purple{Enter}");
+  it("creates a new value through the create button and name input", async () => {
+    render(withProviders(<Harness multiple createLabel="Create new tag" options={OPTS} />, { withRouter: false }));
+    await userEvent.click(screen.getByRole("button", { name: /create new tag/i }));
+    await userEvent.type(screen.getByLabelText("Create new tag"), "purple");
+    await userEvent.click(screen.getByRole("button", { name: /^add$/i }));
     expect(screen.getByTestId("value")).toHaveTextContent("purple");
   });
 
-  it("selects multiple values and removes one via its chip", async () => {
+  it("toggles multiple values with the option checkbox and keeps the list open", async () => {
     render(withProviders(<Harness multiple options={OPTS} />, { withRouter: false }));
-    await userEvent.type(screen.getByLabelText("Picker"), "red{Enter}");
-    await userEvent.type(screen.getByLabelText("Picker"), "green{Enter}");
+    await userEvent.type(screen.getByLabelText("Picker"), "red");
+    await userEvent.click(screen.getByRole("option", { name: /Red/ }));
+    await userEvent.clear(screen.getByLabelText("Picker"));
+    await userEvent.type(screen.getByLabelText("Picker"), "green");
+    await userEvent.click(screen.getByRole("option", { name: /Green/ }));
     expect(screen.getByTestId("value")).toHaveTextContent("red,green");
     await userEvent.click(screen.getByRole("button", { name: /remove red/i }));
     expect(screen.getByTestId("value")).toHaveTextContent("green");
   });
 
-  it("single-select replaces the previous value", async () => {
-    render(withProviders(<Harness options={OPTS} />, { withRouter: false }));
-    await userEvent.type(screen.getByLabelText("Picker"), "red{Enter}");
-    expect(screen.getByTestId("value")).toHaveTextContent("red");
-    await userEvent.type(screen.getByLabelText("Picker"), "blue{Enter}");
-    expect(screen.getByTestId("value")).toHaveTextContent("blue");
-  });
-
-  it("does not re-add an already selected option", async () => {
+  it("keeps a selected option visible and checked, and un-checks it on click", async () => {
     render(withProviders(<Harness multiple options={OPTS} initial={["red"]} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText("Picker"), "red");
-    // "Red" is already selected, so it is filtered out of the list.
-    expect(screen.queryByRole("option", { name: "Red" })).not.toBeInTheDocument();
+    const option = screen.getByRole("option", { name: /Red/ });
+    expect(option).toHaveAttribute("aria-selected", "true");
+    await userEvent.click(option);
+    expect(screen.getByTestId("value")).toHaveTextContent("");
+  });
+
+  it("single-select replaces the previous value", async () => {
+    render(withProviders(<Harness options={OPTS} />, { withRouter: false }));
+    await userEvent.type(screen.getByLabelText("Picker"), "red");
+    await userEvent.click(screen.getByRole("option", { name: /Red/ }));
+    expect(screen.getByTestId("value")).toHaveTextContent("red");
+    await userEvent.type(screen.getByLabelText("Picker"), "blue");
+    await userEvent.click(screen.getByRole("option", { name: /Blue/ }));
+    expect(screen.getByTestId("value")).toHaveTextContent("blue");
   });
 });

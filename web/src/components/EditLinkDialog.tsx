@@ -334,7 +334,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
                 <Combobox
                   id="edit-link-tags"
                   multiple
-                  creatable
+                  createLabel={t("dialogs.edit.tagsCreate")}
                   options={tagOptions.map((name) => ({ value: name, label: name }))}
                   value={tags}
                   onChange={setTags}
@@ -349,7 +349,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
                 </label>
                 <Combobox
                   id="edit-link-folder"
-                  creatable
+                  createLabel={t("dialogs.edit.folderCreate")}
                   options={folders.map((f) => ({ value: f.name, label: f.name }))}
                   value={folder ? [folder] : []}
                   onChange={(vals) => setFolder(vals[0] ?? "")}
