@@ -1,5 +1,5 @@
-//! Encryption at rest for stored third-party secrets — the per-tenant OIDC
-//! `client_secret` and the Sheets `refresh_token` (LUC-48) — opt-in via
+//! Encryption at rest for stored third-party secrets: the per-tenant OIDC
+//! `client_secret` and the Sheets `refresh_token` (LUC-48); opt-in via
 //! `QUARK_ENCRYPTION_KEY`. (Other stored values, e.g. webhook signing secrets,
 //! are not covered by this module.)
 //!
@@ -106,7 +106,7 @@ impl SecretBox {
     /// base64-decoded and must be exactly 32 bytes.
     ///
     /// Returns `None` (logging one line to stderr) when `QUARK_ENCRYPTION_KEY`
-    /// is unset or does not decode to exactly 32 bytes — this is the opt-in
+    /// is unset or does not decode to exactly 32 bytes; this is the opt-in
     /// switch for encryption at rest. An invalid old key logs and is skipped
     /// (rotation degrades to "some old values will not open" rather than
     /// turning encryption off).
@@ -170,7 +170,7 @@ impl SecretBox {
     }
 
     /// Seals `plaintext`, binding the ciphertext to `aad` (the row identity).
-    /// An empty input returns an empty string unchanged — there is no secret to
+    /// An empty input returns an empty string unchanged, there is no secret to
     /// encrypt. Otherwise generates a fresh random 24-byte nonce and returns
     /// `enc:v2:<keyid>:base64(nonce || ciphertext)` using the primary key.
     pub fn seal(&self, plaintext: &str, aad: &[u8]) -> String {
