@@ -142,6 +142,133 @@ async fn mark_invite_accepted_is_single_winner() {
     );
 }
 
+/// `accept_invite_tx` (LUC-46) claims the invite AND grants the membership in
+/// one transaction: a successful call both marks the invite accepted (hidden
+/// from hash lookup afterwards) and creates the membership row, and a second
+/// call against the same invite loses the claim (`Ok(false)`) without
+/// touching the membership that already exists.
+#[tokio::test]
+#[serial]
+async fn accept_invite_tx_claims_and_grants_atomically() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let tenant = make_tenant(&store, "invites-tx-a").await;
+    let id = make_invite(
+        &store,
+        tenant,
+        "tx@acme.com",
+        "raw-tx-token",
+        quark::now(),
+        quark::now() + 3600,
+    )
+    .await;
+    let user_id = 4242u64;
+    let membership = Membership {
+        user_id,
+        tenant_id: tenant,
+        role: Role::Member,
+        created: quark::now(),
+    };
+
+    let first = store
+        .accept_invite_tx(id, &membership, quark::now())
+        .await
+        .unwrap();
+    assert!(first, "the first accept must claim the invite and grant");
+
+    assert!(
+        store
+            .get_invite_by_hash(&hash_token("raw-tx-token"), quark::now())
+            .await
+            .unwrap()
+            .is_none(),
+        "an accepted invite must not be returned by hash lookup"
+    );
+    let granted = store
+        .get_membership(user_id, tenant)
+        .await
+        .unwrap()
+        .expect("accept_invite_tx must grant the membership");
+    assert_eq!(granted.role, Role::Member);
+
+    // Second accept of the same (now-consumed) invite loses the claim and
+    // must not touch the membership that already exists (no upsert clobber,
+    // no double grant).
+    let second_membership = Membership {
+        user_id: 9999,
+        tenant_id: tenant,
+        role: Role::Admin,
+        created: quark::now(),
+    };
+    let second = store
+        .accept_invite_tx(id, &second_membership, quark::now())
+        .await
+        .unwrap();
+    assert!(!second, "a second accept of a consumed invite must lose");
+    assert!(
+        store.get_membership(9999, tenant).await.unwrap().is_none(),
+        "a lost claim must not grant a membership"
+    );
+}
+
+/// Atomicity under concurrency (LUC-46): two `accept_invite_tx` calls racing
+/// on the same invite must produce exactly one winner and exactly one
+/// membership row, never two grants and never a consumed invite with no
+/// membership at all.
+#[tokio::test]
+#[serial]
+async fn accept_invite_tx_concurrent_accepts_grant_membership_once() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = std::sync::Arc::new(store);
+    let tenant = make_tenant(&store, "invites-tx-race-a").await;
+    let id = make_invite(
+        &store,
+        tenant,
+        "race@acme.com",
+        "raw-tx-race-token",
+        quark::now(),
+        quark::now() + 3600,
+    )
+    .await;
+
+    let mut tasks = Vec::new();
+    for user_id in [111u64, 222u64] {
+        let store = store.clone();
+        tasks.push(tokio::spawn(async move {
+            let membership = Membership {
+                user_id,
+                tenant_id: tenant,
+                role: Role::Member,
+                created: quark::now(),
+            };
+            store
+                .accept_invite_tx(id, &membership, quark::now())
+                .await
+                .unwrap()
+        }));
+    }
+    let mut wins = 0;
+    for t in tasks {
+        if t.await.unwrap() {
+            wins += 1;
+        }
+    }
+    assert_eq!(wins, 1, "exactly one concurrent accept must win the claim");
+
+    let m111 = store.get_membership(111, tenant).await.unwrap();
+    let m222 = store.get_membership(222, tenant).await.unwrap();
+    let granted_count = [&m111, &m222].iter().filter(|m| m.is_some()).count();
+    assert_eq!(
+        granted_count, 1,
+        "exactly one of the two racing accepts must have a membership"
+    );
+}
+
 /// An invite whose `expires` is before `now` is invisible to the hash lookup,
 /// even though it was never accepted.
 #[tokio::test]

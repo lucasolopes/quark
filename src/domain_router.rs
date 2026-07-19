@@ -615,6 +615,14 @@ mod tests {
         ) -> Result<bool, StoreError> {
             unimplemented!()
         }
+        async fn accept_invite_tx(
+            &self,
+            _invite_id: u64,
+            _membership: &Membership,
+            _now: u64,
+        ) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
         async fn list_invites(
             &self,
             _tenant: TenantId,

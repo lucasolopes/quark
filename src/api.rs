@@ -3219,11 +3219,12 @@ struct AcceptInviteResp {
 /// Checks run in an order where no membership is ever granted on a failure
 /// path: cloud gate, session, rate limit, invite lookup (covers unknown,
 /// expired, and already-accepted tokens alike, since `get_invite_by_hash`
-/// hides all three), email match, existing-membership conflict, then the
-/// single-winner claim on the invite row itself. `mark_invite_accepted` runs
-/// before `put_membership` so the DB row is the atomic single-use gate: two
-/// concurrent accepts of the same token both pass the checks above, but only
-/// one wins the claim, and only the winner grants membership.
+/// hides all three), email match, existing-membership conflict, then
+/// `accept_invite_tx` claims the invite row AND grants the membership in one
+/// backend transaction (LUC-46): two concurrent accepts of the same token
+/// both pass the checks above, but only one wins the claim, and if the grant
+/// half fails the claim is rolled back too, so a write failure never
+/// strands the invite as consumed-but-unmembered.
 async fn admin_invites_accept(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -3287,25 +3288,20 @@ async fn admin_invites_accept(
         Ok(None) => {}
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
-    match st.store.mark_invite_accepted(inv.id, user_id, now()).await {
+    let membership = crate::tenant::Membership {
+        user_id,
+        tenant_id: inv.tenant_id,
+        role: inv.role,
+        created: now(),
+    };
+    match st.store.accept_invite_tx(inv.id, &membership, now()).await {
         Ok(true) => {}
         // Lost the race, or the invite was already consumed between the
         // lookup above and here: treat it the same as an unknown token.
         Ok(false) => return StatusCode::NOT_FOUND.into_response(),
+        // Atomic: an error here rolled the whole transaction back, so the
+        // claim was NOT taken and the invite is still pending.
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    }
-    if st
-        .store
-        .put_membership(&crate::tenant::Membership {
-            user_id,
-            tenant_id: inv.tenant_id,
-            role: inv.role,
-            created: now(),
-        })
-        .await
-        .is_err()
-    {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     set_session_tenant(&st, &headers, inv.tenant_id).await;
     Json(AcceptInviteResp {

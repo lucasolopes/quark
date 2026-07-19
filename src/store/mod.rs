@@ -693,6 +693,23 @@ pub trait Store: Send + Sync + 'static {
         accepted_by: u64,
         now: u64,
     ) -> Result<bool, StoreError>;
+    /// Claims the invite (single-use, same semantics as
+    /// [`Store::mark_invite_accepted`]) AND grants the membership in ONE
+    /// transaction: if the membership write fails, the claim is rolled back
+    /// so the invite stays pending (an accept that fails after claiming
+    /// never leaves the user without both access and a usable invite). The
+    /// tenant scope for the membership grant comes from `membership.tenant_id`.
+    ///
+    /// Returns `Ok(true)` when this call claimed the row and granted the
+    /// membership, `Ok(false)` when the invite was already consumed (lost
+    /// the race / not pending) — nothing is written in that case. `Err`
+    /// means the whole transaction rolled back: the invite was NOT consumed.
+    async fn accept_invite_tx(
+        &self,
+        invite_id: u64,
+        membership: &Membership,
+        now: u64,
+    ) -> Result<bool, StoreError>;
     /// Lists pending invites owned by `tenant`.
     async fn list_invites(&self, tenant: TenantId) -> Result<Vec<Invite>, StoreError>;
     /// Deletes an invite, scoped to `tenant`.

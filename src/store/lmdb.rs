@@ -1165,6 +1165,20 @@ impl Store for LmdbStore {
         Err(StoreError::Unsupported)
     }
 
+    // `accept_invite_tx` needs a real invites table to claim against (a real
+    // write_txn doing claim + `memberships.put` would be straightforward,
+    // mirroring `put_membership` above), but there is none here: same
+    // cloud-only reasoning as `mark_invite_accepted`/`create_invite` right
+    // above. Kept as `Unsupported` for the same reason.
+    async fn accept_invite_tx(
+        &self,
+        _invite_id: u64,
+        _membership: &Membership,
+        _now: u64,
+    ) -> Result<bool, StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
     async fn list_invites(
         &self,
         _tenant: TenantId,
@@ -1331,7 +1345,7 @@ impl AnalyticsSink for LmdbStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{compose_id, parse_node_id, LmdbStore, LOCAL_BITS, LOCAL_MAX};
+    use super::{compose_id, parse_node_id, LmdbStore, Membership, LOCAL_BITS, LOCAL_MAX};
     use crate::auth::{hash_token, ApiToken, Scope};
     use crate::pixel::{PixelConfig, PixelCredentials, Provider};
     use crate::store::{Record, Store, StoreError};
@@ -1501,6 +1515,24 @@ mod tests {
                 false,
             )
             .await;
+        assert!(matches!(r, Err(StoreError::Unsupported)));
+    }
+
+    #[tokio::test]
+    async fn accept_invite_tx_is_unsupported_on_lmdb() {
+        // LMDB has no invites table at all (cloud-only feature, same as
+        // `mark_invite_accepted`/`create_invite` above): `accept_invite_tx`
+        // must fail the same way rather than silently granting a membership
+        // for an invite claim it never made.
+        let dir = tempfile::tempdir().unwrap();
+        let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let membership = Membership {
+            user_id: 1,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
+            role: crate::tenant::Role::Member,
+            created: 0,
+        };
+        let r = store.accept_invite_tx(1, &membership, 0).await;
         assert!(matches!(r, Err(StoreError::Unsupported)));
     }
 
