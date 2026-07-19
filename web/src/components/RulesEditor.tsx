@@ -1,9 +1,20 @@
+import { useMemo } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useT } from "@/i18n";
+import { Combobox, type ComboboxOption } from "@/components/Combobox";
+import { useT, useLocale } from "@/i18n";
 import { emptyRuleDraft, type RuleDraft } from "@/lib/rules";
+import { countryOptions } from "@/lib/countries";
 import type { RuleField } from "@/lib/types";
+
+/** Split the stored comma-separated values into an array of trimmed, non-empty entries. */
+function parseValues(text: string): string[] {
+  return text
+    .split(",")
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+}
 
 interface RulesEditorProps {
   idPrefix: string;
@@ -24,6 +35,16 @@ interface RulesEditorProps {
  */
 export function RulesEditor({ idPrefix, drafts, onChange }: RulesEditorProps) {
   const t = useT();
+  const { locale } = useLocale();
+  const countryOpts = useMemo(() => countryOptions(locale), [locale]);
+  const deviceOpts: ComboboxOption[] = useMemo(
+    () => [
+      { value: "Mobile", label: t("rules.deviceMobile") },
+      { value: "Desktop", label: t("rules.deviceDesktop") },
+      { value: "Other", label: t("rules.deviceOther") },
+    ],
+    [t],
+  );
 
   function updateRow(index: number, patch: Partial<RuleDraft>) {
     onChange(drafts.map((draft, i) => (i === index ? { ...draft, ...patch } : draft)));
@@ -58,7 +79,7 @@ export function RulesEditor({ idPrefix, drafts, onChange }: RulesEditorProps) {
                   id={`${rowId}-field`}
                   className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                   value={draft.field}
-                  onChange={(e) => updateRow(index, { field: e.target.value as RuleField })}
+                  onChange={(e) => updateRow(index, { field: e.target.value as RuleField, valuesText: "" })}
                 >
                   <option value="country">{t("rules.fieldCountry")}</option>
                   <option value="device">{t("rules.fieldDevice")}</option>
@@ -69,12 +90,14 @@ export function RulesEditor({ idPrefix, drafts, onChange }: RulesEditorProps) {
                 <label htmlFor={`${rowId}-values`} className="text-xs font-medium text-muted-foreground">
                   {t("rules.valuesLabel")}
                 </label>
-                <Input
+                <Combobox
                   id={`${rowId}-values`}
-                  type="text"
+                  multiple
+                  options={draft.field === "device" ? deviceOpts : countryOpts}
+                  value={parseValues(draft.valuesText)}
+                  onChange={(vals) => updateRow(index, { valuesText: vals.join(",") })}
+                  ariaLabel={t("rules.valuesLabel")}
                   placeholder={draft.field === "device" ? t("rules.valuesPlaceholderDevice") : t("rules.valuesPlaceholderCountry")}
-                  value={draft.valuesText}
-                  onChange={(e) => updateRow(index, { valuesText: e.target.value })}
                 />
               </div>
 

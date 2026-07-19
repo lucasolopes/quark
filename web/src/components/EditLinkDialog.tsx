@@ -16,7 +16,7 @@ import { ApiError } from "@/lib/api";
 import { isHttpUrl } from "@/lib/codeguard";
 import { isUnauthorized } from "@/lib/mutation-error";
 import { usePatchLink, useLinkAlert, useSetLinkAlert, useDeleteLinkAlert } from "@/lib/queries";
-import { formatTagsInput, parseTagsInput } from "@/lib/tags";
+import { Combobox } from "@/components/Combobox";
 import { draftsFromRules, parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import { distributeEvenly, normalizeToPercent, variantsPercentTotal } from "@/lib/variants";
 import { DurationField } from "@/components/DurationField";
@@ -64,8 +64,10 @@ interface EditLinkDialogProps {
   link: Link;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Existing folders (from `useFolders`, lifted to the parent) offered in the folder field's datalist. */
+  /** Existing folders (from `useFolders`, lifted to the parent) offered in the folder picker. */
   folders?: Folder[];
+  /** Existing tag names (from `useTags`, lifted to the parent) offered in the tags picker. */
+  tags?: string[];
 }
 
 /**
@@ -73,13 +75,13 @@ interface EditLinkDialogProps {
  * caller (Links.tsx) so the fields always start from the right link — without
  * that we'd need to sync state via an effect on every link change.
  */
-export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditLinkDialogProps) {
+export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: tagOptions = [] }: EditLinkDialogProps) {
   const t = useT();
   const [url, setUrl] = useState(link.url);
   const [ttl, setTtl] = useState("");
   const [ttlUnit, setTtlUnit] = useState<string>(DEFAULT_DURATION_UNIT);
   const [removeExpiry, setRemoveExpiry] = useState(false);
-  const [tagsInput, setTagsInput] = useState(formatTagsInput(link.tags ?? []));
+  const [tags, setTags] = useState<string[]>(link.tags ?? []);
   const [folder, setFolder] = useState(link.folder ?? "");
   const [maxVisits, setMaxVisits] = useState(link.max_visits ? String(link.max_visits) : "");
   const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>(() => draftsFromRules(link.rules));
@@ -266,7 +268,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
         body: {
           url: url.trim(),
           ...(removeExpiry ? { ttl: null } : ttlSecs != null ? { ttl: ttlSecs } : {}),
-          tags: parseTagsInput(tagsInput),
+          tags,
           ...(maxVisits.trim()
             ? { max_visits: Number(maxVisits.trim()) }
             : link.max_visits
@@ -329,12 +331,15 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
                 <label htmlFor="edit-link-tags" className="text-sm font-medium">
                   {t("dialogs.edit.tagsLabel")} <span className="text-muted-foreground">({t("dialogs.edit.tagsHint")})</span>
                 </label>
-                <Input
+                <Combobox
                   id="edit-link-tags"
-                  type="text"
+                  multiple
+                  creatable
+                  options={tagOptions.map((name) => ({ value: name, label: name }))}
+                  value={tags}
+                  onChange={setTags}
+                  ariaLabel={t("dialogs.edit.tagsLabel")}
                   placeholder={t("dialogs.edit.tagsPlaceholder")}
-                  value={tagsInput}
-                  onChange={(e) => setTagsInput(e.target.value)}
                 />
               </div>
 
@@ -342,19 +347,15 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
                 <label htmlFor="edit-link-folder" className="text-sm font-medium">
                   {t("dialogs.edit.folderLabel")} <span className="text-muted-foreground">{t("dialogs.edit.folderOptional")}</span>
                 </label>
-                <Input
+                <Combobox
                   id="edit-link-folder"
-                  type="text"
-                  list="edit-link-folder-options"
+                  creatable
+                  options={folders.map((f) => ({ value: f.name, label: f.name }))}
+                  value={folder ? [folder] : []}
+                  onChange={(vals) => setFolder(vals[0] ?? "")}
+                  ariaLabel={t("dialogs.edit.folderLabel")}
                   placeholder={t("dialogs.edit.folderPlaceholder")}
-                  value={folder}
-                  onChange={(e) => setFolder(e.target.value)}
                 />
-                <datalist id="edit-link-folder-options">
-                  {folders.map((f) => (
-                    <option key={f.name} value={f.name} />
-                  ))}
-                </datalist>
               </div>
             </div>
 

@@ -22,7 +22,7 @@ import { ApiError } from "@/lib/api";
 import { isHttpUrl, isNumericCode } from "@/lib/codeguard";
 import { isUnauthorized } from "@/lib/mutation-error";
 import { useCreateLink } from "@/lib/queries";
-import { parseTagsInput } from "@/lib/tags";
+import { Combobox } from "@/components/Combobox";
 import { applyUtm, deleteUtmTemplate, loadUtmTemplates, saveUtmTemplate, type UtmParams } from "@/lib/utm";
 import { parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import { RulesEditor } from "@/components/RulesEditor";
@@ -68,8 +68,10 @@ function hasAnyUtm(params: UtmParams): boolean {
 interface CreateLinkDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Existing folders (from `useFolders`, lifted to the parent) offered in the folder field's datalist. */
+  /** Existing folders (from `useFolders`, lifted to the parent) offered in the folder picker. */
   folders?: Folder[];
+  /** Existing tag names (from `useTags`, lifted to the parent) offered in the tags picker. */
+  tags?: string[];
 }
 
 /**
@@ -77,13 +79,13 @@ interface CreateLinkDialogProps {
  * outside the numeric-code space, positive TTL) before calling the API —
  * avoids a round-trip just to get back an error we already knew about.
  */
-export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLinkDialogProps) {
+export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOptions = [] }: CreateLinkDialogProps) {
   const t = useT();
   const [url, setUrl] = useState("");
   const [alias, setAlias] = useState("");
   const [ttl, setTtl] = useState("");
   const [ttlUnit, setTtlUnit] = useState<string>(DEFAULT_DURATION_UNIT);
-  const [tagsInput, setTagsInput] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
   const [folder, setFolder] = useState("");
   const [maxVisits, setMaxVisits] = useState("");
   const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>([]);
@@ -109,7 +111,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
     setAlias("");
     setTtl("");
     setTtlUnit(DEFAULT_DURATION_UNIT);
-    setTagsInput("");
+    setTags([]);
     setFolder("");
     setMaxVisits("");
     setRuleDrafts([]);
@@ -255,7 +257,6 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
     const trimmedUrl = url.trim();
     const destination = hasAnyUtm(utm) ? applyUtm(trimmedUrl, utm) : trimmedUrl;
     try {
-      const tags = parseTagsInput(tagsInput);
       const variants = buildVariants();
       const ttlSecs = durationToSeconds(ttl, ttlUnit);
       await createLink.mutateAsync({
@@ -343,19 +344,15 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
                 <label htmlFor="create-link-folder" className="text-sm font-medium">
                   {t("dialogs.create.folderLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
                 </label>
-                <Input
+                <Combobox
                   id="create-link-folder"
-                  type="text"
-                  list="create-link-folder-options"
+                  creatable
+                  options={folders.map((f) => ({ value: f.name, label: f.name }))}
+                  value={folder ? [folder] : []}
+                  onChange={(vals) => setFolder(vals[0] ?? "")}
+                  ariaLabel={t("dialogs.create.folderLabel")}
                   placeholder={t("dialogs.create.folderPlaceholder")}
-                  value={folder}
-                  onChange={(e) => setFolder(e.target.value)}
                 />
-                <datalist id="create-link-folder-options">
-                  {folders.map((f) => (
-                    <option key={f.name} value={f.name} />
-                  ))}
-                </datalist>
               </div>
             </div>
 
@@ -363,12 +360,15 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
               <label htmlFor="create-link-tags" className="text-sm font-medium">
                 {t("dialogs.create.tagsLabel")} <span className="text-muted-foreground">({t("dialogs.create.tagsHint")})</span>
               </label>
-              <Input
+              <Combobox
                 id="create-link-tags"
-                type="text"
+                multiple
+                creatable
+                options={tagOptions.map((name) => ({ value: name, label: name }))}
+                value={tags}
+                onChange={setTags}
+                ariaLabel={t("dialogs.create.tagsLabel")}
                 placeholder={t("dialogs.create.tagsPlaceholder")}
-                value={tagsInput}
-                onChange={(e) => setTagsInput(e.target.value)}
               />
             </div>
 

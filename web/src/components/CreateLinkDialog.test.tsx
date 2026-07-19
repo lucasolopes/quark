@@ -30,14 +30,15 @@ describe("CreateLinkDialog", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("sends parsed tags from the comma-separated field", async () => {
+  it("creates tags from the picker and sends them as an array", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
     );
     render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
-    await userEvent.type(screen.getByLabelText(/tags/i), "promo, summer ,  2026");
-    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+    // Type each tag and press Enter to create it as a chip.
+    await userEvent.type(screen.getByLabelText(/tags/i), "promo{Enter}summer{Enter}2026{Enter}");
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [, init] = fetchMock.mock.calls[0];
@@ -158,7 +159,11 @@ describe("CreateLinkDialog", () => {
     await userEvent.click(screen.getByText(/redirect rules/i));
     await userEvent.click(screen.getByRole("button", { name: /add rule/i }));
     await userEvent.selectOptions(screen.getByLabelText(/match on/i), "country");
-    await userEvent.type(screen.getByLabelText(/values/i), "BR, PT");
+    // The country values are picked from the searchable list (select-only).
+    await userEvent.type(screen.getByLabelText(/values/i), "brazil");
+    await userEvent.click(screen.getByRole("option", { name: /Brazil/i }));
+    await userEvent.type(screen.getByLabelText(/values/i), "portugal");
+    await userEvent.click(screen.getByRole("option", { name: /Portugal/i }));
     await userEvent.type(screen.getByLabelText(/destination url/i), "https://ok.com/br");
 
     await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
