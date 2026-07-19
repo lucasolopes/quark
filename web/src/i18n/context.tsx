@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { I18nContext, MESSAGES, STORAGE_KEY, getMessage, interpolate, resolveDefaultLocale, type I18nContextValue, type Locale, type MessageKey, type Params } from "./shared";
 
 interface I18nProviderProps {
@@ -14,6 +14,11 @@ export function I18nProvider({ children, locale: forcedLocale }: I18nProviderPro
     setLocaleState(next);
     if (typeof localStorage !== "undefined") localStorage.setItem(STORAGE_KEY, next);
   }, []);
+
+  // Keep <html lang> in sync so assistive tech and the browser know the page language.
+  useEffect(() => {
+    if (typeof document !== "undefined") document.documentElement.lang = locale;
+  }, [locale]);
 
   const t = useCallback(
     (key: MessageKey, params?: Params) => interpolate(getMessage(MESSAGES[locale], key), params),
