@@ -15,7 +15,7 @@ describe("CreateLinkDialog", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText(/url/i), "ftp://nope");
-    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
     expect(await screen.findByText(/invalid url|http/i)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -26,18 +26,21 @@ describe("CreateLinkDialog", () => {
     );
     render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
-    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("creates tags from the picker and sends them as an array", async () => {
+  it("creates tags via the create button and sends them as an array", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
     );
     render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
-    // Type each tag and press Enter to create it as a chip.
-    await userEvent.type(screen.getByLabelText(/tags/i), "promo{Enter}summer{Enter}2026{Enter}");
+    // Each tag: click "Create new tag", type the name, confirm with Enter.
+    for (const name of ["promo", "summer", "2026"]) {
+      await userEvent.click(screen.getByRole("button", { name: /create new tag/i }));
+      await userEvent.type(screen.getByLabelText(/create new tag/i), `${name}{Enter}`);
+    }
     await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
 
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -54,7 +57,7 @@ describe("CreateLinkDialog", () => {
     await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
     await userEvent.click(screen.getByRole("button", { name: /scheduling and limits/i }));
     await userEvent.type(screen.getByLabelText(/max visits/i), "100");
-    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
     expect(fetchMock).toHaveBeenCalledOnce();
     const [, init] = fetchMock.mock.calls[0];
     const body = JSON.parse(String(init?.body));
@@ -82,7 +85,7 @@ describe("CreateLinkDialog", () => {
     await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
     await userEvent.click(screen.getByRole("button", { name: /scheduling and limits/i }));
     await userEvent.type(screen.getByLabelText(/fallback/i), "https://ended.com");
-    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
     expect(fetchMock).toHaveBeenCalledOnce();
     const [, init] = fetchMock.mock.calls[0];
     const body = JSON.parse(String(init?.body));
@@ -97,7 +100,7 @@ describe("CreateLinkDialog", () => {
     await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
     await userEvent.click(screen.getByRole("button", { name: /^password$/i }));
     await userEvent.type(screen.getByLabelText(/password/i), "hunter2");
-    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
     expect(fetchMock).toHaveBeenCalledOnce();
     const [, init] = fetchMock.mock.calls[0];
     const body = JSON.parse(String(init?.body));
@@ -113,7 +116,7 @@ describe("CreateLinkDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: /utm parameters/i }));
     await userEvent.type(screen.getByLabelText(/source/i), "newsletter");
     await userEvent.type(screen.getByLabelText(/medium/i), "email");
-    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [, init] = fetchMock.mock.calls[0];
@@ -127,7 +130,7 @@ describe("CreateLinkDialog", () => {
     );
     render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText(/^url$/i), "https://ok.com");
-    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [, init] = fetchMock.mock.calls[0];
@@ -162,6 +165,7 @@ describe("CreateLinkDialog", () => {
     // The country values are picked from the searchable list (select-only).
     await userEvent.type(screen.getByLabelText(/values/i), "brazil");
     await userEvent.click(screen.getByRole("option", { name: /Brazil/i }));
+    await userEvent.clear(screen.getByLabelText(/values/i));
     await userEvent.type(screen.getByLabelText(/values/i), "portugal");
     await userEvent.click(screen.getByRole("option", { name: /Portugal/i }));
     await userEvent.type(screen.getByLabelText(/destination url/i), "https://ok.com/br");
@@ -256,7 +260,7 @@ describe("CreateLinkDialog", () => {
     expect(androidInput).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
     await userEvent.type(iosInput, "https://apps.apple.com/app/x");
-    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
     expect(fetchMock).toHaveBeenCalledOnce();
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body.app_ios).toBe("https://apps.apple.com/app/x");
