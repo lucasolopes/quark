@@ -4,7 +4,8 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 
 /// Valkey pub/sub channel carrying cross-node invalidation messages. Payloads are
-/// tiny text: `link:<id>` (drop one L1 cache entry everywhere).
+/// tiny text: `link:<id>` (drop one L1 cache entry everywhere) or
+/// `host:<name>` (drop one `HostRouter` L1 entry everywhere).
 pub const INVALIDATION_CHANNEL: &str = "quark:invalidate";
 
 /// Backoff between subscriber reconnect attempts. The per-node TTL (L1 60s)
@@ -49,13 +50,26 @@ impl Invalidator {
 #[derive(Debug, PartialEq, Eq)]
 enum Invalidation {
     Link(u64),
+    Host(String),
 }
 
-/// Parses a channel payload into an `Invalidation`. `link:<u64>` is the only
-/// accepted form; anything else (bad prefix, non-numeric id, garbage) is `None`.
+/// Parses a channel payload into an `Invalidation`. `link:<u64>` and
+/// `host:<name>` are the only accepted forms; anything else (bad prefix,
+/// non-numeric link id, empty host name, garbage) is `None`. The host name is
+/// taken as everything after the `host:` prefix without re-splitting on `:`
+/// (a DNS host never contains one, but this stays robust either way).
 fn parse_message(payload: &str) -> Option<Invalidation> {
-    let rest = payload.strip_prefix("link:")?;
-    rest.parse::<u64>().ok().map(Invalidation::Link)
+    if let Some(rest) = payload.strip_prefix("link:") {
+        return rest.parse::<u64>().ok().map(Invalidation::Link);
+    }
+    if let Some(rest) = payload.strip_prefix("host:") {
+        return if rest.is_empty() {
+            None
+        } else {
+            Some(Invalidation::Host(rest.to_string()))
+        };
+    }
+    None
 }
 
 /// Spawns the background subscriber. Opens a dedicated pub/sub connection
@@ -94,6 +108,7 @@ async fn run_once(url: &str, state: &Arc<AppState>) -> Result<(), redis::RedisEr
         };
         match parse_message(&payload) {
             Some(Invalidation::Link(id)) => state.cache.invalidate_local(id).await,
+            Some(Invalidation::Host(name)) => state.host_router.invalidate_local(&name).await,
             None => eprintln!("invalidate: unknown message '{payload}' (ignored)"),
         }
     }
@@ -114,6 +129,21 @@ mod tests {
     fn parses_link_ids() {
         assert_eq!(parse_message("link:42"), Some(Invalidation::Link(42)));
         assert_eq!(parse_message("link:0"), Some(Invalidation::Link(0)));
+    }
+
+    /// LUC-50: `host:<name>` is parsed into `Invalidation::Host`.
+    #[test]
+    fn parses_host_names() {
+        assert_eq!(
+            parse_message("host:go.acme.com"),
+            Some(Invalidation::Host("go.acme.com".to_string()))
+        );
+    }
+
+    /// LUC-50: an empty host name (`host:`) is rejected, same as `link:`.
+    #[test]
+    fn rejects_empty_host() {
+        assert_eq!(parse_message("host:"), None);
     }
 
     #[test]
