@@ -3847,3 +3847,119 @@ async fn sec_gpc_1_does_not_affect_visit_counting_or_redirect_target() {
         .unwrap();
     assert_eq!(r.status(), StatusCode::GONE);
 }
+
+#[tokio::test]
+async fn admin_link_alert_get_null_then_reflects_put_and_delete() {
+    let app = app_admin("secret").await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(r#"{"url":"https://a.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let code = v["code"].as_str().unwrap().to_string();
+
+    // No rule yet: GET returns null.
+    let r = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/admin/links/{code}/alert"))
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(v.is_null());
+
+    // PUT sets a rule; GET now reflects it.
+    let r = app
+        .clone()
+        .oneshot(
+            Request::put(format!("/admin/links/{code}/alert"))
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(r#"{"threshold":5,"window_secs":300}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    let r = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/admin/links/{code}/alert"))
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["threshold"], 5);
+    assert_eq!(v["window_secs"], 300);
+
+    // DELETE removes it; GET goes back to null.
+    let r = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/admin/links/{code}/alert"))
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+
+    let r = app
+        .oneshot(
+            Request::get(format!("/admin/links/{code}/alert"))
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(v.is_null());
+}
+
+#[tokio::test]
+async fn admin_link_alert_get_unknown_code_404() {
+    let app = app_admin("secret").await;
+    let r = app
+        .oneshot(
+            Request::get("/admin/links/zzzzzzz/alert")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+}

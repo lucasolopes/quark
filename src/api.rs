@@ -3955,6 +3955,30 @@ struct AlertReq {
 /// timers in the system.
 const MIN_ALERT_WINDOW_SECS: u64 = 60;
 
+/// `GET /admin/links/:code/alert` — the link's current click-threshold alert
+/// rule, or `null` when unset (LUC-66). Added so the panel can show the
+/// existing rule before editing it, without piggybacking on the PUT response
+/// (which only exists after a save).
+async fn admin_link_alert_get(
+    State(st): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let p = match admin_guard(&st, &headers, Scope::LinksRead).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let (id, _alias) = match resolve_for_admin(&st, p.tenant, &code).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    match st.store.get_alert_rule(p.tenant, id).await {
+        Ok(rule) => Json(serde_json::json!(rule)).into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
 /// `PUT /admin/links/:code/alert` — sets (or replaces) the link's
 /// click-threshold alert rule. Validates `threshold >= 1` and
 /// `window_secs >= 60`. Returns 200 on success.
@@ -5118,7 +5142,9 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         )
         .route(
             "/admin/links/:code/alert",
-            axum::routing::put(admin_link_alert_put).delete(admin_link_alert_delete),
+            axum::routing::get(admin_link_alert_get)
+                .put(admin_link_alert_put)
+                .delete(admin_link_alert_delete),
         )
         .route(
             "/admin/webhooks",

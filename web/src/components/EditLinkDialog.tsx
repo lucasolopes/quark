@@ -1,5 +1,5 @@
 import { Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +15,7 @@ import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { isHttpUrl } from "@/lib/codeguard";
 import { isUnauthorized } from "@/lib/mutation-error";
-import { usePatchLink } from "@/lib/queries";
+import { usePatchLink, useLinkAlert, useSetLinkAlert, useDeleteLinkAlert } from "@/lib/queries";
 import { formatTagsInput, parseTagsInput } from "@/lib/tags";
 import { draftsFromRules, parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import type { Folder, Link, Variant } from "@/lib/types";
@@ -49,6 +49,11 @@ interface FormErrors {
   variants?: string;
 }
 
+interface AlertFormErrors {
+  threshold?: string;
+  window?: string;
+}
+
 interface EditLinkDialogProps {
   link: Link;
   open: boolean;
@@ -80,6 +85,27 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
   const [removePassword, setRemovePassword] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
+
+  // Click-threshold alert (LUC-66): a collapsible section fetching the
+  // current rule lazily (only once expanded), so opening the dialog never
+  // fires an extra request for operators who don't touch it.
+  const [showAlert, setShowAlert] = useState(false);
+  const [alertThreshold, setAlertThreshold] = useState("");
+  const [alertMinutes, setAlertMinutes] = useState("");
+  const [alertPrefilled, setAlertPrefilled] = useState(false);
+  const [alertErrors, setAlertErrors] = useState<AlertFormErrors>({});
+  const alertQuery = useLinkAlert(link.code, { enabled: showAlert });
+  const setLinkAlert = useSetLinkAlert();
+  const deleteLinkAlert = useDeleteLinkAlert();
+
+  useEffect(() => {
+    if (alertQuery.data === undefined || alertPrefilled) return;
+    if (alertQuery.data) {
+      setAlertThreshold(String(alertQuery.data.threshold));
+      setAlertMinutes(String(Math.max(1, Math.round(alertQuery.data.window_secs / 60))));
+    }
+    setAlertPrefilled(true);
+  }, [alertQuery.data, alertPrefilled]);
 
   function addVariantRow() {
     setVariantRows((rows) => (rows.length >= MAX_VARIANTS ? rows : [...rows, emptyVariantRow()]));
@@ -157,6 +183,50 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
 
   function buildVariants(): Variant[] {
     return variantRows.map((row) => ({ url: row.url.trim(), weight: Number(row.weight.trim()) }));
+  }
+
+  function validateAlert(): AlertFormErrors {
+    const next: AlertFormErrors = {};
+    const threshold = Number(alertThreshold.trim());
+    if (!alertThreshold.trim() || !Number.isInteger(threshold) || threshold < 1) {
+      next.threshold = t("dialogs.edit.alertThresholdInvalid");
+    }
+    const minutes = Number(alertMinutes.trim());
+    if (!alertMinutes.trim() || !Number.isInteger(minutes) || minutes < 1) {
+      next.window = t("dialogs.edit.alertWindowInvalid");
+    }
+    return next;
+  }
+
+  async function handleSaveAlert() {
+    const nextErrors = validateAlert();
+    if (Object.keys(nextErrors).length > 0) {
+      setAlertErrors(nextErrors);
+      return;
+    }
+    setAlertErrors({});
+    try {
+      await setLinkAlert.mutateAsync({
+        code: link.code,
+        body: { threshold: Number(alertThreshold.trim()), window_secs: Number(alertMinutes.trim()) * 60 },
+      });
+      toast.success(t("dialogs.edit.alertSaveSuccess"));
+    } catch (err) {
+      if (isUnauthorized(err)) return;
+      toast.error(t("dialogs.edit.alertGenericError"));
+    }
+  }
+
+  async function handleRemoveAlert() {
+    try {
+      await deleteLinkAlert.mutateAsync(link.code);
+      setAlertThreshold("");
+      setAlertMinutes("");
+      toast.success(t("dialogs.edit.alertRemoveSuccess"));
+    } catch (err) {
+      if (isUnauthorized(err)) return;
+      toast.error(t("dialogs.edit.alertGenericError"));
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -495,6 +565,100 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
                     <Plus className="size-3.5" />
                     {t("dialogs.edit.addVariant")}
                   </Button>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="self-start"
+                aria-expanded={showAlert}
+                onClick={() => setShowAlert((v) => !v)}
+              >
+                {t("dialogs.edit.alertToggle")}
+              </Button>
+
+              {showAlert && (
+                <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                  <p className="text-sm text-muted-foreground">{t("dialogs.edit.alertNote")}</p>
+
+                  {alertQuery.isLoading ? (
+                    <p className="text-sm text-muted-foreground">{t("dialogs.edit.alertLoading")}</p>
+                  ) : alertQuery.data ? (
+                    <p className="text-sm text-muted-foreground">
+                      {t("dialogs.edit.alertCurrent", {
+                        threshold: alertQuery.data.threshold,
+                        minutes: Math.max(1, Math.round(alertQuery.data.window_secs / 60)),
+                      })}
+                    </p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">{t("dialogs.edit.alertNone")}</p>
+                  )}
+
+                  <div className="flex items-end gap-2">
+                    <div className="flex flex-1 flex-col gap-1.5">
+                      <label htmlFor="edit-link-alert-threshold" className="text-sm font-medium">
+                        {t("dialogs.edit.alertThresholdLabel")}
+                      </label>
+                      <Input
+                        id="edit-link-alert-threshold"
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={alertThreshold}
+                        onChange={(e) => setAlertThreshold(e.target.value)}
+                        aria-invalid={alertErrors.threshold != null}
+                      />
+                    </div>
+                    <div className="flex flex-1 flex-col gap-1.5">
+                      <label htmlFor="edit-link-alert-window" className="text-sm font-medium">
+                        {t("dialogs.edit.alertWindowLabel")}
+                      </label>
+                      <Input
+                        id="edit-link-alert-window"
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={alertMinutes}
+                        onChange={(e) => setAlertMinutes(e.target.value)}
+                        aria-invalid={alertErrors.window != null}
+                      />
+                    </div>
+                  </div>
+                  {alertErrors.threshold && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {alertErrors.threshold}
+                    </p>
+                  )}
+                  {alertErrors.window && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {alertErrors.window}
+                    </p>
+                  )}
+
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={setLinkAlert.isPending}
+                      onClick={handleSaveAlert}
+                    >
+                      {setLinkAlert.isPending ? t("dialogs.edit.alertSaving") : t("dialogs.edit.alertSave")}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={deleteLinkAlert.isPending}
+                      onClick={handleRemoveAlert}
+                    >
+                      {deleteLinkAlert.isPending ? t("dialogs.edit.alertRemoving") : t("dialogs.edit.alertRemove")}
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>

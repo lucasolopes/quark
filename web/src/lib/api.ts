@@ -10,7 +10,7 @@ import type {
   ListPixelsResponse, CreatePixelRequest, Pixel,
   WellknownName, MeResponse, SheetsStatus,
   InviteView, CreateInviteResponse,
-  SsoDomainView,
+  SsoDomainView, AlertRule,
 } from "./types";
 
 /**
@@ -117,6 +117,21 @@ export const api = {
     return jsonOrThrow(
       await req("/admin/links/bulk", { method: "POST", body: JSON.stringify({ codes, op, value }) }),
     );
+  },
+  /** The link's current click-threshold alert rule, or `null` when unset (LUC-66). */
+  async getLinkAlert(code: string): Promise<AlertRule | null> {
+    return jsonOrThrow(await req(`/admin/links/${encodeURIComponent(code)}/alert`));
+  },
+  /** Sets (or replaces) the link's click-threshold alert rule. `window_secs` must be >= 60. */
+  async setLinkAlert(code: string, body: AlertRule): Promise<AlertRule> {
+    return jsonOrThrow(
+      await req(`/admin/links/${encodeURIComponent(code)}/alert`, { method: "PUT", body: JSON.stringify(body) }),
+    );
+  },
+  /** Removes the link's alert rule; a missing rule is not an error. */
+  async deleteLinkAlert(code: string): Promise<void> {
+    const res = await req(`/admin/links/${encodeURIComponent(code)}/alert`, { method: "DELETE" });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
   async getStats(code: string): Promise<Stats> {
     return jsonOrThrow(await req(`/${encodeURIComponent(code)}/stats`));
