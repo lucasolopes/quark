@@ -168,7 +168,7 @@ describe("CreateLinkDialog", () => {
     expect(body.rules).toEqual([{ field: "country", values: ["BR", "PT"], to: "https://ok.com/br" }]);
   });
 
-  it("adding 2 variants sends the variants array with numeric weights", async () => {
+  it("adding 2 variants defaults to an even 50/50 split and sends it as percentages", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
     );
@@ -179,10 +179,11 @@ describe("CreateLinkDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: /add variant/i }));
 
     const urlInputs = screen.getAllByLabelText(/variant url/i);
-    const weightInputs = screen.getAllByLabelText(/weight/i);
+    const weightInputs = screen.getAllByLabelText(/traffic percentage/i);
+    // Two variants default to 50/50 without any manual entry.
+    expect((weightInputs[0] as HTMLInputElement).value).toBe("50");
+    expect((weightInputs[1] as HTMLInputElement).value).toBe("50");
     await userEvent.type(urlInputs[0], "https://variant-a.com");
-    await userEvent.clear(weightInputs[0]);
-    await userEvent.type(weightInputs[0], "3");
     await userEvent.type(urlInputs[1], "https://variant-b.com");
 
     await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
@@ -191,9 +192,33 @@ describe("CreateLinkDialog", () => {
     const [, init] = fetchMock.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.variants).toEqual([
-      { url: "https://variant-a.com", weight: 3 },
-      { url: "https://variant-b.com", weight: 1 },
+      { url: "https://variant-a.com", weight: 50 },
+      { url: "https://variant-b.com", weight: 50 },
     ]);
+  });
+
+  it("blocks submit when the variant percentages do not add up to 100", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
+    );
+    render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    await userEvent.type(screen.getByLabelText(/^url$/i), "https://ok.com");
+    await userEvent.click(screen.getByRole("button", { name: /a\/b variants/i }));
+    await userEvent.click(screen.getByRole("button", { name: /add variant/i }));
+    await userEvent.click(screen.getByRole("button", { name: /add variant/i }));
+
+    const urlInputs = screen.getAllByLabelText(/variant url/i);
+    const weightInputs = screen.getAllByLabelText(/traffic percentage/i);
+    await userEvent.type(urlInputs[0], "https://variant-a.com");
+    await userEvent.type(urlInputs[1], "https://variant-b.com");
+    // Break the 50/50 default so the total is 70, not 100.
+    await userEvent.clear(weightInputs[0]);
+    await userEvent.type(weightInputs[0], "20");
+
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/100%/);
   });
 
   it("renders the app destination inputs and submits the iOS value", async () => {
