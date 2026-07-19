@@ -51,6 +51,7 @@ describe("CreateLinkDialog", () => {
     );
     render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
+    await userEvent.click(screen.getByRole("button", { name: /scheduling and limits/i }));
     await userEvent.type(screen.getByLabelText(/max visits/i), "100");
     await userEvent.click(screen.getByRole("button", { name: /create/i }));
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -65,7 +66,7 @@ describe("CreateLinkDialog", () => {
     );
     render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
-    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
     expect(fetchMock).toHaveBeenCalledOnce();
     const [, init] = fetchMock.mock.calls[0];
     const body = JSON.parse(String(init?.body));
@@ -78,6 +79,7 @@ describe("CreateLinkDialog", () => {
     );
     render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
+    await userEvent.click(screen.getByRole("button", { name: /scheduling and limits/i }));
     await userEvent.type(screen.getByLabelText(/fallback/i), "https://ended.com");
     await userEvent.click(screen.getByRole("button", { name: /create/i }));
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -92,6 +94,7 @@ describe("CreateLinkDialog", () => {
     );
     render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
+    await userEvent.click(screen.getByRole("button", { name: /^password$/i }));
     await userEvent.type(screen.getByLabelText(/password/i), "hunter2");
     await userEvent.click(screen.getByRole("button", { name: /create/i }));
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -198,6 +201,7 @@ describe("CreateLinkDialog", () => {
       new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
     );
     render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    await userEvent.click(screen.getByRole("button", { name: /app redirect/i }));
     const iosInput = screen.getByLabelText(/ios/i);
     const androidInput = screen.getByLabelText(/android/i);
     expect(iosInput).toBeInTheDocument();
