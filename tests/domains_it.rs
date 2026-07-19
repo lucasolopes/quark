@@ -1853,7 +1853,7 @@ async fn cloud_admin_stats_and_delete_resolve_alias_in_tenant_default_domain() {
     let status = delete_admin_link(&app, &token, "admin-alias").await;
     assert_eq!(
         status,
-        StatusCode::OK,
+        StatusCode::NO_CONTENT,
         "admin delete-by-alias must resolve the alias in the tenant's own subdomain namespace"
     );
 
@@ -1933,7 +1933,7 @@ async fn oss_admin_stats_and_delete_still_resolve_alias_in_shared_domain() {
     let status = delete_admin_link(&app, &token, "oss-admin-alias").await;
     assert_eq!(
         status,
-        StatusCode::OK,
+        StatusCode::NO_CONTENT,
         "admin delete-by-alias must still resolve the alias via the shared domain in OSS"
     );
 }
