@@ -3942,6 +3942,38 @@ async fn admin_link_delete(
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// `DELETE /admin/links/:code/analytics` — GDPR right-to-erasure (LUC-65):
+/// erases the link's analytics (click events + counters + stats), scoped to
+/// the caller's tenant, WITHOUT deleting the link itself. Returns 204. A
+/// link with no analytics is not an error (the erasure is idempotent).
+async fn admin_link_analytics_delete(
+    State(st): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let p = match admin_guard(&st, &headers, Scope::LinksWrite).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let (id, _alias) = match resolve_for_admin(&st, p.tenant, &code).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    // Confirm the link exists and belongs to this tenant before erasing its
+    // analytics (a syntactically valid code always decodes to an id, so this
+    // is what enforces existence + tenant scope, mirroring `admin_link_delete`).
+    match st.store.get_link(p.tenant, id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    if st.store.delete_link_analytics(p.tenant, id).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
 /// Body of `PUT /admin/links/:code/alert`: the click-threshold alert rule
 /// (LUC-38). `threshold` clicks within `window_secs` seconds fire
 /// `link.threshold_reached` once per window.
@@ -5145,6 +5177,10 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             axum::routing::get(admin_link_alert_get)
                 .put(admin_link_alert_put)
                 .delete(admin_link_alert_delete),
+        )
+        .route(
+            "/admin/links/:code/analytics",
+            axum::routing::delete(admin_link_analytics_delete),
         )
         .route(
             "/admin/webhooks",

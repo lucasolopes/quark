@@ -719,7 +719,9 @@ async fn forward_to_pixels(
         }
         for config in configs.iter().filter(|c| c.active) {
             let base = bases.base_for(config.provider);
-            if let Err(e) = pixel::forward(client, base, config, &scoped, key).await {
+            if let Err(e) =
+                pixel::forward(client, base, config, &scoped, key, bases.anonymize_ip).await
+            {
                 eprintln!(
                     "{}",
                     serde_json::json!({

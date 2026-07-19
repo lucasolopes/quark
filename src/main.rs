@@ -286,13 +286,26 @@ async fn main() {
     // forwards to pixels, and drives the click-threshold alert engine (LUC-38),
     // emitting `link.threshold_reached` through `webhooks`. `control_conn` is
     // the shared Valkey counter (`None` -> per-replica in-memory counting).
+    // Opt-in IP anonymization for the Meta forward (LUC-65, GDPR): when on,
+    // `client_ip_address` is truncated (IPv4 /24, IPv6 /48) before it leaves
+    // the instance. Default off keeps the pre-LUC-65 behavior (raw IP).
+    let pixel_anonymize_ip = std::env::var("QUARK_PIXEL_ANONYMIZE_IP")
+        .map(|v| v != "0")
+        .unwrap_or(false);
+    if pixel_anonymize_ip {
+        eprintln!("pixel forward: IP anonymization ENABLED (IPv4 /24, IPv6 /48)");
+    }
+    let pixel_bases = quark::pixel::PixelBases {
+        anonymize_ip: pixel_anonymize_ip,
+        ..quark::pixel::PixelBases::default()
+    };
     let _worker = spawn_worker(
         analytics_rx,
         sink.clone(),
         store.clone(),
         pixel_client,
         key,
-        quark::pixel::PixelBases::default(),
+        pixel_bases,
         webhooks.clone(),
         control_conn.clone(),
     );
@@ -564,6 +577,49 @@ async fn main() {
                 }
             }
         });
+    }
+
+    // Analytics retention purge (LUC-65, GDPR). Retention window:
+    // `QUARK_ANALYTICS_RETENTION_DAYS` (days -> seconds) wins when set;
+    // otherwise cloud (`multi_tenant`) defaults to 365 days and OSS/self-host
+    // is unlimited. `None` = unlimited => the purge task is NOT spawned.
+    let retention_secs: Option<u64> = match std::env::var("QUARK_ANALYTICS_RETENTION_DAYS") {
+        Ok(v) => v.trim().parse::<u64>().ok().map(|d| d * 86_400),
+        Err(_) => {
+            if multi_tenant {
+                Some(365 * 86_400)
+            } else {
+                None
+            }
+        }
+    };
+    if let Some(retention) = retention_secs {
+        eprintln!(
+            "{}",
+            serde_json::json!({ "analytics_retention_secs": retention })
+        );
+        // Hourly purge task (mirrors the session GC above), fail-open: a purge
+        // error is only logged and never blocks serving.
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                ticker.tick().await;
+                let cutoff = quark::now().saturating_sub(retention);
+                match store.purge_click_events_before(cutoff).await {
+                    Ok(n) => eprintln!(
+                        "{}",
+                        serde_json::json!({ "analytics_purge_deleted": n, "cutoff_ts": cutoff })
+                    ),
+                    Err(e) => eprintln!(
+                        "{}",
+                        serde_json::json!({ "analytics_purge_error": e.to_string() })
+                    ),
+                }
+            }
+        });
+    } else {
+        eprintln!("analytics retention: unlimited (no purge)");
     }
 
     let app = router(state);

@@ -148,6 +148,78 @@ async fn stats_requires_token() {
     assert!(v["recent"].is_array());
 }
 
+/// LUC-65 Part B: `DELETE /admin/links/:code/analytics` requires auth and
+/// returns 204 for an existing link. The link itself is NOT deleted (still
+/// redirects afterward), only its analytics.
+#[tokio::test]
+async fn admin_link_analytics_delete_requires_auth_and_returns_204() {
+    let (app, _rx) = app_with(Some("secret"), 100).await;
+    let code = create(&app, "https://example.com", Some("secret")).await;
+
+    // No token -> unauthorized.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/admin/links/{code}/analytics"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Wrong token -> unauthorized.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/admin/links/{code}/analytics"))
+                .header("x-admin-token", "wrong")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Correct token -> 204.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/admin/links/{code}/analytics"))
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // The link is untouched: it still redirects.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/{code}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FOUND);
+
+    // Nonexistent code -> 404.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::delete("/admin/links/0000000/analytics")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn stats_404_nonexistent_code() {
     let (app, _rx) = app_with(Some("secret"), 100).await;

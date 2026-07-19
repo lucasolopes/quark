@@ -454,6 +454,88 @@ async fn stats_for_tenant_default_tenant_aggregates_all_pg() {
     assert_eq!(agg.last_ts, 1_752_300_100);
 }
 
+/// LUC-65 Part A (retention): `purge_click_events_before` deletes only the
+/// detail rows older than the cutoff, keeps the newer ones, and never touches
+/// the per-link aggregates (`click_counters`/`stats_meta`).
+#[tokio::test]
+#[serial(pg)]
+async fn purge_click_events_before_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    s.record_batch(&[ev(1, 1_000), ev(1, 10_000)])
+        .await
+        .unwrap();
+    let before = s.stats(1).await.unwrap().unwrap();
+    assert_eq!(before.aggregates.total, 2);
+    assert_eq!(before.recent.len(), 2);
+
+    let deleted = s.purge_click_events_before(5_000).await.unwrap();
+    assert_eq!(
+        deleted, 1,
+        "only the ts=1000 detail row is older than cutoff"
+    );
+
+    let after = s.stats(1).await.unwrap().unwrap();
+    // Aggregates are untouched by retention (only the detail ring is pruned).
+    assert_eq!(after.aggregates.total, 2);
+    assert_eq!(after.recent.len(), 1);
+    assert_eq!(after.recent[0].ts, 10_000, "the newer detail row is kept");
+}
+
+/// LUC-65 Part B (erasure): `delete_link_analytics` removes events + counters
+/// + stats for one link, scoped by tenant, and never touches another link.
+#[tokio::test]
+#[serial(pg)]
+async fn delete_link_analytics_isolates_by_link_pg() {
+    let Some((s, pool)) = fresh_with_pool().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    s.record_batch(&[ev(1, 1_000), ev(1, 2_000), ev(2, 3_000)])
+        .await
+        .unwrap();
+    assert!(s.stats(1).await.unwrap().is_some());
+    assert!(s.stats(2).await.unwrap().is_some());
+
+    // Wrong tenant: nothing is erased (tenant-scoped).
+    s.delete_link_analytics(TenantId(999), 1).await.unwrap();
+    assert!(
+        s.stats(1).await.unwrap().is_some(),
+        "a mismatched tenant must not erase the link's analytics"
+    );
+
+    // Correct tenant (events were recorded at tenant 0): link 1 fully erased.
+    s.delete_link_analytics(TenantId(0), 1).await.unwrap();
+    let ce1: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM click_events WHERE id=$1")
+        .bind(1i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let cc1: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM click_counters WHERE id=$1")
+        .bind(1i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let sm1: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stats_meta WHERE id=$1")
+        .bind(1i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!((ce1, cc1, sm1), (0, 0, 0), "link 1 analytics fully erased");
+    assert!(s.stats(1).await.unwrap().is_none());
+
+    // Link 2 is untouched.
+    assert!(s.stats(2).await.unwrap().is_some());
+    let ce2: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM click_events WHERE id=$1")
+        .bind(2i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(ce2, 1, "another link's analytics must survive the erasure");
+}
+
 /// Regression: `stats(id)` (the per-link view) is untouched by Task 2 —
 /// still keyed by `id` alone, unaffected by other tenants' or other links'
 /// clicks.

@@ -372,6 +372,16 @@ mod tests {
         async fn gc_sessions(&self, _now: u64) -> Result<(), StoreError> {
             unimplemented!()
         }
+        async fn purge_click_events_before(&self, _cutoff_ts: u64) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
+        async fn delete_link_analytics(
+            &self,
+            _tenant: TenantId,
+            _id: u64,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
         async fn bump_visits(&self, _tenant: TenantId, _id: u64) -> Result<u64, StoreError> {
             unimplemented!()
         }

@@ -40,10 +40,52 @@ there is no accidental path that writes them to the stored analytics buffer.
 
 What does get written: `user_agent`, `referer`, `country`, `city`, and the
 click timestamp, plus a per-click event id. This raw per-click buffer is
-capped at 1000 events per link and trimmed on a rolling basis; there is no
-separate time-based retention window in this release. Aggregated counts
-(by country, city, device, browser, referer host, and day) are kept
-alongside the raw buffer and carry no per-click identifying detail.
+capped at 1000 events per link and trimmed on a rolling basis. On the shared
+Postgres backend it can also be purged on a time-based schedule (see
+Retention below). Aggregated counts (by country, city, device, browser,
+referer host, and day) are kept alongside the raw buffer and carry no
+per-click identifying detail.
+
+## Retention
+
+The raw per-click detail (the near-PII buffer above) can be purged on a
+time-based schedule. The default depends on how quark runs:
+
+- **OSS / self-host** (single-tenant, the default): retention is
+  **unlimited**. Nothing is purged by time; the only bound is the rolling
+  1000-event-per-link cap.
+- **Cloud** (multi-tenant, `QUARK_MULTI_TENANT`): retention defaults to
+  **365 days**.
+
+Either default is overridden by `QUARK_ANALYTICS_RETENTION_DAYS`: set it to a
+number of days to enable (or shorten/lengthen) the purge, on any mode. When a
+retention window is in effect, a background task runs about once an hour and
+deletes click-detail rows older than the window; it fails open (a purge error
+is logged and never affects redirects or serving). Setting the variable to a
+non-numeric value, or leaving it unset in OSS mode, means unlimited (no purge
+task runs).
+
+Retention only prunes the raw per-click detail (`click_events`). The
+aggregated counts (`click_counters` / `stats_meta`) are **not** pruned: they
+carry no per-click identifying detail and are what the analytics view is
+built from. On the embedded LMDB backend the detail buffer is already bounded
+per link, so the purge simply prunes that ring by timestamp when a window is
+configured.
+
+When ClickHouse is used as the analytics sink (a later release, LUC-54),
+retention there is enforced by a native table TTL rather than this task; the
+`QUARK_ANALYTICS_RETENTION_DAYS` window maps onto that TTL when ClickHouse is
+provisioned.
+
+## Erasing a link's analytics
+
+`DELETE /admin/links/:code/analytics` erases all analytics for a single link:
+the raw per-click detail, the aggregated counts, and the stats metadata, all
+scoped to the caller's tenant. It requires the `links:write` scope (the same
+credential that can edit or delete the link). It does **not** delete the link
+itself: the short code keeps redirecting; only its analytics are removed. A
+successful erasure returns `204 No Content`. This is the API surface for a
+per-link erasure request; there is no admin-panel UI for it in this release.
 
 ## Global Privacy Control (GPC)
 
@@ -104,17 +146,28 @@ already completed, to that provider:
 
 - **GA4** receives only the link's short code, country, timestamp, and a
   synthetic per-instance client id. No IP, no User-Agent.
-- **Meta CAPI** additionally receives the raw client IP, raw User-Agent, and
+- **Meta CAPI** additionally receives the client IP, raw User-Agent, and
   `fbc` (all in plaintext, since Meta hashes IP itself), plus a SHA-256
   hashed country code.
 
 This forwarding is off by default and only runs when the operator adds a
 pixel. It is the highest-sensitivity processing quark does, because it is
-the one path where raw visitor IP and User-Agent leave quark's boundary to a
+the one path where visitor IP and User-Agent leave quark's boundary to a
 third party. Enabling it, and disclosing it (or obtaining consent, depending
 on your jurisdiction and how the data is used downstream), is the operator's
 responsibility. `Sec-GPC: 1` suppresses this forwarding automatically, same
 as analytics capture.
+
+### Anonymizing the forwarded IP
+
+By default the Meta forward sends the full client IP. Setting
+`QUARK_PIXEL_ANONYMIZE_IP` (opt-in) truncates the IP before it leaves the
+instance: an IPv4 address has its last octet zeroed (`a.b.c.d` becomes
+`a.b.c.0`, a /24), and an IPv6 address keeps only its first 48 bits (a /48),
+with the rest zeroed. An IP that cannot be parsed is omitted from the payload
+rather than forwarded. The flag only affects the Meta `client_ip_address`
+field; GA4 never receives an IP, and User-Agent is unchanged in this release.
+Leaving the variable unset keeps the current behavior (full IP forwarded).
 
 ## Self-hosting and data residency
 
@@ -124,11 +177,12 @@ any separate configuration: the answer is wherever you deployed it.
 
 ## What this release does not do
 
-- No configurable time-based retention for the raw per-click buffer beyond
-  the rolling 1000-event cap per link. Aggregates are not pruned.
-- No per-link purge or per-visitor erasure endpoint yet.
+- No admin-panel UI for erasure; per-link erasure is API-only
+  (`DELETE /admin/links/:code/analytics`).
 - No fine-grained control over which fields Meta CAPI forwards; it is
-  all-or-nothing per pixel.
+  all-or-nothing per pixel, aside from the IP-anonymization flag above.
+- No anonymization or omission of the forwarded User-Agent (a later phase);
+  the IP is the field this release can anonymize.
 - No cookie-consent banner. Given the cookieless design above, one is not
   needed for quark's built-in analytics; if you enable Meta or GA4
   forwarding, evaluate your own consent obligations for that specific

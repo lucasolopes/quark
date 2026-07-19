@@ -41,10 +41,53 @@ existe caminho acidental que os grave no buffer de analytics armazenado.
 
 O que é gravado: `user_agent`, `referer`, `country`, `city` e o timestamp do
 clique, mais um id de evento por clique. Esse buffer bruto por clique tem um
-teto de 1000 eventos por link e é podado de forma circular; não há uma
-janela de retenção baseada em tempo nesta versão. Contagens agregadas (por
-país, cidade, dispositivo, navegador, host do referer e dia) ficam ao lado
-do buffer bruto e não carregam detalhe identificador por clique.
+teto de 1000 eventos por link e é podado de forma circular. No backend
+Postgres compartilhado ele também pode ser purgado por um agendamento
+baseado em tempo (veja Retenção abaixo). Contagens agregadas (por país,
+cidade, dispositivo, navegador, host do referer e dia) ficam ao lado do
+buffer bruto e não carregam detalhe identificador por clique.
+
+## Retenção
+
+O detalhe bruto por clique (o buffer quase-PII acima) pode ser purgado por um
+agendamento baseado em tempo. O padrão depende de como o quark roda:
+
+- **OSS / self-host** (single-tenant, o padrão): retenção **ilimitada**. Nada
+  é purgado por tempo; o único limite é o teto circular de 1000 eventos por
+  link.
+- **Cloud** (multi-tenant, `QUARK_MULTI_TENANT`): retenção padrão de **365
+  dias**.
+
+Qualquer um dos padrões é sobrescrito por `QUARK_ANALYTICS_RETENTION_DAYS`:
+defina como um número de dias pra ligar (ou encurtar/alongar) a purga, em
+qualquer modo. Quando há uma janela de retenção em vigor, uma task de fundo
+roda cerca de uma vez por hora e apaga as linhas de detalhe de clique mais
+antigas que a janela; ela falha aberta (um erro de purga é logado e nunca
+afeta redirects ou o atendimento). Definir a variável com um valor não
+numérico, ou deixá-la sem definir no modo OSS, significa ilimitada (nenhuma
+task de purga roda).
+
+A retenção só poda o detalhe bruto por clique (`click_events`). Os agregados
+(`click_counters` / `stats_meta`) **não** são podados: eles não carregam
+detalhe identificador por clique e são a base sobre a qual a visão de
+analytics é montada. No backend embutido LMDB o buffer de detalhe já é
+limitado por link, então a purga apenas poda esse ring por timestamp quando
+há uma janela configurada.
+
+Quando o ClickHouse for usado como sink de analytics (uma versão futura,
+LUC-54), a retenção lá é imposta por um TTL nativo da tabela, não por esta
+task; a janela de `QUARK_ANALYTICS_RETENTION_DAYS` é mapeada nesse TTL quando
+o ClickHouse for provisionado.
+
+## Apagando a analytics de um link
+
+`DELETE /admin/links/:code/analytics` apaga toda a analytics de um único
+link: o detalhe bruto por clique, as contagens agregadas e os metadados de
+stats, tudo restrito ao tenant de quem chama. Exige o escopo `links:write` (a
+mesma credencial que pode editar ou apagar o link). **Não** apaga o link em
+si: o código curto continua redirecionando; só a analytics dele é removida.
+Uma erasure bem-sucedida retorna `204 No Content`. Essa é a superfície de API
+pra um pedido de erasure por link; não há UI no painel pra isso nesta versão.
 
 ## Global Privacy Control (GPC)
 
@@ -107,17 +150,29 @@ redirect já foi concluído, pra esse provedor:
 
 - O **GA4** recebe só o código curto do link, o país, o timestamp e um
   client id sintético por instância. Sem IP, sem User-Agent.
-- O **Meta CAPI** recebe adicionalmente o IP bruto do cliente, o User-Agent
-  bruto e o `fbc` (tudo em texto puro, já que o Meta faz o hash do IP do
-  lado dele), mais um código de país com hash SHA-256.
+- O **Meta CAPI** recebe adicionalmente o IP do cliente, o User-Agent bruto e
+  o `fbc` (tudo em texto puro, já que o Meta faz o hash do IP do lado dele),
+  mais um código de país com hash SHA-256.
 
 Esse encaminhamento vem desligado por padrão e só roda quando o operador
 adiciona um pixel. É o processamento mais sensível que o quark faz, porque é
-o único caminho em que o IP e o User-Agent brutos do visitante saem da
-fronteira do quark rumo a um terceiro. Ligar isso, e divulgar (ou obter
-consentimento, dependendo da sua jurisdição e do uso posterior do dado), é
-responsabilidade do operador. `Sec-GPC: 1` suprime esse encaminhamento
-automaticamente, junto com a captura de analytics.
+o único caminho em que o IP e o User-Agent do visitante saem da fronteira do
+quark rumo a um terceiro. Ligar isso, e divulgar (ou obter consentimento,
+dependendo da sua jurisdição e do uso posterior do dado), é responsabilidade
+do operador. `Sec-GPC: 1` suprime esse encaminhamento automaticamente, junto
+com a captura de analytics.
+
+### Anonimizando o IP encaminhado
+
+Por padrão o encaminhamento pro Meta manda o IP completo do cliente. Definir
+`QUARK_PIXEL_ANONYMIZE_IP` (opt-in) trunca o IP antes de ele sair da
+instância: um endereço IPv4 tem o último octeto zerado (`a.b.c.d` vira
+`a.b.c.0`, um /24), e um endereço IPv6 mantém só os primeiros 48 bits (um
+/48), com o resto zerado. Um IP que não puder ser parseado é omitido do
+payload em vez de encaminhado. A flag só afeta o campo `client_ip_address` do
+Meta; o GA4 nunca recebe IP, e o User-Agent fica inalterado nesta versão.
+Deixar a variável sem definir mantém o comportamento atual (IP completo
+encaminhado).
 
 ## Self-host e residência de dados
 
@@ -128,12 +183,12 @@ implantado.
 
 ## O que esta versão não faz
 
-- Não há retenção configurável baseada em tempo pro buffer bruto por
-  clique além do teto circular de 1000 eventos por link. Os agregados não
-  são podados.
-- Ainda não há endpoint de purge por link ou de erasure por visitante.
+- Não há UI no painel pra erasure; a erasure por link é só via API
+  (`DELETE /admin/links/:code/analytics`).
 - Não há controle fino sobre quais campos o Meta CAPI encaminha; é tudo ou
-  nada por pixel.
+  nada por pixel, fora a flag de anonimização de IP acima.
+- Não há anonimização ou omissão do User-Agent encaminhado (uma fase
+  futura); o IP é o campo que esta versão consegue anonimizar.
 - Não há banner de consentimento de cookie. Dado o design sem cookie acima,
   um banner não é necessário pra analytics nativa do quark; se você ligar o
   encaminhamento pro Meta ou GA4, avalie por conta própria suas obrigações

@@ -1729,6 +1729,40 @@ impl Store for PostgresStore {
         Ok(())
     }
 
+    async fn purge_click_events_before(&self, cutoff_ts: u64) -> Result<u64, StoreError> {
+        // Global purge: retention applies across every tenant, so no tenant
+        // scope. Only the near-PII detail (`click_events`) is deleted; the
+        // per-link aggregates (`click_counters`/`stats_meta`) are kept.
+        let res = sqlx::query("DELETE FROM click_events WHERE ts < $1")
+            .bind(cutoff_ts as i64)
+            .execute(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(res.rows_affected())
+    }
+
+    async fn delete_link_analytics(&self, tenant: TenantId, id: u64) -> Result<(), StoreError> {
+        // One transaction (per-tenant in cloud mode) so a link's detail,
+        // counters and stats are erased atomically. Every delete is also
+        // scoped by `tenant_id` (belt-and-suspenders, since these tables are
+        // NOT_FORCED for RLS).
+        let mut tx = self.begin_write_tx(tenant).await?;
+        for q in [
+            "DELETE FROM click_events WHERE id = $1 AND tenant_id = $2",
+            "DELETE FROM click_counters WHERE id = $1 AND tenant_id = $2",
+            "DELETE FROM stats_meta WHERE id = $1 AND tenant_id = $2",
+        ] {
+            sqlx::query(q)
+                .bind(id as i64)
+                .bind(tenant.0 as i64)
+                .execute(&mut *tx)
+                .await
+                .map_err(StoreError::backend)?;
+        }
+        tx.commit().await.map_err(StoreError::backend)?;
+        Ok(())
+    }
+
     async fn list_broken_link_ids(&self, tenant: TenantId) -> Result<Vec<u64>, StoreError> {
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(

@@ -754,6 +754,60 @@ impl Store for LmdbStore {
         Ok(())
     }
 
+    async fn purge_click_events_before(&self, cutoff_ts: u64) -> Result<u64, StoreError> {
+        // The per-link `events` sub-db is already a bounded ring
+        // (`EVENTS_MAX`/link) on LMDB, so this is not the primary retention
+        // target (Postgres is, being unbounded). Still, prune the ring by `ts`
+        // so the OSS/self-host operator who opts into retention gets consistent
+        // behavior: only the near-PII detail (`events`) is touched; the
+        // aggregates (`stats`) are left intact.
+        let mut updates: Vec<(Vec<u8>, Vec<ClickEvent>, u64)> = Vec::new();
+        {
+            let rtxn = self.env.read_txn()?;
+            for item in self.events.iter(&rtxn)? {
+                let (key, bytes) = item?;
+                let recent: Vec<ClickEvent> = serde_json::from_slice(bytes)?;
+                let before = recent.len();
+                let kept: Vec<ClickEvent> =
+                    recent.into_iter().filter(|e| e.ts >= cutoff_ts).collect();
+                let dropped = (before - kept.len()) as u64;
+                if dropped > 0 {
+                    updates.push((key.to_vec(), kept, dropped));
+                }
+            }
+        }
+        let mut total = 0u64;
+        if !updates.is_empty() {
+            let mut wtxn = self.env.write_txn()?;
+            for (key, kept, dropped) in &updates {
+                if kept.is_empty() {
+                    self.events.delete(&mut wtxn, key.as_slice())?;
+                } else {
+                    self.events
+                        .put(&mut wtxn, key.as_slice(), &serde_json::to_vec(kept)?)?;
+                }
+                total += dropped;
+            }
+            wtxn.commit()?;
+        }
+        Ok(total)
+    }
+
+    async fn delete_link_analytics(&self, _tenant: TenantId, id: u64) -> Result<(), StoreError> {
+        // Analytics on LMDB is single-tenant: `record_batch` keys every link's
+        // stats/events under the `DEFAULT_TENANT` prefix regardless of the
+        // link's owner (see the note on `record_batch`), so erasure drops the
+        // link's keys under that same prefix. `_tenant` is unused for the key
+        // for exactly this reason; isolation is by link `id`. The link record
+        // itself is untouched (this erases only the analytics).
+        let k = tkey_id(DEFAULT_TENANT, id);
+        let mut wtxn = self.env.write_txn()?;
+        self.stats.delete(&mut wtxn, &k)?;
+        self.events.delete(&mut wtxn, &k)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
     async fn list_tags(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let mut counts: BTreeMap<String, u64> = BTreeMap::new();
@@ -2189,5 +2243,62 @@ mod tests {
         let rec: Record = serde_json::from_str(blob).unwrap();
         assert_eq!(rec.app_ios, None);
         assert_eq!(rec.app_android, None);
+    }
+
+    fn click_ev(id: u64, ts: u64) -> crate::analytics::ClickEvent {
+        crate::analytics::ClickEvent {
+            id,
+            event_id: format!("clk_{id}_{ts}"),
+            ts,
+            referer: None,
+            country: None,
+            user_agent: None,
+            city: None,
+            bot: false,
+            ip: None,
+            fbc: None,
+            variant: None,
+            tenant_id: crate::tenant::DEFAULT_TENANT.0,
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_click_events_before_drops_old_keeps_new() {
+        use crate::analytics::AnalyticsSink;
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        s.record_batch(&[click_ev(1, 100), click_ev(1, 1000)])
+            .await
+            .unwrap();
+
+        let deleted = s.purge_click_events_before(500).await.unwrap();
+        assert_eq!(deleted, 1, "only the ts=100 event is older than the cutoff");
+
+        let stats = s.stats(1).await.unwrap().unwrap();
+        assert_eq!(stats.recent.len(), 1);
+        assert_eq!(stats.recent[0].ts, 1000, "the new event is preserved");
+        // Aggregates are NOT touched by retention (only the detail ring).
+        assert_eq!(stats.aggregates.total, 2);
+    }
+
+    #[tokio::test]
+    async fn delete_link_analytics_isolates_by_link() {
+        use crate::analytics::AnalyticsSink;
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        s.record_batch(&[click_ev(1, 100), click_ev(2, 200)])
+            .await
+            .unwrap();
+
+        s.delete_link_analytics(crate::tenant::DEFAULT_TENANT, 1)
+            .await
+            .unwrap();
+
+        // Link 1's analytics are gone entirely...
+        assert!(s.stats(1).await.unwrap().is_none());
+        // ...while link 2 is untouched.
+        let two = s.stats(2).await.unwrap().unwrap();
+        assert_eq!(two.recent.len(), 1);
+        assert_eq!(two.aggregates.total, 1);
     }
 }

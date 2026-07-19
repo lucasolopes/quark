@@ -121,6 +121,7 @@ async fn worker_forwards_only_matching_tenant_events_to_each_pixel() {
     let bases = PixelBases {
         ga4: mock_base,
         meta: "http://127.0.0.1:1".to_string(),
+        anonymize_ip: false,
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(100);
     let handle = spawn_worker(
@@ -181,6 +182,7 @@ async fn worker_flush_forwards_batch_to_active_pixel_with_real_short_code() {
     let bases = PixelBases {
         ga4: mock_base,
         meta: "http://127.0.0.1:1".to_string(),
+        anonymize_ip: false,
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(100);
     let handle = spawn_worker(
@@ -225,6 +227,7 @@ async fn worker_flush_skips_inactive_pixel_configs() {
     let bases = PixelBases {
         ga4: mock_base,
         meta: "http://127.0.0.1:1".to_string(),
+        anonymize_ip: false,
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(100);
     let handle = spawn_worker(
@@ -259,6 +262,7 @@ async fn worker_flush_is_fail_open_when_provider_is_down() {
     let bases = PixelBases {
         ga4: "http://127.0.0.1:1".to_string(),
         meta: "http://127.0.0.1:1".to_string(),
+        anonymize_ip: false,
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(100);
     let handle = spawn_worker(
@@ -304,6 +308,7 @@ async fn worker_flush_is_fail_open_when_provider_returns_500() {
     let bases = PixelBases {
         ga4: format!("http://{addr}"),
         meta: "http://127.0.0.1:1".to_string(),
+        anonymize_ip: false,
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(100);
     let handle = spawn_worker(
@@ -342,6 +347,7 @@ async fn worker_forwards_to_a_pixel_added_after_start_once_the_snapshot_refreshe
     let bases = PixelBases {
         ga4: mock_base,
         meta: "http://127.0.0.1:1".to_string(),
+        anonymize_ip: false,
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(100);
     let handle = spawn_worker(
@@ -393,7 +399,7 @@ async fn forward_error_display_never_contains_provider_url_or_credentials() {
     let events = vec![ev(1, 1_752_300_000)];
     let client = reqwest::Client::new();
 
-    let result = pixel::forward(&client, &closed_port_base, &config, &events, KEY).await;
+    let result = pixel::forward(&client, &closed_port_base, &config, &events, KEY, false).await;
     let err = result.expect_err("connection to a closed port must fail");
     let message = err.to_string();
 

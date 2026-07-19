@@ -81,6 +81,11 @@ impl std::error::Error for PixelError {}
 pub struct PixelBases {
     pub ga4: String,
     pub meta: String,
+    /// When `true`, the visitor IP is anonymized (IPv4 /24, IPv6 /48) before
+    /// it is placed in the Meta `client_ip_address` field (LUC-65, opt-in via
+    /// `QUARK_PIXEL_ANONYMIZE_IP`). Default `false` keeps the current behavior
+    /// (raw IP forwarded).
+    pub anonymize_ip: bool,
 }
 
 impl Default for PixelBases {
@@ -88,6 +93,7 @@ impl Default for PixelBases {
         PixelBases {
             ga4: "https://www.google-analytics.com".to_string(),
             meta: "https://graph.facebook.com".to_string(),
+            anonymize_ip: false,
         }
     }
 }
@@ -146,6 +152,31 @@ pub fn ga4_payload(events: &[ClickEvent], key: u64) -> Value {
     })
 }
 
+/// Anonymizes an IP address for privacy-preserving forwarding (LUC-65,
+/// GDPR): an IPv4 address has its last octet zeroed (`a.b.c.d` -> `a.b.c.0`,
+/// a /24), an IPv6 address keeps only its first 48 bits and zeroes the last
+/// 80 (a /48). The output is the canonical string form of the truncated
+/// address. Returns `None` when `raw` does not parse as an IP, so the caller
+/// can omit the field rather than forward an unparseable (and thus
+/// un-anonymizable) value. Pure: no I/O, unit-testable.
+pub fn anonymize_ip(raw: &str) -> Option<String> {
+    use std::net::IpAddr;
+    match raw.trim().parse::<IpAddr>().ok()? {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            Some(std::net::Ipv4Addr::new(o[0], o[1], o[2], 0).to_string())
+        }
+        IpAddr::V6(v6) => {
+            let mut o = v6.octets();
+            // Keep the first 48 bits (bytes 0..6), zero the last 80 bits.
+            for b in o.iter_mut().skip(6) {
+                *b = 0;
+            }
+            Some(std::net::Ipv6Addr::from(o).to_string())
+        }
+    }
+}
+
 /// Lowercase hex SHA-256 of the lowercased input. Used for the Meta
 /// `user_data` fields the Conversions API requires hashed (e.g. country).
 fn sha256_hex(s: &str) -> String {
@@ -162,13 +193,24 @@ fn sha256_hex(s: &str) -> String {
 /// PII to hash), while `country` is sent as a SHA-256 hex of its lowercased
 /// value (Meta requires that field hashed). Absent keys are omitted, never
 /// emitted as null.
-pub fn meta_payload(events: &[ClickEvent], key: u64) -> Value {
+///
+/// When `anonymize_ip` is `true` (LUC-65 opt-in), the IP is truncated
+/// (IPv4 /24, IPv6 /48) via [`anonymize_ip`] before it is inserted; an IP
+/// that fails to parse is omitted rather than forwarded. When `false`, the
+/// raw IP is forwarded (the pre-LUC-65 behavior).
+pub fn meta_payload(events: &[ClickEvent], key: u64, anonymize_ip_flag: bool) -> Value {
     let data: Vec<Value> = events
         .iter()
         .map(|e| {
             let mut user_data = serde_json::Map::new();
             if let Some(ip) = &e.ip {
-                user_data.insert("client_ip_address".to_string(), json!(ip));
+                if anonymize_ip_flag {
+                    if let Some(anon) = anonymize_ip(ip) {
+                        user_data.insert("client_ip_address".to_string(), json!(anon));
+                    }
+                } else {
+                    user_data.insert("client_ip_address".to_string(), json!(ip));
+                }
             }
             if let Some(ua) = &e.user_agent {
                 user_data.insert("client_user_agent".to_string(), json!(ua));
@@ -241,19 +283,23 @@ pub fn provider_url(base: &str, config: &PixelConfig) -> Result<String, PixelErr
 /// callers must run this off the redirect hot path (the analytics worker).
 /// Fails open at the caller: an `Err` here must never affect a redirect.
 /// `key` derives the real short code used as `link_code` in the payload.
+/// `anonymize_ip_flag` (LUC-65) is forwarded to [`meta_payload`]: when set,
+/// the Meta `client_ip_address` is anonymized (IPv4 /24, IPv6 /48); it has no
+/// effect on GA4 (which carries no IP).
 pub async fn forward(
     client: &reqwest::Client,
     base: &str,
     config: &PixelConfig,
     events: &[ClickEvent],
     key: u64,
+    anonymize_ip_flag: bool,
 ) -> Result<(), PixelError> {
     if events.is_empty() {
         return Ok(());
     }
     let payload = match config.provider {
         Provider::Ga4 => ga4_payload(events, key),
-        Provider::MetaCapi => meta_payload(events, key),
+        Provider::MetaCapi => meta_payload(events, key, anonymize_ip_flag),
     };
     let url = provider_url(base, config)?;
     let resp = client
@@ -418,7 +464,7 @@ mod tests {
             },
             ev(21, 201, Some("US")),
         ];
-        let payload = meta_payload(&events, TEST_KEY);
+        let payload = meta_payload(&events, TEST_KEY, false);
         let data = payload["data"].as_array().unwrap();
         assert_eq!(data.len(), 2);
         assert_eq!(data[0]["event_name"], "Lead");
@@ -456,8 +502,8 @@ mod tests {
     #[test]
     fn meta_payload_event_id_matches_event_id_and_is_stable() {
         let events = vec![ev(20, 200, Some("BR"))];
-        let a = meta_payload(&events, TEST_KEY);
-        let b = meta_payload(&events, TEST_KEY);
+        let a = meta_payload(&events, TEST_KEY, false);
+        let b = meta_payload(&events, TEST_KEY, false);
         assert_eq!(a["data"][0]["event_id"], "clk_ev_20");
         assert_eq!(a["data"][0]["event_id"], events[0].event_id);
         assert_eq!(a["data"][0]["event_id"], b["data"][0]["event_id"]);
@@ -546,7 +592,7 @@ mod tests {
         let client = reqwest::Client::new();
         let events = vec![ev(5, 50, Some("BR"))];
 
-        forward(&client, &base, &ga4_config(), &events, TEST_KEY)
+        forward(&client, &base, &ga4_config(), &events, TEST_KEY, false)
             .await
             .unwrap();
 
@@ -567,7 +613,7 @@ mod tests {
         let client = reqwest::Client::new();
         let events = vec![ev(6, 60, Some("US"))];
 
-        forward(&client, &base, &meta_config(), &events, TEST_KEY)
+        forward(&client, &base, &meta_config(), &events, TEST_KEY, false)
             .await
             .unwrap();
 
@@ -592,8 +638,125 @@ mod tests {
             &ga4_config(),
             &events,
             TEST_KEY,
+            false,
         )
         .await
         .unwrap();
+    }
+
+    #[test]
+    fn anonymize_ip_ipv4_zeroes_last_octet() {
+        assert_eq!(anonymize_ip("203.0.113.5").as_deref(), Some("203.0.113.0"));
+        assert_eq!(
+            anonymize_ip("192.168.1.254").as_deref(),
+            Some("192.168.1.0")
+        );
+        // Trailing/leading whitespace is tolerated.
+        assert_eq!(anonymize_ip("  8.8.8.8 ").as_deref(), Some("8.8.8.0"));
+    }
+
+    #[test]
+    fn anonymize_ip_ipv6_keeps_slash_48() {
+        // Last 80 bits zeroed, first 48 bits kept.
+        assert_eq!(
+            anonymize_ip("2001:db8:abcd:1234:5678:9abc:def0:1111").as_deref(),
+            Some("2001:db8:abcd::")
+        );
+        assert_eq!(anonymize_ip("fe80::1").as_deref(), Some("fe80::"));
+    }
+
+    #[test]
+    fn anonymize_ip_invalid_is_none() {
+        assert_eq!(anonymize_ip("not an ip"), None);
+        assert_eq!(anonymize_ip(""), None);
+        assert_eq!(anonymize_ip("999.999.999.999"), None);
+        assert_eq!(anonymize_ip("203.0.113.5:8080"), None);
+    }
+
+    #[test]
+    fn meta_payload_anonymizes_ip_when_flag_on() {
+        let events = vec![ClickEvent {
+            id: 30,
+            event_id: "clk_ev_30".into(),
+            ts: 300,
+            referer: None,
+            country: Some("BR".into()),
+            user_agent: None,
+            city: None,
+            bot: false,
+            ip: Some("203.0.113.5".into()),
+            fbc: None,
+            variant: None,
+            tenant_id: 0,
+        }];
+        // Flag on: last octet zeroed.
+        let anon = meta_payload(&events, TEST_KEY, true);
+        assert_eq!(
+            anon["data"][0]["user_data"]["client_ip_address"],
+            "203.0.113.0"
+        );
+        // Flag off: raw IP forwarded (unchanged behavior).
+        let raw = meta_payload(&events, TEST_KEY, false);
+        assert_eq!(
+            raw["data"][0]["user_data"]["client_ip_address"],
+            "203.0.113.5"
+        );
+    }
+
+    #[test]
+    fn meta_payload_omits_unparseable_ip_when_flag_on() {
+        let events = vec![ClickEvent {
+            id: 31,
+            event_id: "clk_ev_31".into(),
+            ts: 301,
+            referer: None,
+            country: None,
+            user_agent: None,
+            city: None,
+            bot: false,
+            ip: Some("garbage".into()),
+            fbc: None,
+            variant: None,
+            tenant_id: 0,
+        }];
+        let payload = meta_payload(&events, TEST_KEY, true);
+        assert!(
+            payload["data"][0]["user_data"]
+                .get("client_ip_address")
+                .is_none(),
+            "an unparseable IP must be omitted, never forwarded, when anonymizing"
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_meta_anonymizes_ip_in_payload_when_flag_on() {
+        let (base, captured) = mock_server("/v19.0/1234567890/events").await;
+        let client = reqwest::Client::new();
+        let events = vec![ClickEvent {
+            id: 7,
+            event_id: "clk_ev_7".into(),
+            ts: 70,
+            referer: None,
+            country: None,
+            user_agent: None,
+            city: None,
+            bot: false,
+            ip: Some("198.51.100.23".into()),
+            fbc: None,
+            variant: None,
+            tenant_id: 0,
+        }];
+
+        forward(&client, &base, &meta_config(), &events, TEST_KEY, true)
+            .await
+            .unwrap();
+
+        let calls = captured.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (_method, _path, body) = &calls[0];
+        assert_eq!(
+            body["data"][0]["user_data"]["client_ip_address"],
+            "198.51.100.0"
+        );
     }
 }
