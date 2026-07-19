@@ -87,6 +87,54 @@ async fn node(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>, url: &str) ->
     })
 }
 
+/// Like `node`, but wires a real `Invalidator` into the `HostRouter` too (the
+/// cache-only `node` above always passes `None` there), so `host_router
+/// .invalidate` actually publishes.
+async fn node_with_host_invalidator(
+    store: Arc<dyn Store>,
+    sink: Arc<dyn AnalyticsSink>,
+    url: &str,
+) -> Arc<AppState> {
+    let cache_inv = Arc::new(Invalidator {
+        conn: Some(mux(url).await),
+    });
+    let host_inv = Arc::new(Invalidator {
+        conn: Some(mux(url).await),
+    });
+    let cache = Cache::new(store.clone(), 1000, Some(cache_inv));
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        Some(host_inv),
+    ));
+    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
+    Arc::new(AppState {
+        oidc: None,
+        sheets: None,
+        sheets_api: None,
+        oidc_configured: false,
+        multi_tenant: false,
+        tenant_domain_suffix: None,
+        oidc_tenants: quark::oidc::TenantOidcCache::new(),
+        keycloak: None,
+        keycloak_base_url: None,
+        cache,
+        store,
+        key: 0,
+        signing_key: [0u8; 32],
+        analytics_tx,
+        sink,
+        admin_token: None,
+        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
+        block_private: true,
+        public_host: None,
+        real_ip_header: "cf-connecting-ip".into(),
+        webhooks: webhooks(),
+        host_router,
+        dns: std::sync::Arc::new(quark::dns::NullDns),
+    })
+}
+
 #[tokio::test]
 async fn cache_invalidation_propagates_to_other_node() {
     let Ok(url) = std::env::var("QUARK_TEST_VALKEY_URL") else {
@@ -141,6 +189,61 @@ async fn cache_invalidation_propagates_to_other_node() {
         assert!(
             Instant::now() < deadline,
             "B's L1 was not invalidated in time"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// LUC-50: mirrors `cache_invalidation_propagates_to_other_node` for the
+/// `HostRouter`. Node A's `host_router.invalidate` publishes `host:<name>`;
+/// node B's dedicated subscriber consumes it via `invalidate_local` (no
+/// re-publish) and drops B's stale `HostRouter` L1 entry.
+#[tokio::test]
+async fn host_invalidation_propagates_to_other_node() {
+    let Ok(url) = std::env::var("QUARK_TEST_VALKEY_URL") else {
+        eprintln!("skip: QUARK_TEST_VALKEY_URL not set");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    let host = "go.acme.example";
+    store
+        .put_domain(&quark::domain::Domain {
+            id: 1,
+            tenant_id: quark::tenant::TenantId(1),
+            host: host.into(),
+            token: "tok".into(),
+            status: quark::domain::DomainStatus::Verified,
+            created: 0,
+            verified_at: Some(0),
+        })
+        .await
+        .unwrap();
+
+    let node_a = node_with_host_invalidator(store.clone(), sink.clone(), &url).await;
+    let node_b = node_with_host_invalidator(store.clone(), sink.clone(), &url).await;
+    let _sub = spawn_invalidation_subscriber(url.clone(), node_b.clone());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert_eq!(
+        node_b.host_router.resolve(host).await.map(|r| r.domain_id),
+        Some(1)
+    );
+    store
+        .delete_domain(quark::tenant::TenantId(1), 1)
+        .await
+        .unwrap();
+
+    node_a.host_router.invalidate(host).await;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if node_b.host_router.resolve(host).await.is_none() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "B's HostRouter L1 was not invalidated in time"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

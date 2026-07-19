@@ -106,16 +106,27 @@ impl HostRouter {
         }
     }
 
-    /// Drops the cached entry for `host`. Called on domain add/remove/verify
-    /// (Task 6) so the change is visible immediately on this replica. Cross-
-    /// replica invalidation is not wired yet (the `Invalidator` pub/sub
-    /// channel only carries `link:<id>` messages today); the TTL bounds
-    /// staleness on other replicas in the meantime. Wiring a `domain:<host>`
-    /// message through the same channel is a natural follow-up once Task 6
-    /// lands.
-    pub async fn invalidate(&self, host: &str) {
+    /// Drops the cached entry for `host` on this replica only, without
+    /// publishing. Used by the pub/sub subscriber when consuming a
+    /// `host:<name>` message from another node, so the message is never
+    /// re-published (which would loop forever cross-node).
+    pub(crate) async fn invalidate_local(&self, host: &str) {
         let key = normalize_host(host);
         self.cache.invalidate(&key);
+    }
+
+    /// Drops the cached entry for `host` on this replica (see
+    /// `invalidate_local`) and, if a cross-replica `Invalidator` is
+    /// configured, best-effort publishes `host:<host>` so other replicas drop
+    /// their copy too. Called on domain add/remove/verify and subdomain seed.
+    /// Publishing is fire-and-forget/fail-open, same as the cache's
+    /// invalidation publish: a dropped message just means the TTL bounds
+    /// staleness on other replicas instead of an immediate drop.
+    pub async fn invalidate(&self, host: &str) {
+        self.invalidate_local(host).await;
+        if let Some(inv) = &self.invalidator {
+            inv.publish(&format!("host:{host}")).await;
+        }
     }
 
     /// Whether this router has a cross-replica invalidator configured. Exposed
@@ -787,6 +798,46 @@ mod tests {
             DomainStatus::Verified,
         )]));
         let router = HostRouter::new(store.clone(), None, None);
+        let _ = router.resolve("go.acme.com").await;
+        assert_eq!(store.calls(), 1);
+        router.invalidate("go.acme.com").await;
+        let _ = router.resolve("go.acme.com").await;
+        assert_eq!(store.calls(), 2);
+    }
+
+    /// LUC-50: `invalidate_local` (the LOCAL-only path used by the pub/sub
+    /// subscriber) must drop the L1 entry just like `invalidate`, without
+    /// needing an `Invalidator` at all.
+    #[tokio::test]
+    async fn invalidate_local_drops_cache_entry_so_next_resolve_hits_store_again() {
+        let store = Arc::new(FakeStore::new(vec![domain(
+            7,
+            3,
+            "go.acme.com",
+            DomainStatus::Verified,
+        )]));
+        let router = HostRouter::new(store.clone(), None, None);
+        let _ = router.resolve("go.acme.com").await;
+        assert_eq!(store.calls(), 1);
+        router.invalidate_local("go.acme.com").await;
+        let _ = router.resolve("go.acme.com").await;
+        assert_eq!(store.calls(), 2);
+    }
+
+    /// LUC-50: with a configured `Invalidator { conn: None }` (no-op publish,
+    /// mirrors single-node-without-Valkey), `invalidate` still drops the L1
+    /// entry — the publish is best-effort and must never block or skip the
+    /// local drop.
+    #[tokio::test]
+    async fn invalidate_with_noop_invalidator_still_drops_l1() {
+        let store = Arc::new(FakeStore::new(vec![domain(
+            7,
+            3,
+            "go.acme.com",
+            DomainStatus::Verified,
+        )]));
+        let invalidator = Some(Arc::new(crate::invalidate::Invalidator { conn: None }));
+        let router = HostRouter::new(store.clone(), None, invalidator);
         let _ = router.resolve("go.acme.com").await;
         assert_eq!(store.calls(), 1);
         router.invalidate("go.acme.com").await;

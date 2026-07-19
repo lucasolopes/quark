@@ -346,7 +346,7 @@ async fn main() {
     let host_router = Arc::new(quark::domain_router::HostRouter::new(
         store.clone(),
         public_host.clone(),
-        None,
+        invalidator.clone(),
     ));
     // DNS is used only by custom-domain / SSO-domain TXT verification, both
     // cloud-only. In OSS (`!multi_tenant`) nothing calls it, so skip building
