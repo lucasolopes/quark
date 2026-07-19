@@ -4,7 +4,7 @@ use crate::domain::{Domain, DomainStatus};
 use crate::oidc::TenantOidcConfig;
 use crate::pixel::PixelConfig;
 use crate::sso::SsoEmailDomain;
-use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError};
+use crate::store::{AlertRule, LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError};
 use crate::tenant::{Membership, Tenant, TenantId, User, DEFAULT_TENANT};
 use crate::webhooks::WebhookSubscription;
 use heed::byteorder::BigEndian;
@@ -67,7 +67,7 @@ fn membership_key(user_id: u64, tenant: TenantId) -> Vec<u8> {
 /// The named tenant-owned sub-dbs re-keyed by the boot migration. `meta`
 /// (global counters) and `sessions` (global hash lookup) are intentionally
 /// absent — they are never tenant-prefixed.
-const TENANT_OWNED_DBS: [&str; 11] = [
+const TENANT_OWNED_DBS: [&str; 12] = [
     "links",
     "aliases",
     "stats",
@@ -79,6 +79,7 @@ const TENANT_OWNED_DBS: [&str; 11] = [
     "wellknown",
     "health",
     "sheets",
+    "alert_rules",
 ];
 
 /// Defensive partitioning of the 40-bit space across nodes (see docs/SCALING.md).
@@ -88,8 +89,9 @@ const LOCAL_BITS: u32 = 40 - NODE_BITS;
 const LOCAL_MAX: u64 = (1u64 << LOCAL_BITS) - 1;
 
 /// Number of named LMDB sub-databases opened in the environment.
-/// 13 original + 3 identity sub-dbs (`tenants`, `users`, `memberships`).
-const MAX_DBS: u32 = 16;
+/// 13 original + 3 identity sub-dbs (`tenants`, `users`, `memberships`) +
+/// `alert_rules` (LUC-38).
+const MAX_DBS: u32 = 17;
 /// Virtual address space (mmap) reserved for the LMDB environment.
 const MAP_SIZE_BYTES: usize = 64 * 1024 * 1024 * 1024;
 
@@ -136,6 +138,8 @@ pub struct LmdbStore {
     pixels: Database<Bytes, Bytes>,
     wellknown: Database<Bytes, Str>,
     health: Database<Bytes, Bytes>,
+    // Per-link click-threshold alert rules (LUC-38), keyed by `tkey_id`.
+    alert_rules: Database<Bytes, Bytes>,
     // Global hash-lookup — keyed by token hash, tenant travels in the value.
     sessions: Database<Str, Bytes>,
     sheets: Database<Bytes, Bytes>,
@@ -174,6 +178,7 @@ impl LmdbStore {
         let pixels = env.create_database(&mut wtxn, Some("pixels"))?;
         let wellknown = env.create_database(&mut wtxn, Some("wellknown"))?;
         let health = env.create_database(&mut wtxn, Some("health"))?;
+        let alert_rules = env.create_database(&mut wtxn, Some("alert_rules"))?;
         let sessions = env.create_database(&mut wtxn, Some("sessions"))?;
         let sheets = env.create_database(&mut wtxn, Some("sheets"))?;
         let tenants = env.create_database(&mut wtxn, Some("tenants"))?;
@@ -193,6 +198,7 @@ impl LmdbStore {
             pixels,
             wellknown,
             health,
+            alert_rules,
             sessions,
             sheets,
             tenants,
@@ -524,6 +530,53 @@ impl Store for LmdbStore {
         self.meta.put(&mut wtxn, "next_webhook_id", &next)?;
         wtxn.commit()?;
         Ok(next)
+    }
+
+    async fn put_alert_rule(
+        &self,
+        tenant: TenantId,
+        link_id: u64,
+        rule: &AlertRule,
+    ) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec(rule)?;
+        let mut wtxn = self.env.write_txn()?;
+        self.alert_rules
+            .put(&mut wtxn, &tkey_id(tenant, link_id), &bytes)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn get_alert_rule(
+        &self,
+        tenant: TenantId,
+        link_id: u64,
+    ) -> Result<Option<AlertRule>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        match self.alert_rules.get(&rtxn, &tkey_id(tenant, link_id))? {
+            Some(bytes) => Ok(Some(serde_json::from_slice(bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_alert_rule(&self, tenant: TenantId, link_id: u64) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        self.alert_rules
+            .delete(&mut wtxn, &tkey_id(tenant, link_id))?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    async fn list_alert_rules(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<(u64, AlertRule)>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        for item in self.alert_rules.prefix_iter(&rtxn, &tprefix(tenant))? {
+            let (key, bytes) = item?;
+            out.push((id_from_tkey(key), serde_json::from_slice(bytes)?));
+        }
+        Ok(out)
     }
 
     async fn bump_visits(&self, tenant: TenantId, id: u64) -> Result<u64, StoreError> {

@@ -1049,6 +1049,34 @@ mod tests {
         ) -> Result<u64, StoreError> {
             unimplemented!()
         }
+        async fn put_alert_rule(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _link_id: u64,
+            _rule: &crate::store::AlertRule,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn get_alert_rule(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _link_id: u64,
+        ) -> Result<Option<crate::store::AlertRule>, StoreError> {
+            unimplemented!()
+        }
+        async fn delete_alert_rule(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _link_id: u64,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn list_alert_rules(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Vec<(u64, crate::store::AlertRule)>, StoreError> {
+            unimplemented!()
+        }
         async fn list_api_tokens(
             &self,
             _tenant: crate::tenant::TenantId,

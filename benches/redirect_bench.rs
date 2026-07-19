@@ -63,6 +63,15 @@ fn bench(c: &mut Criterion) {
             reqwest::Client::new(),
             key,
             quark::pixel::PixelBases::default(),
+            {
+                let (wh_tx, _wh_rx) = tokio::sync::mpsc::channel(1);
+                Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
+                    wh_tx,
+                    Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                ))
+            },
+            None,
         );
         let host_router = Arc::new(quark::domain_router::HostRouter::new(
             store.clone(),

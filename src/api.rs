@@ -7,8 +7,8 @@ use crate::domain::{Domain, DomainStatus, SHARED_DOMAIN_ID};
 use crate::pixel::{PixelConfig, PixelCredentials, Provider};
 use crate::sso::{normalize_email_domain, SsoEmailDomain};
 use crate::store::{
-    matched_rule_index, normalize_folder, normalize_tags, pick_variant, LinkHealth, Record, Rule,
-    RuleField, Store, StoreError, Variant,
+    matched_rule_index, normalize_folder, normalize_tags, pick_variant, AlertRule, LinkHealth,
+    Record, Rule, RuleField, Store, StoreError, Variant,
 };
 use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{self, EventType, SubscriptionKind, WebhookEvent, WebhookSubscription};
@@ -3946,6 +3946,85 @@ async fn admin_link_delete(
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// Body of `PUT /admin/links/:code/alert`: the click-threshold alert rule
+/// (LUC-38). `threshold` clicks within `window_secs` seconds fire
+/// `link.threshold_reached` once per window.
+#[derive(Deserialize)]
+struct AlertReq {
+    threshold: u32,
+    window_secs: u64,
+}
+
+/// Minimum accepted alert window (seconds), a floor coherent with the other
+/// timers in the system.
+const MIN_ALERT_WINDOW_SECS: u64 = 60;
+
+/// `PUT /admin/links/:code/alert` — sets (or replaces) the link's
+/// click-threshold alert rule. Validates `threshold >= 1` and
+/// `window_secs >= 60`. Returns 200 on success.
+async fn admin_link_alert_put(
+    State(st): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let p = match admin_guard(&st, &headers, Scope::LinksWrite).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let req: AlertReq = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::BAD_REQUEST, "invalid body").into_response(),
+    };
+    if req.threshold < 1 {
+        return (StatusCode::BAD_REQUEST, "threshold must be >= 1").into_response();
+    }
+    if req.window_secs < MIN_ALERT_WINDOW_SECS {
+        return (StatusCode::BAD_REQUEST, "window_secs must be >= 60").into_response();
+    }
+    let (id, _alias) = match resolve_for_admin(&st, p.tenant, &code).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    // Confirm the link exists (and belongs to this tenant) before writing a rule.
+    match st.store.get_link(p.tenant, id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    let rule = AlertRule {
+        threshold: req.threshold,
+        window_secs: req.window_secs,
+    };
+    if st.store.put_alert_rule(p.tenant, id, &rule).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    (StatusCode::OK, axum::Json(serde_json::json!(rule))).into_response()
+}
+
+/// `DELETE /admin/links/:code/alert` — removes the link's alert rule. Returns
+/// 204; a missing rule is not an error.
+async fn admin_link_alert_delete(
+    State(st): State<Arc<AppState>>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let p = match admin_guard(&st, &headers, Scope::LinksWrite).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let (id, _alias) = match resolve_for_admin(&st, p.tenant, &code).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if st.store.delete_alert_rule(p.tenant, id).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
 async fn admin_link_patch(
     State(st): State<Arc<AppState>>,
     Path(code): Path<String>,
@@ -5040,6 +5119,10 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route(
             "/admin/links/:code",
             axum::routing::delete(admin_link_delete).patch(admin_link_patch),
+        )
+        .route(
+            "/admin/links/:code/alert",
+            axum::routing::put(admin_link_alert_put).delete(admin_link_alert_delete),
         )
         .route(
             "/admin/webhooks",

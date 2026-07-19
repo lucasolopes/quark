@@ -32,6 +32,8 @@ pub enum EventType {
     LinkBroken,
     #[serde(rename = "link.recovered")]
     LinkRecovered,
+    #[serde(rename = "link.threshold_reached")]
+    LinkThresholdReached,
 }
 
 impl EventType {
@@ -45,6 +47,7 @@ impl EventType {
             EventType::LinkClicked => "link.clicked",
             EventType::LinkBroken => "link.broken",
             EventType::LinkRecovered => "link.recovered",
+            EventType::LinkThresholdReached => "link.threshold_reached",
         }
     }
 
@@ -61,6 +64,7 @@ impl EventType {
             "link.clicked" => Some(EventType::LinkClicked),
             "link.broken" => Some(EventType::LinkBroken),
             "link.recovered" => Some(EventType::LinkRecovered),
+            "link.threshold_reached" => Some(EventType::LinkThresholdReached),
             _ => None,
         }
     }
@@ -242,6 +246,11 @@ pub fn format_message(event_type: EventType, body: &str) -> String {
             }
             msg
         }
+        EventType::LinkThresholdReached => {
+            let count = parsed["data"]["count"].as_u64().unwrap_or(0);
+            let window_secs = parsed["data"]["window_secs"].as_u64().unwrap_or(0);
+            format!("Click threshold reached for {code}: {count} clicks in {window_secs}s")
+        }
     }
 }
 
@@ -283,6 +292,22 @@ mod tests {
             assert_eq!(serde_json::to_string(&ev).unwrap(), format!("\"{wire}\""));
         }
         assert_eq!(EventType::from_wire("link.nonsense"), None);
+    }
+
+    #[test]
+    fn threshold_reached_event_type_round_trips() {
+        assert_eq!(
+            EventType::LinkThresholdReached.as_str(),
+            "link.threshold_reached"
+        );
+        assert_eq!(
+            EventType::from_wire("link.threshold_reached"),
+            Some(EventType::LinkThresholdReached)
+        );
+        assert_eq!(
+            serde_json::to_string(&EventType::LinkThresholdReached).unwrap(),
+            "\"link.threshold_reached\""
+        );
     }
 
     /// Standard Webhooks symmetric test vector (from the Svix/Standard Webhooks

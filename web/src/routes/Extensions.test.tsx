@@ -105,7 +105,7 @@ describe("Extensions", () => {
     const body = JSON.parse(String((call[1] as RequestInit).body));
     expect(body.kind).toBe("slack");
     expect(body.url).toBe("https://hooks.slack.com/services/x");
-    expect(body.events).toHaveLength(5);
+    expect(body.events).toHaveLength(6);
     // The catalog stayed put — no navigation to the Webhooks route.
     expect(screen.queryByText("webhooks page")).not.toBeInTheDocument();
   });
