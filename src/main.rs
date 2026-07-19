@@ -17,6 +17,35 @@ const CACHE_CAPACITY: u64 = 100_000;
 /// Analytics channel capacity (buffered `ClickEvent`s before backpressure).
 const ANALYTICS_CHANNEL_CAPACITY: usize = 10_000;
 
+/// Analytics retention window (LUC-65, GDPR), in seconds, from the raw
+/// `QUARK_ANALYTICS_RETENTION_DAYS` env value plus the `multi_tenant` mode.
+///
+/// - Env absent: mode default (cloud/`multi_tenant` = 365 days, OSS/self-host
+///   = unlimited).
+/// - Env set and a valid `u64` day count: that value wins (`0` means "purge
+///   everything", i.e. keep no history; this is intentional, not a bug).
+/// - Env set but NOT a valid `u64` (typo, negative, non-numeric, ...): this is
+///   a compliance footgun if silently treated as "unlimited" in cloud, so it
+///   falls back to the mode default instead of disabling retention. Call
+///   sites should log a warning when this happens (this fn stays pure/log-free
+///   so it's easy to unit test).
+fn retention_secs_from(env_value: Option<&str>, multi_tenant: bool) -> Option<u64> {
+    let mode_default = || {
+        if multi_tenant {
+            Some(365 * 86_400)
+        } else {
+            None
+        }
+    };
+    match env_value {
+        Some(v) => match v.trim().parse::<u64>() {
+            Ok(days) => Some(days * 86_400),
+            Err(_) => mode_default(),
+        },
+        None => mode_default(),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let strict_cluster = std::env::var("QUARK_STRICT_CLUSTER")
@@ -580,19 +609,21 @@ async fn main() {
     }
 
     // Analytics retention purge (LUC-65, GDPR). Retention window:
-    // `QUARK_ANALYTICS_RETENTION_DAYS` (days -> seconds) wins when set;
-    // otherwise cloud (`multi_tenant`) defaults to 365 days and OSS/self-host
-    // is unlimited. `None` = unlimited => the purge task is NOT spawned.
-    let retention_secs: Option<u64> = match std::env::var("QUARK_ANALYTICS_RETENTION_DAYS") {
-        Ok(v) => v.trim().parse::<u64>().ok().map(|d| d * 86_400),
-        Err(_) => {
-            if multi_tenant {
-                Some(365 * 86_400)
-            } else {
-                None
-            }
+    // `QUARK_ANALYTICS_RETENTION_DAYS` (days -> seconds) wins when set and
+    // valid; otherwise cloud (`multi_tenant`) defaults to 365 days and
+    // OSS/self-host is unlimited. `None` = unlimited => the purge task is NOT
+    // spawned. An env value that is SET but fails to parse as a `u64` falls
+    // back to the mode default rather than silently disabling retention (see
+    // `retention_secs_from`) — only an ABSENT env uses the default directly.
+    let retention_env = std::env::var("QUARK_ANALYTICS_RETENTION_DAYS").ok();
+    if let Some(v) = &retention_env {
+        if v.trim().parse::<u64>().is_err() {
+            eprintln!(
+                "WARNING: QUARK_ANALYTICS_RETENTION_DAYS={v:?} is not a valid non-negative integer; falling back to the mode default instead of disabling retention"
+            );
         }
-    };
+    }
+    let retention_secs: Option<u64> = retention_secs_from(retention_env.as_deref(), multi_tenant);
     if let Some(retention) = retention_secs {
         eprintln!(
             "{}",
@@ -633,4 +664,44 @@ async fn main() {
     )
     .await
     .expect("serve");
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::retention_secs_from;
+
+    #[test]
+    fn absent_env_uses_mode_default() {
+        assert_eq!(retention_secs_from(None, true), Some(365 * 86_400));
+        assert_eq!(retention_secs_from(None, false), None);
+    }
+
+    #[test]
+    fn valid_env_wins_over_mode_default() {
+        assert_eq!(retention_secs_from(Some("30"), true), Some(30 * 86_400));
+        assert_eq!(retention_secs_from(Some("30"), false), Some(30 * 86_400));
+        // Whitespace is tolerated (matches the previous `.trim()` behavior).
+        assert_eq!(retention_secs_from(Some(" 7 "), true), Some(7 * 86_400));
+    }
+
+    #[test]
+    fn zero_env_means_purge_everything() {
+        assert_eq!(retention_secs_from(Some("0"), true), Some(0));
+        assert_eq!(retention_secs_from(Some("0"), false), Some(0));
+    }
+
+    #[test]
+    fn invalid_env_falls_back_to_mode_default_instead_of_unlimited() {
+        // This is the LUC-65 review fix: a set-but-invalid value must NOT
+        // silently disable retention in cloud (multi_tenant = true).
+        assert_eq!(
+            retention_secs_from(Some("not-a-number"), true),
+            Some(365 * 86_400)
+        );
+        assert_eq!(retention_secs_from(Some("-5"), true), Some(365 * 86_400));
+        assert_eq!(retention_secs_from(Some(""), true), Some(365 * 86_400));
+        // In OSS/self-host (multi_tenant = false) the mode default is still
+        // unlimited, so invalid input behaves the same as absent there.
+        assert_eq!(retention_secs_from(Some("garbage"), false), None);
+    }
 }

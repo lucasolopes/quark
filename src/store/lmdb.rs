@@ -761,35 +761,37 @@ impl Store for LmdbStore {
         // so the OSS/self-host operator who opts into retention gets consistent
         // behavior: only the near-PII detail (`events`) is touched; the
         // aggregates (`stats`) are left intact.
+        //
+        // Read, filter, and write all happen inside a SINGLE write txn (mirrors
+        // `gc_sessions`). A separate read txn followed by a separate write txn
+        // would leave a window where a concurrent `record_batch` commit for the
+        // same key lands between the read and the write; the `put(kept)` here
+        // would then overwrite with the stale (pre-insert) snapshot and silently
+        // drop the just-recorded event (lost update). LMDB serializes writers,
+        // so doing the read+filter+put under one write txn closes that window.
         let mut updates: Vec<(Vec<u8>, Vec<ClickEvent>, u64)> = Vec::new();
-        {
-            let rtxn = self.env.read_txn()?;
-            for item in self.events.iter(&rtxn)? {
-                let (key, bytes) = item?;
-                let recent: Vec<ClickEvent> = serde_json::from_slice(bytes)?;
-                let before = recent.len();
-                let kept: Vec<ClickEvent> =
-                    recent.into_iter().filter(|e| e.ts >= cutoff_ts).collect();
-                let dropped = (before - kept.len()) as u64;
-                if dropped > 0 {
-                    updates.push((key.to_vec(), kept, dropped));
-                }
+        let mut wtxn = self.env.write_txn()?;
+        for item in self.events.iter(&wtxn)? {
+            let (key, bytes) = item?;
+            let recent: Vec<ClickEvent> = serde_json::from_slice(bytes)?;
+            let before = recent.len();
+            let kept: Vec<ClickEvent> = recent.into_iter().filter(|e| e.ts >= cutoff_ts).collect();
+            let dropped = (before - kept.len()) as u64;
+            if dropped > 0 {
+                updates.push((key.to_vec(), kept, dropped));
             }
         }
         let mut total = 0u64;
-        if !updates.is_empty() {
-            let mut wtxn = self.env.write_txn()?;
-            for (key, kept, dropped) in &updates {
-                if kept.is_empty() {
-                    self.events.delete(&mut wtxn, key.as_slice())?;
-                } else {
-                    self.events
-                        .put(&mut wtxn, key.as_slice(), &serde_json::to_vec(kept)?)?;
-                }
-                total += dropped;
+        for (key, kept, dropped) in &updates {
+            if kept.is_empty() {
+                self.events.delete(&mut wtxn, key.as_slice())?;
+            } else {
+                self.events
+                    .put(&mut wtxn, key.as_slice(), &serde_json::to_vec(kept)?)?;
             }
-            wtxn.commit()?;
+            total += dropped;
         }
+        wtxn.commit()?;
         Ok(total)
     }
 
