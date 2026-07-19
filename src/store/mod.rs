@@ -479,6 +479,19 @@ pub trait Store: Send + Sync + 'static {
     async fn delete_session(&self, token_hash: &str) -> Result<(), StoreError>;
     /// Removes all sessions that expired at or before `now`.
     async fn gc_sessions(&self, now: u64) -> Result<(), StoreError>;
+    /// Retention purge (LUC-65, GDPR): deletes detail click events with
+    /// `ts < cutoff_ts` (Unix seconds), returning the number of rows deleted.
+    /// Only `click_events` (the near-PII per-click detail) is affected; the
+    /// per-link aggregates (`click_counters`/`stats_meta`) are left intact.
+    /// Postgres deletes globally (retention applies to every tenant, so no
+    /// tenant scope). LMDB prunes each link's bounded event ring by `ts`.
+    async fn purge_click_events_before(&self, cutoff_ts: u64) -> Result<u64, StoreError>;
+    /// Erasure (LUC-65, GDPR right-to-erasure): removes ALL analytics for a
+    /// single link — `click_events`, `click_counters` and `stats_meta` —
+    /// scoped to `(tenant, id)`. Does NOT delete the link record itself.
+    /// Postgres runs the three deletes in one `begin_tenant_tx` transaction;
+    /// LMDB drops the link's stats/events keys.
+    async fn delete_link_analytics(&self, tenant: TenantId, id: u64) -> Result<(), StoreError>;
     /// Atomically increments the visit counter for `id` and returns the new
     /// total. Separate from `Record` so that a hit doesn't require rewriting
     /// the whole record. Only called for links that opted into `max_visits`.

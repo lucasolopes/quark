@@ -17,6 +17,35 @@ const CACHE_CAPACITY: u64 = 100_000;
 /// Analytics channel capacity (buffered `ClickEvent`s before backpressure).
 const ANALYTICS_CHANNEL_CAPACITY: usize = 10_000;
 
+/// Analytics retention window (LUC-65, GDPR), in seconds, from the raw
+/// `QUARK_ANALYTICS_RETENTION_DAYS` env value plus the `multi_tenant` mode.
+///
+/// - Env absent: mode default (cloud/`multi_tenant` = 365 days, OSS/self-host
+///   = unlimited).
+/// - Env set and a valid `u64` day count: that value wins (`0` means "purge
+///   everything", i.e. keep no history; this is intentional, not a bug).
+/// - Env set but NOT a valid `u64` (typo, negative, non-numeric, ...): this is
+///   a compliance footgun if silently treated as "unlimited" in cloud, so it
+///   falls back to the mode default instead of disabling retention. Call
+///   sites should log a warning when this happens (this fn stays pure/log-free
+///   so it's easy to unit test).
+fn retention_secs_from(env_value: Option<&str>, multi_tenant: bool) -> Option<u64> {
+    let mode_default = || {
+        if multi_tenant {
+            Some(365 * 86_400)
+        } else {
+            None
+        }
+    };
+    match env_value {
+        Some(v) => match v.trim().parse::<u64>() {
+            Ok(days) => Some(days * 86_400),
+            Err(_) => mode_default(),
+        },
+        None => mode_default(),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let strict_cluster = std::env::var("QUARK_STRICT_CLUSTER")
@@ -286,13 +315,26 @@ async fn main() {
     // forwards to pixels, and drives the click-threshold alert engine (LUC-38),
     // emitting `link.threshold_reached` through `webhooks`. `control_conn` is
     // the shared Valkey counter (`None` -> per-replica in-memory counting).
+    // Opt-in IP anonymization for the Meta forward (LUC-65, GDPR): when on,
+    // `client_ip_address` is truncated (IPv4 /24, IPv6 /48) before it leaves
+    // the instance. Default off keeps the pre-LUC-65 behavior (raw IP).
+    let pixel_anonymize_ip = std::env::var("QUARK_PIXEL_ANONYMIZE_IP")
+        .map(|v| v != "0")
+        .unwrap_or(false);
+    if pixel_anonymize_ip {
+        eprintln!("pixel forward: IP anonymization ENABLED (IPv4 /24, IPv6 /48)");
+    }
+    let pixel_bases = quark::pixel::PixelBases {
+        anonymize_ip: pixel_anonymize_ip,
+        ..quark::pixel::PixelBases::default()
+    };
     let _worker = spawn_worker(
         analytics_rx,
         sink.clone(),
         store.clone(),
         pixel_client,
         key,
-        quark::pixel::PixelBases::default(),
+        pixel_bases,
         webhooks.clone(),
         control_conn.clone(),
     );
@@ -566,6 +608,51 @@ async fn main() {
         });
     }
 
+    // Analytics retention purge (LUC-65, GDPR). Retention window:
+    // `QUARK_ANALYTICS_RETENTION_DAYS` (days -> seconds) wins when set and
+    // valid; otherwise cloud (`multi_tenant`) defaults to 365 days and
+    // OSS/self-host is unlimited. `None` = unlimited => the purge task is NOT
+    // spawned. An env value that is SET but fails to parse as a `u64` falls
+    // back to the mode default rather than silently disabling retention (see
+    // `retention_secs_from`) — only an ABSENT env uses the default directly.
+    let retention_env = std::env::var("QUARK_ANALYTICS_RETENTION_DAYS").ok();
+    if let Some(v) = &retention_env {
+        if v.trim().parse::<u64>().is_err() {
+            eprintln!(
+                "WARNING: QUARK_ANALYTICS_RETENTION_DAYS={v:?} is not a valid non-negative integer; falling back to the mode default instead of disabling retention"
+            );
+        }
+    }
+    let retention_secs: Option<u64> = retention_secs_from(retention_env.as_deref(), multi_tenant);
+    if let Some(retention) = retention_secs {
+        eprintln!(
+            "{}",
+            serde_json::json!({ "analytics_retention_secs": retention })
+        );
+        // Hourly purge task (mirrors the session GC above), fail-open: a purge
+        // error is only logged and never blocks serving.
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                ticker.tick().await;
+                let cutoff = quark::now().saturating_sub(retention);
+                match store.purge_click_events_before(cutoff).await {
+                    Ok(n) => eprintln!(
+                        "{}",
+                        serde_json::json!({ "analytics_purge_deleted": n, "cutoff_ts": cutoff })
+                    ),
+                    Err(e) => eprintln!(
+                        "{}",
+                        serde_json::json!({ "analytics_purge_error": e.to_string() })
+                    ),
+                }
+            }
+        });
+    } else {
+        eprintln!("analytics retention: unlimited (no purge)");
+    }
+
     let app = router(state);
 
     let addr = std::env::var("QUARK_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
@@ -577,4 +664,44 @@ async fn main() {
     )
     .await
     .expect("serve");
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::retention_secs_from;
+
+    #[test]
+    fn absent_env_uses_mode_default() {
+        assert_eq!(retention_secs_from(None, true), Some(365 * 86_400));
+        assert_eq!(retention_secs_from(None, false), None);
+    }
+
+    #[test]
+    fn valid_env_wins_over_mode_default() {
+        assert_eq!(retention_secs_from(Some("30"), true), Some(30 * 86_400));
+        assert_eq!(retention_secs_from(Some("30"), false), Some(30 * 86_400));
+        // Whitespace is tolerated (matches the previous `.trim()` behavior).
+        assert_eq!(retention_secs_from(Some(" 7 "), true), Some(7 * 86_400));
+    }
+
+    #[test]
+    fn zero_env_means_purge_everything() {
+        assert_eq!(retention_secs_from(Some("0"), true), Some(0));
+        assert_eq!(retention_secs_from(Some("0"), false), Some(0));
+    }
+
+    #[test]
+    fn invalid_env_falls_back_to_mode_default_instead_of_unlimited() {
+        // This is the LUC-65 review fix: a set-but-invalid value must NOT
+        // silently disable retention in cloud (multi_tenant = true).
+        assert_eq!(
+            retention_secs_from(Some("not-a-number"), true),
+            Some(365 * 86_400)
+        );
+        assert_eq!(retention_secs_from(Some("-5"), true), Some(365 * 86_400));
+        assert_eq!(retention_secs_from(Some(""), true), Some(365 * 86_400));
+        // In OSS/self-host (multi_tenant = false) the mode default is still
+        // unlimited, so invalid input behaves the same as absent there.
+        assert_eq!(retention_secs_from(Some("garbage"), false), None);
+    }
 }
