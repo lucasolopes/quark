@@ -994,7 +994,7 @@ async fn raw_oidc_client_secret(pool: &PgPool, tenant: TenantId) -> String {
 }
 
 /// With `QUARK_ENCRYPTION_KEY` set at `open`, `put_oidc_config` stores the
-/// `client_secret` sealed (`enc:v1:` prefix) in the raw JSONB column, while
+/// `client_secret` sealed (`enc:v2:` prefix) in the raw JSONB column, while
 /// `get_oidc_config_bare` (and the tenant-scoped `get_oidc_config`) still
 /// return the original plaintext to callers.
 #[tokio::test]
@@ -1010,7 +1010,7 @@ async fn client_secret_is_sealed_at_rest_when_key_is_set() {
 
     let raw = raw_oidc_client_secret(&pool, a).await;
     assert!(
-        raw.starts_with("enc:v1:"),
+        raw.starts_with("enc:v2:"),
         "raw client_secret column must be sealed, got: {raw}"
     );
 
@@ -1040,7 +1040,7 @@ async fn client_secret_stays_plaintext_at_rest_when_key_is_unset() {
 /// Legacy passthrough: a config written with no key set (plaintext secret) is
 /// still readable once encryption is turned on (`get_oidc_config_bare` with
 /// the key present returns the original plaintext unchanged). Re-putting it
-/// with the key now set upgrades the raw column to `enc:v1:`.
+/// with the key now set upgrades the raw column to `enc:v2:`.
 #[tokio::test]
 #[serial]
 async fn legacy_plaintext_client_secret_is_read_then_upgraded_on_repeat_write() {
@@ -1073,7 +1073,7 @@ async fn legacy_plaintext_client_secret_is_read_then_upgraded_on_repeat_write() 
         .unwrap();
     let raw = raw_oidc_client_secret(&pool, a).await;
     assert!(
-        raw.starts_with("enc:v1:"),
+        raw.starts_with("enc:v2:"),
         "raw client_secret column must be sealed after the re-put, got: {raw}"
     );
 }
@@ -1116,7 +1116,7 @@ async fn sheets_refresh_token_is_sealed_at_rest_when_key_is_set() {
 
     let raw = raw_sheets_refresh_token(&pool, a).await;
     assert!(
-        raw.starts_with("enc:v1:"),
+        raw.starts_with("enc:v2:"),
         "raw refresh_token column must be sealed, got: {raw}"
     );
 
@@ -1171,7 +1171,7 @@ async fn legacy_plaintext_refresh_token_is_read_then_upgraded_on_repeat_write() 
         .unwrap();
     let raw = raw_sheets_refresh_token(&pool, a).await;
     assert!(
-        raw.starts_with("enc:v1:"),
+        raw.starts_with("enc:v2:"),
         "raw refresh_token column must be sealed after the re-put, got: {raw}"
     );
 }
@@ -1212,7 +1212,7 @@ async fn backfill_reencrypts_legacy_oidc_client_secret_and_is_idempotent() {
         .unwrap();
     let raw = raw_oidc_client_secret(&pool, a).await;
     assert!(
-        raw.starts_with("enc:v1:"),
+        raw.starts_with("enc:v2:"),
         "raw client_secret column must be sealed after the backfill, got: {raw}"
     );
     let got = store2.get_oidc_config_bare(a).await.unwrap().unwrap();
@@ -1252,7 +1252,7 @@ async fn backfill_reencrypts_legacy_sheets_refresh_token_and_is_idempotent() {
         .unwrap();
     let raw = raw_sheets_refresh_token(&pool, a).await;
     assert!(
-        raw.starts_with("enc:v1:"),
+        raw.starts_with("enc:v2:"),
         "raw refresh_token column must be sealed after the backfill, got: {raw}"
     );
     let got = store2.get_sheets_connection(a).await.unwrap().unwrap();
