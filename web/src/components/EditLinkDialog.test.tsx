@@ -40,18 +40,19 @@ function patchBody(fetchMock: ReturnType<typeof vi.spyOn>): Record<string, unkno
 describe("EditLinkDialog — tags", () => {
   beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
 
-  it("pre-populates the tags field with the link's current tags", () => {
+  it("pre-populates the tags picker with the link's current tags as chips", () => {
     render(withProviders(<EditLinkDialog link={link} open onOpenChange={() => {}} />, { withRouter: false }));
-    expect(screen.getByLabelText(/tags/i)).toHaveValue("promo, summer");
+    expect(screen.getByRole("button", { name: /remove promo/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /remove summer/i })).toBeInTheDocument();
   });
 
   it("sends the edited tags array on submit", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
     render(withProviders(<EditLinkDialog link={link} open onOpenChange={() => {}} />, { withRouter: false }));
 
-    const tagsField = screen.getByLabelText(/tags/i);
-    await userEvent.clear(tagsField);
-    await userEvent.type(tagsField, "promo, winter");
+    // Remove the "summer" chip and add "winter" via the picker.
+    await userEvent.click(screen.getByRole("button", { name: /remove summer/i }));
+    await userEvent.type(screen.getByLabelText(/tags/i), "winter{Enter}");
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -97,10 +98,10 @@ describe("EditLinkDialog — max visits", () => {
 describe("EditLinkDialog — folder", () => {
   beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
 
-  it("pre-populates the folder field from the link's folder", () => {
+  it("pre-populates the folder picker from the link's folder", () => {
     const l = makeLink({ folder: "Marketing" });
     render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
-    expect(screen.getByLabelText(/folder/i)).toHaveValue("Marketing");
+    expect(screen.getByRole("button", { name: /remove Marketing/i })).toBeInTheDocument();
   });
 
   it("sends folder: null when a pre-filled folder is cleared", async () => {
@@ -108,7 +109,7 @@ describe("EditLinkDialog — folder", () => {
     const l = makeLink({ folder: "Marketing" });
     render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
 
-    await userEvent.clear(screen.getByLabelText(/folder/i));
+    await userEvent.click(screen.getByRole("button", { name: /remove Marketing/i }));
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
@@ -133,7 +134,7 @@ describe("EditLinkDialog — folder", () => {
     const l = makeLink();
     render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
 
-    await userEvent.type(screen.getByLabelText(/folder/i), "Docs");
+    await userEvent.type(screen.getByLabelText(/folder/i), "Docs{Enter}");
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());

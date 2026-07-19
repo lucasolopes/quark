@@ -263,6 +263,7 @@ export function Links() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         folders={foldersQuery.data?.folders ?? []}
+        tags={tagsQuery.data?.tags?.map((tag) => tag.name) ?? []}
       />
 
       {editingLink && (
@@ -272,6 +273,7 @@ export function Links() {
           open
           onOpenChange={(open) => !open && setEditingLink(null)}
           folders={foldersQuery.data?.folders ?? []}
+          tags={tagsQuery.data?.tags?.map((tag) => tag.name) ?? []}
         />
       )}
 
