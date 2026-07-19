@@ -37,6 +37,7 @@ pub struct HttpKeycloakAdmin {
     admin_client_id: String,
     admin_client_secret: String,
     smtp: SmtpConfig,
+    login_theme: Option<String>,
     token: Mutex<Option<CachedToken>>,
 }
 
@@ -48,6 +49,7 @@ impl HttpKeycloakAdmin {
             admin_client_id: cfg.admin_client_id,
             admin_client_secret: cfg.admin_client_secret,
             smtp: cfg.smtp,
+            login_theme: cfg.login_theme,
             token: Mutex::new(None),
         }
     }
@@ -186,15 +188,7 @@ impl HttpKeycloakAdmin {
 #[async_trait]
 impl KeycloakAdmin for HttpKeycloakAdmin {
     async fn ensure_realm(&self, slug: &str) -> Result<(), KcError> {
-        let body = json!({
-            "realm": slug,
-            "enabled": true,
-            "sslRequired": "external",
-            "registrationAllowed": false,
-            "loginWithEmailAllowed": true,
-            "duplicateEmailsAllowed": false,
-            "smtpServer": self.smtp.to_json(),
-        });
+        let body = realm_body(slug, &self.smtp, self.login_theme.as_deref());
         self.admin_post_idempotent(&format!("{}/admin/realms", self.base), &body)
             .await
     }
@@ -326,4 +320,43 @@ impl KeycloakAdmin for HttpKeycloakAdmin {
 /// Extracts `id` from the first element of a Keycloak list-users response.
 fn first_user_id(v: &serde_json::Value) -> Option<String> {
     v.as_array()?.first()?.get("id")?.as_str().map(String::from)
+}
+
+/// Builds the realm-create request body for `ensure_realm`. `login_theme` is
+/// only included as `loginTheme` when `Some`: leaving it out entirely (not
+/// even `null`) keeps Keycloak's own default login theme in place, since a
+/// `loginTheme` naming a theme that isn't deployed on the server breaks that
+/// realm's login page.
+fn realm_body(slug: &str, smtp: &SmtpConfig, login_theme: Option<&str>) -> serde_json::Value {
+    let mut body = json!({
+        "realm": slug,
+        "enabled": true,
+        "sslRequired": "external",
+        "registrationAllowed": false,
+        "loginWithEmailAllowed": true,
+        "duplicateEmailsAllowed": false,
+        "smtpServer": smtp.to_json(),
+    });
+    if let Some(theme) = login_theme {
+        body["loginTheme"] = json!(theme);
+    }
+    body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn realm_body_omits_login_theme_when_none() {
+        let body = realm_body("acme", &SmtpConfig::default(), None);
+        assert_eq!(body["realm"], "acme");
+        assert!(body.get("loginTheme").is_none());
+    }
+
+    #[test]
+    fn realm_body_includes_login_theme_when_set() {
+        let body = realm_body("acme", &SmtpConfig::default(), Some("quark-branded"));
+        assert_eq!(body["loginTheme"], "quark-branded");
+    }
 }

@@ -102,6 +102,47 @@ Two providers work out of the box:
 
 Both providers use the API key as the password; there's no separate SMTP credential to generate.
 
+## Realm branding / login theme
+
+Each tenant gets its own Keycloak realm, and each realm serves its own login page. The theme for that page (logo, colors, CSS) is a Keycloak theme: a set of files (`.ftl` templates, CSS, images) deployed on the Keycloak server itself, under `providers`/`themes` (or the equivalent volume for the deployment). It is not quark code; quark only references the theme by name through the realm's `loginTheme` attribute.
+
+That means changing login branding always takes two steps, in this order: deploy the theme on the Keycloak server first (outside quark), then point the realm(s) at it. Pointing a realm at a theme that isn't deployed on the server yet breaks that realm's login page (Keycloak errors when it tries to render it).
+
+### Global path: one shared theme for every realm
+
+For the simple case, a single quark-branded theme applied to every tenant, there is an opt-in hook: `QUARK_KEYCLOAK_LOGIN_THEME`.
+
+1. Deploy the theme (e.g. `quark-branded`) on Keycloak, on every node/instance that serves the login page.
+2. Set `QUARK_KEYCLOAK_LOGIN_THEME=quark-branded` in quark's environment.
+3. Every realm `ensure_realm` provisions from then on (a new tenant, or a backfill run for an existing one) is created with `"loginTheme": "quark-branded"` in the realm-create body.
+
+Without this env var (the default), `ensure_realm` leaves the `loginTheme` key out of the body entirely, and the realm keeps Keycloak's stock login theme. That is deliberate: since the theme must already be deployed, the hook is opt-in rather than automatic.
+
+Note: `ensure_realm` is a create call (`POST /admin/realms`); an already-existing realm (409) is not resent, so turning on `QUARK_KEYCLOAK_LOGIN_THEME` after realms already exist does not retroactively change their theme. For realms already provisioned, use the per-tenant path below.
+
+### Per-tenant path: real per-company branding
+
+When each tenant needs its own branding instead of one shared theme, the model is a theme per tenant on Keycloak (e.g. `quark-<slug>`), applied individually to each realm through the Admin API. This is manual (or externally scripted) config-ops, not part of quark's automatic provisioning:
+
+1. Deploy the `quark-<slug>` theme on Keycloak (same mechanism as the global path, one theme per tenant instead of one shared theme).
+2. Apply the theme to the tenant's realm through the Admin API:
+
+   ```
+   PUT /admin/realms/<slug>
+   Content-Type: application/json
+   Authorization: Bearer <admin token>
+
+   {"loginTheme": "quark-<slug>"}
+   ```
+
+3. Confirm visually (the realm's login page) before considering it done.
+
+As with the global path, setting `loginTheme` to a theme that doesn't exist on the server breaks that realm's login. Always deploy the theme first, point the realm at it second.
+
+### Dependency
+
+Both paths require a live Keycloak in production (see "Prerequisites" above); neither has been validated against a real instance yet, same caveat as "Deferred: real end-to-end validation" at the end of this runbook.
+
 ## Known gap: backfilled tenants and the Owner
 
 `backfill_keycloak_provisioning` calls `provision_tenant_keycloak` with `owner_user_id: None` for every tenant it provisions on boot. That's deliberate: the backfill has no request context to know who should become the Keycloak-side Owner, so it provisions the realm, client, and groups but skips `ensure_user`/`send_set_password_email` entirely.
