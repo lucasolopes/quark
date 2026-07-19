@@ -88,6 +88,9 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
   const [fallbackUrl, setFallbackUrl] = useState("");
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<FormErrors>({});
+  const [schedulingOpen, setSchedulingOpen] = useState(false);
+  const [appRedirectOpen, setAppRedirectOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const [utmOpen, setUtmOpen] = useState(false);
   const [utm, setUtm] = useState<UtmParams>(EMPTY_UTM);
   const [templates, setTemplates] = useState(() => loadUtmTemplates());
@@ -110,6 +113,9 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
     setFallbackUrl("");
     setPassword("");
     setErrors({});
+    setSchedulingOpen(false);
+    setAppRedirectOpen(false);
+    setPasswordOpen(false);
     setUtmOpen(false);
     setUtm(EMPTY_UTM);
     setTemplateName("");
@@ -270,7 +276,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-3xl">
         <form onSubmit={handleSubmit} className="flex max-h-[85vh] flex-col">
           <DialogHeader className="shrink-0">
             <DialogTitle>{t("dialogs.create.title")}</DialogTitle>
@@ -298,44 +304,44 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
               )}
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="create-link-alias" className="text-sm font-medium">
-                {t("dialogs.create.aliasLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
-              </label>
-              <Input
-                id="create-link-alias"
-                type="text"
-                placeholder={t("dialogs.create.aliasPlaceholder")}
-                value={alias}
-                onChange={(e) => setAlias(e.target.value)}
-                aria-invalid={errors.alias != null}
-              />
-              {errors.alias && (
-                <p className="text-sm text-destructive" role="alert">
-                  {errors.alias}
-                </p>
-              )}
-            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="create-link-alias" className="text-sm font-medium">
+                  {t("dialogs.create.aliasLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
+                </label>
+                <Input
+                  id="create-link-alias"
+                  type="text"
+                  placeholder={t("dialogs.create.aliasPlaceholder")}
+                  value={alias}
+                  onChange={(e) => setAlias(e.target.value)}
+                  aria-invalid={errors.alias != null}
+                />
+                {errors.alias && (
+                  <p className="text-sm text-destructive" role="alert">
+                    {errors.alias}
+                  </p>
+                )}
+              </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="create-link-ttl" className="text-sm font-medium">
-                {t("dialogs.create.ttlLabel")} <span className="text-muted-foreground">{t("dialogs.create.ttlOptional")}</span>
-              </label>
-              <Input
-                id="create-link-ttl"
-                type="number"
-                min={1}
-                step={1}
-                placeholder={t("dialogs.create.ttlPlaceholder")}
-                value={ttl}
-                onChange={(e) => setTtl(e.target.value)}
-                aria-invalid={errors.ttl != null}
-              />
-              {errors.ttl && (
-                <p className="text-sm text-destructive" role="alert">
-                  {errors.ttl}
-                </p>
-              )}
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="create-link-folder" className="text-sm font-medium">
+                  {t("dialogs.create.folderLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
+                </label>
+                <Input
+                  id="create-link-folder"
+                  type="text"
+                  list="create-link-folder-options"
+                  placeholder={t("dialogs.create.folderPlaceholder")}
+                  value={folder}
+                  onChange={(e) => setFolder(e.target.value)}
+                />
+                <datalist id="create-link-folder-options">
+                  {folders.map((f) => (
+                    <option key={f.name} value={f.name} />
+                  ))}
+                </datalist>
+              </div>
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -351,23 +357,183 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
               />
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="create-link-folder" className="text-sm font-medium">
-                {t("dialogs.create.folderLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
-              </label>
-              <Input
-                id="create-link-folder"
-                type="text"
-                list="create-link-folder-options"
-                placeholder={t("dialogs.create.folderPlaceholder")}
-                value={folder}
-                onChange={(e) => setFolder(e.target.value)}
-              />
-              <datalist id="create-link-folder-options">
-                {folders.map((f) => (
-                  <option key={f.name} value={f.name} />
-                ))}
-              </datalist>
+            <div className="flex flex-col gap-2 rounded-lg border border-input p-2.5">
+              <button
+                type="button"
+                className="flex items-center gap-1.5 text-sm font-medium"
+                aria-expanded={schedulingOpen}
+                onClick={() => setSchedulingOpen((open) => !open)}
+              >
+                {schedulingOpen ? (
+                  <ChevronDown className="size-4 text-muted-foreground" aria-hidden />
+                ) : (
+                  <ChevronRight className="size-4 text-muted-foreground" aria-hidden />
+                )}
+                {t("dialogs.sections.scheduling")}
+              </button>
+
+              {schedulingOpen && (
+                <div className="flex flex-col gap-3 pt-1">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="create-link-ttl" className="text-sm font-medium">
+                        {t("dialogs.create.ttlLabel")} <span className="text-muted-foreground">{t("dialogs.create.ttlOptional")}</span>
+                      </label>
+                      <Input
+                        id="create-link-ttl"
+                        type="number"
+                        min={1}
+                        step={1}
+                        placeholder={t("dialogs.create.ttlPlaceholder")}
+                        value={ttl}
+                        onChange={(e) => setTtl(e.target.value)}
+                        aria-invalid={errors.ttl != null}
+                      />
+                      {errors.ttl && (
+                        <p className="text-sm text-destructive" role="alert">
+                          {errors.ttl}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="create-link-max-visits" className="text-sm font-medium">
+                        {t("dialogs.create.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.create.maxVisitsOptional")}</span>
+                      </label>
+                      <Input
+                        id="create-link-max-visits"
+                        type="number"
+                        min={1}
+                        step={1}
+                        placeholder={t("dialogs.create.maxVisitsPlaceholder")}
+                        value={maxVisits}
+                        onChange={(e) => setMaxVisits(e.target.value)}
+                        aria-invalid={errors.maxVisits != null}
+                      />
+                      {errors.maxVisits && (
+                        <p className="text-sm text-destructive" role="alert">
+                          {errors.maxVisits}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="create-link-fallback-url" className="text-sm font-medium">
+                      {t("dialogs.create.fallbackUrlLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
+                    </label>
+                    <p className="text-sm text-muted-foreground">{t("dialogs.create.fallbackUrlNote")}</p>
+                    <Input
+                      id="create-link-fallback-url"
+                      type="text"
+                      placeholder={t("dialogs.create.fallbackUrlPlaceholder")}
+                      value={fallbackUrl}
+                      onChange={(e) => setFallbackUrl(e.target.value)}
+                      aria-invalid={errors.fallbackUrl != null}
+                    />
+                    {errors.fallbackUrl && (
+                      <p className="text-sm text-destructive" role="alert">
+                        {errors.fallbackUrl}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2 rounded-lg border border-input p-2.5">
+              <button
+                type="button"
+                className="flex items-center gap-1.5 text-sm font-medium"
+                aria-expanded={appRedirectOpen}
+                onClick={() => setAppRedirectOpen((open) => !open)}
+              >
+                {appRedirectOpen ? (
+                  <ChevronDown className="size-4 text-muted-foreground" aria-hidden />
+                ) : (
+                  <ChevronRight className="size-4 text-muted-foreground" aria-hidden />
+                )}
+                {t("dialogs.sections.appRedirect")}
+              </button>
+
+              {appRedirectOpen && (
+                <div className="flex flex-col gap-3 pt-1">
+                  <p className="text-sm text-muted-foreground">{t("dialogs.create.appDestNote")}</p>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="create-link-app-ios" className="text-sm font-medium">
+                        {t("dialogs.create.appIosLabel")}
+                      </label>
+                      <Input
+                        id="create-link-app-ios"
+                        type="text"
+                        placeholder={t("dialogs.create.appIosPlaceholder")}
+                        value={appIos}
+                        onChange={(e) => setAppIos(e.target.value)}
+                        aria-invalid={errors.appIos != null}
+                      />
+                      {errors.appIos && (
+                        <p className="text-sm text-destructive" role="alert">
+                          {errors.appIos}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="create-link-app-android" className="text-sm font-medium">
+                        {t("dialogs.create.appAndroidLabel")}
+                      </label>
+                      <Input
+                        id="create-link-app-android"
+                        type="text"
+                        placeholder={t("dialogs.create.appAndroidPlaceholder")}
+                        value={appAndroid}
+                        onChange={(e) => setAppAndroid(e.target.value)}
+                        aria-invalid={errors.appAndroid != null}
+                      />
+                      {errors.appAndroid && (
+                        <p className="text-sm text-destructive" role="alert">
+                          {errors.appAndroid}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2 rounded-lg border border-input p-2.5">
+              <button
+                type="button"
+                className="flex items-center gap-1.5 text-sm font-medium"
+                aria-expanded={passwordOpen}
+                onClick={() => setPasswordOpen((open) => !open)}
+              >
+                {passwordOpen ? (
+                  <ChevronDown className="size-4 text-muted-foreground" aria-hidden />
+                ) : (
+                  <ChevronRight className="size-4 text-muted-foreground" aria-hidden />
+                )}
+                {t("dialogs.sections.password")}
+              </button>
+
+              {passwordOpen && (
+                <div className="flex flex-col gap-3 pt-1">
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="create-link-password" className="text-sm font-medium">
+                      {t("dialogs.create.passwordLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
+                    </label>
+                    <p className="text-sm text-muted-foreground">{t("dialogs.create.passwordNote")}</p>
+                    <Input
+                      id="create-link-password"
+                      type="password"
+                      autoComplete="new-password"
+                      placeholder={t("dialogs.create.passwordPlaceholder")}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-2 rounded-lg border border-input p-2.5">
@@ -428,69 +594,71 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
                     </DropdownMenu>
                   </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="utm-source" className="text-sm font-medium">
-                      {t("utm.sourceLabel")}
-                    </label>
-                    <Input
-                      id="utm-source"
-                      type="text"
-                      placeholder={t("utm.sourcePlaceholder")}
-                      value={utm.source ?? ""}
-                      onChange={(e) => setUtmField("source", e.target.value)}
-                    />
-                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="utm-source" className="text-sm font-medium">
+                        {t("utm.sourceLabel")}
+                      </label>
+                      <Input
+                        id="utm-source"
+                        type="text"
+                        placeholder={t("utm.sourcePlaceholder")}
+                        value={utm.source ?? ""}
+                        onChange={(e) => setUtmField("source", e.target.value)}
+                      />
+                    </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="utm-medium" className="text-sm font-medium">
-                      {t("utm.mediumLabel")}
-                    </label>
-                    <Input
-                      id="utm-medium"
-                      type="text"
-                      placeholder={t("utm.mediumPlaceholder")}
-                      value={utm.medium ?? ""}
-                      onChange={(e) => setUtmField("medium", e.target.value)}
-                    />
-                  </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="utm-medium" className="text-sm font-medium">
+                        {t("utm.mediumLabel")}
+                      </label>
+                      <Input
+                        id="utm-medium"
+                        type="text"
+                        placeholder={t("utm.mediumPlaceholder")}
+                        value={utm.medium ?? ""}
+                        onChange={(e) => setUtmField("medium", e.target.value)}
+                      />
+                    </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="utm-campaign" className="text-sm font-medium">
-                      {t("utm.campaignLabel")}
-                    </label>
-                    <Input
-                      id="utm-campaign"
-                      type="text"
-                      placeholder={t("utm.campaignPlaceholder")}
-                      value={utm.campaign ?? ""}
-                      onChange={(e) => setUtmField("campaign", e.target.value)}
-                    />
-                  </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="utm-campaign" className="text-sm font-medium">
+                        {t("utm.campaignLabel")}
+                      </label>
+                      <Input
+                        id="utm-campaign"
+                        type="text"
+                        placeholder={t("utm.campaignPlaceholder")}
+                        value={utm.campaign ?? ""}
+                        onChange={(e) => setUtmField("campaign", e.target.value)}
+                      />
+                    </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="utm-term" className="text-sm font-medium">
-                      {t("utm.termLabel")}
-                    </label>
-                    <Input
-                      id="utm-term"
-                      type="text"
-                      placeholder={t("utm.termPlaceholder")}
-                      value={utm.term ?? ""}
-                      onChange={(e) => setUtmField("term", e.target.value)}
-                    />
-                  </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="utm-term" className="text-sm font-medium">
+                        {t("utm.termLabel")}
+                      </label>
+                      <Input
+                        id="utm-term"
+                        type="text"
+                        placeholder={t("utm.termPlaceholder")}
+                        value={utm.term ?? ""}
+                        onChange={(e) => setUtmField("term", e.target.value)}
+                      />
+                    </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="utm-content" className="text-sm font-medium">
-                      {t("utm.contentLabel")}
-                    </label>
-                    <Input
-                      id="utm-content"
-                      type="text"
-                      placeholder={t("utm.contentPlaceholder")}
-                      value={utm.content ?? ""}
-                      onChange={(e) => setUtmField("content", e.target.value)}
-                    />
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="utm-content" className="text-sm font-medium">
+                        {t("utm.contentLabel")}
+                      </label>
+                      <Input
+                        id="utm-content"
+                        type="text"
+                        placeholder={t("utm.contentPlaceholder")}
+                        value={utm.content ?? ""}
+                        onChange={(e) => setUtmField("content", e.target.value)}
+                      />
+                    </div>
                   </div>
 
                   <div className="flex flex-col gap-1.5">
@@ -605,101 +773,6 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
                     {t("dialogs.create.addVariant")}
                   </Button>
                 </div>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="create-link-max-visits" className="text-sm font-medium">
-                {t("dialogs.create.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.create.maxVisitsOptional")}</span>
-              </label>
-              <Input
-                id="create-link-max-visits"
-                type="number"
-                min={1}
-                step={1}
-                placeholder={t("dialogs.create.maxVisitsPlaceholder")}
-                value={maxVisits}
-                onChange={(e) => setMaxVisits(e.target.value)}
-                aria-invalid={errors.maxVisits != null}
-              />
-              {errors.maxVisits && (
-                <p className="text-sm text-destructive" role="alert">
-                  {errors.maxVisits}
-                </p>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="create-link-fallback-url" className="text-sm font-medium">
-                {t("dialogs.create.fallbackUrlLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
-              </label>
-              <p className="text-sm text-muted-foreground">{t("dialogs.create.fallbackUrlNote")}</p>
-              <Input
-                id="create-link-fallback-url"
-                type="text"
-                placeholder={t("dialogs.create.fallbackUrlPlaceholder")}
-                value={fallbackUrl}
-                onChange={(e) => setFallbackUrl(e.target.value)}
-                aria-invalid={errors.fallbackUrl != null}
-              />
-              {errors.fallbackUrl && (
-                <p className="text-sm text-destructive" role="alert">
-                  {errors.fallbackUrl}
-                </p>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="create-link-password" className="text-sm font-medium">
-                {t("dialogs.create.passwordLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
-              </label>
-              <p className="text-sm text-muted-foreground">{t("dialogs.create.passwordNote")}</p>
-              <Input
-                id="create-link-password"
-                type="password"
-                autoComplete="new-password"
-                placeholder={t("dialogs.create.passwordPlaceholder")}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium">
-                {t("dialogs.create.appDestLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
-              </span>
-              <p className="text-sm text-muted-foreground">{t("dialogs.create.appDestNote")}</p>
-              <label htmlFor="create-link-app-ios" className="text-sm font-medium">
-                {t("dialogs.create.appIosLabel")}
-              </label>
-              <Input
-                id="create-link-app-ios"
-                type="text"
-                placeholder={t("dialogs.create.appIosPlaceholder")}
-                value={appIos}
-                onChange={(e) => setAppIos(e.target.value)}
-                aria-invalid={errors.appIos != null}
-              />
-              {errors.appIos && (
-                <p className="text-sm text-destructive" role="alert">
-                  {errors.appIos}
-                </p>
-              )}
-              <label htmlFor="create-link-app-android" className="text-sm font-medium">
-                {t("dialogs.create.appAndroidLabel")}
-              </label>
-              <Input
-                id="create-link-app-android"
-                type="text"
-                placeholder={t("dialogs.create.appAndroidPlaceholder")}
-                value={appAndroid}
-                onChange={(e) => setAppAndroid(e.target.value)}
-                aria-invalid={errors.appAndroid != null}
-              />
-              {errors.appAndroid && (
-                <p className="text-sm text-destructive" role="alert">
-                  {errors.appAndroid}
-                </p>
               )}
             </div>
 

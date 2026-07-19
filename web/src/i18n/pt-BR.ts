@@ -329,6 +329,11 @@ export const ptBR: Messages = {
     emptySubtitle: "Escolha um arquivo ou cole os dados abaixo e clique em Importar.",
   },
   dialogs: {
+    sections: {
+      scheduling: "Agendamento e limites",
+      password: "Senha",
+      appRedirect: "Redirecionamento por app",
+    },
     create: {
       title: "Criar link",
       description: "Encurte uma URL e, se quiser, escolha um alias e um prazo de validade.",

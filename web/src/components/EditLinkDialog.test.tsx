@@ -68,6 +68,7 @@ describe("EditLinkDialog — max visits", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
     render(withProviders(<EditLinkDialog link={link} open onOpenChange={() => {}} />, { withRouter: false }));
 
+    await userEvent.click(screen.getByRole("button", { name: /scheduling and limits/i }));
     const maxVisitsInput = screen.getByLabelText(/max visits/i);
     expect(maxVisitsInput).toHaveValue(100);
     await userEvent.clear(maxVisitsInput);
@@ -149,6 +150,7 @@ describe("EditLinkDialog — app destinations", () => {
     const l = makeLink({ app_ios: "https://apps.apple.com/app/x" });
     render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
 
+    await userEvent.click(screen.getByRole("button", { name: /app redirect/i }));
     await userEvent.clear(screen.getByLabelText(/ios/i));
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
@@ -177,6 +179,7 @@ describe("EditLinkDialog — app destinations", () => {
     const l = makeLink();
     render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
 
+    await userEvent.click(screen.getByRole("button", { name: /app redirect/i }));
     await userEvent.type(screen.getByLabelText(/ios/i), "https://apps.apple.com/app/y");
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
@@ -194,6 +197,7 @@ describe("EditLinkDialog — fallback url", () => {
     const l = makeLink({ fallback_url: "https://old.com" });
     render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
 
+    await userEvent.click(screen.getByRole("button", { name: /scheduling and limits/i }));
     const field = screen.getByLabelText(/fallback/i);
     expect(field).toHaveValue("https://old.com");
     await userEvent.clear(field);
@@ -210,6 +214,7 @@ describe("EditLinkDialog — fallback url", () => {
     const l = makeLink({ fallback_url: "https://old.com" });
     render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
 
+    await userEvent.click(screen.getByRole("button", { name: /scheduling and limits/i }));
     await userEvent.clear(screen.getByLabelText(/fallback/i));
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
@@ -239,6 +244,7 @@ describe("EditLinkDialog — password", () => {
     const l = makeLink();
     render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
 
+    await userEvent.click(screen.getByRole("button", { name: /^password$/i }));
     await userEvent.type(screen.getByLabelText(/^password$/i), "hunter2");
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 
@@ -251,6 +257,7 @@ describe("EditLinkDialog — password", () => {
     const l = makeLink({ has_password: true });
     render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
 
+    await userEvent.click(screen.getByRole("button", { name: /^password$/i }));
     await userEvent.click(screen.getByLabelText(/remove password/i));
     await userEvent.click(screen.getByRole("button", { name: /save/i }));
 

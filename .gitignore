@@ -10,3 +10,9 @@ web/node_modules/
 
 # Wrangler local cache (account id, project cache) — nunca commitar
 .wrangler/
+
+# local e2e test artifacts (not committed)
+.playwright-mcp/
+modal-*.png
+page-*.png
+web/.env.local

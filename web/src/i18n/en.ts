@@ -327,6 +327,11 @@ export const en = {
     emptySubtitle: "Choose a file or paste data below, then click Import.",
   },
   dialogs: {
+    sections: {
+      scheduling: "Scheduling and limits",
+      password: "Password",
+      appRedirect: "App redirect",
+    },
     create: {
       title: "Create link",
       description: "Shorten a URL and, if you want, choose an alias and an expiration.",
