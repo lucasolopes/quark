@@ -14,6 +14,12 @@ export interface Rule {
 
 /** One A/B destination: a URL and its relative weight (>= 1) in the weighted-random pick at redirect time. */
 export interface Variant { url: string; weight: number; }
+/**
+ * A per-link click-threshold alert rule (LUC-38/LUC-66): fire
+ * `link.threshold_reached` when the link is clicked at least `threshold`
+ * times within a fixed window of `window_secs` seconds.
+ */
+export interface AlertRule { threshold: number; window_secs: number; }
 /** Destination health from the background checker; absent when never probed. */
 export interface LinkHealth { healthy: boolean; status?: number; checked_at: number; }
 export interface Link {

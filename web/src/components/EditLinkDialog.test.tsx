@@ -269,3 +269,90 @@ describe("EditLinkDialog — password", () => {
     expect(patchBody(fetchMock)).not.toHaveProperty("password");
   });
 });
+
+describe("EditLinkDialog — click-threshold alert (LUC-66)", () => {
+  beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
+
+  function mockAlertFetch(currentRule: { threshold: number; window_secs: number } | null = null) {
+    return vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init?: RequestInit) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (method === "GET") return new Response(JSON.stringify(currentRule), { status: 200 });
+      if (method === "DELETE") return new Response(null, { status: 204 });
+      // PUT: echo the body back like the real endpoint does.
+      return new Response(String(init?.body ?? "null"), { status: 200 });
+    });
+  }
+
+  it("does not fetch the alert rule until the section is expanded", () => {
+    const fetchMock = mockAlertFetch();
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("shows the current rule once the section is expanded", async () => {
+    mockAlertFetch({ threshold: 10, window_secs: 600 });
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.click(screen.getByRole("button", { name: /click-threshold alert/i }));
+
+    expect(await screen.findByLabelText(/click threshold/i)).toHaveValue(10);
+    expect(screen.getByLabelText(/window \(minutes\)/i)).toHaveValue(10);
+  });
+
+  it("saving sends a PUT with threshold and window_secs converted from minutes", async () => {
+    const fetchMock = mockAlertFetch(null);
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.click(screen.getByRole("button", { name: /click-threshold alert/i }));
+    await screen.findByText(/no alert rule set/i);
+
+    await userEvent.type(screen.getByLabelText(/click threshold/i), "5");
+    await userEvent.type(screen.getByLabelText(/window \(minutes\)/i), "3");
+    await userEvent.click(screen.getByRole("button", { name: /^save alert$/i }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT");
+      expect(putCall).toBeDefined();
+    });
+    const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT")!;
+    const [url, init] = putCall;
+    expect(String(url)).toContain(`/admin/links/${l.code}/alert`);
+    const body = JSON.parse(String((init as RequestInit).body));
+    expect(body).toEqual({ threshold: 5, window_secs: 180 });
+  });
+
+  it("removing sends a DELETE to the link's alert endpoint", async () => {
+    const fetchMock = mockAlertFetch({ threshold: 10, window_secs: 600 });
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.click(screen.getByRole("button", { name: /click-threshold alert/i }));
+    await screen.findByLabelText(/click threshold/i);
+
+    await userEvent.click(screen.getByRole("button", { name: /^remove alert$/i }));
+
+    await waitFor(() => {
+      const delCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "DELETE");
+      expect(delCall).toBeDefined();
+    });
+    const delCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "DELETE")!;
+    expect(String(delCall[0])).toContain(`/admin/links/${l.code}/alert`);
+  });
+
+  it("rejects a threshold below 1 client-side without calling PUT", async () => {
+    const fetchMock = mockAlertFetch(null);
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.click(screen.getByRole("button", { name: /click-threshold alert/i }));
+    await screen.findByText(/no alert rule set/i);
+
+    await userEvent.type(screen.getByLabelText(/window \(minutes\)/i), "1");
+    await userEvent.click(screen.getByRole("button", { name: /^save alert$/i }));
+
+    expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit)?.method === "PUT")).toBe(false);
+  });
+});

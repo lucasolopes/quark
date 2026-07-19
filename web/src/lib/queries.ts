@@ -1,7 +1,7 @@
 import { QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import { hasToken } from "./auth";
-import type { BulkOp, CreateLinkRequest, CreatePixelRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest, WellknownName } from "./types";
+import type { AlertRule, BulkOp, CreateLinkRequest, CreatePixelRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest, WellknownName } from "./types";
 
 const LINKS_QUERY_KEY = ["links"];
 const WEBHOOKS_QUERY_KEY = ["webhooks"];
@@ -185,6 +185,35 @@ export function useStats(code: string) {
     queryKey: ["stats", code],
     queryFn: () => api.getStats(code),
     enabled: Boolean(code),
+  });
+}
+
+const linkAlertKey = (code: string) => ["link-alert", code];
+
+/** The link's current click-threshold alert rule (LUC-66), or `null` when unset, for the edit dialog. */
+export function useLinkAlert(code: string, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: linkAlertKey(code),
+    queryFn: () => api.getLinkAlert(code),
+    enabled: Boolean(code) && (options.enabled ?? true),
+  });
+}
+
+/** Sets (or replaces) a link's alert rule; on success invalidates its `useLinkAlert` query. */
+export function useSetLinkAlert() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ code, body }: { code: string; body: AlertRule }) => api.setLinkAlert(code, body),
+    onSuccess: (_data, { code }) => { void client.invalidateQueries({ queryKey: linkAlertKey(code) }); },
+  });
+}
+
+/** Removes a link's alert rule; on success invalidates its `useLinkAlert` query. */
+export function useDeleteLinkAlert() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (code: string) => api.deleteLinkAlert(code),
+    onSuccess: (_data, code) => { void client.invalidateQueries({ queryKey: linkAlertKey(code) }); },
   });
 }
 
