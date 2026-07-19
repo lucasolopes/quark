@@ -27,6 +27,8 @@ import { applyUtm, deleteUtmTemplate, loadUtmTemplates, saveUtmTemplate, type Ut
 import { parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import { RulesEditor } from "@/components/RulesEditor";
 import { distributeEvenly, variantsPercentTotal } from "@/lib/variants";
+import { DurationField } from "@/components/DurationField";
+import { DEFAULT_DURATION_UNIT, durationToSeconds } from "@/lib/duration";
 import type { Folder, Variant } from "@/lib/types";
 
 /** Same cap enforced server-side (`MAX_VARIANTS` in `src/api.rs`). */
@@ -80,6 +82,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
   const [url, setUrl] = useState("");
   const [alias, setAlias] = useState("");
   const [ttl, setTtl] = useState("");
+  const [ttlUnit, setTtlUnit] = useState<string>(DEFAULT_DURATION_UNIT);
   const [tagsInput, setTagsInput] = useState("");
   const [folder, setFolder] = useState("");
   const [maxVisits, setMaxVisits] = useState("");
@@ -105,6 +108,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
     setUrl("");
     setAlias("");
     setTtl("");
+    setTtlUnit(DEFAULT_DURATION_UNIT);
     setTagsInput("");
     setFolder("");
     setMaxVisits("");
@@ -190,12 +194,8 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
     if (trimmedAlias && isNumericCode(trimmedAlias)) {
       next.alias = t("dialogs.create.aliasCollision");
     }
-    const trimmedTtl = ttl.trim();
-    if (trimmedTtl) {
-      const n = Number(trimmedTtl);
-      if (!Number.isInteger(n) || n <= 0) {
-        next.ttl = t("dialogs.create.ttlInvalid");
-      }
+    if (ttl.trim() && durationToSeconds(ttl, ttlUnit) == null) {
+      next.ttl = t("dialogs.create.ttlInvalid");
     }
     const trimmedMaxVisits = maxVisits.trim();
     if (trimmedMaxVisits) {
@@ -257,10 +257,11 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
     try {
       const tags = parseTagsInput(tagsInput);
       const variants = buildVariants();
+      const ttlSecs = durationToSeconds(ttl, ttlUnit);
       await createLink.mutateAsync({
         url: destination,
         ...(alias.trim() ? { alias: alias.trim() } : {}),
-        ...(ttl.trim() ? { ttl: Number(ttl.trim()) } : {}),
+        ...(ttlSecs != null ? { ttl: ttlSecs } : {}),
         ...(tags.length > 0 ? { tags } : {}),
         ...(maxVisits.trim() ? { max_visits: Number(maxVisits.trim()) } : {}),
         ...(rules.length > 0 ? { rules } : {}),
@@ -389,26 +390,17 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
               {schedulingOpen && (
                 <div className="flex flex-col gap-3 pt-1">
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="create-link-ttl" className="text-sm font-medium">
-                        {t("dialogs.create.ttlLabel")} <span className="text-muted-foreground">{t("dialogs.create.ttlOptional")}</span>
-                      </label>
-                      <Input
-                        id="create-link-ttl"
-                        type="number"
-                        min={1}
-                        step={1}
-                        placeholder={t("dialogs.create.ttlPlaceholder")}
-                        value={ttl}
-                        onChange={(e) => setTtl(e.target.value)}
-                        aria-invalid={errors.ttl != null}
-                      />
-                      {errors.ttl && (
-                        <p className="text-sm text-destructive" role="alert">
-                          {errors.ttl}
-                        </p>
-                      )}
-                    </div>
+                    <DurationField
+                      id="create-link-ttl"
+                      label={t("dialogs.create.ttlLabel")}
+                      hint={t("dialogs.create.ttlOptional")}
+                      value={ttl}
+                      unit={ttlUnit}
+                      onValueChange={setTtl}
+                      onUnitChange={setTtlUnit}
+                      placeholder={t("dialogs.create.ttlPlaceholder")}
+                      error={errors.ttl}
+                    />
 
                     <div className="flex flex-col gap-1.5">
                       <label htmlFor="create-link-max-visits" className="text-sm font-medium">
