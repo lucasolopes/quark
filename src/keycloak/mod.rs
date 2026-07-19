@@ -116,6 +116,12 @@ pub struct KeycloakConfig {
     pub admin_client_id: String,
     pub admin_client_secret: String,
     pub smtp: SmtpConfig,
+    /// Optional Keycloak theme name applied as every provisioned realm's
+    /// `loginTheme` (`QUARK_KEYCLOAK_LOGIN_THEME`). `None` (the default) keeps
+    /// Keycloak's stock login theme: opt-in because the named theme must
+    /// already be deployed on the Keycloak server (its files under
+    /// `providers`/`themes`), otherwise every realm's login page breaks.
+    pub login_theme: Option<String>,
 }
 
 impl KeycloakConfig {
@@ -125,26 +131,35 @@ impl KeycloakConfig {
             &std::env::var("QUARK_KEYCLOAK_ADMIN_CLIENT_ID").unwrap_or_default(),
             &std::env::var("QUARK_KEYCLOAK_ADMIN_CLIENT_SECRET").unwrap_or_default(),
             SmtpConfig::from_env(),
+            std::env::var("QUARK_KEYCLOAK_LOGIN_THEME").unwrap_or_default(),
         )
     }
 
     /// Builds a config from explicit parts (used by `from_env` and tests, so
     /// tests do not need to mutate process env — mirrors
-    /// `sheets::SheetsConfig::from_parts`).
+    /// `sheets::SheetsConfig::from_parts`). `login_theme` is normalized to
+    /// `None` when empty, so an unset or blank env var means "no override".
     pub fn from_parts(
         base_url: &str,
         admin_client_id: &str,
         admin_client_secret: &str,
         smtp: SmtpConfig,
+        login_theme: impl Into<String>,
     ) -> Option<KeycloakConfig> {
         if base_url.is_empty() {
             return None;
         }
+        let login_theme = login_theme.into();
         Some(KeycloakConfig {
             base_url: base_url.trim_end_matches('/').to_string(),
             admin_client_id: admin_client_id.to_string(),
             admin_client_secret: admin_client_secret.to_string(),
             smtp,
+            login_theme: if login_theme.is_empty() {
+                None
+            } else {
+                Some(login_theme)
+            },
         })
     }
 }
@@ -298,7 +313,9 @@ mod tests {
 
     #[test]
     fn keycloak_config_from_parts_is_none_without_base_url() {
-        assert!(KeycloakConfig::from_parts("", "id", "secret", SmtpConfig::default()).is_none());
+        assert!(
+            KeycloakConfig::from_parts("", "id", "secret", SmtpConfig::default(), "").is_none()
+        );
     }
 
     #[test]
@@ -308,11 +325,39 @@ mod tests {
             "admin-cli",
             "s3cr3t",
             SmtpConfig::default(),
+            "",
         )
         .unwrap();
         assert_eq!(cfg.base_url, "https://kc.example.com");
         assert_eq!(cfg.admin_client_id, "admin-cli");
         assert_eq!(cfg.admin_client_secret, "s3cr3t");
+        assert_eq!(cfg.login_theme, None);
+    }
+
+    #[test]
+    fn keycloak_config_from_parts_login_theme_empty_is_none() {
+        let cfg = KeycloakConfig::from_parts(
+            "https://kc.example.com",
+            "admin-cli",
+            "s3cr3t",
+            SmtpConfig::default(),
+            "",
+        )
+        .unwrap();
+        assert_eq!(cfg.login_theme, None);
+    }
+
+    #[test]
+    fn keycloak_config_from_parts_login_theme_set_is_some() {
+        let cfg = KeycloakConfig::from_parts(
+            "https://kc.example.com",
+            "admin-cli",
+            "s3cr3t",
+            SmtpConfig::default(),
+            "quark-branded",
+        )
+        .unwrap();
+        assert_eq!(cfg.login_theme, Some("quark-branded".to_string()));
     }
 
     #[test]
