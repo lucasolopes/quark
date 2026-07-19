@@ -26,6 +26,7 @@ import { parseTagsInput } from "@/lib/tags";
 import { applyUtm, deleteUtmTemplate, loadUtmTemplates, saveUtmTemplate, type UtmParams } from "@/lib/utm";
 import { parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import { RulesEditor } from "@/components/RulesEditor";
+import { distributeEvenly, variantsPercentTotal } from "@/lib/variants";
 import type { Folder, Variant } from "@/lib/types";
 
 /** Same cap enforced server-side (`MAX_VARIANTS` in `src/api.rs`). */
@@ -36,8 +37,10 @@ interface VariantRow {
   weight: string;
 }
 
-function emptyVariantRow(): VariantRow {
-  return { url: "", weight: "1" };
+/** Reassign percentages so the rows split 100% evenly, keeping their URLs. */
+function rebalance(rows: VariantRow[]): VariantRow[] {
+  const pct = distributeEvenly(rows.length);
+  return rows.map((row, i) => ({ ...row, weight: String(pct[i]) }));
 }
 
 interface FormErrors {
@@ -152,17 +155,23 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
 
   const utmPreview = url.trim() ? applyUtm(url.trim(), utm) : "";
   const templateNames = Object.keys(templates);
+  const variantsTotal = variantsPercentTotal(variantRows.map((r) => r.weight));
+  const variantsTotalValid = variantRows.length === 0 || variantsTotal === 100;
 
   function addVariantRow() {
-    setVariantRows((rows) => (rows.length >= MAX_VARIANTS ? rows : [...rows, emptyVariantRow()]));
+    setVariantRows((rows) => (rows.length >= MAX_VARIANTS ? rows : rebalance([...rows, { url: "", weight: "0" }])));
   }
 
   function removeVariantRow(index: number) {
-    setVariantRows((rows) => rows.filter((_, i) => i !== index));
+    setVariantRows((rows) => rebalance(rows.filter((_, i) => i !== index)));
   }
 
   function updateVariantRow(index: number, patch: Partial<VariantRow>) {
     setVariantRows((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }
+
+  function distributeVariantsEvenly() {
+    setVariantRows((rows) => rebalance(rows));
   }
 
   function handleOpenChange(next: boolean) {
@@ -198,6 +207,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
     if (variantRows.length > MAX_VARIANTS) {
       next.variants = t("dialogs.create.tooManyVariants", { max: MAX_VARIANTS });
     } else {
+      let sum = 0;
       for (const row of variantRows) {
         if (!row.url.trim() || !isHttpUrl(row.url)) {
           next.variants = t("dialogs.create.variantUrlInvalid");
@@ -205,9 +215,13 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
         }
         const w = Number(row.weight.trim());
         if (!Number.isInteger(w) || w <= 0) {
-          next.variants = t("dialogs.create.variantWeightInvalid");
+          next.variants = t("dialogs.create.variantPercentInvalid");
           break;
         }
+        sum += w;
+      }
+      if (!next.variants && variantRows.length > 0 && sum !== 100) {
+        next.variants = t("dialogs.create.variantsSumInvalid", { total: sum });
       }
     }
     if (appIos.trim() && !isHttpUrl(appIos)) {
@@ -729,19 +743,25 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
                           onChange={(e) => updateVariantRow(i, { url: e.target.value })}
                         />
                       </div>
-                      <div className="flex w-20 flex-col gap-1.5">
+                      <div className="flex w-24 flex-col gap-1.5">
                         <label htmlFor={`create-variant-weight-${i}`} className="sr-only">
                           {t("dialogs.create.variantWeightLabel")}
                         </label>
-                        <Input
-                          id={`create-variant-weight-${i}`}
-                          type="number"
-                          min={1}
-                          step={1}
-                          placeholder={t("dialogs.create.variantWeightLabel")}
-                          value={row.weight}
-                          onChange={(e) => updateVariantRow(i, { weight: e.target.value })}
-                        />
+                        <div className="relative">
+                          <Input
+                            id={`create-variant-weight-${i}`}
+                            type="number"
+                            min={1}
+                            max={100}
+                            step={1}
+                            className="pr-7"
+                            value={row.weight}
+                            onChange={(e) => updateVariantRow(i, { weight: e.target.value })}
+                          />
+                          <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-sm text-muted-foreground">
+                            %
+                          </span>
+                        </div>
                       </div>
                       <Button
                         type="button"
@@ -754,6 +774,23 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [] }: CreateLin
                       </Button>
                     </div>
                   ))}
+
+                  {variantRows.length > 0 && (
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={
+                          variantsTotalValid
+                            ? "text-sm font-medium text-muted-foreground"
+                            : "text-sm font-medium text-destructive"
+                        }
+                      >
+                        {t("dialogs.create.variantsTotal", { total: variantsTotal })}
+                      </span>
+                      <Button type="button" variant="ghost" size="sm" onClick={distributeVariantsEvenly}>
+                        {t("dialogs.create.distributeEvenly")}
+                      </Button>
+                    </div>
+                  )}
 
                   {errors.variants && (
                     <p className="text-sm text-destructive" role="alert">

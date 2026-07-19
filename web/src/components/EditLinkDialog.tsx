@@ -18,6 +18,7 @@ import { isUnauthorized } from "@/lib/mutation-error";
 import { usePatchLink, useLinkAlert, useSetLinkAlert, useDeleteLinkAlert } from "@/lib/queries";
 import { formatTagsInput, parseTagsInput } from "@/lib/tags";
 import { draftsFromRules, parseRuleDrafts, type RuleDraft } from "@/lib/rules";
+import { distributeEvenly, normalizeToPercent, variantsPercentTotal } from "@/lib/variants";
 import type { Folder, Link, Variant } from "@/lib/types";
 import { RulesEditor } from "@/components/RulesEditor";
 
@@ -30,11 +31,14 @@ interface VariantRow {
 }
 
 function toVariantRows(variants: Variant[]): VariantRow[] {
-  return variants.map((v) => ({ url: v.url, weight: String(v.weight) }));
+  const pct = normalizeToPercent(variants.map((v) => v.weight));
+  return variants.map((v, i) => ({ url: v.url, weight: String(pct[i]) }));
 }
 
-function emptyVariantRow(): VariantRow {
-  return { url: "", weight: "1" };
+/** Reassign percentages so the rows split 100% evenly, keeping their URLs. */
+function rebalance(rows: VariantRow[]): VariantRow[] {
+  const pct = distributeEvenly(rows.length);
+  return rows.map((row, i) => ({ ...row, weight: String(pct[i]) }));
 }
 
 interface FormErrors {
@@ -111,15 +115,19 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
   }, [alertQuery.data, alertPrefilled]);
 
   function addVariantRow() {
-    setVariantRows((rows) => (rows.length >= MAX_VARIANTS ? rows : [...rows, emptyVariantRow()]));
+    setVariantRows((rows) => (rows.length >= MAX_VARIANTS ? rows : rebalance([...rows, { url: "", weight: "0" }])));
   }
 
   function removeVariantRow(index: number) {
-    setVariantRows((rows) => rows.filter((_, i) => i !== index));
+    setVariantRows((rows) => rebalance(rows.filter((_, i) => i !== index)));
   }
 
   function updateVariantRow(index: number, patch: Partial<VariantRow>) {
     setVariantRows((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }
+
+  function distributeVariantsEvenly() {
+    setVariantRows((rows) => rebalance(rows));
   }
 
   function formatExpiry(expiry: number | null): string {
@@ -160,6 +168,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
     if (variantRows.length > MAX_VARIANTS) {
       next.variants = t("dialogs.edit.tooManyVariants", { max: MAX_VARIANTS });
     } else {
+      let sum = 0;
       for (const row of variantRows) {
         if (!row.url.trim() || !isHttpUrl(row.url)) {
           next.variants = t("dialogs.edit.variantUrlInvalid");
@@ -167,9 +176,13 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
         }
         const w = Number(row.weight.trim());
         if (!Number.isInteger(w) || w <= 0) {
-          next.variants = t("dialogs.edit.variantWeightInvalid");
+          next.variants = t("dialogs.edit.variantPercentInvalid");
           break;
         }
+        sum += w;
+      }
+      if (!next.variants && variantRows.length > 0 && sum !== 100) {
+        next.variants = t("dialogs.edit.variantsSumInvalid", { total: sum });
       }
     }
     if (appIos.trim() && !isHttpUrl(appIos)) {
@@ -187,6 +200,9 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
   function buildVariants(): Variant[] {
     return variantRows.map((row) => ({ url: row.url.trim(), weight: Number(row.weight.trim()) }));
   }
+
+  const variantsTotal = variantsPercentTotal(variantRows.map((r) => r.weight));
+  const variantsTotalValid = variantRows.length === 0 || variantsTotal === 100;
 
   function validateAlert(): AlertFormErrors {
     const next: AlertFormErrors = {};
@@ -585,19 +601,25 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
                           onChange={(e) => updateVariantRow(i, { url: e.target.value })}
                         />
                       </div>
-                      <div className="flex w-20 flex-col gap-1.5">
+                      <div className="flex w-24 flex-col gap-1.5">
                         <label htmlFor={`edit-variant-weight-${i}`} className="sr-only">
                           {t("dialogs.edit.variantWeightLabel")}
                         </label>
-                        <Input
-                          id={`edit-variant-weight-${i}`}
-                          type="number"
-                          min={1}
-                          step={1}
-                          placeholder={t("dialogs.edit.variantWeightLabel")}
-                          value={row.weight}
-                          onChange={(e) => updateVariantRow(i, { weight: e.target.value })}
-                        />
+                        <div className="relative">
+                          <Input
+                            id={`edit-variant-weight-${i}`}
+                            type="number"
+                            min={1}
+                            max={100}
+                            step={1}
+                            className="pr-7"
+                            value={row.weight}
+                            onChange={(e) => updateVariantRow(i, { weight: e.target.value })}
+                          />
+                          <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-sm text-muted-foreground">
+                            %
+                          </span>
+                        </div>
                       </div>
                       <Button
                         type="button"
@@ -610,6 +632,23 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [] }: EditL
                       </Button>
                     </div>
                   ))}
+
+                  {variantRows.length > 0 && (
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={
+                          variantsTotalValid
+                            ? "text-sm font-medium text-muted-foreground"
+                            : "text-sm font-medium text-destructive"
+                        }
+                      >
+                        {t("dialogs.edit.variantsTotal", { total: variantsTotal })}
+                      </span>
+                      <Button type="button" variant="ghost" size="sm" onClick={distributeVariantsEvenly}>
+                        {t("dialogs.edit.distributeEvenly")}
+                      </Button>
+                    </div>
+                  )}
 
                   {errors.variants && (
                     <p className="text-sm text-destructive" role="alert">
