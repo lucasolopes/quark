@@ -14,6 +14,24 @@ use crate::webhooks::{SubscriptionKind, WebhookSubscription};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{PgPool, Row};
 
+/// AAD field label for the per-tenant OIDC `client_secret`. The full AAD is
+/// `format!("{tenant_id}:{AAD_OIDC_CLIENT_SECRET}")`, binding the v2 ciphertext
+/// to that row (LUC-62). Kept as a constant so seal and open never diverge.
+const AAD_OIDC_CLIENT_SECRET: &str = "oidc_client_secret";
+
+/// AAD field label for the Sheets `refresh_token`. See `AAD_OIDC_CLIENT_SECRET`.
+const AAD_SHEETS_REFRESH_TOKEN: &str = "sheets_refresh_token";
+
+/// Builds the OIDC `client_secret` AAD for a tenant: `<tenant_id>:oidc_client_secret`.
+fn aad_oidc_client_secret(tenant: TenantId) -> Vec<u8> {
+    format!("{}:{AAD_OIDC_CLIENT_SECRET}", tenant.0).into_bytes()
+}
+
+/// Builds the Sheets `refresh_token` AAD for a tenant: `<tenant_id>:sheets_refresh_token`.
+fn aad_sheets_refresh_token(tenant: TenantId) -> Vec<u8> {
+    format!("{}:{AAD_SHEETS_REFRESH_TOKEN}", tenant.0).into_bytes()
+}
+
 /// Routes a tenant-owned READ (or write-pool read) query through the correct
 /// execution context. `$body` is an expression that uses the bound connection
 /// `$c: &mut sqlx::PgConnection` and returns `Result<_, sqlx::Error>`.
@@ -273,7 +291,11 @@ struct OidcConfigBlob {
 fn oidc_config_blob(cfg: &TenantOidcConfig, sb: &Option<SecretBox>) -> serde_json::Value {
     serde_json::to_value(OidcConfigBlob {
         client_id: cfg.client_id.clone(),
-        client_secret: secretbox::seal_opt(sb, &cfg.client_secret),
+        client_secret: secretbox::seal_opt(
+            sb,
+            &cfg.client_secret,
+            &aad_oidc_client_secret(cfg.tenant_id),
+        ),
         scopes: cfg.scopes.clone(),
         admin_claim: cfg.admin_claim.clone(),
         admin_value: cfg.admin_value.clone(),
@@ -292,9 +314,11 @@ fn row_to_oidc_config(r: &PgRow, sb: &Option<SecretBox>) -> Result<TenantOidcCon
     let issuer: String = r.try_get("issuer").map_err(StoreError::backend)?;
     let blob: serde_json::Value = r.try_get("blob").map_err(StoreError::backend)?;
     let b: OidcConfigBlob = serde_json::from_value(blob)?;
-    let client_secret = secretbox::open_opt(sb, &b.client_secret).map_err(StoreError::backend)?;
+    let tid = crate::tenant::TenantId(tenant_id as u64);
+    let client_secret = secretbox::open_opt(sb, &b.client_secret, &aad_oidc_client_secret(tid))
+        .map_err(StoreError::backend)?;
     Ok(TenantOidcConfig {
-        tenant_id: crate::tenant::TenantId(tenant_id as u64),
+        tenant_id: tid,
         issuer,
         client_id: b.client_id,
         client_secret,
@@ -307,12 +331,20 @@ fn row_to_oidc_config(r: &PgRow, sb: &Option<SecretBox>) -> Result<TenantOidcCon
     })
 }
 
-/// True when `secret` is a legacy plaintext value worth re-encrypting: present,
-/// non-empty, and not already carrying the `enc:v1:` seal. Used by
-/// `reencrypt_legacy_secrets` to skip rows that are empty or already sealed.
-fn is_legacy_plaintext(secret: &Option<String>) -> bool {
+/// True when `secret` should be re-sealed under the current primary key: it is
+/// present, non-empty, and not already an `enc:v2:<primary_keyid>:` value. This
+/// covers legacy plaintext, `enc:v1:`, and `enc:v2:` sealed under a rotated-out
+/// (old) key. Used by `reencrypt_legacy_secrets` to skip rows already at the
+/// target format. Idempotent by construction.
+fn needs_reseal(secret: &Option<String>, primary_keyid: &str) -> bool {
     match secret {
-        Some(s) => !s.is_empty() && !s.starts_with("enc:v1:"),
+        Some(s) => {
+            if s.is_empty() {
+                return false;
+            }
+            let already = format!("enc:v2:{primary_keyid}:");
+            !s.starts_with(&already)
+        }
         None => false,
     }
 }
@@ -1748,7 +1780,11 @@ impl Store for PostgresStore {
         // `refresh_token` is sealed at rest (opt-in via `QUARK_ENCRYPTION_KEY`);
         // every other field stays plaintext.
         let sealed = crate::sheets::SheetsConnection {
-            refresh_token: secretbox::seal_opt(&self.secretbox, &c.refresh_token),
+            refresh_token: secretbox::seal_opt(
+                &self.secretbox,
+                &c.refresh_token,
+                &aad_sheets_refresh_token(tenant),
+            ),
             ..c.clone()
         };
         let blob = serde_json::to_value(sealed)?;
@@ -1783,8 +1819,12 @@ impl Store for PostgresStore {
             Some(r) => {
                 let blob: serde_json::Value = r.try_get("blob").map_err(StoreError::backend)?;
                 let c: crate::sheets::SheetsConnection = serde_json::from_value(blob)?;
-                let refresh_token = secretbox::open_opt(&self.secretbox, &c.refresh_token)
-                    .map_err(StoreError::backend)?;
+                let refresh_token = secretbox::open_opt(
+                    &self.secretbox,
+                    &c.refresh_token,
+                    &aad_sheets_refresh_token(tenant),
+                )
+                .map_err(StoreError::backend)?;
                 Ok(Some(crate::sheets::SheetsConnection { refresh_token, ..c }))
             }
             None => Ok(None),
@@ -2126,9 +2166,10 @@ impl Store for PostgresStore {
 
     async fn reencrypt_legacy_secrets(&self) -> Result<usize, StoreError> {
         // No key configured: nothing to do, and no round-trip worth paying for.
-        if self.secretbox.is_none() {
+        let Some(sb) = self.secretbox.as_ref() else {
             return Ok(0);
-        }
+        };
+        let primary_keyid = sb.primary_keyid();
         let mut count = 0usize;
 
         // oidc_configs: `NOT_FORCED` (see the const above), so a bare scan on
@@ -2142,12 +2183,13 @@ impl Store for PostgresStore {
         for r in rows {
             let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
             let secret: Option<String> = r.try_get("secret").map_err(StoreError::backend)?;
-            if !is_legacy_plaintext(&secret) {
+            if !needs_reseal(&secret, primary_keyid) {
                 continue;
             }
             let tenant = TenantId(tenant_id as u64);
-            // get→put round-trip: `get_oidc_config_bare` opens (passes legacy
-            // plaintext through unchanged), `put_oidc_config` seals it fresh.
+            // get→put round-trip: `get_oidc_config_bare` opens (plaintext passes
+            // through, v1/old-v2 decrypt via the keyring), `put_oidc_config`
+            // re-seals under the primary key with the correct per-row AAD.
             // No hand-rolled crypto here, just the existing seal/open path.
             if let Some(config) = self.get_oidc_config_bare(tenant).await? {
                 self.put_oidc_config(&config).await?;
@@ -2174,7 +2216,7 @@ impl Store for PostgresStore {
                 continue;
             };
             let secret: Option<String> = row.try_get("secret").map_err(StoreError::backend)?;
-            if !is_legacy_plaintext(&secret) {
+            if !needs_reseal(&secret, primary_keyid) {
                 continue;
             }
             if let Some(conn) = self.get_sheets_connection(t.id).await? {
@@ -3215,5 +3257,27 @@ mod tests {
         }
         assert!(!make(false).is_multi_tenant());
         assert!(make(true).is_multi_tenant());
+    }
+
+    #[test]
+    fn needs_reseal_covers_plaintext_v1_and_old_v2_but_not_primary_v2() {
+        let primary = "abcd1234";
+        // Empty / absent: nothing to do.
+        assert!(!needs_reseal(&None, primary));
+        assert!(!needs_reseal(&Some(String::new()), primary));
+        // Legacy plaintext: reseal.
+        assert!(needs_reseal(&Some("plain-secret".to_string()), primary));
+        // v1: reseal.
+        assert!(needs_reseal(&Some("enc:v1:whatever".to_string()), primary));
+        // v2 under a different (rotated-out) key id: reseal.
+        assert!(needs_reseal(
+            &Some("enc:v2:deadbeef:body".to_string()),
+            primary
+        ));
+        // v2 already under the primary key id: skip.
+        assert!(!needs_reseal(
+            &Some(format!("enc:v2:{primary}:body")),
+            primary
+        ));
     }
 }
