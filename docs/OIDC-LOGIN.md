@@ -152,6 +152,29 @@ on the org/team claim the broker exposes.
    Credentials, `QUARK_OIDC_ADMIN_CLAIM=groups`,
    `QUARK_OIDC_ADMIN_VALUE=/quark-admins` (Keycloak group paths start with `/`).
 
+## Home-realm discovery (multi-tenant)
+
+In multi-tenant (cloud) mode each tenant can bring its own IdP, stored per tenant
+rather than in the `QUARK_OIDC_*` environment. A member then signs in through
+their own company's provider, found from their email domain, without picking it
+from a list.
+
+An admin registers the mapping once, on the SSO domains admin page:
+
+1. Add the company email domain, for example `acme.com` (`POST /admin/sso-domains`).
+2. quark returns a TXT record to publish (`_quark-sso.<domain>`). Add it in your
+   DNS, then trigger verification (`POST /admin/sso-domains/:id/verify`); quark
+   looks the record up and, on a match, marks the domain `verified`.
+
+Once the domain is verified and its tenant has an OIDC config, the login page
+routes by email: a user who types `someone@acme.com` and presses Continue goes
+straight to Acme's IdP, with the email forwarded as `login_hint` so the provider
+pre-fills it. This is resolved by `GET /admin/sso/discover`, which returns only
+the tenant slug and the same empty body for every non-match, so an
+unauthenticated caller cannot probe which domains are claimed. A domain that is
+unmapped, not yet verified, or whose tenant has no OIDC config falls back to the
+shared provider sign-in button.
+
 ## Notes and limits
 
 - Break-glass: `QUARK_ADMIN_TOKEN` always authenticates as full access, so a
