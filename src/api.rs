@@ -5605,7 +5605,10 @@ mod tests {
         let st = multi_tenant_state().await;
         let resp = super::oidc_login(
             State(st),
-            axum::extract::Query(super::LoginParams { org: None, login_hint: None }),
+            axum::extract::Query(super::LoginParams {
+                org: None,
+                login_hint: None,
+            }),
             ReqHeaderMap::new(),
         )
         .await;
