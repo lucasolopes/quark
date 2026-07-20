@@ -8,7 +8,7 @@ use quark::analytics::AnalyticsSink;
 use quark::api::router;
 use quark::cache::Cache;
 use quark::store::{postgres::PostgresStore, Store};
-use serial_test::serial;
+use serial_test::file_serial;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -53,7 +53,7 @@ fn test_webhook_dispatcher() -> Arc<quark::webhooks::delivery::WebhookDispatcher
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn unique_ids_across_replicas_pg() {
     let Some(url) = test_url() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -88,7 +88,7 @@ async fn unique_ids_across_replicas_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn create_on_replica_a_redirect_on_replica_b_pg() {
     let Some(url) = test_url() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");

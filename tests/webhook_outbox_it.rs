@@ -5,7 +5,7 @@ use axum::Router;
 use quark::store::{postgres::PostgresStore, OutboxRow, Store};
 use quark::webhooks::delivery::{poll_once, MAX_DELIVERY_ATTEMPTS, RELAY_BATCH};
 use quark::webhooks::{EventType, SubscriptionKind, WebhookSubscription};
-use serial_test::serial;
+use serial_test::file_serial;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
@@ -168,7 +168,7 @@ async fn count_rows(pool: &PgPool, key: &str) -> i64 {
 
 /// Enqueue -> relay delivers to the mock server -> every row marked delivered.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn relay_delivers_all_enqueued() {
     let Some((store, pool)) = setup().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -202,7 +202,7 @@ async fn relay_delivers_all_enqueued() {
 /// NOT be dead-lettered. The relay looks the sub up in the store authoritatively
 /// and delivers it. Before the fix it was marked dead with attempts=0.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn delivery_for_sub_missing_from_snapshot_is_looked_up_not_dead_lettered() {
     let Some((store, pool)) = setup().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -232,7 +232,7 @@ async fn delivery_for_sub_missing_from_snapshot_is_looked_up_not_dead_lettered()
 /// A 500 endpoint: attempts grow, next_attempt_at grows, then dead=true after
 /// MAX (DLQ), and the row stops being claimed.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn failing_endpoint_dead_letters_after_max() {
     let Some((store, pool)) = setup().await else {
         return;
@@ -284,7 +284,7 @@ async fn failing_endpoint_dead_letters_after_max() {
 
 /// Two concurrent claims return disjoint rows (SKIP LOCKED, no double delivery).
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn concurrent_claims_are_disjoint() {
     let Some((store, _pool)) = setup().await else {
         return;
@@ -315,7 +315,7 @@ async fn concurrent_claims_are_disjoint() {
 /// The webhook-id header equals delivery_key and is identical across two
 /// attempts of the same row (the persisted idempotency key).
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn webhook_id_equals_delivery_key_across_attempts() {
     let Some((store, _pool)) = setup().await else {
         return;
@@ -362,7 +362,7 @@ async fn webhook_id_equals_delivery_key_across_attempts() {
 /// ON CONFLICT (delivery_key) DO NOTHING: enqueuing the same (event, sub) twice
 /// inserts a single row.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn duplicate_enqueue_inserts_one_row() {
     let Some((store, pool)) = setup().await else {
         return;
@@ -387,7 +387,7 @@ async fn duplicate_enqueue_inserts_one_row() {
 /// dropped `tenant_id` here would make the relay look up the subscription in
 /// the wrong tenant once P2b creates real tenants.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn claim_due_deliveries_round_trips_tenant_id() {
     let Some((store, _pool)) = setup().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");

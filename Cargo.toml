@@ -39,7 +39,13 @@ csv = "1"
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
-serial_test = "3"
+# `file_locks` enables `#[file_serial]`: a cross-process lock. Plain `#[serial]`
+# only serializes within one test binary, but `cargo test` runs the integration
+# test binaries in parallel against the SAME shared Postgres, so two binaries
+# would concurrently run schema DDL / `FORCE ROW LEVEL SECURITY` / `TRUNCATE`
+# and race (a non-tenant query seeing `no rows` once another binary FORCEs RLS).
+# A file lock serializes them across processes.
+serial_test = { version = "3", features = ["file_locks"] }
 tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"
 tower = "0.5"

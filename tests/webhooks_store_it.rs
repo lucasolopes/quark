@@ -1,6 +1,6 @@
 use quark::store::{postgres::PostgresStore, Store};
 use quark::webhooks::{EventType, SubscriptionKind, WebhookSubscription};
-use serial_test::serial;
+use serial_test::file_serial;
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
@@ -10,7 +10,7 @@ async fn fresh() -> Option<PostgresStore> {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn webhook_crud_round_trip_pg() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -62,7 +62,7 @@ async fn webhook_crud_round_trip_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn next_webhook_id_increments_pg() {
     let Some(store) = fresh().await else {
         return;

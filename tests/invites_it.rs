@@ -12,7 +12,7 @@ use quark::store::postgres::PostgresStore;
 use quark::store::{open_backends, Store};
 use quark::tenant::{Membership, Role, Tenant, TenantId, User};
 use quark::webhooks::delivery::WebhookDispatcher;
-use serial_test::serial;
+use serial_test::file_serial;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -70,7 +70,7 @@ async fn make_invite(
 /// The full lifecycle: create -> hash lookup finds it -> accept -> hash
 /// lookup no longer finds it (accepted invites are invisible).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn invite_accept_hides_it_from_hash_lookup() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -110,7 +110,7 @@ async fn invite_accept_hides_it_from_hash_lookup() {
 /// below, which asserts the second accept returns 404 and grants no second
 /// membership.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn mark_invite_accepted_is_single_winner() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -149,7 +149,7 @@ async fn mark_invite_accepted_is_single_winner() {
 /// call against the same invite loses the claim (`Ok(false)`) without
 /// touching the membership that already exists.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn accept_invite_tx_claims_and_grants_atomically() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -219,7 +219,7 @@ async fn accept_invite_tx_claims_and_grants_atomically() {
 /// membership row, never two grants and never a consumed invite with no
 /// membership at all.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn accept_invite_tx_concurrent_accepts_grant_membership_once() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -273,7 +273,7 @@ async fn accept_invite_tx_concurrent_accepts_grant_membership_once() {
 /// An invite whose `expires` is before `now` is invisible to the hash lookup,
 /// even though it was never accepted.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn expired_invite_is_invisible_to_hash_lookup() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -302,7 +302,7 @@ async fn expired_invite_is_invisible_to_hash_lookup() {
 /// `list_invites` is tenant-scoped: tenant B never sees tenant A's pending
 /// invite.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn list_invites_is_tenant_scoped() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -326,7 +326,7 @@ async fn list_invites_is_tenant_scoped() {
 /// `delete_invite` is tenant-scoped: tenant B cannot delete tenant A's
 /// invite by id, and tenant A's own delete removes it from its list.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn delete_invite_is_tenant_scoped() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -458,7 +458,7 @@ async fn create_invite(
 /// Create with `role: "member"` returns a token in the body, and the store
 /// only ever holds its hash (`token_hash != token`).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_invite_returns_token_and_stores_only_hash() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -489,7 +489,7 @@ async fn create_invite_returns_token_and_stores_only_hash() {
 /// Create with `role: "owner"` is rejected: an invite can never grant
 /// ownership.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_invite_with_owner_role_is_400() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -509,7 +509,7 @@ async fn create_invite_with_owner_role_is_400() {
 /// invite could never be redeemed since accept matches on the session's
 /// user email.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_invite_with_empty_email_is_400() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -532,7 +532,7 @@ async fn create_invite_with_empty_email_is_400() {
 /// A caller with insufficient scope (Viewer: links_read + analytics, no
 /// `Scope::Full`) cannot create an invite -> 403.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_invite_by_viewer_is_403() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -557,7 +557,7 @@ async fn create_invite_by_viewer_is_403() {
 /// `GET /admin/invites` only returns the caller's tenant's pending invites,
 /// and never the `token_hash` field.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn list_invites_http_is_tenant_scoped_and_hides_hash() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -614,7 +614,7 @@ async fn list_invites_http_is_tenant_scoped_and_hides_hash() {
 
 /// `DELETE /admin/invites/:id` removes the invite.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn delete_invite_http_removes_it() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -663,7 +663,7 @@ async fn delete_invite_http_removes_it() {
 
 /// All three `/admin/invites` endpoints 404 when `multi_tenant = false`.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn invites_endpoints_404_in_oss() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -802,7 +802,7 @@ async fn accept_invite(
 /// so accepting grants the invited role, marks the invite accepted (a
 /// second accept then 404s), and re-points the session's tenant.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn accept_invite_grants_membership_and_repoints_session() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -841,7 +841,7 @@ async fn accept_invite_grants_membership_and_repoints_session() {
 
 /// A wrong/unknown token 404s.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn accept_invite_wrong_token_is_404() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -857,7 +857,7 @@ async fn accept_invite_wrong_token_is_404() {
 
 /// An expired invite 404s (never accepted, just past `expires`).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn accept_invite_expired_is_404() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -877,7 +877,7 @@ async fn accept_invite_expired_is_404() {
 /// A session whose `User.email` does not match the invite's target email is
 /// rejected with 403, and no membership is granted.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn accept_invite_email_mismatch_is_403() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -909,7 +909,7 @@ async fn accept_invite_email_mismatch_is_403() {
 /// A user who already has a membership on the invite's tenant gets 409, and
 /// the existing membership's role is left untouched.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn accept_invite_already_member_is_409() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -950,7 +950,7 @@ async fn accept_invite_already_member_is_409() {
 
 /// No session cookie at all -> 401, before the invite is even looked up.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn accept_invite_no_session_is_401() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -975,7 +975,7 @@ async fn accept_invite_no_session_is_401() {
 
 /// `multi_tenant = false` (OSS) -> 404, same gate as create/list/revoke.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn accept_invite_404_in_oss() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1073,7 +1073,7 @@ async fn oss_invites_endpoints_are_404_without_postgres() {
 /// boundary, where `admin_guard` resolves the tenant from the caller's own
 /// token rather than a test taking it on faith).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn list_and_delete_invites_http_are_tenant_scoped_for_non_superuser() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1151,7 +1151,7 @@ async fn list_and_delete_invites_http_are_tenant_scoped_for_non_superuser() {
 /// `quark-admins`/`quark-readers`, so every invited role must land in one of
 /// the two).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_invite_with_keycloak_provisions_member_into_readers_group() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1196,7 +1196,7 @@ async fn create_invite_with_keycloak_provisions_member_into_readers_group() {
 /// `role: "viewer"` also maps to `quark-readers` (same group as Member — see
 /// the mapping note above).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_invite_with_keycloak_provisions_viewer_into_readers_group() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1231,7 +1231,7 @@ async fn create_invite_with_keycloak_provisions_viewer_into_readers_group() {
 
 /// `role: "admin"` maps to `quark-admins`, distinct from Member/Viewer.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_invite_with_keycloak_provisions_admin_into_admins_group() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1269,7 +1269,7 @@ async fn create_invite_with_keycloak_provisions_admin_into_admins_group() {
 /// no membership to check either way (model B never grants it here), so this
 /// only asserts the invite row survives a Keycloak-side failure.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_invite_with_keycloak_failure_still_stores_the_invite() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1344,7 +1344,7 @@ impl quark::keycloak::KeycloakAdmin for FailingKeycloakAdmin {
 /// model B only creates membership at first OIDC login, off the group claim.
 /// The response instead points the caller at their org's login.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn accept_invite_with_keycloak_grants_no_membership() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1400,7 +1400,7 @@ async fn accept_invite_with_keycloak_grants_no_membership() {
 /// negative side explicitly: a session-app built with keycloak wired to
 /// `None` never takes the login-redirect branch.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn accept_invite_without_keycloak_keeps_model_a_behavior() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");

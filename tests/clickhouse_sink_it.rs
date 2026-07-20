@@ -1,6 +1,6 @@
 use quark::analytics::clickhouse::ClickHouseSink;
 use quark::analytics::{AnalyticsSink, ClickEvent};
-use serial_test::serial;
+use serial_test::file_serial;
 
 async fn fresh() -> Option<ClickHouseSink> {
     let url = std::env::var("QUARK_TEST_CLICKHOUSE_URL").ok()?;
@@ -42,7 +42,7 @@ fn ev_full(id: u64, ts: u64, ua: &str, referer: Option<&str>, city: Option<&str>
 }
 
 #[tokio::test]
-#[serial(ch)]
+#[file_serial]
 async fn record_and_stats_ch() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_CLICKHOUSE_URL not set");
@@ -79,7 +79,7 @@ async fn record_and_stats_ch() {
 }
 
 #[tokio::test]
-#[serial(ch)]
+#[file_serial]
 async fn bot_filter_ch() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_CLICKHOUSE_URL not set");
@@ -118,7 +118,7 @@ async fn bot_filter_ch() {
 }
 
 #[tokio::test]
-#[serial(ch)]
+#[file_serial]
 async fn recent_limits_to_n_ch() {
     let Some(s) = fresh().await else {
         return;
@@ -133,7 +133,7 @@ async fn recent_limits_to_n_ch() {
 }
 
 #[tokio::test]
-#[serial(ch)]
+#[file_serial]
 async fn os_browser_referer_city_ch() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_CLICKHOUSE_URL not set");
@@ -180,7 +180,7 @@ async fn os_browser_referer_city_ch() {
 }
 
 #[tokio::test]
-#[serial(ch)]
+#[file_serial]
 async fn per_variant_aggregates_and_recent_ch() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_CLICKHOUSE_URL not set");

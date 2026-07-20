@@ -15,7 +15,7 @@ use quark::store::postgres::PostgresStore;
 use quark::store::Store;
 use quark::tenant::{Tenant, TenantId};
 use quark::webhooks::delivery::WebhookDispatcher;
-use serial_test::serial;
+use serial_test::file_serial;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -64,7 +64,7 @@ async fn put(store: &PostgresStore, tenant: TenantId, domain: &str) -> u64 {
 /// A pending domain round-trips through the bare lookup, and flipping it to
 /// verified persists the status + timestamp.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn put_get_bare_and_verify() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -106,7 +106,7 @@ async fn put_get_bare_and_verify() {
 /// `domain` is UNIQUE across tenants: a second tenant cannot claim a domain a
 /// first tenant already owns, and the first tenant's row is untouched.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn domain_is_unique_across_tenants() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -146,7 +146,7 @@ async fn domain_is_unique_across_tenants() {
 /// `list_sso_domains` and `get_sso_domain` are tenant-scoped: tenant B never
 /// sees tenant A's rows through the scoped accessors.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn scoped_accessors_are_tenant_isolated() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -168,7 +168,7 @@ async fn scoped_accessors_are_tenant_isolated() {
 
 /// Delete removes the row (and frees the domain for a future claim).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn delete_removes_the_row() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -320,7 +320,7 @@ async fn create_sso_domain(
 /// Creating an SSO domain for a tenant that has an `oidc_config` succeeds and
 /// returns the pending row plus the TXT verification instructions.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_returns_pending_with_instructions_when_sso_configured() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -357,7 +357,7 @@ async fn create_returns_pending_with_instructions_when_sso_configured() {
 /// Without an `oidc_config`, creating an SSO domain is rejected before any
 /// row is written.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_without_oidc_config_is_rejected() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -387,7 +387,7 @@ async fn create_without_oidc_config_is_rejected() {
 /// A domain already claimed by another tenant is a 409, even when the
 /// second tenant also has an `oidc_config`.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_duplicate_domain_across_tenants_is_409() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -426,7 +426,7 @@ async fn create_duplicate_domain_across_tenants_is_409() {
 
 /// `verify` with a `FakeDns` returning the domain's token marks it `Verified`.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn verify_with_matching_txt_marks_verified() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -490,7 +490,7 @@ async fn verify_with_matching_txt_marks_verified() {
 
 /// `verify` with no matching TXT record leaves the domain `pending`.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn verify_with_wrong_txt_stays_pending() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -553,7 +553,7 @@ async fn verify_with_wrong_txt_stays_pending() {
 /// `list`/`delete` are tenant-scoped: tenant B's admin view never sees
 /// tenant A's SSO domain, and cannot delete it by id either.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn list_and_delete_are_tenant_scoped() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -670,7 +670,7 @@ async fn list_and_delete_are_tenant_scoped() {
 
 /// All four `/admin/sso-domains` endpoints 404 in OSS (`multi_tenant = false`).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn endpoints_404_in_oss() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -740,7 +740,7 @@ async fn endpoints_404_in_oss() {
 /// An API token with insufficient scope (not `Full`) is rejected with 403,
 /// mirroring the P3 custom-domains scope contract.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn insufficient_scope_is_403() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -854,7 +854,7 @@ fn urlencoding_light(s: &str) -> String {
 /// tenant's slug, and the response body carries `org` only -- no
 /// `tenant_id` anywhere.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn discover_verified_with_oidc_returns_org_slug() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -883,7 +883,7 @@ async fn discover_verified_with_oidc_returns_org_slug() {
 /// A `Pending` (unverified) domain must never route -- anti-hijack
 /// guarantee -- so discovery returns the uniform empty body.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn discover_pending_domain_returns_empty() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -909,7 +909,7 @@ async fn discover_pending_domain_returns_empty() {
 /// non-match -- an unauthenticated caller cannot distinguish "no such
 /// domain" from "domain exists but isn't ready".
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn discover_unknown_domain_returns_empty() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -931,7 +931,7 @@ async fn discover_unknown_domain_returns_empty() {
 /// disabled) must not route either -- there'd be nowhere for the login to
 /// go, and this would otherwise reveal that the domain is claimed.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn discover_verified_without_oidc_config_returns_empty() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -962,7 +962,7 @@ async fn discover_verified_without_oidc_config_returns_empty() {
 /// A malformed email (no `@`, or otherwise not `normalize_email_domain`-able)
 /// returns the same uniform empty body -- never a 400.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn discover_malformed_email_returns_empty() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -983,7 +983,7 @@ async fn discover_malformed_email_returns_empty() {
 /// No `email` query param at all returns the same uniform empty body as a
 /// malformed email -- the missing-param branch must not 400 or diverge.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn discover_without_email_param_returns_empty() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1019,7 +1019,7 @@ async fn discover_without_email_param_returns_empty() {
 
 /// OSS (`multi_tenant = false`) 404s the discovery endpoint entirely.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn discover_404_in_oss() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1039,7 +1039,7 @@ async fn discover_404_in_oss() {
 /// one-request burst, the first call succeeds and the second (same IP)
 /// trips `429` (mirrors `api_it::rate_limit_429_after_exceeding`).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn discover_rate_limit_429_after_exceeding() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1058,7 +1058,7 @@ async fn discover_rate_limit_429_after_exceeding() {
 /// one-request burst the first create succeeds and a second immediately
 /// after (same IP) trips `429` before ever reaching the store.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_is_rate_limited() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");

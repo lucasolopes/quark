@@ -1,5 +1,5 @@
 use quark::store::{postgres::PostgresStore, Record, Store};
-use serial_test::serial;
+use serial_test::file_serial;
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
@@ -54,7 +54,7 @@ async fn seed_links(s: &PostgresStore, links: &[(&str, Option<&str>)]) -> Vec<u6
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn search_matches_url_and_alias() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -97,7 +97,7 @@ async fn search_matches_url_and_alias() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn search_escapes_wildcards() {
     let Some(store) = fresh().await else {
         return;
@@ -134,7 +134,7 @@ async fn search_escapes_wildcards() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn search_is_case_insensitive() {
     let Some(store) = fresh().await else {
         return;
@@ -171,7 +171,7 @@ async fn search_is_case_insensitive() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn search_keyset_pagination() {
     let Some(store) = fresh().await else {
         return;

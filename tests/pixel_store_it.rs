@@ -1,7 +1,7 @@
 use quark::pixel::{PixelConfig, PixelCredentials, Provider};
 use quark::store::postgres::PostgresStore;
 use quark::store::Store;
-use serial_test::serial;
+use serial_test::file_serial;
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
@@ -11,7 +11,7 @@ async fn fresh() -> Option<PostgresStore> {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn next_pixel_id_increments_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -29,7 +29,7 @@ async fn next_pixel_id_increments_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn pixel_round_trip_pg() {
     let Some(s) = fresh().await else {
         return;
@@ -91,7 +91,7 @@ async fn pixel_round_trip_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn pixel_put_upserts_pg() {
     let Some(s) = fresh().await else {
         return;
