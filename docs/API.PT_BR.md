@@ -2,7 +2,7 @@
 
 # Referência da API HTTP
 
-Toda rota que o quark serve, de `src/api.rs` (`router_with_cors`). Duas rotas
+Toda rota que o quark serve, de `src/api/router.rs` (`router_with_cors`). Duas rotas
 são públicas por default (`POST /` e `GET /:code`); os arquivos well-known são
 sempre públicos; tudo em `/admin/*` e `GET /:code/stats` é protegido.
 

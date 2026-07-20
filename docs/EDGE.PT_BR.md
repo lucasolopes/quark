@@ -12,7 +12,7 @@ RTT completo em toda clicada, mesmo que o link nunca mude.
 ## O que o quark manda (e isso já funciona)
 
 Toda resposta de redirect carrega um `Cache-Control` calculado a partir do TTL
-do link (`src/api.rs`, `cache_control_for`):
+do link (`src/api/links.rs`, `cache_control_for`):
 
 | Situação | Status | `Cache-Control` |
 |---|---|---|

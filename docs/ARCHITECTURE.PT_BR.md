@@ -36,7 +36,7 @@ flowchart LR
 | `cluster` | Preflight de startup que falha um deploy multi-nó estrito sem suas deps de estado compartilhado. Decisão pura, com teste unitário. | (puro) |
 | `calibrate` | Harness offline de avalanche/SAC que mede a difusão do `permute` e escolhe `ROUNDS`. Fora do serviço em execução. | `permute` (uma cópia da matemática) |
 
-`permute` e `calibrate` são o diferencial; todo o resto é engenharia padrão e trocável (LMDB podia virar `redb`, moka qualquer outro cache, axum qualquer coisa que fale HTTP). Os handlers HTTP e o router vivem todos num módulo só, `src/api.rs`, agrupados por comentário; os tipos de request/response são structs serde inline nesse arquivo.
+`permute` e `calibrate` são o diferencial; todo o resto é engenharia padrão e trocável (LMDB podia virar `redb`, moka qualquer outro cache, axum qualquer coisa que fale HTTP). Os handlers HTTP e o router vivem em `src/api/`, um módulo de diretório dividido por área (`links`, `guard`, `oidc_login`, `tenants`, `domains`, `webhooks_api`, `router`, ...); os tipos de request/response são structs serde inline no submódulo que os usa.
 
 ## Fluxo de criação
 
