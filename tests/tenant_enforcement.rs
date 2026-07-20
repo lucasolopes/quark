@@ -23,6 +23,8 @@ use quark::webhooks::{EventType, SubscriptionKind, WebhookSubscription};
 use std::sync::Arc;
 use tower::ServiceExt;
 
+mod common;
+
 fn rec(url: &str) -> Record {
     Record {
         url: url.into(),
@@ -284,31 +286,14 @@ fn cloud_state(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>) -> Arc<AppSt
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: true,
-        multi_tenant: true,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    })
+    common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .oidc_configured(true)
+        .multi_tenant(true)
+        .build()
 }
 
 /// Puts a login session (keyed by the hash of `raw`) for `user_id` in `tenant`.

@@ -2,10 +2,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use base64::{engine::general_purpose::STANDARD as b64, Engine as _};
 use quark::analytics::AnalyticsSink;
-use quark::api::{router, AppState};
+use quark::api::router;
 use quark::auth::{hash_token, ApiToken, Scope};
 use quark::cache::Cache;
-use quark::dns::NullDns;
 use quark::oidc::TenantOidcConfig;
 use quark::store::postgres::PostgresStore;
 use quark::store::{open_backends, Store};
@@ -16,6 +15,8 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tower::ServiceExt;
+
+mod common;
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
@@ -274,31 +275,15 @@ async fn admin_app_with_scopes(
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store_dyn,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink: sink_dyn,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: Some("quark.example.com".to_string()),
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: Arc::new(NullDns),
-    });
+    let state = common::TestState::new(store_dyn, sink_dyn)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .key(KEY)
+        .public_host(Some("quark.example.com".to_string()))
+        .multi_tenant(multi_tenant)
+        .build();
     (router(state), raw)
 }
 
@@ -651,31 +636,14 @@ async fn oidc_config_endpoints_404_in_oss_without_postgres() {
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: true,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: Arc::new(NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .key(KEY)
+        .oidc_configured(true)
+        .build();
     let app = router(state);
 
     let (status, _, _) = put_oidc_config_http(&app, "whatever", put_body()).await;
@@ -707,31 +675,13 @@ async fn oss_login_and_callback_404_without_oidc_configured_or_postgres() {
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: Arc::new(NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .key(KEY)
+        .build();
     let app = router(state);
 
     let login_resp = app
@@ -769,31 +719,13 @@ async fn oss_org_login_404_at_router_level() {
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: Arc::new(NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .key(KEY)
+        .build();
     let app = router(state);
 
     let resp = app
@@ -822,31 +754,16 @@ async fn admin_app_with_breakglass_token(store: Arc<PostgresStore>, token: &str)
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: true,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store_dyn,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink: sink_dyn,
-        admin_token: Some(token.to_string()),
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: Some("quark.example.com".to_string()),
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: Arc::new(NullDns),
-    });
+    let state = common::TestState::new(store_dyn, sink_dyn)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .key(KEY)
+        .admin_token(Some(token.to_string()))
+        .public_host(Some("quark.example.com".to_string()))
+        .multi_tenant(true)
+        .build();
     router(state)
 }
 

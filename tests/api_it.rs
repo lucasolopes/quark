@@ -1,11 +1,13 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::analytics::ClickEvent;
-use quark::api::{router, AppState};
+use quark::api::router;
 use quark::cache::Cache;
 use quark::store::open_backends;
 use std::sync::Arc;
 use tower::ServiceExt;
+
+mod common;
 
 async fn app() -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
@@ -17,31 +19,12 @@ async fn app() -> axum::Router {
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .build();
     router(state)
 }
 
@@ -800,31 +783,14 @@ async fn unlock_post_is_rate_limited() {
         None,
     ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: Some("secret".to_string()),
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::memory(1),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(Some("secret".to_string()))
+        .ratelimiter(quark::abuse::ratelimit::RateLimiter::memory(1))
+        .build();
     let app = router(state);
     let code = create_protected(&app, "https://secret.example.com", "hunter2").await;
 
@@ -912,31 +878,13 @@ async fn rate_limit_429_after_exceeding() {
         None,
     ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::memory(1),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .ratelimiter(quark::abuse::ratelimit::RateLimiter::memory(1))
+        .build();
     let app = router(state);
     let mk = || {
         Request::post("/")
@@ -1052,31 +1000,13 @@ async fn app_admin(token: &str) -> axum::Router {
         None,
     ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: Some(token.to_string()),
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(Some(token.to_string()))
+        .build();
     router(state)
 }
 
@@ -1536,31 +1466,12 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
         None,
     ));
     let (analytics_tx, rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .build();
     (router(state), rx)
 }
 
@@ -2244,31 +2155,12 @@ async fn cors_header_present_when_configured() {
         None,
     ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".into(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .build();
     let app = quark::api::router_with_cors(state, vec!["https://panel.example".into()]);
     let resp = app
         .oneshot(
@@ -2585,31 +2477,13 @@ async fn admin_links_reports_health_and_broken_filter() {
         None,
     ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store.clone(),
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: Some("secret".to_string()),
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store.clone(), sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(Some("secret".to_string()))
+        .build();
     let app = router(state);
 
     let mk = |url: &str| {
@@ -2714,31 +2588,14 @@ async fn session_cookie_authorizes_admin_by_scope() {
         None,
     ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: true,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store.clone(),
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: Some("secret".to_string()),
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store.clone(), sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(Some("secret".to_string()))
+        .oidc_configured(true)
+        .build();
     let app = router(state);
     let now = 1_000_000u64;
     // A reader session (links_read + analytics) can list links.
@@ -2858,31 +2715,13 @@ async fn admin_me_reports_session_and_oidc_state() {
         None,
     ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store.clone(),
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: Some("secret".to_string()),
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store.clone(), sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(Some("secret".to_string()))
+        .build();
     let app = router(state);
 
     // No session -> authenticated:false, oidc_enabled:false.
@@ -2966,31 +2805,14 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
         None,
     ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: true,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store.clone(),
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: Some("secret".to_string()),
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store.clone(), sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(Some("secret".to_string()))
+        .oidc_configured(true)
+        .build();
     let app = router(state);
     let now = 1_000_000u64;
 
@@ -3091,31 +2913,14 @@ async fn logout_requires_csrf_header_and_revokes_session() {
         None,
     ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: true,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store.clone(),
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: Some("secret".to_string()),
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store.clone(), sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(Some("secret".to_string()))
+        .oidc_configured(true)
+        .build();
     let app = router(state);
     store
         .put_session(
@@ -3183,32 +2988,14 @@ async fn session_cookie_is_ignored_when_oidc_not_configured() {
         None,
     ));
     let (tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        // OIDC turned off (e.g. QUARK_OIDC_ISSUER unset) while a token stays set.
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store.clone(),
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: Some("secret".to_string()),
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    // OIDC turned off (e.g. QUARK_OIDC_ISSUER unset) while a token stays set.
+    let state = common::TestState::new(store.clone(), sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(Some("secret".to_string()))
+        .build();
     let app = router(state);
     // A previously issued, still-unexpired full-scope session.
     store
@@ -3273,31 +3060,15 @@ async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
         None,
     )
     .unwrap();
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: Some(Arc::new(cfg)),
-        sheets_api: None,
-        oidc_configured: true,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store.clone(),
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: Some("secret".to_string()),
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store.clone(), sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(Some("secret".to_string()))
+        .oidc_configured(true)
+        .sheets(Some(Arc::new(cfg)))
+        .build();
     // Seed a connection whose refresh token must never appear in a response.
     store
         .put_sheets_connection(
@@ -3394,31 +3165,15 @@ async fn sheets_callback_requires_the_state_cookie() {
         None,
     )
     .unwrap();
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: Some(Arc::new(cfg)),
-        sheets_api: None,
-        oidc_configured: true,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store.clone(),
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: Some("secret".to_string()),
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store.clone(), sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(Some("secret".to_string()))
+        .oidc_configured(true)
+        .sheets(Some(Arc::new(cfg)))
+        .build();
     let app = router(state);
 
     // Connect (admin-authed) returns the consent URL and sets the state cookie.
@@ -3486,31 +3241,14 @@ async fn sheets_connect_binds_the_state_cookie_to_the_callers_tenant() {
     )
     .unwrap();
     let signing_key = [0u8; 32];
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: Some(Arc::new(cfg)),
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store.clone(),
-        key: 0x1234,
-        signing_key,
-        analytics_tx: tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store.clone(), sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .signing_key(signing_key)
+        .sheets(Some(Arc::new(cfg)))
+        .build();
     let tenant = quark::tenant::TenantId(42);
     store
         .put_api_token(
