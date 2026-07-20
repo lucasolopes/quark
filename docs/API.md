@@ -2,9 +2,13 @@
 
 # HTTP API reference
 
-Every route quark serves, from `src/api/router.rs` (`router_with_cors`). Two routes are
-public by default (`POST /` and `GET /:code`); the well-known files are always
-public; everything under `/admin/*` and `GET /:code/stats` is gated.
+The core routes quark serves, from `src/api/router.rs` (`router_with_cors`). Two
+routes are public by default (`POST /` and `GET /:code`); the well-known files
+are always public; everything under `/admin/*` and `GET /:code/stats` is gated.
+The multi-tenant (cloud) admin routes (`/admin/tenants`, `/admin/domains`,
+`/admin/sso-domains`, `/admin/invites`, `/admin/oidc-config`, and
+`/admin/integrations/sheets`) are documented in their own feature pages, not
+here.
 
 Timestamps (`created`, `expiry`, `ts`, `timestamp`) are unix seconds. A `code`
 is either a computed 7-character base62 string or a custom alias.
@@ -141,6 +145,17 @@ holds `total`, `bots`, `first_ts`, `last_ts`, and the `per_day`, `per_country`,
 maps. `recent` is the newest click events (up to 1000). A link with no clicks
 returns empty aggregates and an empty list. See [ANALYTICS](ANALYTICS.md).
 
+### `GET /admin/stats`
+
+Dashboard aggregate across the whole workspace (not one link). Scope:
+`analytics`. Returns `200` with the tenant-wide aggregates; `503` if the
+analytics sink is unavailable.
+
+### `DELETE /admin/links/:code/analytics`
+
+Purge a single link's stored click analytics, leaving the link itself. Scope:
+`links_write`. `200` on success, `404` if the code does not resolve.
+
 ## Link management
 
 ### `GET /admin/links`
@@ -197,6 +212,24 @@ rejected field.
 
 Remove a link (and its alias, if the code was an alias). Scope: `links_write`.
 `200` on success, `404` if it does not resolve.
+
+### `POST /admin/links/bulk`
+
+Apply one operation to many links at once. Scope: `links_write`. Body
+`{codes: [...], op, value?}` where `op` is `add_tag`, `remove_tag`, `set_folder`,
+or `delete`. `value` is required for the tag ops; for `set_folder` an empty or
+missing value removes the link from its folder; `delete` ignores it. Up to 500
+codes per call. Never aborts on a bad code: `200` with
+`{"results": [{code, ok, error?}], "ok": N, "failed": M}`. `400` on invalid
+JSON, an empty or oversized `codes` list, or a missing required `value`.
+
+### `GET|PUT|DELETE /admin/links/:code/alert`
+
+The click-threshold alert on a link: fire the `link.threshold_reached` webhook
+when the link is clicked at least `threshold` times within a fixed window. `GET`
+reads the current config (scope `links_read`); `PUT` sets it (scope
+`links_write`); `DELETE` removes it (scope `links_write`). `404` if the code does
+not resolve. See [WEBHOOKS](WEBHOOKS.md).
 
 ### `POST /admin/import`
 
@@ -258,5 +291,8 @@ Manage the deep-linking association files. Scope: `full`. `:name` must be
 ## CORS
 
 When `QUARK_CORS_ORIGINS` is set (comma-separated), quark adds a CORS layer
-allowing those origins with `GET, POST, PUT, PATCH, DELETE` and any headers.
-Unset means same-origin only. This is for the separately hosted web panel.
+allowing those origins with `GET, POST, PUT, PATCH, DELETE` and the request
+headers `content-type`, `x-admin-token`, and `x-quark-csrf`. Credentials are
+allowed (so the OIDC session cookie is accepted cross-origin), which is why the
+allowed headers are an explicit list, not `*`. Unset means same-origin only.
+This is for the separately hosted web panel.

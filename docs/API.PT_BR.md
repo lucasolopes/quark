@@ -2,9 +2,13 @@
 
 # Referência da API HTTP
 
-Toda rota que o quark serve, de `src/api/router.rs` (`router_with_cors`). Duas rotas
-são públicas por default (`POST /` e `GET /:code`); os arquivos well-known são
-sempre públicos; tudo em `/admin/*` e `GET /:code/stats` é protegido.
+As rotas core que o quark serve, de `src/api/router.rs` (`router_with_cors`).
+Duas rotas são públicas por default (`POST /` e `GET /:code`); os arquivos
+well-known são sempre públicos; tudo em `/admin/*` e `GET /:code/stats` é
+protegido. As rotas admin de multi-tenant (cloud) (`/admin/tenants`,
+`/admin/domains`, `/admin/sso-domains`, `/admin/invites`, `/admin/oidc-config` e
+`/admin/integrations/sheets`) estão documentadas nas suas próprias páginas de
+feature, não aqui.
 
 Timestamps (`created`, `expiry`, `ts`, `timestamp`) são em segundos unix. Um
 `code` é uma string base62 computada de 7 caracteres ou um alias customizado.
@@ -144,6 +148,17 @@ Sucesso: `200` com `{"aggregates": {...}, "recent": [...]}`. `aggregates` tem
 sem cliques retorna agregados vazios e lista vazia. Veja
 [ANALYTICS](ANALYTICS.PT_BR.md).
 
+### `GET /admin/stats`
+
+Agregado do dashboard no workspace inteiro (não por link). Escopo: `analytics`.
+Retorna `200` com os agregados do tenant; `503` se o sink de analytics estiver
+indisponível.
+
+### `DELETE /admin/links/:code/analytics`
+
+Apaga os analytics de clique de um link, mantendo o link em si. Escopo:
+`links_write`. `200` no sucesso, `404` se o código não resolver.
+
 ## Gestão de links
 
 ### `GET /admin/links`
@@ -200,6 +215,24 @@ campo rejeitado.
 
 Remove um link (e o alias, se o código era alias). Escopo: `links_write`. `200`
 no sucesso, `404` se não resolve.
+
+### `POST /admin/links/bulk`
+
+Aplica uma operação a vários links de uma vez. Escopo: `links_write`. Corpo
+`{codes: [...], op, value?}` onde `op` é `add_tag`, `remove_tag`, `set_folder`
+ou `delete`. `value` é obrigatório para as ops de tag; para `set_folder` um
+valor vazio ou ausente remove o link da pasta; `delete` ignora. Até 500 códigos
+por chamada. Nunca aborta num código ruim: `200` com
+`{"results": [{code, ok, error?}], "ok": N, "failed": M}`. `400` em JSON
+inválido, lista `codes` vazia ou grande demais, ou `value` obrigatório ausente.
+
+### `GET|PUT|DELETE /admin/links/:code/alert`
+
+O alerta de limiar de cliques de um link: dispara o webhook
+`link.threshold_reached` quando o link é clicado pelo menos `threshold` vezes
+dentro de uma janela fixa. `GET` lê a config atual (escopo `links_read`); `PUT`
+define (escopo `links_write`); `DELETE` remove (escopo `links_write`). `404` se
+o código não resolve. Veja [WEBHOOKS](WEBHOOKS.PT_BR.md).
 
 ### `POST /admin/import`
 
@@ -262,5 +295,8 @@ deve ser `apple-app-site-association` ou `assetlinks.json`, senão `404`.
 ## CORS
 
 Com `QUARK_CORS_ORIGINS` setado (vírgula), o quark adiciona uma camada de CORS
-liberando essas origens com `GET, POST, PUT, PATCH, DELETE` e qualquer header.
-Sem setar é só mesma origem. É para o painel web hospedado à parte.
+liberando essas origens com `GET, POST, PUT, PATCH, DELETE` e os headers de
+request `content-type`, `x-admin-token` e `x-quark-csrf`. Credenciais são
+permitidas (para o cookie de sessão OIDC ser aceito cross-origin), e é por isso
+que os headers permitidos são uma lista explícita, não `*`. Sem setar é só
+mesma origem. É para o painel web hospedado à parte.
