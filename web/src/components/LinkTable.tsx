@@ -1,9 +1,8 @@
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { BarChart3, Check, Copy, Folder, Lock, MoreHorizontal, Pencil, QrCode, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { LinkQrDialog } from "@/components/LinkQrDialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,6 +29,10 @@ import { formatDate } from "@/lib/format";
 import { useBulkLinks, useMe } from "@/lib/queries";
 import { tagColor } from "@/lib/tag-color";
 import type { BulkOp, Link } from "@/lib/types";
+
+// qrcode.react is only needed when the QR dialog is opened; lazy-load it so it
+// lands in its own chunk instead of the main bundle.
+const LinkQrDialog = lazy(() => import("@/components/LinkQrDialog").then((m) => ({ default: m.LinkQrDialog })));
 
 /**
  * The public base for short links is the API host itself (it resolves `/:code`);
@@ -448,14 +451,16 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
       </Table>
 
       {qrLink && (
-        <LinkQrDialog
-          code={qrLink.code}
-          url={buildShortUrl(qrLink.code, tenantDomain)}
-          open
-          onOpenChange={(next) => {
-            if (!next) setQrLink(null);
-          }}
-        />
+        <Suspense fallback={null}>
+          <LinkQrDialog
+            code={qrLink.code}
+            url={buildShortUrl(qrLink.code, tenantDomain)}
+            open
+            onOpenChange={(next) => {
+              if (!next) setQrLink(null);
+            }}
+          />
+        </Suspense>
       )}
 
       <AlertDialog

@@ -1,11 +1,14 @@
 import { AlertTriangle, Bot, MousePointerClick, RotateCw, Timer, TimerReset } from "lucide-react";
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RecentEventsTable } from "@/components/RecentEventsTable";
-import { StatsCharts } from "@/components/StatsCharts";
 import { useT } from "@/i18n";
+
+// recharts is heavy; keep it out of the main bundle by loading the charts
+// component only when a link's stats are actually rendered.
+const StatsCharts = lazy(() => import("@/components/StatsCharts").then((m) => ({ default: m.StatsCharts })));
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { useStats } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -83,7 +86,9 @@ export function StatsView({ code }: { code: string }) {
 
           <p className="text-sm text-muted-foreground">{t("stats.chartsHumanOnlyHint")}</p>
 
-          <StatsCharts aggregates={query.data.aggregates} />
+          <Suspense fallback={<ChartsSkeleton />}>
+            <StatsCharts aggregates={query.data.aggregates} />
+          </Suspense>
 
           <Card className="py-0">
             <CardHeader className="pt-4">
@@ -141,12 +146,19 @@ function StatsSkeleton() {
           <Skeleton key={i} className="h-20 w-full" />
         ))}
       </div>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {Array.from({ length: 3 }).map((_, i) => (
-          <Skeleton key={i} className="h-64 w-full" />
-        ))}
-      </div>
+      <ChartsSkeleton />
       <Skeleton className="h-48 w-full" />
+    </div>
+  );
+}
+
+/** Chart-grid placeholder shown while the lazy recharts chunk loads. */
+function ChartsSkeleton() {
+  return (
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" aria-hidden="true">
+      {Array.from({ length: 3 }).map((_, i) => (
+        <Skeleton key={i} className="h-64 w-full" />
+      ))}
     </div>
   );
 }
