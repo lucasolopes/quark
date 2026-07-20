@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -26,21 +26,11 @@ import { Combobox } from "@/components/Combobox";
 import { applyUtm, deleteUtmTemplate, loadUtmTemplates, saveUtmTemplate, type UtmParams } from "@/lib/utm";
 import { parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import { RulesEditor } from "@/components/RulesEditor";
-import { distributeEvenly, variantsPercentTotal, MAX_VARIANTS } from "@/lib/variants";
+import { VariantsEditor } from "@/components/VariantsEditor";
+import { useVariantRows } from "@/hooks/useVariantRows";
 import { DurationField } from "@/components/DurationField";
 import { DEFAULT_DURATION_UNIT, durationToSeconds } from "@/lib/duration";
-import type { Folder, Variant } from "@/lib/types";
-
-interface VariantRow {
-  url: string;
-  weight: string;
-}
-
-/** Reassign percentages so the rows split 100% evenly, keeping their URLs. */
-function rebalance(rows: VariantRow[]): VariantRow[] {
-  const pct = distributeEvenly(rows.length);
-  return rows.map((row, i) => ({ ...row, weight: String(pct[i]) }));
-}
+import type { Folder } from "@/lib/types";
 
 interface FormErrors {
   url?: string;
@@ -86,8 +76,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
   const [folder, setFolder] = useState("");
   const [maxVisits, setMaxVisits] = useState("");
   const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>([]);
-  const [showVariants, setShowVariants] = useState(false);
-  const [variantRows, setVariantRows] = useState<VariantRow[]>([]);
+  const variants = useVariantRows([]);
   const [appIos, setAppIos] = useState("");
   const [appAndroid, setAppAndroid] = useState("");
   const [fallbackUrl, setFallbackUrl] = useState("");
@@ -112,8 +101,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
     setFolder("");
     setMaxVisits("");
     setRuleDrafts([]);
-    setShowVariants(false);
-    setVariantRows([]);
+    variants.reset();
     setAppIos("");
     setAppAndroid("");
     setFallbackUrl("");
@@ -158,24 +146,6 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
 
   const utmPreview = url.trim() ? applyUtm(url.trim(), utm) : "";
   const templateNames = Object.keys(templates);
-  const variantsTotal = variantsPercentTotal(variantRows.map((r) => r.weight));
-  const variantsTotalValid = variantRows.length === 0 || variantsTotal === 100;
-
-  function addVariantRow() {
-    setVariantRows((rows) => (rows.length >= MAX_VARIANTS ? rows : rebalance([...rows, { url: "", weight: "0" }])));
-  }
-
-  function removeVariantRow(index: number) {
-    setVariantRows((rows) => rebalance(rows.filter((_, i) => i !== index)));
-  }
-
-  function updateVariantRow(index: number, patch: Partial<VariantRow>) {
-    setVariantRows((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
-  }
-
-  function distributeVariantsEvenly() {
-    setVariantRows((rows) => rebalance(rows));
-  }
 
   function handleOpenChange(next: boolean) {
     if (!next) reset();
@@ -203,25 +173,9 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
         next.maxVisits = t("dialogs.create.maxVisitsInvalid");
       }
     }
-    if (variantRows.length > MAX_VARIANTS) {
-      next.variants = t("dialogs.create.tooManyVariants", { max: MAX_VARIANTS });
-    } else {
-      let sum = 0;
-      for (const row of variantRows) {
-        if (!row.url.trim() || !isHttpUrl(row.url)) {
-          next.variants = t("dialogs.create.variantUrlInvalid");
-          break;
-        }
-        const w = Number(row.weight.trim());
-        if (!Number.isInteger(w) || w <= 0) {
-          next.variants = t("dialogs.create.variantPercentInvalid");
-          break;
-        }
-        sum += w;
-      }
-      if (!next.variants && variantRows.length > 0 && sum !== 100) {
-        next.variants = t("dialogs.create.variantsSumInvalid", { total: sum });
-      }
+    const variantsError = variants.validate(t, "dialogs.create");
+    if (variantsError) {
+      next.variants = variantsError;
     }
     if (appIos.trim() && !isHttpUrl(appIos)) {
       next.appIos = t("dialogs.create.appDestInvalid");
@@ -233,10 +187,6 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
       next.fallbackUrl = t("dialogs.create.fallbackUrlInvalid");
     }
     return next;
-  }
-
-  function buildVariants(): Variant[] {
-    return variantRows.map((row) => ({ url: row.url.trim(), weight: Number(row.weight.trim()) }));
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -254,7 +204,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
     const trimmedUrl = url.trim();
     const destination = hasAnyUtm(utm) ? applyUtm(trimmedUrl, utm) : trimmedUrl;
     try {
-      const variants = buildVariants();
+      const variantsPayload = variants.buildVariants();
       const ttlSecs = durationToSeconds(ttl, ttlUnit);
       await createLink.mutateAsync({
         url: destination,
@@ -263,7 +213,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
         ...(tags.length > 0 ? { tags } : {}),
         ...(maxVisits.trim() ? { max_visits: Number(maxVisits.trim()) } : {}),
         ...(rules.length > 0 ? { rules } : {}),
-        ...(variants.length > 0 ? { variants } : {}),
+        ...(variantsPayload.length > 0 ? { variants: variantsPayload } : {}),
         ...(appIos.trim() ? { app_ios: appIos.trim() } : {}),
         ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : {}),
         ...(folder.trim() ? { folder: folder.trim() } : {}),
@@ -702,105 +652,19 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
               )}
             </div>
 
-            <div className="flex flex-col gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="self-start"
-                aria-expanded={showVariants}
-                onClick={() => setShowVariants((v) => !v)}
-              >
-                {t("dialogs.create.variantsToggle")}
-              </Button>
-
-              {showVariants && (
-                <div className="flex flex-col gap-2 rounded-md border border-border p-3">
-                  <p className="text-sm text-muted-foreground">{t("dialogs.create.variantsHint")}</p>
-
-                  {variantRows.map((row, i) => (
-                    <div key={i} className="flex items-end gap-2">
-                      <div className="flex flex-1 flex-col gap-1.5">
-                        <label htmlFor={`create-variant-url-${i}`} className="sr-only">
-                          {t("dialogs.create.variantUrlLabel")}
-                        </label>
-                        <Input
-                          id={`create-variant-url-${i}`}
-                          type="text"
-                          placeholder={t("dialogs.create.variantUrlPlaceholder")}
-                          value={row.url}
-                          onChange={(e) => updateVariantRow(i, { url: e.target.value })}
-                        />
-                      </div>
-                      <div className="flex w-24 flex-col gap-1.5">
-                        <label htmlFor={`create-variant-weight-${i}`} className="sr-only">
-                          {t("dialogs.create.variantWeightLabel")}
-                        </label>
-                        <div className="relative">
-                          <Input
-                            id={`create-variant-weight-${i}`}
-                            type="number"
-                            min={1}
-                            max={100}
-                            step={1}
-                            className="pr-7"
-                            value={row.weight}
-                            onChange={(e) => updateVariantRow(i, { weight: e.target.value })}
-                          />
-                          <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-sm text-muted-foreground">
-                            %
-                          </span>
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t("dialogs.create.removeVariant")}
-                        onClick={() => removeVariantRow(i)}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
-                    </div>
-                  ))}
-
-                  {variantRows.length > 0 && (
-                    <div className="flex items-center justify-between gap-2">
-                      <span
-                        className={
-                          variantsTotalValid
-                            ? "text-sm font-medium text-muted-foreground"
-                            : "text-sm font-medium text-destructive"
-                        }
-                      >
-                        {t("dialogs.create.variantsTotal", { total: variantsTotal })}
-                      </span>
-                      <Button type="button" variant="ghost" size="sm" onClick={distributeVariantsEvenly}>
-                        {t("dialogs.create.distributeEvenly")}
-                      </Button>
-                    </div>
-                  )}
-
-                  {errors.variants && (
-                    <p className="text-sm text-destructive" role="alert">
-                      {errors.variants}
-                    </p>
-                  )}
-
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="self-start"
-                    disabled={variantRows.length >= MAX_VARIANTS}
-                    onClick={addVariantRow}
-                  >
-                    <Plus className="size-3.5" />
-                    {t("dialogs.create.addVariant")}
-                  </Button>
-                </div>
-              )}
-            </div>
+            <VariantsEditor
+              idPrefix="create"
+              ns="dialogs.create"
+              rows={variants.rows}
+              total={variants.total}
+              totalValid={variants.totalValid}
+              error={errors.variants}
+              initialOpen={false}
+              onAddRow={variants.addRow}
+              onRemoveRow={variants.removeRow}
+              onUpdateRow={variants.updateRow}
+              onDistributeEvenly={variants.distributeEvenly}
+            />
 
             <RulesEditor idPrefix="create-link" drafts={ruleDrafts} onChange={setRuleDrafts} />
             {errors.rules && (

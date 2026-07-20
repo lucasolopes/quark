@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -19,26 +19,17 @@ import { isUnauthorized } from "@/lib/mutation-error";
 import { usePatchLink, useLinkAlert, useSetLinkAlert, useDeleteLinkAlert } from "@/lib/queries";
 import { Combobox } from "@/components/Combobox";
 import { draftsFromRules, parseRuleDrafts, type RuleDraft } from "@/lib/rules";
-import { distributeEvenly, normalizeToPercent, variantsPercentTotal, MAX_VARIANTS } from "@/lib/variants";
+import { normalizeToPercent } from "@/lib/variants";
 import { DurationField } from "@/components/DurationField";
 import { DEFAULT_DURATION_UNIT, durationToSeconds } from "@/lib/duration";
 import type { Folder, Link, Variant } from "@/lib/types";
 import { RulesEditor } from "@/components/RulesEditor";
-
-interface VariantRow {
-  url: string;
-  weight: string;
-}
+import { VariantsEditor } from "@/components/VariantsEditor";
+import { useVariantRows, type VariantRow } from "@/hooks/useVariantRows";
 
 function toVariantRows(variants: Variant[]): VariantRow[] {
   const pct = normalizeToPercent(variants.map((v) => v.weight));
   return variants.map((v, i) => ({ url: v.url, weight: String(pct[i]) }));
-}
-
-/** Reassign percentages so the rows split 100% evenly, keeping their URLs. */
-function rebalance(rows: VariantRow[]): VariantRow[] {
-  const pct = distributeEvenly(rows.length);
-  return rows.map((row, i) => ({ ...row, weight: String(pct[i]) }));
 }
 
 interface FormErrors {
@@ -83,8 +74,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
   const [folder, setFolder] = useState(link.folder ?? "");
   const [maxVisits, setMaxVisits] = useState(link.max_visits ? String(link.max_visits) : "");
   const [ruleDrafts, setRuleDrafts] = useState<RuleDraft[]>(() => draftsFromRules(link.rules));
-  const [showVariants, setShowVariants] = useState(link.variants.length > 0);
-  const [variantRows, setVariantRows] = useState<VariantRow[]>(() => toVariantRows(link.variants));
+  const variants = useVariantRows(toVariantRows(link.variants));
   const [appIos, setAppIos] = useState(link.app_ios ?? "");
   const [appAndroid, setAppAndroid] = useState(link.app_android ?? "");
   const [fallbackUrl, setFallbackUrl] = useState(link.fallback_url ?? "");
@@ -117,22 +107,6 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
     setAlertPrefilled(true);
   }, [alertQuery.data, alertPrefilled]);
 
-  function addVariantRow() {
-    setVariantRows((rows) => (rows.length >= MAX_VARIANTS ? rows : rebalance([...rows, { url: "", weight: "0" }])));
-  }
-
-  function removeVariantRow(index: number) {
-    setVariantRows((rows) => rebalance(rows.filter((_, i) => i !== index)));
-  }
-
-  function updateVariantRow(index: number, patch: Partial<VariantRow>) {
-    setVariantRows((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
-  }
-
-  function distributeVariantsEvenly() {
-    setVariantRows((rows) => rebalance(rows));
-  }
-
   function formatExpiry(expiry: number | null): string {
     if (expiry == null) return t("dialogs.edit.neverExpires");
     return t("dialogs.edit.expiresOn", { date: formatDate(expiry) });
@@ -164,25 +138,9 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
         next.maxVisits = t("dialogs.edit.maxVisitsInvalid");
       }
     }
-    if (variantRows.length > MAX_VARIANTS) {
-      next.variants = t("dialogs.edit.tooManyVariants", { max: MAX_VARIANTS });
-    } else {
-      let sum = 0;
-      for (const row of variantRows) {
-        if (!row.url.trim() || !isHttpUrl(row.url)) {
-          next.variants = t("dialogs.edit.variantUrlInvalid");
-          break;
-        }
-        const w = Number(row.weight.trim());
-        if (!Number.isInteger(w) || w <= 0) {
-          next.variants = t("dialogs.edit.variantPercentInvalid");
-          break;
-        }
-        sum += w;
-      }
-      if (!next.variants && variantRows.length > 0 && sum !== 100) {
-        next.variants = t("dialogs.edit.variantsSumInvalid", { total: sum });
-      }
+    const variantsError = variants.validate(t, "dialogs.edit");
+    if (variantsError) {
+      next.variants = variantsError;
     }
     if (appIos.trim() && !isHttpUrl(appIos)) {
       next.appIos = t("dialogs.edit.appDestInvalid");
@@ -195,13 +153,6 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
     }
     return next;
   }
-
-  function buildVariants(): Variant[] {
-    return variantRows.map((row) => ({ url: row.url.trim(), weight: Number(row.weight.trim()) }));
-  }
-
-  const variantsTotal = variantsPercentTotal(variantRows.map((r) => r.weight));
-  const variantsTotalValid = variantRows.length === 0 || variantsTotal === 100;
 
   function validateAlert(): AlertFormErrors {
     const next: AlertFormErrors = {};
@@ -273,7 +224,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
               ? { max_visits: null }
               : {}),
           rules,
-          variants: buildVariants(),
+          variants: variants.buildVariants(),
           ...(appIos.trim() ? { app_ios: appIos.trim() } : link.app_ios?.trim() ? { app_ios: null } : {}),
           ...(appAndroid.trim() ? { app_android: appAndroid.trim() } : link.app_android?.trim() ? { app_android: null } : {}),
           ...(folder.trim() ? { folder: folder.trim() } : link.folder?.trim() ? { folder: null } : {}),
@@ -563,105 +514,19 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
               )}
             </div>
 
-            <div className="flex flex-col gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="self-start"
-                aria-expanded={showVariants}
-                onClick={() => setShowVariants((v) => !v)}
-              >
-                {t("dialogs.edit.variantsToggle")}
-              </Button>
-
-              {showVariants && (
-                <div className="flex flex-col gap-2 rounded-md border border-border p-3">
-                  <p className="text-sm text-muted-foreground">{t("dialogs.edit.variantsHint")}</p>
-
-                  {variantRows.map((row, i) => (
-                    <div key={i} className="flex items-end gap-2">
-                      <div className="flex flex-1 flex-col gap-1.5">
-                        <label htmlFor={`edit-variant-url-${i}`} className="sr-only">
-                          {t("dialogs.edit.variantUrlLabel")}
-                        </label>
-                        <Input
-                          id={`edit-variant-url-${i}`}
-                          type="text"
-                          placeholder={t("dialogs.edit.variantUrlPlaceholder")}
-                          value={row.url}
-                          onChange={(e) => updateVariantRow(i, { url: e.target.value })}
-                        />
-                      </div>
-                      <div className="flex w-24 flex-col gap-1.5">
-                        <label htmlFor={`edit-variant-weight-${i}`} className="sr-only">
-                          {t("dialogs.edit.variantWeightLabel")}
-                        </label>
-                        <div className="relative">
-                          <Input
-                            id={`edit-variant-weight-${i}`}
-                            type="number"
-                            min={1}
-                            max={100}
-                            step={1}
-                            className="pr-7"
-                            value={row.weight}
-                            onChange={(e) => updateVariantRow(i, { weight: e.target.value })}
-                          />
-                          <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-sm text-muted-foreground">
-                            %
-                          </span>
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t("dialogs.edit.removeVariant")}
-                        onClick={() => removeVariantRow(i)}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
-                    </div>
-                  ))}
-
-                  {variantRows.length > 0 && (
-                    <div className="flex items-center justify-between gap-2">
-                      <span
-                        className={
-                          variantsTotalValid
-                            ? "text-sm font-medium text-muted-foreground"
-                            : "text-sm font-medium text-destructive"
-                        }
-                      >
-                        {t("dialogs.edit.variantsTotal", { total: variantsTotal })}
-                      </span>
-                      <Button type="button" variant="ghost" size="sm" onClick={distributeVariantsEvenly}>
-                        {t("dialogs.edit.distributeEvenly")}
-                      </Button>
-                    </div>
-                  )}
-
-                  {errors.variants && (
-                    <p className="text-sm text-destructive" role="alert">
-                      {errors.variants}
-                    </p>
-                  )}
-
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="self-start"
-                    disabled={variantRows.length >= MAX_VARIANTS}
-                    onClick={addVariantRow}
-                  >
-                    <Plus className="size-3.5" />
-                    {t("dialogs.edit.addVariant")}
-                  </Button>
-                </div>
-              )}
-            </div>
+            <VariantsEditor
+              idPrefix="edit"
+              ns="dialogs.edit"
+              rows={variants.rows}
+              total={variants.total}
+              totalValid={variants.totalValid}
+              error={errors.variants}
+              initialOpen={link.variants.length > 0}
+              onAddRow={variants.addRow}
+              onRemoveRow={variants.removeRow}
+              onUpdateRow={variants.updateRow}
+              onDistributeEvenly={variants.distributeEvenly}
+            />
 
             <RulesEditor idPrefix="edit-link" drafts={ruleDrafts} onChange={setRuleDrafts} />
             {errors.rules && (
