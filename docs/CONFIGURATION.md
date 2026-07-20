@@ -4,10 +4,13 @@
 
 Every quark setting is an environment variable read once at startup. There is
 no config file and no build-time feature flag: which backends run is decided
-purely by which `QUARK_*` variables are set. This page lists every variable the
-binary reads, its default, and what it does. The source of truth is
-`src/main.rs`, plus `src/cluster.rs` (the cluster preflight), `src/store/mod.rs`
-(backend selection), and `src/api/router.rs` (CORS).
+purely by which `QUARK_*` variables are set. This page documents every variable
+the binary reads, its default, and what it does. The core self-hosted surface is
+below; the cloud multi-tenant, secret-encryption, and privacy variables have
+their own section further down, with pointers to the runbooks that cover them in
+full. The source of truth is `src/main.rs`, plus `src/cluster.rs` (the cluster
+preflight), `src/store/mod.rs` (backend selection), `src/secretbox.rs`
+(encryption), and `src/api/router.rs` (CORS).
 
 Only `QUARK_KEY` matters for a real deployment. Leave everything else unset and
 quark runs as a single zero-dependency binary on `0.0.0.0:8080` with an LMDB
@@ -64,6 +67,21 @@ passes and single-node behavior is untouched.
 | `QUARK_OIDC_ISSUER` (+ `QUARK_OIDC_CLIENT_ID`/`_SECRET`/`_REDIRECT_URL`/`_SCOPES`/`_ADMIN_CLAIM`/`_ADMIN_VALUE`/`_READONLY_VALUE`) | unset (OIDC off) | Enables "sign in with your identity provider" (OIDC Authorization Code + PKCE). Off unless `QUARK_OIDC_ISSUER` is set; the admin token stays a break-glass. Full details and per-provider setup in [OIDC-LOGIN](OIDC-LOGIN.md). |
 | `QUARK_SHEETS_CLIENT_ID` (+ `QUARK_SHEETS_CLIENT_SECRET`/`_REDIRECT_URL`/`_SYNC_SECS`) | unset (connector off) | Enables the Google Sheets connector, which mirrors the link catalog into a spreadsheet you own (OAuth, scope `drive.file`). Off unless the client id, secret, and redirect URL are all set; `_SYNC_SECS` (floored to 60) turns on scheduled sync. Full setup in [SHEETS](SHEETS.md). |
 | `QUARK_ACCESS_LOG` | unset (off) | Enable a per-request JSON access log line (`{"method","path","status","latency_ms"}`) on stdout. Off by default so the redirect hot path pays no synchronous stdout cost. |
+
+## Cloud, encryption, and privacy
+
+These drive the multi-tenant (cloud) mode, secret-at-rest encryption, and the
+privacy knobs. All are off unless set, so a self-hosted single-tenant deployment
+never needs them. Each has a dedicated page with the full detail.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `QUARK_MULTI_TENANT` | unset / `0` (off) | Any value other than `0` turns on multi-tenant mode: FORCE row-level security, per-tenant transactions, and `Host`-based tenant resolution on the redirect path. Needs the Postgres store. Off means single-tenant, the OSS default. |
+| `QUARK_TENANT_DOMAIN_SUFFIX` | unset (feature off) | Base suffix for the auto per-tenant subdomain, e.g. `quarkus.com.br` gives tenant `acme` the host `acme.quarkus.com.br`. Unset disables the whole subdomain-auto feature (no seed on tenant create, no boot backfill, `/admin/me` reports `null`). Cloud-only. |
+| `QUARK_ENCRYPTION_KEY` (+ `QUARK_ENCRYPTION_KEY_OLD`) | unset (secrets stored as-is) | Base64 key that encrypts stored secrets at rest (the OIDC `client_secret` and the Sheets refresh token). Setting it triggers a boot backfill that re-encrypts any legacy plaintext. `_OLD` is a comma-separated list of retired keys still accepted for decryption during rotation. Full procedure in [RUNBOOK-secret-encryption](RUNBOOK-secret-encryption.md). |
+| `QUARK_PIXEL_ANONYMIZE_IP` | unset / `0` (off) | Any value other than `0` anonymizes the client IP before it is forwarded to conversion-pixel providers. See [PRIVACY](PRIVACY.md) and [CONVERSION-FORWARDING](CONVERSION-FORWARDING.md). |
+| `QUARK_ANALYTICS_RETENTION_DAYS` | unset (keep indefinitely) | Retention window in days for stored click analytics; older rows are pruned. See [PRIVACY](PRIVACY.md). |
+| `QUARK_KEYCLOAK_BASE_URL` (+ the `QUARK_KEYCLOAK_*` family) | unset (provisioning off) | Enables per-tenant Keycloak realm provisioning: the admin client (`_ADMIN_CLIENT_ID`/`_ADMIN_CLIENT_SECRET`), realm SMTP (`_SMTP_HOST`/`_PORT`/`_USER`/`_PASSWORD`/`_FROM`/`_STARTTLS`), and `_LOGIN_THEME`. Cloud-only; the full list and setup are in [RUNBOOK-keycloak-p2e](RUNBOOK-keycloak-p2e.md). |
 
 ## Abuse protection
 

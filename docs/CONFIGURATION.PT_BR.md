@@ -4,10 +4,13 @@
 
 Toda configuração do quark é uma variável de ambiente lida uma vez no startup.
 Não há arquivo de config nem feature flag de build: quais backends rodam é
-decidido só por quais variáveis `QUARK_*` estão setadas. Esta página lista cada
-variável que o binário lê, o default e o que faz. A fonte da verdade é
-`src/main.rs`, mais `src/cluster.rs` (o preflight de cluster), `src/store/mod.rs`
-(escolha de backend) e `src/api/router.rs` (CORS).
+decidido só por quais variáveis `QUARK_*` estão setadas. Esta página documenta
+cada variável que o binário lê, o default e o que faz. A superfície core de
+self-host está abaixo; as variáveis de multi-tenant (cloud), cifragem de segredos
+e privacidade têm uma seção própria mais adiante, com ponteiros para os runbooks
+que as cobrem por completo. A fonte da verdade é `src/main.rs`, mais
+`src/cluster.rs` (o preflight de cluster), `src/store/mod.rs` (escolha de
+backend), `src/secretbox.rs` (cifragem) e `src/api/router.rs` (CORS).
 
 Só `QUARK_KEY` importa para um deploy real. Deixe o resto sem setar e o quark
 roda como um binário único sem dependências em `0.0.0.0:8080` com store LMDB.
@@ -64,6 +67,22 @@ passa e o comportamento single-node fica intacto.
 | `QUARK_OIDC_ISSUER` (+ `QUARK_OIDC_CLIENT_ID`/`_SECRET`/`_REDIRECT_URL`/`_SCOPES`/`_ADMIN_CLAIM`/`_ADMIN_VALUE`/`_READONLY_VALUE`) | sem setar (OIDC off) | Liga o "entrar com seu provedor de identidade" (OIDC Authorization Code + PKCE). Off a menos que `QUARK_OIDC_ISSUER` esteja setado; o token de admin segue como break-glass. Detalhes completos e setup por provedor em [OIDC-LOGIN](OIDC-LOGIN.PT_BR.md). |
 | `QUARK_SHEETS_CLIENT_ID` (+ `QUARK_SHEETS_CLIENT_SECRET`/`_REDIRECT_URL`/`_SYNC_SECS`) | sem setar (conector off) | Liga o conector do Google Sheets, que espelha o catálogo de links numa planilha que é sua (OAuth, escopo `drive.file`). Off a menos que o client id, o secret e a redirect URL estejam todos setados; `_SYNC_SECS` (piso de 60) liga a sincronização agendada. Setup completo em [SHEETS](SHEETS.PT_BR.md). |
 | `QUARK_ACCESS_LOG` | sem setar (off) | Liga uma linha de log de acesso em JSON por requisição (`{"method","path","status","latency_ms"}`) no stdout. Off por default para o caminho quente do redirect não pagar custo síncrono de stdout. |
+
+## Cloud, cifragem e privacidade
+
+Estas dirigem o modo multi-tenant (cloud), a cifragem de segredos at rest e os
+controles de privacidade. Todas ficam off a menos que setadas, então um deploy
+self-host single-tenant nunca precisa delas. Cada uma tem uma página dedicada
+com o detalhe completo.
+
+| Variável | Default | Propósito |
+|---|---|---|
+| `QUARK_MULTI_TENANT` | sem setar / `0` (off) | Qualquer valor diferente de `0` liga o modo multi-tenant: FORCE row-level security, transações por tenant e resolução de tenant por `Host` no caminho do redirect. Precisa do store Postgres. Off é single-tenant, o default OSS. |
+| `QUARK_TENANT_DOMAIN_SUFFIX` | sem setar (feature off) | Sufixo base do subdomínio automático por tenant, ex. `quarkus.com.br` dá ao tenant `acme` o host `acme.quarkus.com.br`. Sem setar desliga toda a feature de subdomínio-auto (sem seed no create do tenant, sem backfill de boot, `/admin/me` reporta `null`). Só cloud. |
+| `QUARK_ENCRYPTION_KEY` (+ `QUARK_ENCRYPTION_KEY_OLD`) | sem setar (segredos gravados como estão) | Chave base64 que cifra os segredos gravados at rest (o `client_secret` do OIDC e o refresh token do Sheets). Setar dispara um backfill de boot que re-cifra qualquer plaintext legado. `_OLD` é uma lista separada por vírgula de chaves aposentadas ainda aceitas para decifrar durante rotação. Procedimento completo em [RUNBOOK-secret-encryption](RUNBOOK-secret-encryption.md). |
+| `QUARK_PIXEL_ANONYMIZE_IP` | sem setar / `0` (off) | Qualquer valor diferente de `0` anonimiza o IP do cliente antes de encaminhar para os provedores de pixel de conversão. Ver [PRIVACY](PRIVACY.PT_BR.md) e [CONVERSION-FORWARDING](CONVERSION-FORWARDING.PT_BR.md). |
+| `QUARK_ANALYTICS_RETENTION_DAYS` | sem setar (mantém indefinidamente) | Janela de retenção em dias para os analytics de clique gravados; linhas mais antigas são podadas. Ver [PRIVACY](PRIVACY.PT_BR.md). |
+| `QUARK_KEYCLOAK_BASE_URL` (+ a família `QUARK_KEYCLOAK_*`) | sem setar (provisionamento off) | Liga o provisionamento de realm Keycloak por tenant: o admin client (`_ADMIN_CLIENT_ID`/`_ADMIN_CLIENT_SECRET`), SMTP do realm (`_SMTP_HOST`/`_PORT`/`_USER`/`_PASSWORD`/`_FROM`/`_STARTTLS`) e `_LOGIN_THEME`. Só cloud; a lista completa e o setup estão em [RUNBOOK-keycloak-p2e](RUNBOOK-keycloak-p2e.md). |
 
 ## Proteção contra abuso
 
