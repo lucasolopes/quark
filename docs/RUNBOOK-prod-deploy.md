@@ -102,7 +102,7 @@ the pieces become `KC_DB_URL`/`KC_DB_USERNAME`/`KC_DB_PASSWORD`.
 
 ### Realms
 
-- `quark-panel` — the login realm for the panel. Holds the confidential client
+- `quark-panel`: the login realm for the panel. Holds the confidential client
   `quark` (redirect `https://backend.quarkus.com.br/admin/callback`, a `groups`
   membership mapper, the `quark-admins`/`quark-readers` groups, and
   `post.logout.redirect.uris = https://app.quarkus.com.br/*`). This is the IdP the
