@@ -26,13 +26,10 @@ import { Combobox } from "@/components/Combobox";
 import { applyUtm, deleteUtmTemplate, loadUtmTemplates, saveUtmTemplate, type UtmParams } from "@/lib/utm";
 import { parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import { RulesEditor } from "@/components/RulesEditor";
-import { distributeEvenly, variantsPercentTotal } from "@/lib/variants";
+import { distributeEvenly, variantsPercentTotal, MAX_VARIANTS } from "@/lib/variants";
 import { DurationField } from "@/components/DurationField";
 import { DEFAULT_DURATION_UNIT, durationToSeconds } from "@/lib/duration";
 import type { Folder, Variant } from "@/lib/types";
-
-/** Same cap enforced server-side (`MAX_VARIANTS` in `src/api.rs`). */
-const MAX_VARIANTS = 10;
 
 interface VariantRow {
   url: string;

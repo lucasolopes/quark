@@ -14,18 +14,16 @@ import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { isHttpUrl } from "@/lib/codeguard";
+import { formatDate } from "@/lib/format";
 import { isUnauthorized } from "@/lib/mutation-error";
 import { usePatchLink, useLinkAlert, useSetLinkAlert, useDeleteLinkAlert } from "@/lib/queries";
 import { Combobox } from "@/components/Combobox";
 import { draftsFromRules, parseRuleDrafts, type RuleDraft } from "@/lib/rules";
-import { distributeEvenly, normalizeToPercent, variantsPercentTotal } from "@/lib/variants";
+import { distributeEvenly, normalizeToPercent, variantsPercentTotal, MAX_VARIANTS } from "@/lib/variants";
 import { DurationField } from "@/components/DurationField";
 import { DEFAULT_DURATION_UNIT, durationToSeconds } from "@/lib/duration";
 import type { Folder, Link, Variant } from "@/lib/types";
 import { RulesEditor } from "@/components/RulesEditor";
-
-/** Same cap enforced server-side (`MAX_VARIANTS` in `src/api.rs`). */
-const MAX_VARIANTS = 10;
 
 interface VariantRow {
   url: string;
@@ -137,7 +135,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
 
   function formatExpiry(expiry: number | null): string {
     if (expiry == null) return t("dialogs.edit.neverExpires");
-    return t("dialogs.edit.expiresOn", { date: new Date(expiry * 1000).toLocaleDateString("pt-BR") });
+    return t("dialogs.edit.expiresOn", { date: formatDate(expiry) });
   }
 
   function formatCurrentMaxVisits(value?: number): string {
