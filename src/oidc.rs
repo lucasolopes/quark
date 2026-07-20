@@ -186,17 +186,23 @@ pub fn authorize_url(
     state: &str,
     nonce: &str,
     challenge: &str,
+    login_hint: Option<&str>,
 ) -> String {
-    let q = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("response_type", "code")
+    let mut ser = url::form_urlencoded::Serializer::new(String::new());
+    ser.append_pair("response_type", "code")
         .append_pair("client_id", &cfg.client_id)
         .append_pair("redirect_uri", &cfg.redirect_url)
         .append_pair("scope", &cfg.scopes)
         .append_pair("state", state)
         .append_pair("nonce", nonce)
         .append_pair("code_challenge", challenge)
-        .append_pair("code_challenge_method", "S256")
-        .finish();
+        .append_pair("code_challenge_method", "S256");
+    // Optional home-realm hint: pre-fills the username/email at the IdP so a
+    // user who already typed their email in the panel does not retype it.
+    if let Some(hint) = login_hint.map(str::trim).filter(|s| !s.is_empty()) {
+        ser.append_pair("login_hint", hint);
+    }
+    let q = ser.finish();
     let sep = if disco.authorization_endpoint.contains('?') {
         '&'
     } else {
@@ -552,9 +558,16 @@ impl OidcRuntime {
         })
     }
 
-    /// The authorize URL for a fresh login attempt.
-    pub fn authorize_url(&self, state: &str, nonce: &str, challenge: &str) -> String {
-        authorize_url(&self.config, &self.discovery, state, nonce, challenge)
+    /// The authorize URL for a fresh login attempt. `login_hint` (an email) is
+    /// forwarded to the IdP to pre-fill the username when present.
+    pub fn authorize_url(
+        &self,
+        state: &str,
+        nonce: &str,
+        challenge: &str,
+        login_hint: Option<&str>,
+    ) -> String {
+        authorize_url(&self.config, &self.discovery, state, nonce, challenge, login_hint)
     }
 
     /// Exchanges a callback code for the id_token.
@@ -746,7 +759,7 @@ mod tests {
             token_endpoint: "https://idp.example/token".into(),
             jwks_uri: "https://idp.example/jwks".into(),
         };
-        let u = authorize_url(&cfg(), &disco, "st8", "nnc", "chlng");
+        let u = authorize_url(&cfg(), &disco, "st8", "nnc", "chlng", None);
         for needle in [
             "response_type=code",
             "client_id=quark",
@@ -759,6 +772,23 @@ mod tests {
             assert!(u.contains(needle), "missing {needle} in {u}");
         }
         assert!(u.starts_with("https://idp.example/authorize?"));
+        // No login_hint when none is passed.
+        assert!(!u.contains("login_hint"), "unexpected login_hint in {u}");
+    }
+
+    #[test]
+    fn authorize_url_forwards_login_hint_when_present() {
+        let disco = Discovery {
+            authorization_endpoint: "https://idp.example/authorize".into(),
+            token_endpoint: "https://idp.example/token".into(),
+            jwks_uri: "https://idp.example/jwks".into(),
+        };
+        // Present + non-empty -> forwarded (email percent-encoded).
+        let u = authorize_url(&cfg(), &disco, "s", "n", "c", Some("jane@acme.com"));
+        assert!(u.contains("login_hint=jane%40acme.com"), "missing login_hint in {u}");
+        // Blank/whitespace -> omitted.
+        let blank = authorize_url(&cfg(), &disco, "s", "n", "c", Some("   "));
+        assert!(!blank.contains("login_hint"), "blank login_hint must be dropped: {blank}");
     }
 
     #[test]

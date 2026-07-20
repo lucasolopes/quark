@@ -50,11 +50,16 @@ async function req(path: string, opts: RequestInit = {}): Promise<Response> {
 
 /**
  * Absolute URL to start the OIDC login (a full navigation, not fetch). An
- * optional `org` is a per-tenant SSO hint (untrusted UX convenience — the
- * server decides what to do with it, we just forward it).
+ * optional `org` is a per-tenant SSO hint and `email` becomes the IdP
+ * `login_hint` so the provider pre-fills the username (both untrusted UX
+ * conveniences — the server decides what to do with them, we just forward).
  */
-export function oidcLoginUrl(org?: string): string {
-  return org ? `${BASE}/admin/login?org=${encodeURIComponent(org)}` : `${BASE}/admin/login`;
+export function oidcLoginUrl(org?: string, email?: string): string {
+  const parts: string[] = [];
+  if (org) parts.push(`org=${encodeURIComponent(org)}`);
+  const hint = email?.trim();
+  if (hint) parts.push(`login_hint=${encodeURIComponent(hint)}`);
+  return parts.length ? `${BASE}/admin/login?${parts.join("&")}` : `${BASE}/admin/login`;
 }
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
