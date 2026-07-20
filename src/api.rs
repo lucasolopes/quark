@@ -2007,6 +2007,7 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
                 "oidc_enabled": oidc_enabled,
                 "oidc_button_label": oidc_button_label,
                 "multi_tenant": st.multi_tenant,
+                "admin_login_enabled": st.admin_token.is_some(),
                 "tenant_domain_suffix": st.tenant_domain_suffix,
             });
             // Cloud (multi-tenant) only: the panel gates workspace onboarding on
@@ -2055,6 +2056,7 @@ async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
         "oidc_enabled": oidc_enabled,
         "oidc_button_label": oidc_button_label,
         "multi_tenant": st.multi_tenant,
+        "admin_login_enabled": st.admin_token.is_some(),
         "tenant_domain_suffix": st.tenant_domain_suffix,
     }))
     .into_response()

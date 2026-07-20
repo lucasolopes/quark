@@ -15,6 +15,7 @@ export const en = {
   login: {
     badge: "Operator panel",
     description: "Sign in with the admin token to manage links.",
+    descriptionSso: "Sign in with your identity provider to manage links.",
     tokenLabel: "Admin token",
     submit: "Sign in",
     sessionStarted: "Signed in.",

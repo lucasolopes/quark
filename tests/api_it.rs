@@ -2897,6 +2897,9 @@ async fn admin_me_reports_session_and_oidc_state() {
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["authenticated"], false);
     assert_eq!(v["oidc_enabled"], false);
+    // Break-glass admin token is configured on this AppState, so the login
+    // screen may offer it (LUC-75). Present even pre-auth.
+    assert_eq!(v["admin_login_enabled"], true);
 
     store
         .put_session(
@@ -2929,6 +2932,7 @@ async fn admin_me_reports_session_and_oidc_state() {
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["authenticated"], true);
     assert_eq!(v["display"], "me@example.com");
+    assert_eq!(v["admin_login_enabled"], true);
     // OSS/single-tenant must OMIT memberships/current_tenant: the panel reads
     // the presence of `memberships` as cloud mode and would trap an OSS+OIDC
     // user on the workspace gate. Regression guard (LUC-74).

@@ -46,6 +46,21 @@ describe("Login", () => {
     expect(screen.queryByLabelText(/^email$/i)).not.toBeInTheDocument();
   });
 
+  it("hides the admin token field when the server has no admin token (SSO-only)", async () => {
+    // admin_login_enabled:false -> the break-glass token field must not render;
+    // the SSO path (email step) is the only way in (LUC-75).
+    mockFetchByUrl({ authenticated: false, oidc_enabled: true, multi_tenant: true, admin_login_enabled: false });
+    render(withProviders(<Login />, { initialEntries: ["/login"] }));
+    expect(await screen.findByLabelText(/^email$/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/token/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the admin token field when admin_login_enabled is true", async () => {
+    mockFetchByUrl({ authenticated: false, oidc_enabled: true, multi_tenant: true, admin_login_enabled: true });
+    render(withProviders(<Login />, { initialEntries: ["/login"] }));
+    expect(await screen.findByLabelText(/token/i)).toBeInTheDocument();
+  });
+
   it("hides the email step on OSS even when a shared OIDC provider is configured", async () => {
     // Single-tenant OSS with a global OIDC provider: home-realm discovery is
     // meaningless, so the email-first step must not appear (it would only fire

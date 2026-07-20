@@ -17,6 +17,7 @@ export const ptBR: Messages = {
   login: {
     badge: "Painel do operador",
     description: "Entre com o token de administrador para gerenciar os links.",
+    descriptionSso: "Entre com seu provedor de identidade para gerenciar os links.",
     tokenLabel: "Token de admin",
     submit: "Entrar",
     sessionStarted: "Sessão iniciada.",
