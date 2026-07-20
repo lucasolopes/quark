@@ -79,7 +79,7 @@ pub fn generate_token() -> String {
 /// lookup key (the plaintext itself is never stored).
 pub fn hash_token(token: &str) -> String {
     let digest = Sha256::digest(token.as_bytes());
-    digest.iter().map(|b| format!("{b:02x}")).collect()
+    crate::hex(&digest)
 }
 
 #[cfg(test)]

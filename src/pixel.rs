@@ -182,7 +182,7 @@ pub fn anonymize_ip(raw: &str) -> Option<String> {
 fn sha256_hex(s: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(s.to_lowercase().as_bytes());
-    digest.iter().map(|b| format!("{b:02x}")).collect()
+    crate::hex(&digest)
 }
 
 /// Builds the Meta Conversions API batch body for a slice of events.

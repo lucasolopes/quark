@@ -287,8 +287,8 @@ async fn main() {
     let public_host = std::env::var("QUARK_PUBLIC_HOST")
         .ok()
         .map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase());
-    let real_ip_header =
-        std::env::var("QUARK_REAL_IP_HEADER").unwrap_or_else(|_| "cf-connecting-ip".to_string());
+    let real_ip_header = std::env::var("QUARK_REAL_IP_HEADER")
+        .unwrap_or_else(|_| quark::api::DEFAULT_REAL_IP_HEADER.to_string());
 
     let (wh_tx, wh_rx) = tokio::sync::mpsc::channel(WEBHOOK_CHANNEL_CAPACITY);
     let clicked = Arc::new(AtomicBool::new(false));
@@ -514,10 +514,7 @@ async fn main() {
             // Per-process holder id for the sync lease (mirrors the health checker).
             let mut hb = [0u8; 8];
             let _ = getrandom::fill(&mut hb);
-            let holder: String = format!(
-                "sheets_{}",
-                hb.iter().map(|b| format!("{b:02x}")).collect::<String>()
-            );
+            let holder: String = format!("sheets_{}", quark::hex(&hb));
             let ttl = secs.saturating_mul(2);
             tokio::spawn(async move {
                 let client = quark::sheets::client::http_client();

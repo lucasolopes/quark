@@ -457,7 +457,7 @@ impl AlertCounter {
 fn generate_alert_event_id() -> String {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("system RNG must be available");
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = crate::hex(&bytes);
     format!("evt_{hex}")
 }
 

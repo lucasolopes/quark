@@ -3080,7 +3080,7 @@ impl AnalyticsSink for PostgresStore {
             }
             // All events for the same link share one tenant (the link's owner),
             // so any event in `evs` carries the right value for the whole batch.
-            let tenant_id = evs.first().map(|e| e.tenant_id as i64).unwrap_or(0);
+            let tenant_id = evs.first().map_or(0, |e| e.tenant_id as i64);
             for (dimension, bucket, count) in counter_rows(&delta) {
                 sqlx::query(
                     "INSERT INTO click_counters (id, dimension, bucket, count, tenant_id) VALUES ($1,$2,$3,$4,$5) \
