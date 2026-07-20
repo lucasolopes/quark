@@ -2137,6 +2137,7 @@ mod tests {
             expires: 100,
             tenant_id: crate::tenant::DEFAULT_TENANT,
             user_id: 0,
+            id_token: None,
         };
         s.put_session(crate::tenant::DEFAULT_TENANT, &sess)
             .await

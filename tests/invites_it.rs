@@ -765,6 +765,7 @@ async fn seed_session(store: &PostgresStore, subject: &str, email: &str) -> (u64
         expires: quark::now() + 3600,
         tenant_id: TenantId(0),
         user_id,
+        id_token: None,
     };
     store.put_session(TenantId(0), &session).await.unwrap();
     (user_id, raw)

@@ -2611,6 +2611,7 @@ async fn session_cookie_authorizes_admin_by_scope() {
                 expires: now + 100_000_000_000,
                 tenant_id: quark::tenant::DEFAULT_TENANT,
                 user_id: 0,
+                id_token: None,
             },
         )
         .await
@@ -2659,6 +2660,7 @@ async fn session_cookie_authorizes_admin_by_scope() {
                 expires: now + 100_000_000_000,
                 tenant_id: quark::tenant::DEFAULT_TENANT,
                 user_id: 0,
+                id_token: None,
             },
         )
         .await
@@ -2689,6 +2691,7 @@ async fn session_cookie_authorizes_admin_by_scope() {
                 expires: 2,
                 tenant_id: quark::tenant::DEFAULT_TENANT,
                 user_id: 0,
+                id_token: None,
             },
         )
         .await
@@ -2752,6 +2755,7 @@ async fn admin_me_reports_session_and_oidc_state() {
                 expires: 100_000_000_000,
                 tenant_id: quark::tenant::DEFAULT_TENANT,
                 user_id: 0,
+                id_token: None,
             },
         )
         .await
@@ -2830,6 +2834,7 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
                 expires: now + 100_000_000_000,
                 tenant_id: quark::tenant::DEFAULT_TENANT,
                 user_id: 0,
+                id_token: None,
             },
         )
         .await
@@ -2880,6 +2885,7 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
                 expires: now + 100_000_000_000,
                 tenant_id: quark::tenant::DEFAULT_TENANT,
                 user_id: 0,
+                id_token: None,
             },
         )
         .await
@@ -2934,6 +2940,7 @@ async fn logout_requires_csrf_header_and_revokes_session() {
                 expires: 100_000_000_000,
                 tenant_id: quark::tenant::DEFAULT_TENANT,
                 user_id: 0,
+                id_token: None,
             },
         )
         .await
@@ -3010,6 +3017,7 @@ async fn session_cookie_is_ignored_when_oidc_not_configured() {
                 expires: 100_000_000_000,
                 tenant_id: quark::tenant::DEFAULT_TENANT,
                 user_id: 0,
+                id_token: None,
             },
         )
         .await
@@ -3128,6 +3136,7 @@ async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
                 expires: now + 100_000_000_000,
                 tenant_id: quark::tenant::DEFAULT_TENANT,
                 user_id: 0,
+                id_token: None,
             },
         )
         .await

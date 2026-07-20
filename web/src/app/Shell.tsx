@@ -62,11 +62,18 @@ export function Shell() {
     },
   ];
 
-  function handleLogout() {
+  async function handleLogout() {
     clearToken();
-    // Revoke the OIDC session server-side too (no-op if it was a token login).
-    void api.logout().catch(() => {});
-    navigate("/login", { replace: true });
+    // Revoke the OIDC session server-side (no-op if it was a token login). When
+    // the server hands back an end-session URL, do a top-level navigation to it
+    // so the IdP session is ended too, not just quark's (RP-initiated logout,
+    // LUC-79). Fall back to /login on any error or when there is no URL.
+    try {
+      const { logout_url } = await api.logout();
+      window.location.href = logout_url ?? "/login";
+    } catch {
+      navigate("/login", { replace: true });
+    }
   }
 
   const apiHost = (

@@ -52,6 +52,7 @@ fn cfg(tenant_id: TenantId, issuer: &str) -> TenantOidcConfig {
         readonly_value: "acme-viewers".to_string(),
         required_value: None,
         post_login_url: Some("/dashboard".to_string()),
+        post_logout_url: Some("/logged-out".to_string()),
     }
 }
 

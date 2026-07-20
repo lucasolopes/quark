@@ -215,7 +215,12 @@ impl KeycloakAdmin for HttpKeycloakAdmin {
             "standardFlowEnabled": true,
             "directAccessGrantsEnabled": false,
             "redirectUris": [redirect_uri],
-            "attributes": { "pkce.code.challenge.method": "S256" },
+            "attributes": {
+                "pkce.code.challenge.method": "S256",
+                // Accept the client's registered redirect URIs as valid
+                // post-logout redirects (RP-initiated logout, LUC-79).
+                "post.logout.redirect.uris": "+",
+            },
         });
         self.admin_post_idempotent(&format!("{}/admin/realms/{slug}/clients", self.base), &body)
             .await

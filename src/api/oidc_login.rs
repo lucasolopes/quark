@@ -294,6 +294,9 @@ pub(crate) async fn oidc_callback(
         expires: now + SESSION_TTL_SECS,
         tenant_id: session_tenant,
         user_id,
+        // Kept so RP-initiated logout can pass it as `id_token_hint` to end
+        // the IdP session too (not just quark's local session).
+        id_token: Some(id_token.clone()),
     };
     if st
         .store
@@ -337,24 +340,44 @@ pub(crate) async fn oidc_callback(
     resp
 }
 
-/// `POST /admin/logout`: revoke the current session and clear the cookie.
+/// `POST /admin/logout`: revoke the current session, clear the cookie, and
+/// hand the panel the IdP's RP-initiated logout URL (OIDC end-session) so the
+/// browser can also end the IdP session, not just quark's local one (LUC-79).
 /// Requires the `x-quark-csrf` header the panel sends: without it a cross-site
 /// simple POST could force-logout via the SameSite=None cookie, and with it the
 /// request is preflighted so the CORS allowlist gates any cross-origin caller.
+///
+/// Responds `200 OK` with `{"logout_url": <string|null>}`: the URL is `null`
+/// (local-only logout, as before) when OIDC is off, the IdP advertised no
+/// `end_session_endpoint`, or the session carried no stored `id_token`.
 pub(crate) async fn oidc_logout(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if headers.get(HEADER_CSRF).is_none() {
         return StatusCode::FORBIDDEN.into_response();
     }
+    // Read the session BEFORE deleting it, so we still have its `id_token` to
+    // build the end-session URL.
+    let mut id_token: Option<String> = None;
     if let Some(raw) = cookie_value(&headers, SESSION_COOKIE) {
-        let _ = st.store.delete_session(&hash_token(raw)).await;
+        let hash = hash_token(raw);
+        if let Ok(Some(session)) = st.store.get_session_by_hash(&hash, now()).await {
+            id_token = session.id_token;
+        }
+        let _ = st.store.delete_session(&hash).await;
     }
+    // Build the RP-initiated logout URL from the GLOBAL runtime's discovery +
+    // the session's id_token. `None` whenever any piece is missing.
+    let logout_url = match (st.oidc.as_ref(), id_token.as_deref()) {
+        (Some(rt), Some(tok)) => rt.logout_url(tok),
+        _ => None,
+    };
     let clear = format!("{SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
     (
-        StatusCode::NO_CONTENT,
+        StatusCode::OK,
         [
             (header::SET_COOKIE, clear),
             (header::CACHE_CONTROL, "no-store".to_string()),
         ],
+        Json(serde_json::json!({ "logout_url": logout_url })),
     )
         .into_response()
 }

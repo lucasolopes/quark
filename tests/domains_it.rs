@@ -1336,6 +1336,7 @@ async fn admin_me_reports_tenant_domain_suffix() {
         expires: quark::now() + 3600,
         tenant_id: TenantId(0),
         user_id,
+        id_token: None,
     };
     store.put_session(TenantId(0), &session).await.unwrap();
 

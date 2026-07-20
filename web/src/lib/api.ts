@@ -74,9 +74,11 @@ export const api = {
   },
   /** Revokes the current OIDC session server-side and clears its cookie. `req`
    * attaches the `x-quark-csrf` header the server requires (defeats cross-site
-   * forced-logout: the header forces a preflight and can't ride a simple POST). */
-  async logout(): Promise<void> {
-    await req("/admin/logout", { method: "POST" });
+   * forced-logout: the header forces a preflight and can't ride a simple POST).
+   * Returns `{ logout_url }`: when non-null, the caller should navigate the
+   * browser there to end the IdP session too (RP-initiated logout, LUC-79). */
+  async logout(): Promise<{ logout_url: string | null }> {
+    return jsonOrThrow(await req("/admin/logout", { method: "POST" }));
   },
   /** Creates a workspace (cloud only) and re-points the session at it. 409 if the slug is taken, 429 if rate-limited. */
   async createWorkspace(name: string, slug: string): Promise<{ id: number; name: string; slug: string; created: number }> {
