@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
-import { isHttpUrl, isNumericCode } from "@/lib/codeguard";
+import { isNumericCode } from "@/lib/codeguard";
 import { isUnauthorized } from "@/lib/mutation-error";
 import { useCreateLink } from "@/lib/queries";
 import { Combobox } from "@/components/Combobox";
@@ -29,7 +29,9 @@ import { RulesEditor } from "@/components/RulesEditor";
 import { VariantsEditor } from "@/components/VariantsEditor";
 import { useVariantRows } from "@/hooks/useVariantRows";
 import { DurationField } from "@/components/DurationField";
+import { CollapsibleSection } from "@/components/CollapsibleSection";
 import { DEFAULT_DURATION_UNIT, durationToSeconds } from "@/lib/duration";
+import { validateLinkForm } from "@/lib/link-form";
 import type { Folder } from "@/lib/types";
 
 interface FormErrors {
@@ -82,10 +84,6 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
   const [fallbackUrl, setFallbackUrl] = useState("");
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<FormErrors>({});
-  const [schedulingOpen, setSchedulingOpen] = useState(false);
-  const [appRedirectOpen, setAppRedirectOpen] = useState(false);
-  const [passwordOpen, setPasswordOpen] = useState(false);
-  const [utmOpen, setUtmOpen] = useState(false);
   const [utm, setUtm] = useState<UtmParams>(EMPTY_UTM);
   const [templates, setTemplates] = useState(() => loadUtmTemplates());
   const [templateName, setTemplateName] = useState("");
@@ -107,10 +105,6 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
     setFallbackUrl("");
     setPassword("");
     setErrors({});
-    setSchedulingOpen(false);
-    setAppRedirectOpen(false);
-    setPasswordOpen(false);
-    setUtmOpen(false);
     setUtm(EMPTY_UTM);
     setTemplateName("");
     setTemplateNameError(undefined);
@@ -153,38 +147,18 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
   }
 
   function validate(): FormErrors {
-    const next: FormErrors = {};
-    if (!url.trim()) {
-      next.url = t("dialogs.create.urlRequired");
-    } else if (!isHttpUrl(url)) {
-      next.url = t("dialogs.create.urlInvalid");
-    }
+    const next: FormErrors = validateLinkForm(
+      { url, ttl, ttlUnit, maxVisits, appIos, appAndroid, fallbackUrl },
+      t,
+      "dialogs.create",
+    );
     const trimmedAlias = alias.trim();
     if (trimmedAlias && isNumericCode(trimmedAlias)) {
       next.alias = t("dialogs.create.aliasCollision");
     }
-    if (ttl.trim() && durationToSeconds(ttl, ttlUnit) == null) {
-      next.ttl = t("dialogs.create.ttlInvalid");
-    }
-    const trimmedMaxVisits = maxVisits.trim();
-    if (trimmedMaxVisits) {
-      const n = Number(trimmedMaxVisits);
-      if (!Number.isInteger(n) || n <= 0) {
-        next.maxVisits = t("dialogs.create.maxVisitsInvalid");
-      }
-    }
     const variantsError = variants.validate(t, "dialogs.create");
     if (variantsError) {
       next.variants = variantsError;
-    }
-    if (appIos.trim() && !isHttpUrl(appIos)) {
-      next.appIos = t("dialogs.create.appDestInvalid");
-    }
-    if (appAndroid.trim() && !isHttpUrl(appAndroid)) {
-      next.appAndroid = t("dialogs.create.appDestInvalid");
-    }
-    if (fallbackUrl.trim() && !isHttpUrl(fallbackUrl)) {
-      next.fallbackUrl = t("dialogs.create.fallbackUrlInvalid");
     }
     return next;
   }
@@ -319,338 +293,266 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
               />
             </div>
 
-            <div className="flex flex-col gap-2 rounded-lg border border-input p-2.5">
-              <button
-                type="button"
-                className="flex items-center gap-1.5 text-sm font-medium"
-                aria-expanded={schedulingOpen}
-                onClick={() => setSchedulingOpen((open) => !open)}
-              >
-                {schedulingOpen ? (
-                  <ChevronDown className="size-4 text-muted-foreground" aria-hidden />
-                ) : (
-                  <ChevronRight className="size-4 text-muted-foreground" aria-hidden />
-                )}
-                {t("dialogs.sections.scheduling")}
-              </button>
+            <CollapsibleSection title={t("dialogs.sections.scheduling")}>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <DurationField
+                  id="create-link-ttl"
+                  label={t("dialogs.create.ttlLabel")}
+                  hint={t("dialogs.create.ttlOptional")}
+                  value={ttl}
+                  unit={ttlUnit}
+                  onValueChange={setTtl}
+                  onUnitChange={setTtlUnit}
+                  placeholder={t("dialogs.create.ttlPlaceholder")}
+                  error={errors.ttl}
+                />
 
-              {schedulingOpen && (
-                <div className="flex flex-col gap-3 pt-1">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <DurationField
-                      id="create-link-ttl"
-                      label={t("dialogs.create.ttlLabel")}
-                      hint={t("dialogs.create.ttlOptional")}
-                      value={ttl}
-                      unit={ttlUnit}
-                      onValueChange={setTtl}
-                      onUnitChange={setTtlUnit}
-                      placeholder={t("dialogs.create.ttlPlaceholder")}
-                      error={errors.ttl}
-                    />
-
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="create-link-max-visits" className="text-sm font-medium">
-                        {t("dialogs.create.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.create.maxVisitsOptional")}</span>
-                      </label>
-                      <Input
-                        id="create-link-max-visits"
-                        type="number"
-                        min={1}
-                        step={1}
-                        placeholder={t("dialogs.create.maxVisitsPlaceholder")}
-                        value={maxVisits}
-                        onChange={(e) => setMaxVisits(e.target.value)}
-                        aria-invalid={errors.maxVisits != null}
-                      />
-                      {errors.maxVisits && (
-                        <p className="text-sm text-destructive" role="alert">
-                          {errors.maxVisits}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="create-link-fallback-url" className="text-sm font-medium">
-                      {t("dialogs.create.fallbackUrlLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
-                    </label>
-                    <p className="text-sm text-muted-foreground">{t("dialogs.create.fallbackUrlNote")}</p>
-                    <Input
-                      id="create-link-fallback-url"
-                      type="text"
-                      placeholder={t("dialogs.create.fallbackUrlPlaceholder")}
-                      value={fallbackUrl}
-                      onChange={(e) => setFallbackUrl(e.target.value)}
-                      aria-invalid={errors.fallbackUrl != null}
-                    />
-                    {errors.fallbackUrl && (
-                      <p className="text-sm text-destructive" role="alert">
-                        {errors.fallbackUrl}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-2 rounded-lg border border-input p-2.5">
-              <button
-                type="button"
-                className="flex items-center gap-1.5 text-sm font-medium"
-                aria-expanded={appRedirectOpen}
-                onClick={() => setAppRedirectOpen((open) => !open)}
-              >
-                {appRedirectOpen ? (
-                  <ChevronDown className="size-4 text-muted-foreground" aria-hidden />
-                ) : (
-                  <ChevronRight className="size-4 text-muted-foreground" aria-hidden />
-                )}
-                {t("dialogs.sections.appRedirect")}
-              </button>
-
-              {appRedirectOpen && (
-                <div className="flex flex-col gap-3 pt-1">
-                  <p className="text-sm text-muted-foreground">{t("dialogs.create.appDestNote")}</p>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="create-link-app-ios" className="text-sm font-medium">
-                        {t("dialogs.create.appIosLabel")}
-                      </label>
-                      <Input
-                        id="create-link-app-ios"
-                        type="text"
-                        placeholder={t("dialogs.create.appIosPlaceholder")}
-                        value={appIos}
-                        onChange={(e) => setAppIos(e.target.value)}
-                        aria-invalid={errors.appIos != null}
-                      />
-                      {errors.appIos && (
-                        <p className="text-sm text-destructive" role="alert">
-                          {errors.appIos}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="create-link-app-android" className="text-sm font-medium">
-                        {t("dialogs.create.appAndroidLabel")}
-                      </label>
-                      <Input
-                        id="create-link-app-android"
-                        type="text"
-                        placeholder={t("dialogs.create.appAndroidPlaceholder")}
-                        value={appAndroid}
-                        onChange={(e) => setAppAndroid(e.target.value)}
-                        aria-invalid={errors.appAndroid != null}
-                      />
-                      {errors.appAndroid && (
-                        <p className="text-sm text-destructive" role="alert">
-                          {errors.appAndroid}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-2 rounded-lg border border-input p-2.5">
-              <button
-                type="button"
-                className="flex items-center gap-1.5 text-sm font-medium"
-                aria-expanded={passwordOpen}
-                onClick={() => setPasswordOpen((open) => !open)}
-              >
-                {passwordOpen ? (
-                  <ChevronDown className="size-4 text-muted-foreground" aria-hidden />
-                ) : (
-                  <ChevronRight className="size-4 text-muted-foreground" aria-hidden />
-                )}
-                {t("dialogs.sections.password")}
-              </button>
-
-              {passwordOpen && (
-                <div className="flex flex-col gap-3 pt-1">
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="create-link-password" className="text-sm font-medium">
-                      {t("dialogs.create.passwordLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
-                    </label>
-                    <p className="text-sm text-muted-foreground">{t("dialogs.create.passwordNote")}</p>
-                    <Input
-                      id="create-link-password"
-                      type="password"
-                      autoComplete="new-password"
-                      placeholder={t("dialogs.create.passwordPlaceholder")}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-2 rounded-lg border border-input p-2.5">
-              <button
-                type="button"
-                className="flex items-center gap-1.5 text-sm font-medium"
-                aria-expanded={utmOpen}
-                onClick={() => setUtmOpen((open) => !open)}
-              >
-                {utmOpen ? (
-                  <ChevronDown className="size-4 text-muted-foreground" aria-hidden />
-                ) : (
-                  <ChevronRight className="size-4 text-muted-foreground" aria-hidden />
-                )}
-                {t("utm.sectionTitle")}
-              </button>
-
-              {utmOpen && (
-                <div className="flex flex-col gap-3 pt-1">
-                  <p className="text-xs text-muted-foreground">{t("utm.sectionSubtitle")}</p>
-
-                  <div className="flex items-center gap-2">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <Button type="button" variant="outline" size="sm">
-                            {t("utm.templatesLabel")}
-                          </Button>
-                        }
-                      />
-                      <DropdownMenuContent align="start">
-                        {templateNames.length === 0 && (
-                          <div className="px-1.5 py-1 text-xs text-muted-foreground">
-                            {t("utm.templatesEmpty")}
-                          </div>
-                        )}
-                        {templateNames.map((name) => (
-                          <DropdownMenuItem
-                            key={name}
-                            onClick={() => applyTemplate(name)}
-                            className="flex items-center justify-between gap-2"
-                          >
-                            <span>{name}</span>
-                            <button
-                              type="button"
-                              aria-label={t("utm.deleteTemplateAria", { name })}
-                              className="text-muted-foreground hover:text-destructive"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteTemplate(name);
-                              }}
-                            >
-                              <Trash2 className="size-3.5" aria-hidden />
-                            </button>
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="utm-source" className="text-sm font-medium">
-                        {t("utm.sourceLabel")}
-                      </label>
-                      <Input
-                        id="utm-source"
-                        type="text"
-                        placeholder={t("utm.sourcePlaceholder")}
-                        value={utm.source ?? ""}
-                        onChange={(e) => setUtmField("source", e.target.value)}
-                      />
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="utm-medium" className="text-sm font-medium">
-                        {t("utm.mediumLabel")}
-                      </label>
-                      <Input
-                        id="utm-medium"
-                        type="text"
-                        placeholder={t("utm.mediumPlaceholder")}
-                        value={utm.medium ?? ""}
-                        onChange={(e) => setUtmField("medium", e.target.value)}
-                      />
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="utm-campaign" className="text-sm font-medium">
-                        {t("utm.campaignLabel")}
-                      </label>
-                      <Input
-                        id="utm-campaign"
-                        type="text"
-                        placeholder={t("utm.campaignPlaceholder")}
-                        value={utm.campaign ?? ""}
-                        onChange={(e) => setUtmField("campaign", e.target.value)}
-                      />
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="utm-term" className="text-sm font-medium">
-                        {t("utm.termLabel")}
-                      </label>
-                      <Input
-                        id="utm-term"
-                        type="text"
-                        placeholder={t("utm.termPlaceholder")}
-                        value={utm.term ?? ""}
-                        onChange={(e) => setUtmField("term", e.target.value)}
-                      />
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="utm-content" className="text-sm font-medium">
-                        {t("utm.contentLabel")}
-                      </label>
-                      <Input
-                        id="utm-content"
-                        type="text"
-                        placeholder={t("utm.contentPlaceholder")}
-                        value={utm.content ?? ""}
-                        onChange={(e) => setUtmField("content", e.target.value)}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="utm-template-name" className="text-sm font-medium">
-                      {t("utm.templateNameLabel")}
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        id="utm-template-name"
-                        type="text"
-                        placeholder={t("utm.templateNamePlaceholder")}
-                        value={templateName}
-                        onChange={(e) => {
-                          setTemplateName(e.target.value);
-                          if (templateNameError) setTemplateNameError(undefined);
-                        }}
-                      />
-                      <Button type="button" variant="outline" size="sm" onClick={handleSaveTemplate}>
-                        {t("utm.saveAsTemplate")}
-                      </Button>
-                    </div>
-                    {templateNameError && (
-                      <p className="text-sm text-destructive" role="alert">
-                        {templateNameError}
-                      </p>
-                    )}
-                  </div>
-
-                  {utmPreview && (
-                    <div className="flex flex-col gap-1">
-                      <span className="text-xs font-medium text-muted-foreground">
-                        {t("utm.previewLabel")}
-                      </span>
-                      <p className="break-all text-sm">{utmPreview}</p>
-                    </div>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="create-link-max-visits" className="text-sm font-medium">
+                    {t("dialogs.create.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.create.maxVisitsOptional")}</span>
+                  </label>
+                  <Input
+                    id="create-link-max-visits"
+                    type="number"
+                    min={1}
+                    step={1}
+                    placeholder={t("dialogs.create.maxVisitsPlaceholder")}
+                    value={maxVisits}
+                    onChange={(e) => setMaxVisits(e.target.value)}
+                    aria-invalid={errors.maxVisits != null}
+                  />
+                  {errors.maxVisits && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {errors.maxVisits}
+                    </p>
                   )}
                 </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="create-link-fallback-url" className="text-sm font-medium">
+                  {t("dialogs.create.fallbackUrlLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
+                </label>
+                <p className="text-sm text-muted-foreground">{t("dialogs.create.fallbackUrlNote")}</p>
+                <Input
+                  id="create-link-fallback-url"
+                  type="text"
+                  placeholder={t("dialogs.create.fallbackUrlPlaceholder")}
+                  value={fallbackUrl}
+                  onChange={(e) => setFallbackUrl(e.target.value)}
+                  aria-invalid={errors.fallbackUrl != null}
+                />
+                {errors.fallbackUrl && (
+                  <p className="text-sm text-destructive" role="alert">
+                    {errors.fallbackUrl}
+                  </p>
+                )}
+              </div>
+            </CollapsibleSection>
+
+            <CollapsibleSection title={t("dialogs.sections.appRedirect")}>
+              <p className="text-sm text-muted-foreground">{t("dialogs.create.appDestNote")}</p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="create-link-app-ios" className="text-sm font-medium">
+                    {t("dialogs.create.appIosLabel")}
+                  </label>
+                  <Input
+                    id="create-link-app-ios"
+                    type="text"
+                    placeholder={t("dialogs.create.appIosPlaceholder")}
+                    value={appIos}
+                    onChange={(e) => setAppIos(e.target.value)}
+                    aria-invalid={errors.appIos != null}
+                  />
+                  {errors.appIos && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {errors.appIos}
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="create-link-app-android" className="text-sm font-medium">
+                    {t("dialogs.create.appAndroidLabel")}
+                  </label>
+                  <Input
+                    id="create-link-app-android"
+                    type="text"
+                    placeholder={t("dialogs.create.appAndroidPlaceholder")}
+                    value={appAndroid}
+                    onChange={(e) => setAppAndroid(e.target.value)}
+                    aria-invalid={errors.appAndroid != null}
+                  />
+                  {errors.appAndroid && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {errors.appAndroid}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </CollapsibleSection>
+
+            <CollapsibleSection title={t("dialogs.sections.password")}>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="create-link-password" className="text-sm font-medium">
+                  {t("dialogs.create.passwordLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
+                </label>
+                <p className="text-sm text-muted-foreground">{t("dialogs.create.passwordNote")}</p>
+                <Input
+                  id="create-link-password"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder={t("dialogs.create.passwordPlaceholder")}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
+            </CollapsibleSection>
+
+            <CollapsibleSection title={t("utm.sectionTitle")}>
+              <p className="text-xs text-muted-foreground">{t("utm.sectionSubtitle")}</p>
+
+              <div className="flex items-center gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button type="button" variant="outline" size="sm">
+                        {t("utm.templatesLabel")}
+                      </Button>
+                    }
+                  />
+                  <DropdownMenuContent align="start">
+                    {templateNames.length === 0 && (
+                      <div className="px-1.5 py-1 text-xs text-muted-foreground">
+                        {t("utm.templatesEmpty")}
+                      </div>
+                    )}
+                    {templateNames.map((name) => (
+                      <DropdownMenuItem
+                        key={name}
+                        onClick={() => applyTemplate(name)}
+                        className="flex items-center justify-between gap-2"
+                      >
+                        <span>{name}</span>
+                        <button
+                          type="button"
+                          aria-label={t("utm.deleteTemplateAria", { name })}
+                          className="text-muted-foreground hover:text-destructive"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteTemplate(name);
+                          }}
+                        >
+                          <Trash2 className="size-3.5" aria-hidden />
+                        </button>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="utm-source" className="text-sm font-medium">
+                    {t("utm.sourceLabel")}
+                  </label>
+                  <Input
+                    id="utm-source"
+                    type="text"
+                    placeholder={t("utm.sourcePlaceholder")}
+                    value={utm.source ?? ""}
+                    onChange={(e) => setUtmField("source", e.target.value)}
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="utm-medium" className="text-sm font-medium">
+                    {t("utm.mediumLabel")}
+                  </label>
+                  <Input
+                    id="utm-medium"
+                    type="text"
+                    placeholder={t("utm.mediumPlaceholder")}
+                    value={utm.medium ?? ""}
+                    onChange={(e) => setUtmField("medium", e.target.value)}
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="utm-campaign" className="text-sm font-medium">
+                    {t("utm.campaignLabel")}
+                  </label>
+                  <Input
+                    id="utm-campaign"
+                    type="text"
+                    placeholder={t("utm.campaignPlaceholder")}
+                    value={utm.campaign ?? ""}
+                    onChange={(e) => setUtmField("campaign", e.target.value)}
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="utm-term" className="text-sm font-medium">
+                    {t("utm.termLabel")}
+                  </label>
+                  <Input
+                    id="utm-term"
+                    type="text"
+                    placeholder={t("utm.termPlaceholder")}
+                    value={utm.term ?? ""}
+                    onChange={(e) => setUtmField("term", e.target.value)}
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="utm-content" className="text-sm font-medium">
+                    {t("utm.contentLabel")}
+                  </label>
+                  <Input
+                    id="utm-content"
+                    type="text"
+                    placeholder={t("utm.contentPlaceholder")}
+                    value={utm.content ?? ""}
+                    onChange={(e) => setUtmField("content", e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="utm-template-name" className="text-sm font-medium">
+                  {t("utm.templateNameLabel")}
+                </label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="utm-template-name"
+                    type="text"
+                    placeholder={t("utm.templateNamePlaceholder")}
+                    value={templateName}
+                    onChange={(e) => {
+                      setTemplateName(e.target.value);
+                      if (templateNameError) setTemplateNameError(undefined);
+                    }}
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={handleSaveTemplate}>
+                    {t("utm.saveAsTemplate")}
+                  </Button>
+                </div>
+                {templateNameError && (
+                  <p className="text-sm text-destructive" role="alert">
+                    {templateNameError}
+                  </p>
+                )}
+              </div>
+
+              {utmPreview && (
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {t("utm.previewLabel")}
+                  </span>
+                  <p className="break-all text-sm">{utmPreview}</p>
+                </div>
               )}
-            </div>
+            </CollapsibleSection>
 
             <VariantsEditor
               idPrefix="create"
