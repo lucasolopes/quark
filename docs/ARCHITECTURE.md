@@ -36,7 +36,7 @@ flowchart LR
 | `cluster` | Startup preflight that fails a strict multi-node deployment missing its shared-state deps. Pure decision, unit-tested. | (pure) |
 | `calibrate` | Offline avalanche/SAC harness that measures diffusion of `permute` and picks `ROUNDS`. Not part of the running service. | `permute` (a copy of its math) |
 
-`permute` and `calibrate` are the differentiator; everything else is standard, swappable engineering (LMDB could become `redb`, moka could become any other cache, axum could become anything that speaks HTTP). The HTTP handlers and the router all live in one module, `src/api.rs`, grouped by comment; request/response types are serde structs inline in that file.
+`permute` and `calibrate` are the differentiator; everything else is standard, swappable engineering (LMDB could become `redb`, moka could become any other cache, axum could become anything that speaks HTTP). The HTTP handlers and the router live in `src/api/`, a directory module split by area (`links`, `guard`, `oidc_login`, `tenants`, `domains`, `webhooks_api`, `router`, ...); request/response types are serde structs inline in the submodule that uses them.
 
 ## Create flow
 

@@ -7,7 +7,7 @@ Não há arquivo de config nem feature flag de build: quais backends rodam é
 decidido só por quais variáveis `QUARK_*` estão setadas. Esta página lista cada
 variável que o binário lê, o default e o que faz. A fonte da verdade é
 `src/main.rs`, mais `src/cluster.rs` (o preflight de cluster), `src/store/mod.rs`
-(escolha de backend) e `src/api.rs` (CORS).
+(escolha de backend) e `src/api/router.rs` (CORS).
 
 Só `QUARK_KEY` importa para um deploy real. Deixe o resto sem setar e o quark
 roda como um binário único sem dependências em `0.0.0.0:8080` com store LMDB.

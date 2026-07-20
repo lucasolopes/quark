@@ -7,7 +7,7 @@ no config file and no build-time feature flag: which backends run is decided
 purely by which `QUARK_*` variables are set. This page lists every variable the
 binary reads, its default, and what it does. The source of truth is
 `src/main.rs`, plus `src/cluster.rs` (the cluster preflight), `src/store/mod.rs`
-(backend selection), and `src/api.rs` (CORS).
+(backend selection), and `src/api/router.rs` (CORS).
 
 Only `QUARK_KEY` matters for a real deployment. Leave everything else unset and
 quark runs as a single zero-dependency binary on `0.0.0.0:8080` with an LMDB

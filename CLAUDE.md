@@ -6,13 +6,19 @@ analytics, and rate-limiting are pluggable: embedded defaults (LMDB, in-memory)
 with opt-in production backends (Postgres, Valkey/Redis, ClickHouse).
 
 ### Code Structure
-- HTTP handlers and the router live in a single module `src/api.rs`
-  (all `/`, `/:code`, `/admin/*` handlers, `router()` / `router_with_cors()`,
-  and `AppState`). There is no per-domain handler file; handlers are grouped by
-  comment within `src/api.rs`.
-- Request/response types are serde structs defined inline in `src/api.rs`
-  (e.g. `CreateReq`, `CreateResp`). Persisted domain types (`Record`, `Rule`,
-  `Variant`, ...) live in `src/store/mod.rs`.
+- HTTP handlers and the router live in `src/api/`, a directory module split by
+  area. `mod.rs` holds `AppState`, the shared imports, and re-exports; handlers
+  are grouped into `links.rs` and `links_admin.rs` (the `/`, `/:code`, and admin
+  link CRUD), `guard.rs` (admin auth), `oidc_login.rs`, `tenants.rs`,
+  `domains.rs`, `sso_domains.rs`, `invites.rs`, `sheets.rs`, `webhooks_api.rs`,
+  and `router.rs` (`router()` / `router_with_cors()`). Submodules use
+  `use super::*;` over a flat glob re-export in `mod.rs`, so the internal
+  namespace stays flat and the public surface (`AppState`, `router`, ...) is
+  reachable at `quark::api::`.
+- Request/response types are serde structs defined inline in the relevant
+  `src/api/*.rs` submodule (e.g. `CreateReq`, `CreateResp` in `links.rs`).
+  Persisted domain types (`Record`, `Rule`, `Variant`, ...) live in
+  `src/store/mod.rs`.
 - Storage: `src/store/` — the `Store` trait in `mod.rs`, backends `lmdb.rs`
   (default, embedded) and `postgres.rs` (shared).
 - Cache: `src/cache/` — `mod.rs` (L1 moka + optional L2 tier), `valkey.rs`.
@@ -22,7 +28,7 @@ with opt-in production backends (Postgres, Valkey/Redis, ClickHouse).
   `delivery.rs` (dispatcher + delivery worker).
 - Abuse / cross-cutting guards (the closest thing to middleware): `src/abuse/`
   — `ratelimit.rs` and `mod.rs` (SSRF `is_internal_host`,
-  `extract_host`). Admin auth is in `src/api.rs` (`admin_guard`,
+  `extract_host`). Admin auth is in `src/api/guard.rs` (`admin_guard`,
   `require_admin_for_create`); API tokens and scopes are in `src/auth.rs`.
 - Other modules: `src/pixel.rs` (conversion forwarding), `src/import.rs`,
   `src/permute.rs` (keyed Feistel code generation), `src/codec.rs` (base62),
@@ -32,7 +38,10 @@ with opt-in production backends (Postgres, Valkey/Redis, ClickHouse).
   `webhooks_api_it.rs`, `tokens_api_it.rs`); unit tests are inline
   `#[cfg(test)]` modules. Postgres / Valkey / ClickHouse integration tests are
   gated behind env vars (`QUARK_TEST_DATABASE_URL`, `QUARK_TEST_VALKEY_URL`,
-  ...). Frontend tests are `web/src/**/*.test.tsx` (Vitest).
+  ...). Integration tests build their `AppState` through the shared
+  `tests/common/mod.rs` `TestState` builder (defaults to the OSS single-tenant
+  shape, fluent setters per field) rather than a hand-rolled struct literal.
+  Frontend tests are `web/src/**/*.test.tsx` (Vitest).
 
 ### Documentation Format
 - Project docs live in `docs/` as Markdown files.

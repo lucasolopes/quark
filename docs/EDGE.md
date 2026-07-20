@@ -13,7 +13,7 @@ changes.
 ## What quark already sends (and it already works)
 
 Every redirect response carries a `Cache-Control` header computed from the
-link's TTL (`src/api.rs`, `cache_control_for`):
+link's TTL (`src/api/links.rs`, `cache_control_for`):
 
 | Situation | Status | `Cache-Control` |
 |---|---|---|

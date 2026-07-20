@@ -2,7 +2,7 @@
 
 # HTTP API reference
 
-Every route quark serves, from `src/api.rs` (`router_with_cors`). Two routes are
+Every route quark serves, from `src/api/router.rs` (`router_with_cors`). Two routes are
 public by default (`POST /` and `GET /:code`); the well-known files are always
 public; everything under `/admin/*` and `GET /:code/stats` is gated.
 

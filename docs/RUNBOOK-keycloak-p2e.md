@@ -6,7 +6,7 @@ Real end-to-end validation against a live Keycloak instance is deferred to LUC-4
 
 ## What gets provisioned, and when
 
-Every tenant gets its own Keycloak realm, named after the tenant's slug. `admin_tenants_create` (`src/api.rs`) provisions it inline, best-effort: if any step fails, the tenant is still created and the boot backfill (`backfill_keycloak_provisioning`, run once at startup) retries any tenant missing an `oidc_config` row.
+Every tenant gets its own Keycloak realm, named after the tenant's slug. `admin_tenants_create` (`src/api/tenants.rs`) provisions it inline, best-effort: if any step fails, the tenant is still created and the boot backfill (`backfill_keycloak_provisioning`, run once at startup) retries any tenant missing an `oidc_config` row.
 
 ```mermaid
 sequenceDiagram
