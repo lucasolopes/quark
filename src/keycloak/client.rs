@@ -112,9 +112,13 @@ impl HttpKeycloakAdmin {
     }
 
     /// POSTs `body` to `url` with a bearer admin token, retrying once with a
-    /// freshly fetched token on `401`. `409 Conflict` (the resource already
-    /// exists) is treated as success, since every provisioning step must be
-    /// safe to re-run.
+    /// freshly fetched token on `401` or `403`. The `403` retry matters right
+    /// after `ensure_realm` creates a realm: Keycloak adds that realm's
+    /// `<realm>-realm` management roles to the `admin` composite on creation,
+    /// but a token minted before the realm existed does not carry them, so the
+    /// follow-up `ensure_client`/`ensure_mapper` POST would `403` until the
+    /// token is refetched. `409 Conflict` (the resource already exists) is
+    /// treated as success, since every provisioning step must be safe to re-run.
     async fn admin_post_idempotent(
         &self,
         url: &str,
@@ -122,7 +126,10 @@ impl HttpKeycloakAdmin {
     ) -> Result<(), KcError> {
         let token = self.admin_token().await?;
         let resp = self.post_json(url, &token, body).await?;
-        if resp.status() == StatusCode::UNAUTHORIZED {
+        if matches!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
             let token = self.fetch_token().await?;
             let resp = self.post_json(url, &token, body).await?;
             return Self::ok_or_conflict(resp).await;
@@ -155,7 +162,8 @@ impl HttpKeycloakAdmin {
         )))
     }
 
-    /// GETs `url` with a bearer admin token, retrying once on `401`.
+    /// GETs `url` with a bearer admin token, retrying once with a fresh token
+    /// on `401` or `403` (see `admin_post_idempotent` for why `403`).
     async fn admin_get(&self, url: &str) -> Result<serde_json::Value, KcError> {
         let token = self.admin_token().await?;
         let mut resp = self
@@ -165,7 +173,10 @@ impl HttpKeycloakAdmin {
             .send()
             .await
             .map_err(|e| KcError(e.to_string()))?;
-        if resp.status() == StatusCode::UNAUTHORIZED {
+        if matches!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
             let token = self.fetch_token().await?;
             resp = self
                 .client
@@ -279,10 +290,14 @@ impl KeycloakAdmin for HttpKeycloakAdmin {
         });
         let create_url = format!("{}/admin/realms/{slug}/users", self.base);
         let mut resp = self.post_json(&create_url, &token, &create_body).await?;
-        if resp.status() == StatusCode::UNAUTHORIZED {
+        if matches!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
             // Mirrors `admin_post_idempotent`/`admin_get`: the cached token
-            // may have expired between `admin_token` and this POST, so fetch
-            // a fresh one and retry exactly once before giving up.
+            // may have expired (401) or lack the realm's freshly-added roles
+            // (403) between `admin_token` and this POST, so fetch a fresh one
+            // and retry exactly once before giving up.
             let token = self.fetch_token().await?;
             resp = self.post_json(&create_url, &token, &create_body).await?;
         }
