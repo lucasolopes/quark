@@ -10,6 +10,13 @@ as contas sejam reais, nomeadas e revogáveis, e o quark nunca guarde senha.
 É opt-in: OIDC fica totalmente desligado até você setar `QUARK_OIDC_ISSUER`. O
 token de admin continua funcionando como break-glass, mesmo com OIDC ligado.
 
+Se você rodar **sem** `QUARK_ADMIN_TOKEN` (deploy só-SSO), a tela de login
+esconde o campo de token de admin e oferece só o login pelo provedor de
+identidade. Set o token de novo pra o campo break-glass voltar.
+
+Na tela de login, o e-mail que você digita é encaminhado ao provedor como
+`login_hint`, então o IdP já abre com o usuário preenchido.
+
 ## Como funciona
 
 O quark roda o fluxo OIDC padrão Authorization Code com PKCE. Ele nunca vê a
