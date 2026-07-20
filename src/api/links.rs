@@ -374,7 +374,7 @@ pub async fn create_link_core(
             Err(StoreError::IdSpaceExhausted) => return Err(CreateError::IdExhausted),
             Err(_) => return Err(CreateError::Backend),
         };
-        let canonical_code = codec::to_base62(permute::encode(id, st.key));
+        let canonical_code = st.encode_code(id);
         let ev = WebhookEvent {
             event_type: EventType::LinkCreated,
             body: webhook_event_payload(
@@ -410,7 +410,7 @@ pub async fn create_link_core(
     if id > permute::MAX_ID {
         return Err(CreateError::IdExhausted);
     }
-    let code = codec::to_base62(permute::encode(id, st.key));
+    let code = st.encode_code(id);
     let ev = WebhookEvent {
         event_type: EventType::LinkCreated,
         body: webhook_event_payload(
@@ -1071,7 +1071,7 @@ pub(crate) async fn unlock(
     // Path=/, so it is honored whether the visitor returns via the alias or the
     // code, and the cookie name is always a safe base62 string. The token is also
     // bound to the current password hash, so rotating the password kills it.
-    let canonical = codec::to_base62(permute::encode(id, st.key));
+    let canonical = st.encode_code(id);
     let (token, _expiry) = crate::password::unlock_token(&st.signing_key, &canonical, &hash, now());
     let secure = if request_is_https(&headers) {
         "; Secure"
@@ -1153,7 +1153,7 @@ pub(crate) async fn redirect(
             // so it works whether the visitor arrived via the alias or the code.
             // `canonical` is computed only here, never on the unprotected hot path.
             if let Some(hash) = rec.password_hash.as_deref() {
-                let canonical = codec::to_base62(permute::encode(id, st.key));
+                let canonical = st.encode_code(id);
                 if !is_unlocked(&headers, &st.signing_key, &canonical, hash, now) {
                     return interstitial_response(&code, raw_query.as_deref(), &headers, false);
                 }

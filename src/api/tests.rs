@@ -2,7 +2,7 @@ use super::{
     access_log_line, app_destination, cache_control_for, classify_platform, create_link_core,
     fbclid_from_query, normalize_max_visits, parse_cors_origins, resolve_code, resolve_for_admin,
     send_test_event_guarded, EventType, Platform, SubscriptionKind, WebhookSubscription,
-    SHARED_DOMAIN_ID,
+    HEADER_ADMIN_TOKEN, SHARED_DOMAIN_ID,
 };
 use crate::store::Record;
 use axum::body::Bytes;
@@ -906,7 +906,7 @@ async fn admin_guard_resolves_principal_per_credential() {
 
     // 1) env admin token present + provided -> Full principal, default tenant.
     let mut h = GuardHeaders::new();
-    h.insert("x-admin-token", "secret".parse().unwrap());
+    h.insert(HEADER_ADMIN_TOKEN, "secret".parse().unwrap());
     let p = admin_guard(&st, &h, Scope::Full)
         .await
         .expect("env admin token authorizes");
@@ -938,7 +938,7 @@ async fn admin_guard_resolves_principal_per_credential() {
         .await
         .unwrap();
     let mut ht = GuardHeaders::new();
-    ht.insert("x-admin-token", plaintext.parse().unwrap());
+    ht.insert(HEADER_ADMIN_TOKEN, plaintext.parse().unwrap());
 
     // 2) covering API token -> Principal carries the token's tenant + scopes.
     let p = admin_guard(&st, &ht, Scope::LinksRead)

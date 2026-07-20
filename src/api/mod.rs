@@ -92,6 +92,23 @@ pub struct AppState {
     pub keycloak_base_url: Option<String>,
 }
 
+/// Break-glass admin token header, checked by `admin_guard` and allowed through
+/// CORS. Kept as a const so the guard, the CSRF check, and the CORS allow-list
+/// never drift apart on the literal.
+pub(crate) const HEADER_ADMIN_TOKEN: &str = "x-admin-token";
+/// Double-submit CSRF header for the cookie-session admin path.
+pub(crate) const HEADER_CSRF: &str = "x-quark-csrf";
+
+impl AppState {
+    /// Public short code for a link id: permute the id with the instance key,
+    /// then base62-encode. The inverse is `permute::decode` (guarded by
+    /// `permute::MAX_ID`). Centralizes the composition that the create/redirect
+    /// and admin-list paths would otherwise repeat.
+    pub(crate) fn encode_code(&self, id: u64) -> String {
+        codec::to_base62(permute::encode(id, self.key))
+    }
+}
+
 mod domains;
 mod guard;
 mod invites;
