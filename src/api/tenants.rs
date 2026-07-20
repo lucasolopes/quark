@@ -139,6 +139,7 @@ pub async fn provision_tenant_keycloak(
         // authenticated realm user.
         required_value: Some("quark-readers".to_string()),
         post_login_url: None,
+        post_logout_url: None,
     };
     if let Err(e) = store.put_oidc_config(&cfg).await {
         log_keycloak_step_error(tenant.id.0, "put_oidc_config", e);

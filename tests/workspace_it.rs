@@ -134,6 +134,7 @@ async fn seed_session(store: &PostgresStore, subject: &str) -> (u64, String) {
         expires: quark::now() + 3600,
         tenant_id: TenantId(0),
         user_id,
+        id_token: None,
     };
     store.put_session(TenantId(0), &session).await.unwrap();
     (user_id, raw)
@@ -648,6 +649,7 @@ async fn oss_admin_me_shape_unchanged() {
         expires: quark::now() + 3600,
         tenant_id: TenantId(0),
         user_id,
+        id_token: None,
     };
     store.put_session(TenantId(0), &session).await.unwrap();
 
@@ -926,6 +928,7 @@ async fn backfill_provisions_tenants_missing_oidc_config() {
             readonly_value: "quark-readers".to_string(),
             required_value: Some("quark-readers".to_string()),
             post_login_url: None,
+            post_logout_url: None,
         })
         .await
         .unwrap();
@@ -963,6 +966,7 @@ async fn backfill_provisions_tenants_missing_oidc_config() {
             readonly_value: "quark-readers".to_string(),
             required_value: Some("quark-readers".to_string()),
             post_login_url: None,
+            post_logout_url: None,
         })
         .await
         .unwrap();
@@ -1021,6 +1025,7 @@ async fn backfill_provisions_the_tenant_owner() {
             readonly_value: "quark-readers".to_string(),
             required_value: Some("quark-readers".to_string()),
             post_login_url: None,
+            post_logout_url: None,
         })
         .await
         .unwrap();

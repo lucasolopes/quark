@@ -54,6 +54,11 @@ pub struct Session {
     pub tenant_id: crate::tenant::TenantId,
     #[serde(default)]
     pub user_id: u64,
+    /// The raw OIDC `id_token` from login, kept so RP-initiated logout can send
+    /// it to the IdP as `id_token_hint`. `Option` + serde default so sessions
+    /// persisted before this field existed still deserialize (as `None`).
+    #[serde(default)]
+    pub id_token: Option<String>,
 }
 
 /// Base62 alphabet (digits, uppercase, lowercase) used by `generate_token`.

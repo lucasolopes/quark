@@ -280,6 +280,9 @@ pub(crate) async fn admin_oidc_config_put(
         readonly_value: req.readonly_value,
         required_value: req.required_value,
         post_login_url: req.post_login_url,
+        // Not part of the admin OIDC-config API surface (RP-initiated logout
+        // uses the global runtime's end-session endpoint, LUC-79).
+        post_logout_url: None,
     };
     if let Err(e) = st.store.put_oidc_config(&cfg).await {
         return conflict_or_503(e).into_response();

@@ -424,6 +424,7 @@ async fn tenant_login_membership_role_matches_claim_mapping() {
         readonly_value: "acme-viewers".into(),
         required_value: None,
         post_login_url: None,
+        post_logout_url: None,
     };
     let tenant = crate::tenant::TenantId(1);
 
@@ -494,6 +495,7 @@ async fn tenant_login_creates_membership_only_in_the_login_tenant() {
         readonly_value: "acme-viewers".into(),
         required_value: None,
         post_login_url: None,
+        post_logout_url: None,
     };
 
     let claims = serde_json::json!({ "groups": ["acme-admins"] });
@@ -586,6 +588,7 @@ async fn tenant_login_never_downgrades_an_existing_owner() {
         readonly_value: "acme-viewers".into(),
         required_value: None,
         post_login_url: None,
+        post_logout_url: None,
     };
     let claims = serde_json::json!({ "groups": ["acme-admins"] });
     let role = crate::oidc::claim_role(&claims, &cfg);
@@ -641,6 +644,7 @@ async fn tenant_login_still_applies_claim_role_for_non_owners() {
         readonly_value: "acme-viewers".into(),
         required_value: None,
         post_login_url: None,
+        post_logout_url: None,
     };
 
     // First login: no admin-group claim yet, lands as Member (default).
@@ -713,6 +717,7 @@ async fn tenant_login_new_user_gets_claim_role() {
         readonly_value: "acme-viewers".into(),
         required_value: None,
         post_login_url: None,
+        post_logout_url: None,
     };
     let claims = serde_json::json!({ "groups": ["acme-admins"] });
     let role = crate::oidc::claim_role(&claims, &cfg);
@@ -752,6 +757,7 @@ async fn required_group_gate_open_when_unconfigured() {
         readonly_value: "acme-viewers".into(),
         required_value: None,
         post_login_url: None,
+        post_logout_url: None,
     };
     let tenant = crate::tenant::TenantId(1);
 
@@ -797,6 +803,7 @@ async fn required_group_gate_closed_when_configured() {
         readonly_value: "acme-viewers".into(),
         required_value: Some("acme-contractors".to_string()),
         post_login_url: None,
+        post_logout_url: None,
     };
     let tenant = crate::tenant::TenantId(1);
 
@@ -954,6 +961,7 @@ async fn admin_guard_oss_empty_scope_session_is_forbidden_not_unauthorized() {
         expires: u64::MAX,
         tenant_id: crate::tenant::DEFAULT_TENANT,
         user_id: 7,
+        id_token: None,
     };
     st.store
         .put_session(crate::tenant::DEFAULT_TENANT, &session)
@@ -993,6 +1001,7 @@ async fn session_user_id_none_when_oidc_not_configured() {
         expires: u64::MAX,
         tenant_id: crate::tenant::DEFAULT_TENANT,
         user_id: 42,
+        id_token: None,
     };
 
     // OIDC disabled: even a store-valid session cookie must resolve to

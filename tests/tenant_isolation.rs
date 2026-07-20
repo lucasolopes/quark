@@ -411,6 +411,7 @@ async fn lmdb_token_and_session_carry_tenant_and_user() {
         expires: u64::MAX,
         tenant_id: t,
         user_id: 7,
+        id_token: None,
     };
     store.put_session(t, &sess).await.unwrap();
     let gs = store.get_session_by_hash("s1", 0).await.unwrap().unwrap();
@@ -453,6 +454,7 @@ async fn pg_token_and_session_carry_tenant_and_user() {
         expires: i64::MAX as u64,
         tenant_id: t,
         user_id: 7,
+        id_token: None,
     };
     store.put_session(t, &sess).await.unwrap();
     let gs = store

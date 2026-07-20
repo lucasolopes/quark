@@ -1146,6 +1146,7 @@ async fn session_round_trip_and_gc_pg() {
         expires: 100,
         tenant_id: quark::tenant::DEFAULT_TENANT,
         user_id: 0,
+        id_token: None,
     };
     s.put_session(quark::tenant::DEFAULT_TENANT, &sess)
         .await

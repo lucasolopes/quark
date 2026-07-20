@@ -250,6 +250,7 @@ async fn cloud_hash_lookups_survive_force_rls() {
         expires: 1_000_000_000,
         tenant_id: TenantId(1),
         user_id: 0,
+        id_token: None,
     };
     t1.put_session(&session).await.unwrap();
 
@@ -312,6 +313,7 @@ async fn put_login_session(store: &Arc<dyn Store>, raw: &str, user_id: u64, tena
         expires: 4_000_000_000,
         tenant_id: tenant,
         user_id,
+        id_token: None,
     };
     store.put_session(tenant, &session).await.unwrap();
 }

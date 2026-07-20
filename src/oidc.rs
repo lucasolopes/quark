@@ -33,6 +33,11 @@ pub struct OidcConfig {
     /// Where to send the browser after a successful login. Default `/` (panel
     /// same-origin); set to the panel URL for a split-origin deployment.
     pub post_login_url: String,
+    /// Where to send the browser after an RP-initiated logout (OIDC
+    /// end-session), passed to the IdP as `post_logout_redirect_uri`. `None`
+    /// when unset, in which case the logout falls back to `post_login_url`
+    /// then `/`. Read from `QUARK_OIDC_POST_LOGOUT_URL`.
+    pub post_logout_url: Option<String>,
     /// Optional label for the panel's shared OIDC login button, read from
     /// `QUARK_OIDC_BUTTON_LABEL`. `None` when unset or empty, in which case the
     /// panel falls back to its own i18n label. Lets an operator relabel the
@@ -63,6 +68,9 @@ impl OidcConfig {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "/".to_string()),
+            post_logout_url: std::env::var("QUARK_OIDC_POST_LOGOUT_URL")
+                .ok()
+                .filter(|s| !s.is_empty()),
             button_label: std::env::var("QUARK_OIDC_BUTTON_LABEL")
                 .ok()
                 .filter(|s| !s.is_empty()),
@@ -96,6 +104,11 @@ pub struct TenantOidcConfig {
     #[serde(default)]
     pub required_value: Option<String>,
     pub post_login_url: Option<String>,
+    /// Optional per-tenant post-logout redirect URI (RP-initiated logout).
+    /// `#[serde(default)]` so a blob written before this field existed still
+    /// deserializes.
+    #[serde(default)]
+    pub post_logout_url: Option<String>,
 }
 
 /// The subset of the IdP's `.well-known/openid-configuration` we use.
@@ -104,6 +117,9 @@ pub struct Discovery {
     pub authorization_endpoint: String,
     pub token_endpoint: String,
     pub jwks_uri: String,
+    /// RP-initiated logout endpoint. Absent on some IdPs, so kept optional; a
+    /// logout falls back to a local-only clear when it is missing.
+    pub end_session_endpoint: Option<String>,
 }
 
 /// Fetches the IdP discovery document.
@@ -209,6 +225,28 @@ pub fn authorize_url(
         '?'
     };
     format!("{}{}{}", disco.authorization_endpoint, sep, q)
+}
+
+/// Builds the RP-initiated logout URL (OIDC end-session): sends the browser to
+/// the IdP's `end_session_endpoint` with the `id_token_hint` (so the IdP knows
+/// which session to end) and the `post_logout_redirect_uri` (where the IdP
+/// returns the browser afterwards). Both values are URL-encoded, mirroring how
+/// `authorize_url` builds its query.
+pub fn build_logout_url(
+    end_session_endpoint: &str,
+    id_token: &str,
+    post_logout_redirect_uri: &str,
+) -> String {
+    let mut ser = url::form_urlencoded::Serializer::new(String::new());
+    ser.append_pair("id_token_hint", id_token)
+        .append_pair("post_logout_redirect_uri", post_logout_redirect_uri);
+    let q = ser.finish();
+    let sep = if end_session_endpoint.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
+    format!("{end_session_endpoint}{sep}{q}")
 }
 
 /// Exchanges an authorization `code` (with the PKCE `verifier`) for the token
@@ -536,6 +574,7 @@ impl OidcRuntime {
                 .post_login_url
                 .clone()
                 .unwrap_or_else(|| "/".to_string()),
+            post_logout_url: cfg.post_logout_url.clone(),
             // The button label is a global/OSS panel affordance (env-sourced);
             // the per-tenant multi-tenant login path does not carry one.
             button_label: None,
@@ -575,6 +614,20 @@ impl OidcRuntime {
             challenge,
             login_hint,
         )
+    }
+
+    /// The RP-initiated logout URL for `id_token`, or `None` when this IdP's
+    /// discovery advertised no `end_session_endpoint`. The
+    /// `post_logout_redirect_uri` is the config's `post_logout_url` when set,
+    /// otherwise its `post_login_url` (which itself defaults to `/`).
+    pub fn logout_url(&self, id_token: &str) -> Option<String> {
+        let endpoint = self.discovery.end_session_endpoint.as_deref()?;
+        let redirect = self
+            .config
+            .post_logout_url
+            .as_deref()
+            .unwrap_or(&self.config.post_login_url);
+        Some(build_logout_url(endpoint, id_token, redirect))
     }
 
     /// Exchanges a callback code for the id_token.
@@ -747,6 +800,7 @@ mod tests {
             admin_value: "quark-admins".into(),
             readonly_value: Some("quark-viewers".into()),
             post_login_url: "/".into(),
+            post_logout_url: None,
             button_label: None,
         }
     }
@@ -765,6 +819,7 @@ mod tests {
             authorization_endpoint: "https://idp.example/authorize".into(),
             token_endpoint: "https://idp.example/token".into(),
             jwks_uri: "https://idp.example/jwks".into(),
+            end_session_endpoint: Some("https://idp.example/logout".into()),
         };
         let u = authorize_url(&cfg(), &disco, "st8", "nnc", "chlng", None);
         for needle in [
@@ -789,6 +844,7 @@ mod tests {
             authorization_endpoint: "https://idp.example/authorize".into(),
             token_endpoint: "https://idp.example/token".into(),
             jwks_uri: "https://idp.example/jwks".into(),
+            end_session_endpoint: Some("https://idp.example/logout".into()),
         };
         // Present + non-empty -> forwarded (email percent-encoded).
         let u = authorize_url(&cfg(), &disco, "s", "n", "c", Some("jane@acme.com"));
@@ -802,6 +858,48 @@ mod tests {
             !blank.contains("login_hint"),
             "blank login_hint must be dropped: {blank}"
         );
+    }
+
+    #[test]
+    fn discovery_parses_end_session_endpoint() {
+        // Present in the discovery doc -> populated.
+        let with = serde_json::json!({
+            "authorization_endpoint": "https://idp.example/authorize",
+            "token_endpoint": "https://idp.example/token",
+            "jwks_uri": "https://idp.example/jwks",
+            "end_session_endpoint": "https://idp.example/logout",
+        });
+        let d: Discovery = serde_json::from_value(with).unwrap();
+        assert_eq!(
+            d.end_session_endpoint.as_deref(),
+            Some("https://idp.example/logout")
+        );
+        // Absent (IdP without RP-initiated logout) -> None, still parses.
+        let without = serde_json::json!({
+            "authorization_endpoint": "https://idp.example/authorize",
+            "token_endpoint": "https://idp.example/token",
+            "jwks_uri": "https://idp.example/jwks",
+        });
+        let d: Discovery = serde_json::from_value(without).unwrap();
+        assert_eq!(d.end_session_endpoint, None);
+    }
+
+    #[test]
+    fn build_logout_url_encodes_hint_and_redirect() {
+        let u = build_logout_url(
+            "https://idp.example/logout",
+            "the.id.token",
+            "https://q.example/login",
+        );
+        assert_eq!(
+            u,
+            "https://idp.example/logout?id_token_hint=the.id.token&\
+             post_logout_redirect_uri=https%3A%2F%2Fq.example%2Flogin"
+        );
+        // When the endpoint already carries a query, params are appended with &.
+        let u2 = build_logout_url("https://idp.example/logout?x=1", "tok", "/");
+        assert!(u2.starts_with("https://idp.example/logout?x=1&id_token_hint=tok"));
+        assert!(u2.contains("post_logout_redirect_uri=%2F"));
     }
 
     #[test]
@@ -881,6 +979,7 @@ mod tests {
                 authorization_endpoint: "https://idp.example/authorize".into(),
                 token_endpoint: "https://idp.example/token".into(),
                 jwks_uri: "https://idp.example/jwks".into(),
+                end_session_endpoint: Some("https://idp.example/logout".into()),
             },
             jwks: tokio::sync::RwLock::new(Jwks { keys: Vec::new() }),
         }
@@ -900,6 +999,7 @@ mod tests {
             readonly_value: String::new(),
             required_value: None,
             post_login_url: None,
+            post_logout_url: None,
         };
         let rt = OidcRuntime::from_config(&cfg).await.unwrap();
         assert_eq!(rt.config.scopes, "openid profile");
@@ -1121,6 +1221,7 @@ mod tests {
             readonly_value: "acme-viewers".into(),
             required_value: None,
             post_login_url: None,
+            post_logout_url: None,
         };
 
         let admin = serde_json::json!({ "groups": ["x", "acme-admins"] });
@@ -1167,6 +1268,7 @@ mod tests {
             readonly_value: "quark-readers".into(),
             required_value: Some("quark-readers".into()),
             post_login_url: None,
+            post_logout_url: None,
         };
 
         let admin = serde_json::json!({ "groups": ["quark-admins"] });
@@ -1192,6 +1294,7 @@ mod tests {
             readonly_value: "acme-viewers".into(),
             required_value: required_value.map(str::to_string),
             post_login_url: None,
+            post_logout_url: None,
         }
     }
 

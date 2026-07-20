@@ -286,6 +286,11 @@ struct OidcConfigBlob {
     #[serde(default)]
     required_value: Option<String>,
     post_login_url: Option<String>,
+    /// Optional per-tenant post-logout redirect URI (RP-initiated logout,
+    /// LUC-79). `#[serde(default)]` so a blob written before this field existed
+    /// still deserializes.
+    #[serde(default)]
+    post_logout_url: Option<String>,
 }
 
 fn oidc_config_blob(cfg: &TenantOidcConfig, sb: &Option<SecretBox>) -> serde_json::Value {
@@ -302,6 +307,7 @@ fn oidc_config_blob(cfg: &TenantOidcConfig, sb: &Option<SecretBox>) -> serde_jso
         readonly_value: cfg.readonly_value.clone(),
         required_value: cfg.required_value.clone(),
         post_login_url: cfg.post_login_url.clone(),
+        post_logout_url: cfg.post_logout_url.clone(),
     })
     .expect("OidcConfigBlob has no non-serializable fields")
 }
@@ -328,6 +334,7 @@ fn row_to_oidc_config(r: &PgRow, sb: &Option<SecretBox>) -> Result<TenantOidcCon
         readonly_value: b.readonly_value,
         required_value: b.required_value,
         post_login_url: b.post_login_url,
+        post_logout_url: b.post_logout_url,
     })
 }
 
@@ -720,6 +727,8 @@ impl PostgresStore {
                 "CREATE INDEX IF NOT EXISTS memberships_by_tenant ON memberships (tenant_id)",
                 // --- Multi-tenancy (P1b): sessions carry the authenticated user ---
                 "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id BIGINT NOT NULL DEFAULT 0",
+                // --- RP-initiated logout (LUC-79): store the id_token for id_token_hint ---
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS id_token TEXT",
                 // --- Multi-tenancy (P3): custom domains ---
                 // Starts at 1 so it never collides with the reserved shared-domain sentinel (0).
                 "CREATE SEQUENCE IF NOT EXISTS quark_domain_id_seq START WITH 1",
@@ -1681,10 +1690,10 @@ impl Store for PostgresStore {
         // `WHERE`/`tenant_id` column keeps isolation.
         with_write!(self, tenant, |c| {
             sqlx::query(
-                "INSERT INTO sessions (token_hash, subject, display, scopes, created, expires, tenant_id, user_id) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) \
+                "INSERT INTO sessions (token_hash, subject, display, scopes, created, expires, tenant_id, user_id, id_token) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) \
                  ON CONFLICT (token_hash) DO UPDATE \
-                   SET subject=$2, display=$3, scopes=$4, created=$5, expires=$6, tenant_id=$7, user_id=$8",
+                   SET subject=$2, display=$3, scopes=$4, created=$5, expires=$6, tenant_id=$7, user_id=$8, id_token=$9",
             )
             .bind(&session.token_hash)
             .bind(&session.subject)
@@ -1694,6 +1703,7 @@ impl Store for PostgresStore {
             .bind(session.expires as i64)
             .bind(tenant.0 as i64)
             .bind(session.user_id as i64)
+            .bind(session.id_token.as_deref())
             .execute(&mut *c)
             .await
         });
@@ -1706,7 +1716,7 @@ impl Store for PostgresStore {
         now: u64,
     ) -> Result<Option<crate::auth::Session>, StoreError> {
         let row = sqlx::query(
-            "SELECT token_hash, subject, display, scopes, created, expires, tenant_id, user_id FROM sessions \
+            "SELECT token_hash, subject, display, scopes, created, expires, tenant_id, user_id, id_token FROM sessions \
              WHERE token_hash = $1 AND expires > $2",
         )
         .bind(token_hash)
@@ -1730,6 +1740,7 @@ impl Store for PostgresStore {
                     expires: expires as u64,
                     tenant_id: TenantId(tenant_id as u64),
                     user_id: user_id as u64,
+                    id_token: r.try_get("id_token").ok().flatten(),
                 }))
             }
             None => Ok(None),

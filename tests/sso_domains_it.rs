@@ -234,6 +234,7 @@ async fn seed_oidc_config(store: &PostgresStore, tenant: TenantId) {
             readonly_value: "member".to_string(),
             required_value: None,
             post_login_url: None,
+            post_logout_url: None,
         })
         .await
         .unwrap();
