@@ -2,6 +2,7 @@ use quark::analytics::AnalyticsSink;
 use quark::api::AppState;
 use quark::cache::Cache;
 use quark::invalidate::{spawn_invalidation_subscriber, Invalidator};
+use quark::store::postgres::PostgresStore;
 use quark::store::{open_backends, Record, Store};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -204,8 +205,16 @@ async fn host_invalidation_propagates_to_other_node() {
         eprintln!("skip: QUARK_TEST_VALKEY_URL not set");
         return;
     };
-    let dir = tempfile::tempdir().unwrap();
-    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    // Domains are a cloud feature; LMDB's `put_domain` is `Unsupported`, so this
+    // test needs a Postgres-backed store. Skip when Postgres is not configured.
+    let Ok(db) = std::env::var("QUARK_TEST_DATABASE_URL") else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let pg = Arc::new(PostgresStore::open(&db, true).await.unwrap());
+    pg.reset_for_tests().await.unwrap();
+    let store: Arc<dyn Store> = pg.clone();
+    let sink: Arc<dyn AnalyticsSink> = pg;
     let host = "go.acme.example";
     store
         .put_domain(&quark::domain::Domain {
