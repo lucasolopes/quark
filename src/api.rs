@@ -185,6 +185,11 @@ const MAX_PAGE_LIMIT: usize = 500;
 const MAX_WEBHOOK_SUBSCRIPTIONS: usize = 50;
 /// Timeout for the synchronous one-shot delivery used by the "test" endpoint.
 const WEBHOOK_TEST_TIMEOUT_SECS: u64 = 5;
+/// Default header carrying the real client IP behind a proxy (Cloudflare).
+/// Overridable via `QUARK_REAL_IP_HEADER` at startup (see `main.rs`).
+pub const DEFAULT_REAL_IP_HEADER: &str = "cf-connecting-ip";
+/// Request timeout for the outbound `reqwest` client built by `reqwest_client`.
+const HTTP_CLIENT_TIMEOUT_SECS: u64 = 10;
 
 /// A random id embedded in an outbound event payload's `id` field.
 /// Distinct from the `webhook-id` header the delivery worker assigns per
@@ -193,7 +198,7 @@ const WEBHOOK_TEST_TIMEOUT_SECS: u64 = 5;
 fn generate_event_id() -> String {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("system RNG must be available");
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = crate::hex(&bytes);
     format!("evt_{hex}")
 }
 
@@ -207,7 +212,7 @@ fn generate_click_id() -> String {
     if getrandom::fill(&mut bytes).is_err() {
         return String::new();
     }
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = crate::hex(&bytes);
     format!("clk_{hex}")
 }
 
@@ -3646,7 +3651,7 @@ fn sheets_base_host(st: &AppState, headers: &HeaderMap) -> String {
 fn reqwest_client() -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(HTTP_CLIENT_TIMEOUT_SECS))
         .build()
         .expect("reqwest client builds")
 }
@@ -4437,7 +4442,7 @@ async fn admin_links_bulk(
     // `set_folder`, a missing/empty value is allowed and means "remove from
     // folder"; `delete` ignores it.
     if matches!(req.op, BulkOp::AddTag | BulkOp::RemoveTag)
-        && req.value.as_deref().map(str::trim).unwrap_or("").is_empty()
+        && req.value.as_deref().is_none_or(|v| v.trim().is_empty())
     {
         return (StatusCode::BAD_REQUEST, "value required").into_response();
     }
@@ -5394,7 +5399,7 @@ mod tests {
             ratelimiter: crate::abuse::ratelimit::RateLimiter::disabled(),
             block_private: true,
             public_host: None,
-            real_ip_header: "cf-connecting-ip".to_string(),
+            real_ip_header: super::DEFAULT_REAL_IP_HEADER.to_string(),
             webhooks,
             multi_tenant: false,
             host_router,
@@ -5447,7 +5452,7 @@ mod tests {
             ratelimiter: crate::abuse::ratelimit::RateLimiter::disabled(),
             block_private: true,
             public_host: None,
-            real_ip_header: "cf-connecting-ip".to_string(),
+            real_ip_header: super::DEFAULT_REAL_IP_HEADER.to_string(),
             webhooks,
             multi_tenant: true,
             host_router,

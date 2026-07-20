@@ -150,7 +150,7 @@ fn transition_body(event_type: EventType, code: &str, url: &str, status: Option<
     }
     let mut id = [0u8; 16];
     let _ = getrandom::fill(&mut id);
-    let hex: String = id.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = crate::hex(&id);
     serde_json::json!({
         "id": format!("evt_{hex}"),
         "type": event_type.as_str(),
@@ -240,7 +240,7 @@ where
                     continue;
                 };
                 checked += 1;
-                let was_healthy = prev.get(&id).map(|p| p.healthy).unwrap_or(true);
+                let was_healthy = prev.get(&id).is_none_or(|p| p.healthy);
                 if was_healthy != health.healthy {
                     let et = if health.healthy {
                         EventType::LinkRecovered
@@ -292,10 +292,7 @@ pub fn spawn_link_checker(
         // and only the holder sweeps in a given round (multi-node coordination).
         let mut hb = [0u8; 8];
         let _ = getrandom::fill(&mut hb);
-        let holder: String = format!(
-            "chk_{}",
-            hb.iter().map(|b| format!("{b:02x}")).collect::<String>()
-        );
+        let holder: String = format!("chk_{}", crate::hex(&hb));
         // Lease lasts longer than one interval so the holder keeps it across a
         // slow sweep; if the holder dies, another node takes over within the TTL.
         let ttl = period.as_secs().saturating_mul(2).max(MIN_CHECK_SECS);

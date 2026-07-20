@@ -188,7 +188,7 @@ impl AnalyticsSink for ClickHouseSink {
                 city: e.city.as_deref().unwrap_or(""),
                 referer_host: host,
                 bot,
-                variant: e.variant.map(|v| v as i32).unwrap_or(-1),
+                variant: e.variant.map_or(-1, |v| v as i32),
                 tenant_id: e.tenant_id,
             };
             insert.write(&row).await.map_err(StoreError::backend)?;

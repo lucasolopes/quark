@@ -755,7 +755,7 @@ fn relay_backoff_secs(attempts: u32) -> u64 {
 fn generate_msg_id() -> String {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("system RNG must be available");
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = crate::hex(&bytes);
     format!("msg_{hex}")
 }
 

@@ -34,3 +34,9 @@ pub fn now() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
+
+/// Lowercase hex encoding of a byte slice (two `%02x` digits per byte).
+/// Shared by id generators, digests, and lease holder ids across the crate.
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
