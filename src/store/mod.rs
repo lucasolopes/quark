@@ -498,6 +498,14 @@ pub trait Store: Send + Sync + 'static {
     async fn bump_visits(&self, tenant: TenantId, id: u64) -> Result<u64, StoreError>;
     /// Reads the current visit count for `id` (0 if never bumped), for display.
     async fn visits(&self, tenant: TenantId, id: u64) -> Result<u64, StoreError>;
+    /// Visit counts for a specific set of link ids (ids never bumped are simply
+    /// absent from the map). Used by the admin list so a page load reads the
+    /// whole page's visit counts in one round trip instead of one query per row.
+    async fn visits_for(
+        &self,
+        tenant: TenantId,
+        ids: &[u64],
+    ) -> Result<std::collections::HashMap<u64, u64>, StoreError>;
     /// Records the latest health probe result for a link (broken-link
     /// monitoring). Upserts by id; a link is probed at most once per sweep.
     async fn put_link_health(
@@ -959,6 +967,12 @@ impl ScopedStore {
     }
     pub async fn visits(&self, id: u64) -> Result<u64, StoreError> {
         self.inner.visits(self.tenant, id).await
+    }
+    pub async fn visits_for(
+        &self,
+        ids: &[u64],
+    ) -> Result<std::collections::HashMap<u64, u64>, StoreError> {
+        self.inner.visits_for(self.tenant, ids).await
     }
     pub async fn put_link_health(&self, id: u64, health: &LinkHealth) -> Result<(), StoreError> {
         self.inner.put_link_health(self.tenant, id, health).await
