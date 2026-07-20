@@ -20,6 +20,10 @@ export function Login() {
   // (`QUARK_OIDC_BUTTON_LABEL`); null means fall back to the i18n label.
   const [oidcButtonLabel, setOidcButtonLabel] = useState<string | null>(null);
   const [multiTenant, setMultiTenant] = useState(false);
+  // Whether the server has a break-glass admin token configured. Defaults to
+  // true so the field shows until `/admin/me` says otherwise (and stays visible
+  // against older servers that omit the flag).
+  const [adminLoginEnabled, setAdminLoginEnabled] = useState(true);
   const [email, setEmail] = useState("");
   // Set once email discovery comes back with no org: reveals the shared
   // provider button instead of blocking the user behind the email step.
@@ -50,6 +54,7 @@ export function Login() {
           setOidcEnabled(me.oidc_enabled);
           setOidcButtonLabel(me.oidc_button_label ?? null);
           setMultiTenant(me.multi_tenant ?? false);
+          setAdminLoginEnabled(me.admin_login_enabled ?? true);
         }
       })
       .catch(() => {});
@@ -120,47 +125,53 @@ export function Login() {
               <CardTitle className="font-heading text-2xl font-bold tracking-tight">quark</CardTitle>
             </div>
           </div>
-          <CardDescription>{t("login.description")}</CardDescription>
+          <CardDescription>
+            {adminLoginEnabled ? t("login.description") : t("login.descriptionSso")}
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-3" noValidate>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="admin-token" className="text-sm font-medium">
-                {t("login.tokenLabel")}
-              </label>
-              <Input
-                id="admin-token"
-                ref={inputRef}
-                type="password"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="••••••••"
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                aria-invalid={mutation.isError}
-                aria-describedby={mutation.isError ? "admin-token-error" : undefined}
-                className="font-mono"
-              />
-              {mutation.isError && (
-                <p id="admin-token-error" role="alert" className="text-sm text-destructive">
-                  {mutation.error instanceof ApiError && mutation.error.status === 401
-                    ? t("login.invalidToken")
-                    : t("login.connectionError")}
-                </p>
-              )}
-            </div>
-            <Button type="submit" disabled={!value.trim() || mutation.isPending} className="mt-1">
-              {mutation.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-              {t("login.submit")}
-            </Button>
-          </form>
+          {adminLoginEnabled && (
+            <form onSubmit={handleSubmit} className="flex flex-col gap-3" noValidate>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="admin-token" className="text-sm font-medium">
+                  {t("login.tokenLabel")}
+                </label>
+                <Input
+                  id="admin-token"
+                  ref={inputRef}
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="••••••••"
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  aria-invalid={mutation.isError}
+                  aria-describedby={mutation.isError ? "admin-token-error" : undefined}
+                  className="font-mono"
+                />
+                {mutation.isError && (
+                  <p id="admin-token-error" role="alert" className="text-sm text-destructive">
+                    {mutation.error instanceof ApiError && mutation.error.status === 401
+                      ? t("login.invalidToken")
+                      : t("login.connectionError")}
+                  </p>
+                )}
+              </div>
+              <Button type="submit" disabled={!value.trim() || mutation.isPending} className="mt-1">
+                {mutation.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+                {t("login.submit")}
+              </Button>
+            </form>
+          )}
           {oidcEnabled && (
             <>
-              <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="h-px flex-1 bg-border" />
-                {t("login.or")}
-                <span className="h-px flex-1 bg-border" />
-              </div>
+              {adminLoginEnabled && (
+                <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground">
+                  <span className="h-px flex-1 bg-border" />
+                  {t("login.or")}
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+              )}
               {org ? (
                 <>
                   <p className="mb-2 text-center text-sm text-muted-foreground">

@@ -89,6 +89,11 @@ export interface MeResponse {
    * so the login screen can gate cloud-only affordances like email-first SSO
    * discovery (meaningless in single-tenant OSS). */
   multi_tenant?: boolean;
+  /** True when a break-glass admin token is configured (`QUARK_ADMIN_TOKEN`).
+   * Present pre-auth so the login screen hides the admin-token field on an
+   * SSO-only deployment where it could never work. Absent = assume enabled
+   * (backward compatible with older servers). */
+  admin_login_enabled?: boolean;
   display?: string;
   scopes?: string[];
   memberships?: Membership[];
