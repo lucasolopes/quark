@@ -165,6 +165,8 @@ export function Combobox({
             aria-label={ariaLabel}
             aria-expanded={open}
             aria-controls={open ? listboxId : undefined}
+            aria-autocomplete="list"
+            aria-activedescendant={open && filtered.length > 0 ? `${listboxId}-opt-${Math.min(activeIndex, filtered.length - 1)}` : undefined}
             role="combobox"
             autoComplete="off"
             disabled={disabled}
@@ -191,6 +193,7 @@ export function Combobox({
               return (
                 <li
                   key={o.value}
+                  id={`${listboxId}-opt-${i}`}
                   role="option"
                   aria-selected={selected}
                   className={cn(

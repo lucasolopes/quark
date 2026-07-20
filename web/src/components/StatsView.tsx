@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { RecentEventsTable } from "@/components/RecentEventsTable";
 import { StatsCharts } from "@/components/StatsCharts";
 import { useT } from "@/i18n";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatNumber } from "@/lib/format";
 import { useStats } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -61,13 +61,13 @@ export function StatsView({ code }: { code: string }) {
             <StatCard
               icon={<MousePointerClick className="size-4" aria-hidden="true" />}
               label={t("stats.totalClicks")}
-              value={query.data.aggregates.total.toLocaleString("pt-BR")}
+              value={formatNumber(query.data.aggregates.total)}
               accent
             />
             <StatCard
               icon={<Bot className="size-4" aria-hidden="true" />}
               label={t("stats.botsExcluded")}
-              value={query.data.aggregates.bots.toLocaleString("pt-BR")}
+              value={formatNumber(query.data.aggregates.bots)}
             />
             <StatCard
               icon={<Timer className="size-4" aria-hidden="true" />}
