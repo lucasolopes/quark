@@ -34,7 +34,7 @@ pub(crate) async fn admin_guard(
     required: Scope,
 ) -> Result<Principal, StatusCode> {
     let provided = headers
-        .get("x-admin-token")
+        .get(HEADER_ADMIN_TOKEN)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
@@ -176,7 +176,7 @@ pub(crate) async fn admin_guard(
 /// on simple-POST endpoints (no JSON body / content-type-sniffed body) that
 /// would otherwise be reachable cross-site.
 pub(crate) fn csrf_guard(headers: &HeaderMap) -> Result<(), StatusCode> {
-    if headers.contains_key("x-admin-token") || headers.contains_key("x-quark-csrf") {
+    if headers.contains_key(HEADER_ADMIN_TOKEN) || headers.contains_key(HEADER_CSRF) {
         Ok(())
     } else {
         Err(StatusCode::FORBIDDEN)

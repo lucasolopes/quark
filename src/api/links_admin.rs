@@ -167,7 +167,7 @@ pub(crate) async fn admin_links_list(
         let visits = visits_map.get(&id).copied().unwrap_or(0);
         rows.push(LinkRow {
             id,
-            code: codec::to_base62(permute::encode(id, st.key)),
+            code: st.encode_code(id),
             alias: alias_map.get(&id).cloned(),
             url: rec.url,
             expiry: rec.expiry,
@@ -278,7 +278,7 @@ pub(crate) async fn admin_link_delete(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    let canonical_code = codec::to_base62(permute::encode(id, st.key));
+    let canonical_code = st.encode_code(id);
     let ev = WebhookEvent {
         event_type: EventType::LinkDeleted,
         body: webhook_event_payload(
@@ -604,7 +604,7 @@ pub(crate) async fn admin_link_patch(
             return (StatusCode::BAD_REQUEST, "invalid password").into_response();
         }
     }
-    let canonical_code = codec::to_base62(permute::encode(id, st.key));
+    let canonical_code = st.encode_code(id);
     let ev = WebhookEvent {
         event_type: EventType::LinkUpdated,
         body: webhook_event_payload(
@@ -692,7 +692,7 @@ pub(crate) async fn bulk_apply_one(
         Ok(None) => return Err("not found".to_string()),
         Err(_) => return Err("store error".to_string()),
     };
-    let canonical_code = codec::to_base62(permute::encode(id, st.key));
+    let canonical_code = st.encode_code(id);
 
     if op == BulkOp::Delete {
         let ev = WebhookEvent {

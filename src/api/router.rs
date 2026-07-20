@@ -199,8 +199,8 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             // session cookie is accepted on a cross-origin panel.
             .allow_headers([
                 header::CONTENT_TYPE,
-                axum::http::HeaderName::from_static("x-admin-token"),
-                axum::http::HeaderName::from_static("x-quark-csrf"),
+                axum::http::HeaderName::from_static(HEADER_ADMIN_TOKEN),
+                axum::http::HeaderName::from_static(HEADER_CSRF),
             ])
             .allow_credentials(true);
         app.layer(cors)

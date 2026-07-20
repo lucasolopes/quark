@@ -342,7 +342,7 @@ pub(crate) async fn oidc_callback(
 /// simple POST could force-logout via the SameSite=None cookie, and with it the
 /// request is preflighted so the CORS allowlist gates any cross-origin caller.
 pub(crate) async fn oidc_logout(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if headers.get("x-quark-csrf").is_none() {
+    if headers.get(HEADER_CSRF).is_none() {
         return StatusCode::FORBIDDEN.into_response();
     }
     if let Some(raw) = cookie_value(&headers, SESSION_COOKIE) {
