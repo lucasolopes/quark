@@ -896,6 +896,21 @@ impl Store for LmdbStore {
         Ok(self.visits.get(&rtxn, &tkey_id(tenant, id))?.unwrap_or(0))
     }
 
+    async fn visits_for(
+        &self,
+        tenant: TenantId,
+        ids: &[u64],
+    ) -> Result<std::collections::HashMap<u64, u64>, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let mut out = std::collections::HashMap::with_capacity(ids.len());
+        for &id in ids {
+            if let Some(v) = self.visits.get(&rtxn, &tkey_id(tenant, id))? {
+                out.insert(id, v);
+            }
+        }
+        Ok(out)
+    }
+
     async fn next_pixel_id(&self, _tenant: TenantId) -> Result<u64, StoreError> {
         // Global id namespace (not tenant-prefixed).
         let mut wtxn = self.env.write_txn()?;

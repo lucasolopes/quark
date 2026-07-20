@@ -681,10 +681,9 @@ async fn oss_admin_me_shape_unchanged() {
     assert_eq!(me["authenticated"], true);
     assert_eq!(me["display"], "OSS Me");
     assert_eq!(me["oidc_enabled"], false);
-    assert_eq!(
-        me["memberships"],
-        serde_json::json!([]),
-        "OSS must never surface tenant memberships, even though one exists in the store"
+    assert!(
+        me.get("memberships").is_none(),
+        "OSS must OMIT memberships entirely (the panel reads its presence as cloud mode); one exists in the store but must not surface"
     );
     assert_eq!(
         me["current_tenant"],

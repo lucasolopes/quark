@@ -1592,6 +1592,31 @@ impl Store for PostgresStore {
         }
     }
 
+    async fn visits_for(
+        &self,
+        tenant: TenantId,
+        ids: &[u64],
+    ) -> Result<std::collections::HashMap<u64, u64>, StoreError> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let id_list: Vec<i64> = ids.iter().map(|&i| i as i64).collect();
+        let rows = with_read!(self, tenant, |c| {
+            sqlx::query("SELECT id, visits FROM links WHERE tenant_id = $1 AND id = ANY($2)")
+                .bind(tenant.0 as i64)
+                .bind(&id_list)
+                .fetch_all(&mut *c)
+                .await
+        });
+        let mut out = std::collections::HashMap::with_capacity(rows.len());
+        for r in &rows {
+            let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+            let visits: i64 = r.try_get("visits").map_err(StoreError::backend)?;
+            out.insert(id as u64, visits as u64);
+        }
+        Ok(out)
+    }
+
     async fn put_link_health(
         &self,
         tenant: TenantId,

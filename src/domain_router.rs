@@ -388,6 +388,13 @@ mod tests {
         async fn visits(&self, _tenant: TenantId, _id: u64) -> Result<u64, StoreError> {
             unimplemented!()
         }
+        async fn visits_for(
+            &self,
+            _tenant: TenantId,
+            _ids: &[u64],
+        ) -> Result<std::collections::HashMap<u64, u64>, StoreError> {
+            unimplemented!()
+        }
         async fn put_link_health(
             &self,
             _tenant: TenantId,

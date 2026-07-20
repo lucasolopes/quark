@@ -3811,13 +3811,16 @@ async fn admin_links_list(
             Ok(v) => v.into_iter().collect(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
-    let mut rows: Vec<LinkRow> = Vec::with_capacity(links.len());
-    for (id, rec) in links {
-        let health = health_map.get(&id);
-        let visits = match st.store.visits(prin.tenant, id).await {
+    // Fetch visit counts for just this page's ids in one round trip.
+    let visits_map: std::collections::HashMap<u64, u64> =
+        match st.store.visits_for(prin.tenant, &page_ids).await {
             Ok(v) => v,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
+    let mut rows: Vec<LinkRow> = Vec::with_capacity(links.len());
+    for (id, rec) in links {
+        let health = health_map.get(&id);
+        let visits = visits_map.get(&id).copied().unwrap_or(0);
         rows.push(LinkRow {
             id,
             code: codec::to_base62(permute::encode(id, st.key)),
