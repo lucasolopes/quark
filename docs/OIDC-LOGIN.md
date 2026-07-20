@@ -10,6 +10,13 @@ real, named, and revocable and quark never stores a password.
 This is opt-in: OIDC is fully off until you set `QUARK_OIDC_ISSUER`. The admin
 token always keeps working as a break-glass, even with OIDC enabled.
 
+If you run **without** `QUARK_ADMIN_TOKEN` (an SSO-only deployment), the login
+screen hides the admin-token field and offers only identity-provider sign-in.
+Set the token again to bring the break-glass field back.
+
+On the login screen, the email you type is forwarded to the provider as the
+`login_hint`, so the IdP opens with the username already filled in.
+
 ## How it works
 
 quark runs the standard OIDC Authorization Code flow with PKCE. It never sees a

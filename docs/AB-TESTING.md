@@ -44,12 +44,20 @@ flowchart LR
 In the panel, open **Create link** or **Edit link** and expand the
 **A/B variants** section:
 
-1. Add a row for each destination: a URL and a weight (defaults to 1).
+1. Add a row for each destination: a URL and a **traffic percentage**. The
+   panel splits 100% evenly across the rows (two variants start at 50/50); a
+   live total shows "Total: X% / 100%" and turns red until the percentages add
+   up to exactly 100. "Distribute evenly" resets to an even split.
 2. Every variant URL goes through the same validation as the main URL
    (must be `http://` or `https://`, and is checked against the same
    internal-network SSRF guard on the server).
 3. Up to 10 variants per link.
 4. Save. The link now shows an "A/B: N" badge in the links table.
+
+The panel presents each variant as a percentage of traffic, which maps to the
+`weight` field below: with the total at 100, the weight is the percentage. The
+API still accepts raw relative weights directly (see below), so `2` and `1` are
+equivalent to `67%` and `33%`.
 
 Example: a link with `url: https://example.com/landing-a` and two variants,
 `https://example.com/landing-a` (weight 2) and `https://example.com/landing-b`
