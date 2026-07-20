@@ -1,6 +1,6 @@
 use quark::store::{postgres::PostgresStore, OutboxRow, Record, Rule, RuleField, Store, Variant};
 use quark::webhooks::{EventType, SubscriptionKind, WebhookSubscription};
-use serial_test::serial;
+use serial_test::file_serial;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 
@@ -91,7 +91,7 @@ async fn count_deliveries(pool: &PgPool, key: &str) -> i64 {
 /// same test DB (CI has no real replica), this proves the routing wiring: a
 /// `put_link` on the write pool is visible to a `get_link` on the read pool.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn open_with_replica_write_then_read_round_trips() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -120,7 +120,7 @@ async fn open_with_replica_write_then_read_round_trips() {
 /// wires functioning read and write pools rather than comparing handle
 /// identity.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn open_and_open_with_replica_both_wire_working_pools() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -173,7 +173,7 @@ async fn open_and_open_with_replica_both_wire_working_pools() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn put_get_link_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -213,7 +213,7 @@ async fn put_get_link_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn rules_round_trip_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -257,7 +257,7 @@ async fn rules_round_trip_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn link_without_rules_round_trips_to_empty_vec_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -290,7 +290,7 @@ async fn link_without_rules_round_trips_to_empty_vec_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn next_id_increments_pg() {
     let Some(s) = fresh().await else {
         return;
@@ -301,7 +301,7 @@ async fn next_id_increments_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn alias_is_atomic_no_orphan_pg() {
     let Some(s) = fresh().await else {
         return;
@@ -355,7 +355,7 @@ async fn alias_is_atomic_no_orphan_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn tags_round_trip_filter_and_distinct_pg() {
     let Some(s) = fresh().await else {
         return;
@@ -436,7 +436,7 @@ async fn tags_round_trip_filter_and_distinct_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn folder_round_trip_filter_and_list_pg() {
     let Some(s) = fresh().await else {
         return;
@@ -515,7 +515,7 @@ async fn folder_round_trip_filter_and_list_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn visits_round_trip_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -554,7 +554,7 @@ async fn visits_round_trip_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn bump_visits_is_atomic_and_increments_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -618,7 +618,7 @@ async fn bump_visits_is_atomic_and_increments_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn variants_round_trip_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -692,7 +692,7 @@ async fn variants_round_trip_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn wellknown_round_trip_pg() {
     let Some(s) = fresh().await else {
         return;
@@ -730,7 +730,7 @@ async fn wellknown_round_trip_pg() {
 /// `put_link_tx` writes BOTH the link and the delivery rows in one transaction:
 /// after the call, the link and its `webhook_deliveries` row are present.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn put_link_tx_writes_link_and_deliveries_atomically() {
     let Some((s, pool)) = fresh_with_pool().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -762,7 +762,7 @@ async fn put_link_tx_writes_link_and_deliveries_atomically() {
 /// `put_link_tx` with no deliveries still upserts the link (patch on a link
 /// with no matching subscription).
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn put_link_tx_with_no_deliveries_upserts_link() {
     let Some((s, pool)) = fresh_with_pool().await else {
         return;
@@ -785,7 +785,7 @@ async fn put_link_tx_with_no_deliveries_upserts_link() {
 /// `put_alias_and_link_tx` writes the alias, the link, and the deliveries in
 /// one transaction.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn put_alias_and_link_tx_writes_all_atomically() {
     let Some((s, pool)) = fresh_with_pool().await else {
         return;
@@ -825,7 +825,7 @@ async fn put_alias_and_link_tx_writes_all_atomically() {
 /// On an alias conflict, `put_alias_and_link_tx` returns `Ok(false)` and rolls
 /// back: NEITHER the link NOR the deliveries are written.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn put_alias_and_link_tx_conflict_rolls_back_link_and_deliveries() {
     let Some((s, pool)) = fresh_with_pool().await else {
         return;
@@ -879,7 +879,7 @@ async fn put_alias_and_link_tx_conflict_rolls_back_link_and_deliveries() {
 
 /// `delete_link_tx` deletes the link AND enqueues the deliveries atomically.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn delete_link_tx_deletes_link_and_enqueues_deliveries() {
     let Some((s, pool)) = fresh_with_pool().await else {
         return;
@@ -912,7 +912,7 @@ async fn delete_link_tx_deletes_link_and_enqueues_deliveries() {
 /// existing `delivery_key` still upserts the link and leaves exactly one
 /// delivery row.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn put_link_tx_on_conflict_upserts_link_and_keeps_one_delivery() {
     let Some((s, pool)) = fresh_with_pool().await else {
         return;
@@ -953,7 +953,7 @@ async fn put_link_tx_on_conflict_upserts_link_and_keeps_one_delivery() {
 }
 
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn link_health_round_trip_pg() {
     let Some(s) = fresh().await else { return };
     assert!(s
@@ -1017,7 +1017,7 @@ async fn link_health_round_trip_pg() {
 }
 
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn health_lease_single_holder_and_renew_pg() {
     let Some(s) = fresh().await else { return };
     // First holder acquires; a different holder is refused while it is valid;
@@ -1028,7 +1028,7 @@ async fn health_lease_single_holder_and_renew_pg() {
 }
 
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn list_broken_link_ids_pg() {
     let Some(s) = fresh().await else { return };
     s.put_link_health(
@@ -1073,7 +1073,7 @@ async fn list_broken_link_ids_pg() {
 }
 
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn sheets_connection_round_trips_pg() {
     let Some(s) = fresh().await else { return };
     assert!(s
@@ -1123,7 +1123,7 @@ async fn sheets_connection_round_trips_pg() {
 }
 
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn sheets_lease_single_holder_and_renew_pg() {
     let Some(s) = fresh().await else { return };
     // Mirrors the health lease: first holder acquires; a different holder is
@@ -1134,7 +1134,7 @@ async fn sheets_lease_single_holder_and_renew_pg() {
 }
 
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn session_round_trip_and_gc_pg() {
     let Some(s) = fresh().await else { return };
     let sess = quark::auth::Session {

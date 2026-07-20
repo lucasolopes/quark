@@ -1,6 +1,6 @@
 use quark::auth::{hash_token, ApiToken, Scope};
 use quark::store::{postgres::PostgresStore, Store};
-use serial_test::serial;
+use serial_test::file_serial;
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
@@ -10,7 +10,7 @@ async fn fresh() -> Option<PostgresStore> {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn api_token_crud_round_trip_pg() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -55,7 +55,7 @@ async fn api_token_crud_round_trip_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn delete_api_token_returns_false_when_missing_pg() {
     let Some(store) = fresh().await else {
         return;
@@ -67,7 +67,7 @@ async fn delete_api_token_returns_false_when_missing_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn next_api_token_id_increments_pg() {
     let Some(store) = fresh().await else {
         return;

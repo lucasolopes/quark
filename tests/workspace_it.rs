@@ -6,7 +6,7 @@ use quark::auth::{generate_token, hash_token, Session};
 use quark::cache::Cache;
 use quark::store::{open_backends, postgres::PostgresStore, Store};
 use quark::tenant::{TenantId, User};
-use serial_test::serial;
+use serial_test::file_serial;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -21,7 +21,7 @@ async fn fresh() -> Option<PostgresStore> {
 
 // ids are >=1 and monotonic, never 0 (0 is the seeded default tenant).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn next_tenant_id_starts_above_default() {
     let Some(store) = fresh().await else {
         return;
@@ -144,7 +144,7 @@ async fn seed_session(store: &PostgresStore, subject: &str) -> (u64, String) {
 /// Owner membership, the session's tenant switching to it, the 409 on a
 /// duplicate slug, and the 404 in OSS mode.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_tenant_self_serve() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -233,7 +233,7 @@ async fn create_tenant_self_serve() {
 /// name) must be rejected before any tenant row is created, since P2e turns
 /// the slug into the realm name (final-review finding).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_tenant_rejects_reserved_slug() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -269,7 +269,7 @@ async fn create_tenant_rejects_reserved_slug() {
 /// must be rejected — a bad slug becomes a malformed Keycloak realm name,
 /// Admin-API path, and OIDC issuer URL under P2e.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_tenant_rejects_malformed_slug() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -310,7 +310,7 @@ async fn create_tenant_rejects_malformed_slug() {
 /// No session cookie at all -> 401, not 404 (cloud endpoint exists, just
 /// unauthenticated).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_tenant_requires_session() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -339,7 +339,7 @@ async fn create_tenant_requires_session() {
 /// are NOT a member of is refused with 403 and — the security invariant —
 /// leaves the session's current tenant unchanged. Also checks OSS 404.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn workspace_switch_checks_membership() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -480,7 +480,7 @@ async fn workspace_switch_checks_membership() {
 /// caller Owner there), `/admin/me` lists that membership and `current_tenant`
 /// points at it.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn me_memberships() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -685,7 +685,7 @@ async fn oss_admin_me_shape_unchanged() {
 /// `domains` row, end to end through the real handler (not just the store
 /// helper directly). `get_domain_by_host` resolves it to the new tenant.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_tenant_seeds_subdomain_when_suffix_configured() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -727,7 +727,7 @@ async fn create_tenant_seeds_subdomain_when_suffix_configured() {
 /// a tenant never seeds any subdomain row — the gate is the config, not the
 /// mode.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_tenant_seeds_no_subdomain_without_suffix() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -779,7 +779,7 @@ async fn create_tenant_seeds_no_subdomain_without_suffix() {
 /// admin/readonly group values. Every `KeycloakAdmin` call is idempotent
 /// (`409` = ok in the real client), so this order is safe to replay.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_tenant_provisions_keycloak_realm() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -853,7 +853,7 @@ async fn create_tenant_provisions_keycloak_realm() {
 /// construction) and writes no `oidc_config` at all — byte-for-byte the same
 /// outcome as before this task (P2d-A).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_tenant_without_keycloak_writes_no_oidc_config() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -903,7 +903,7 @@ async fn create_tenant_without_keycloak_writes_no_oidc_config() {
 /// alone (no extra calls), and the count returned matches how many were
 /// actually provisioned.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn backfill_provisions_tenants_missing_oidc_config() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -999,7 +999,7 @@ async fn backfill_provisions_tenants_missing_oidc_config() {
 /// its Owner's realm user + set-password email on the backfill pass — via
 /// `get_owner_user_id` — so the Owner can SSO-log-in, not just realm/client.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn backfill_provisions_the_tenant_owner() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1088,7 +1088,7 @@ async fn backfill_provisions_the_tenant_owner() {
 /// same `KeycloakAdmin`; every recorded call carries exactly one of the two
 /// slugs, never both, and each tenant's own slug shows up in its own calls.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_tenant_provisions_only_its_own_slug() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1186,7 +1186,7 @@ impl quark::keycloak::KeycloakAdmin for EnsureRealmFailsKeycloakAdmin {
 }
 
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_tenant_survives_ensure_realm_failure() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");

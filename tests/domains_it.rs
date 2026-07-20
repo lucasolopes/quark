@@ -10,7 +10,7 @@ use quark::store::postgres::PostgresStore;
 use quark::store::{Record, Store};
 use quark::tenant::{Tenant, TenantId};
 use quark::webhooks::delivery::WebhookDispatcher;
-use serial_test::serial;
+use serial_test::file_serial;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -63,7 +63,7 @@ async fn make_tenant(store: &PostgresStore, slug: &str) -> TenantId {
 /// tenants by design, since the redirect path only has a `Host` header and
 /// doesn't know the tenant yet.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn domains_are_tenant_isolated_but_host_lookup_is_public() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -112,7 +112,7 @@ async fn domains_are_tenant_isolated_but_host_lookup_is_public() {
 /// tenant, and `delete_domain` removes it; both are tenant-scoped mutations
 /// like every other tenant-owned store method.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn set_status_and_delete_are_tenant_scoped() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -149,7 +149,7 @@ async fn set_status_and_delete_are_tenant_scoped() {
 /// different domains resolves to two different links, and the shared
 /// namespace (`SHARED_DOMAIN_ID`) stays untouched by either.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn alias_namespace_is_per_domain() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -261,7 +261,7 @@ async fn get_via_host(app: &axum::Router, path: &str, host: &str) -> StatusCode 
 /// fix `bump_visits` hardcoded `DEFAULT_TENANT`, so a `max_visits` link on a
 /// cloud tenant counted against tenant 0.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn visit_counter_lands_on_the_owning_tenant() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -311,7 +311,7 @@ async fn visit_counter_lands_on_the_owning_tenant() {
 /// even though both domains are equally "known" hosts to the router. This is
 /// the cross-tenant isolation filter the task adds.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn redirect_isolates_numeric_link_by_custom_domain_tenant() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -349,7 +349,7 @@ async fn redirect_isolates_numeric_link_by_custom_domain_tenant() {
 /// The alias namespace is per-domain (P3 Task 2): the same alias string on
 /// two different tenants' domains resolves to two different links.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn redirect_alias_resolves_per_domain() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -415,7 +415,7 @@ async fn redirect_alias_resolves_per_domain() {
 /// An unrecognized `Host` (never registered as a domain, and not the shared
 /// `public_host`) must 404 before any code resolution happens.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn redirect_unknown_host_is_404() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -444,7 +444,7 @@ async fn redirect_unknown_host_is_404() {
 /// before P3 (a link on the shared/default tenant redirects through it,
 /// unaffected by custom-domain isolation).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn redirect_shared_host_resolves_globally() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -486,7 +486,7 @@ async fn redirect_shared_host_resolves_globally() {
 /// before it does password verification: a password-protected link owned by
 /// tenant A must not be unlockable through tenant B's custom domain.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn unlock_isolates_password_protected_link_by_custom_domain_tenant() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -650,7 +650,7 @@ async fn create_domain(
 /// Create returns `pending` plus the DNS verification instructions: the TXT
 /// record name/value to publish and the CNAME target.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_domain_returns_pending_with_instructions() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -676,7 +676,7 @@ async fn create_domain_returns_pending_with_instructions() {
 /// A duplicate `host` (already owned, even by another tenant) is a 409, not
 /// a 503 — the store maps the UNIQUE violation and the handler surfaces it.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_domain_duplicate_host_is_409() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -695,7 +695,7 @@ async fn create_domain_duplicate_host_is_409() {
 /// Creating an internal host or the shared `public_host` is rejected before
 /// it ever reaches the store.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_domain_rejects_internal_and_public_host() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -723,7 +723,7 @@ async fn create_domain_rejects_internal_and_public_host() {
 /// `verify` with a `FakeDns` returning the domain's token marks it `Verified`
 /// and drops the host router's cached entry for the host.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn verify_with_matching_txt_marks_verified_and_invalidates_router() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -781,7 +781,7 @@ async fn verify_with_matching_txt_marks_verified_and_invalidates_router() {
 
 /// `verify` with no matching TXT record leaves the domain `pending`.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn verify_with_wrong_txt_stays_pending() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -824,7 +824,7 @@ async fn verify_with_wrong_txt_stays_pending() {
 /// `list`/`delete` are tenant-scoped: tenant B's admin view never sees
 /// tenant A's domain, and cannot delete it by id either.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn list_and_delete_are_tenant_scoped() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -922,7 +922,7 @@ async fn list_and_delete_are_tenant_scoped() {
 
 /// All four `/admin/domains` endpoints 404 in OSS (`multi_tenant = false`).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn domains_endpoints_404_in_oss() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1007,7 +1007,7 @@ async fn get_wellknown(app: &axum::Router, host: &str) -> (StatusCode, String) {
 /// `DEFAULT_TENANT`'s, and an unrecognized host gets nothing (404) even
 /// though a document exists for some other tenant.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn wellknown_is_resolved_by_host() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1057,7 +1057,7 @@ async fn wellknown_is_resolved_by_host() {
 /// OSS parity: with `multi_tenant = false`, `serve_wellknown` behaves exactly
 /// as pre-P3 — tenant 0, Host header ignored entirely.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn wellknown_ignores_host_in_oss() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1103,7 +1103,7 @@ async fn wellknown_ignores_host_in_oss() {
 /// self-loop and must be blocked, exactly like the shared `public_host`
 /// always was. An unrelated external host is unaffected.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn create_blocks_target_matching_any_registered_domain() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1169,7 +1169,7 @@ fn subdomain_host_lowercases_and_joins() {
 /// Seeding a tenant's subdomain materializes a Verified `domains` row that
 /// `get_domain_by_host` resolves to the right tenant.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn seed_tenant_subdomain_materializes_verified_domain() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1213,7 +1213,7 @@ async fn seed_tenant_subdomain_materializes_verified_domain() {
 /// hits the `host` UNIQUE constraint (mapped to `StoreError::UniqueViolation`)
 /// and is treated as success, leaving exactly one row.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn seed_tenant_subdomain_is_idempotent() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1255,7 +1255,7 @@ async fn seed_tenant_subdomain_is_idempotent() {
 /// the boot backfill in `main.rs` runs — seeds a pre-existing tenant exactly
 /// once, whether it runs once or twice (mirrors the idempotent boot).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn backfill_shape_seeds_preexisting_tenant_idempotently() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1308,7 +1308,7 @@ async fn backfill_shape_seeds_preexisting_tenant_idempotently() {
 /// `/admin/me` reports the configured suffix (or `null` when unset) so the
 /// panel can build subdomain URLs without its own env var.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn admin_me_reports_tenant_domain_suffix() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1480,7 +1480,7 @@ async fn get_with_host(app: &axum::Router, host: &str, path: &str) -> StatusCode
 /// and its custom alias) must resolve on B's own subdomain, not on a
 /// different tenant's subdomain.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn cloud_create_stamps_callers_tenant_and_resolves_on_its_subdomain() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1613,7 +1613,7 @@ async fn app_create_with_alias(
 /// unset in cloud), `POST /` still stamps `DEFAULT_TENANT` and lands the
 /// alias in `SHARED_DOMAIN_ID`, byte-for-byte as before this task.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn oss_create_still_stamps_default_tenant_and_shared_domain() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1727,7 +1727,7 @@ async fn delete_admin_link(app: &axum::Router, token: &str, code: &str) -> Statu
 /// (not 404) -- they now look up the alias in the caller's tenant default
 /// domain, mirroring `create`.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn cloud_admin_stats_and_delete_resolve_alias_in_tenant_default_domain() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1791,7 +1791,7 @@ async fn cloud_admin_stats_and_delete_resolve_alias_in_tenant_default_domain() {
 /// must still resolve for admin stats and delete-by-alias exactly as before
 /// this task.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn oss_admin_stats_and_delete_still_resolve_alias_in_shared_domain() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");

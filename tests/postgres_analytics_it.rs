@@ -2,7 +2,7 @@ use quark::analytics::{AnalyticsSink, ClickEvent};
 use quark::store::postgres::PostgresStore;
 use quark::store::{Record, Store};
 use quark::tenant::TenantId;
-use serial_test::serial;
+use serial_test::file_serial;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 
@@ -110,7 +110,7 @@ fn ev_ua(id: u64, ts: u64, country: &str, ua: &str) -> ClickEvent {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn record_and_stats_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -127,7 +127,7 @@ async fn record_and_stats_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn retention_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -145,7 +145,7 @@ async fn retention_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn per_dimension_aggregation_across_batches_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -172,7 +172,7 @@ async fn per_dimension_aggregation_across_batches_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn bots_counted_in_total_excluded_from_breakdowns_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -198,7 +198,7 @@ async fn bots_counted_in_total_excluded_from_breakdowns_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn retention_keeps_newest_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -227,7 +227,7 @@ async fn retention_keeps_newest_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn stats_none_when_empty_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -237,7 +237,7 @@ async fn stats_none_when_empty_pg() {
 }
 
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn record_batch_concurrent_no_lost_updates() {
     let url = match std::env::var("QUARK_TEST_DATABASE_URL") {
         Ok(u) => u,
@@ -274,7 +274,7 @@ async fn record_batch_concurrent_no_lost_updates() {
 /// analytics tables, so a click for a link owned by tenant B lands tagged
 /// with B — not the column default (0).
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn click_event_tagged_with_owning_tenant_pg() {
     let Some((s, pool)) = fresh_with_pool().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -302,7 +302,7 @@ async fn click_event_tagged_with_owning_tenant_pg() {
 /// the backfill (opening the store again — `init_schema` runs on every
 /// `open`) is a no-op once caught up.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn analytics_tenant_backfill_pg() {
     let Some((s, pool)) = fresh_with_pool().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -378,7 +378,7 @@ async fn analytics_tenant_backfill_pg() {
 /// NOT_FORCED and the app-level `WHERE tenant_id = $1` is the only thing
 /// standing between this and a cross-tenant leak.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn stats_for_tenant_isolates_across_tenants_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -436,7 +436,7 @@ async fn stats_for_tenant_isolates_across_tenants_pg() {
 /// aggregates every click recorded under it, same as the pre-P4a behavior
 /// where there was only ever one tenant.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn stats_for_tenant_default_tenant_aggregates_all_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -458,7 +458,7 @@ async fn stats_for_tenant_default_tenant_aggregates_all_pg() {
 /// detail rows older than the cutoff, keeps the newer ones, and never touches
 /// the per-link aggregates (`click_counters`/`stats_meta`).
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn purge_click_events_before_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -487,7 +487,7 @@ async fn purge_click_events_before_pg() {
 /// LUC-65 Part B (erasure): `delete_link_analytics` removes events + counters
 /// + stats for one link, scoped by tenant, and never touches another link.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn delete_link_analytics_isolates_by_link_pg() {
     let Some((s, pool)) = fresh_with_pool().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -540,7 +540,7 @@ async fn delete_link_analytics_isolates_by_link_pg() {
 /// still keyed by `id` alone, unaffected by other tenants' or other links'
 /// clicks.
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn stats_per_link_unchanged_by_tenant_aggregate_pg() {
     let Some(s) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");

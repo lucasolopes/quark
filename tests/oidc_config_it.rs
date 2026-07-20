@@ -10,7 +10,7 @@ use quark::store::postgres::PostgresStore;
 use quark::store::{open_backends, Store};
 use quark::tenant::{Tenant, TenantId};
 use quark::webhooks::delivery::WebhookDispatcher;
-use serial_test::serial;
+use serial_test::file_serial;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
@@ -60,7 +60,7 @@ fn cfg(tenant_id: TenantId, issuer: &str) -> TenantOidcConfig {
 /// round-trips through the JSONB `blob`, mirroring `sheets_connection`'s
 /// plaintext-refresh-token precedent).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn put_then_get_round_trips_including_secret() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -82,7 +82,7 @@ async fn put_then_get_round_trips_including_secret() {
 /// isolation the RLS + `WHERE tenant_id` predicate is supposed to give every
 /// other tenant-owned table.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn tenant_scoped_read_does_not_leak_across_tenants() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -105,7 +105,7 @@ async fn tenant_scoped_read_does_not_leak_across_tenants() {
 /// `get_oidc_config_bare` (the login/callback path, before any RLS context
 /// exists) also returns tenant A's config, unscoped by a transaction.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn bare_read_returns_config_before_any_tenant_context() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -129,7 +129,7 @@ async fn bare_read_returns_config_before_any_tenant_context() {
 /// existed is exercised in `store::postgres` unit-style via deserialization,
 /// but the round trip through a real Postgres write/read is asserted here).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn required_value_round_trips_set_and_unset() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -153,7 +153,7 @@ async fn required_value_round_trips_set_and_unset() {
 /// Putting a second config for the same tenant replaces the first (UPSERT on
 /// the UNIQUE `tenant_id`), leaving exactly one row and the newer values.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn put_upserts_replacing_not_duplicating() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -181,7 +181,7 @@ async fn put_upserts_replacing_not_duplicating() {
 /// `delete_oidc_config` removes the row; a subsequent read (either path) sees
 /// nothing, and deleting again is not an error.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn delete_removes_config_both_read_paths() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -203,7 +203,7 @@ async fn delete_removes_config_both_read_paths() {
 /// `get_tenant_by_slug` resolves the tenant `/admin/login?org=<slug>` needs,
 /// and an unknown slug is `None` rather than an error.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn get_tenant_by_slug_resolves_or_none() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -378,7 +378,7 @@ async fn delete_oidc_config_http(app: &axum::Router, token: &str) -> StatusCode 
 /// PUT (never mutated/hashed at rest, mirroring the Sheets precedent). The
 /// PUT's own JSON response never echoes the secret back.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn put_oidc_config_http_upserts_and_round_trips_secret() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -446,7 +446,7 @@ async fn put_oidc_config_http_upserts_and_round_trips_secret() {
 /// reflected on `GET` — it is not secret, so unlike `client_secret` it rides
 /// in the redacted view unchanged.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn required_value_accepted_on_put_and_reflected_on_get() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -485,7 +485,7 @@ async fn required_value_accepted_on_put_and_reflected_on_get() {
 /// `PUT` with an empty (or whitespace-only) `issuer` or `client_id` is
 /// rejected: such a config could never drive a real login.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn put_oidc_config_http_with_empty_issuer_or_client_id_is_400() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -517,7 +517,7 @@ async fn put_oidc_config_http_with_empty_issuer_or_client_id_is_400() {
 /// body never contains the `client_secret` field or its value — the core
 /// security assertion for this task.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn get_oidc_config_http_redacts_secret() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -546,7 +546,7 @@ async fn get_oidc_config_http_redacts_secret() {
 
 /// `GET` with no config on file -> 404.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn get_oidc_config_http_without_one_set_is_404() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -564,7 +564,7 @@ async fn get_oidc_config_http_without_one_set_is_404() {
 /// `DELETE` removes the config: a `GET` afterward 404s, and a second `DELETE`
 /// also 404s (nothing left to remove).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn delete_oidc_config_http_removes_it() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -591,7 +591,7 @@ async fn delete_oidc_config_http_removes_it() {
 /// A caller with insufficient scope (Viewer-like: links_read + analytics, no
 /// `Scope::Full`) is 403 on all three endpoints, and nothing is written.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn non_full_caller_is_403_on_all_three_oidc_config_endpoints() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -625,7 +625,7 @@ async fn non_full_caller_is_403_on_all_three_oidc_config_endpoints() {
 /// gate runs before authentication. Mirrors
 /// `invites_it::oss_invites_endpoints_are_404_without_postgres`.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn oidc_config_endpoints_404_in_oss_without_postgres() {
     let dir = tempfile::tempdir().unwrap();
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
@@ -664,7 +664,7 @@ async fn oidc_config_endpoints_404_in_oss_without_postgres() {
 /// proves the actual routes wired into `router()` carry the gate, not just
 /// the functions behind them.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn oss_login_and_callback_404_without_oidc_configured_or_postgres() {
     let dir = tempfile::tempdir().unwrap();
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
@@ -708,7 +708,7 @@ async fn oss_login_and_callback_404_without_oidc_configured_or_postgres() {
 /// in the `api.rs` unit tests (which calls the handler directly) but through
 /// the actual route.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn oss_org_login_404_at_router_level() {
     let dir = tempfile::tempdir().unwrap();
     let (store, sink) = open_backends(dir.path(), false).await.unwrap();
@@ -776,7 +776,7 @@ async fn admin_app_with_breakglass_token(store: Arc<PostgresStore>, token: &str)
 /// it proves the isolation holds through `admin_guard`'s `Principal.tenant`,
 /// not just through the store's `WHERE tenant_id` predicate.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn cross_tenant_token_cannot_see_edit_or_delete_another_tenants_config() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -833,7 +833,7 @@ async fn cross_tenant_token_cannot_see_edit_or_delete_another_tenants_config() {
 /// rejected by `admin_guard` (`401`/`403`) — proof the authorization step
 /// itself is unaffected.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn breakglass_admin_token_unaffected_by_other_tenants_oidc_config() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -915,7 +915,7 @@ async fn raw_oidc_client_secret(pool: &PgPool, tenant: TenantId) -> String {
 /// `get_oidc_config_bare` (and the tenant-scoped `get_oidc_config`) still
 /// return the original plaintext to callers.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn client_secret_is_sealed_at_rest_when_key_is_set() {
     let Some((store, pool)) = fresh_with_pool_and_key().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -940,7 +940,7 @@ async fn client_secret_is_sealed_at_rest_when_key_is_set() {
 /// Without `QUARK_ENCRYPTION_KEY` (today's default), the raw `client_secret`
 /// column stays plaintext — parity with pre-LUC-48 behavior.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn client_secret_stays_plaintext_at_rest_when_key_is_unset() {
     let Some((store, pool)) = fresh_with_pool().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -959,7 +959,7 @@ async fn client_secret_stays_plaintext_at_rest_when_key_is_unset() {
 /// the key present returns the original plaintext unchanged). Re-putting it
 /// with the key now set upgrades the raw column to `enc:v2:`.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn legacy_plaintext_client_secret_is_read_then_upgraded_on_repeat_write() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1021,7 +1021,7 @@ async fn raw_sheets_refresh_token(pool: &PgPool, tenant: TenantId) -> String {
 /// With the key set, `put_sheets_connection` seals `refresh_token` at rest,
 /// and `get_sheets_connection` still returns the original plaintext.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn sheets_refresh_token_is_sealed_at_rest_when_key_is_set() {
     let Some((store, pool)) = fresh_with_pool_and_key().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1044,7 +1044,7 @@ async fn sheets_refresh_token_is_sealed_at_rest_when_key_is_set() {
 /// Without a key, the raw `refresh_token` column stays plaintext — parity
 /// with today's behavior.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn sheets_refresh_token_stays_plaintext_at_rest_when_key_is_unset() {
     let Some((store, pool)) = fresh_with_pool().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1061,7 +1061,7 @@ async fn sheets_refresh_token_stays_plaintext_at_rest_when_key_is_unset() {
 /// Legacy passthrough for sheets: a connection written with no key set reads
 /// back fine once the key is turned on, and a re-put upgrades the raw column.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn legacy_plaintext_refresh_token_is_read_then_upgraded_on_repeat_write() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1100,7 +1100,7 @@ async fn legacy_plaintext_refresh_token_is_read_then_upgraded_on_repeat_write() 
 /// the decrypted value is unchanged, and a second pass finds nothing left to
 /// do (idempotent).
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn backfill_reencrypts_legacy_oidc_client_secret_and_is_idempotent() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1142,7 +1142,7 @@ async fn backfill_reencrypts_legacy_oidc_client_secret_and_is_idempotent() {
 
 /// Same shape as the oidc case above, for the sheets `refresh_token`.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn backfill_reencrypts_legacy_sheets_refresh_token_and_is_idempotent() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -1182,7 +1182,7 @@ async fn backfill_reencrypts_legacy_sheets_refresh_token_and_is_idempotent() {
 /// Without a key (`secretbox` is `None`), the backfill is a no-op: returns 0
 /// and leaves the plaintext column exactly as it was.
 #[tokio::test]
-#[serial]
+#[file_serial]
 async fn backfill_is_noop_without_a_key() {
     let Some((store, pool)) = fresh_with_pool().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");

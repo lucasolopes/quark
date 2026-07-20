@@ -6,7 +6,7 @@ use quark::auth::{hash_token, ApiToken, Scope};
 use quark::cache::Cache;
 use quark::store::{open_backends, postgres::PostgresStore, Record, Store};
 use quark::tenant::TenantId;
-use serial_test::serial;
+use serial_test::file_serial;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -317,7 +317,7 @@ fn app_over_pg(store: Arc<PostgresStore>) -> axum::Router {
 /// HTTP-level half of the isolation contract (`stats_for_tenant_isolates_...`
 /// in `postgres_analytics_it.rs` covers the sink level directly).
 #[tokio::test]
-#[serial(pg)]
+#[file_serial]
 async fn admin_stats_isolates_tenant_b_from_tenant_a() {
     let Some(store) = fresh_pg().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
