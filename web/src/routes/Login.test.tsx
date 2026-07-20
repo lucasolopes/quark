@@ -132,6 +132,8 @@ describe("Login", () => {
     await userEvent.type(await screen.findByLabelText(/^email$/i), "jane@acme.com");
     await userEvent.click(screen.getByRole("button", { name: /continue/i }));
     await vi.waitFor(() => expect(window.location.href).toContain("/admin/login?org=acme"));
+    // The typed email is forwarded as login_hint so the IdP pre-fills it (LUC-76).
+    expect(window.location.href).toContain("login_hint=jane%40acme.com");
     window.location = originalLocation;
   });
 
@@ -163,6 +165,8 @@ describe("Login", () => {
     await userEvent.click(await screen.findByRole("button", { name: /provider/i }));
     expect(window.location.href).toContain("/admin/login");
     expect(window.location.href).not.toContain("org=");
+    // The email typed for discovery is still forwarded as login_hint (LUC-76).
+    expect(window.location.href).toContain("login_hint=jane%40personal.com");
     // Token form is still present.
     expect(screen.getByLabelText(/token/i)).toBeInTheDocument();
     window.location = originalLocation;

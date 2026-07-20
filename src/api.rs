@@ -1645,6 +1645,10 @@ struct LoginParams {
     /// `/admin/login?org=<slug>`). Absent (or empty) means the global/OSS
     /// login against the env-configured IdP, unchanged.
     org: Option<String>,
+    /// Optional email to forward to the IdP as `login_hint` so the provider
+    /// pre-fills the username. Purely a UX convenience; the server never trusts
+    /// it for authorization.
+    login_hint: Option<String>,
 }
 
 /// The single, generic 404 for every `?org=<slug>` login failure that must
@@ -1728,7 +1732,7 @@ async fn oidc_login(
     let state = crate::oidc::random_token();
     let nonce = crate::oidc::random_token();
     let (verifier, challenge) = crate::oidc::pkce_pair();
-    let url = runtime.authorize_url(&state, &nonce, &challenge);
+    let url = runtime.authorize_url(&state, &nonce, &challenge, params.login_hint.as_deref());
     let value = crate::oidc::sign_login_state(&st.signing_key, &state, &verifier, &nonce, tenant);
     let secure = if request_is_https(&headers) {
         "; Secure"
@@ -5480,6 +5484,7 @@ mod tests {
             State(st),
             axum::extract::Query(super::LoginParams {
                 org: Some("ghost-org".to_string()),
+                login_hint: None,
             }),
             ReqHeaderMap::new(),
         )
@@ -5509,6 +5514,7 @@ mod tests {
             State(st),
             axum::extract::Query(super::LoginParams {
                 org: Some("acme".to_string()),
+                login_hint: None,
             }),
             ReqHeaderMap::new(),
         )
@@ -5544,6 +5550,7 @@ mod tests {
             State(st.clone()),
             axum::extract::Query(super::LoginParams {
                 org: Some("ghost-org".to_string()),
+                login_hint: None,
             }),
             ReqHeaderMap::new(),
         )
@@ -5552,6 +5559,7 @@ mod tests {
             State(st),
             axum::extract::Query(super::LoginParams {
                 org: Some("acme".to_string()),
+                login_hint: None,
             }),
             ReqHeaderMap::new(),
         )
@@ -5581,6 +5589,7 @@ mod tests {
             State(st),
             axum::extract::Query(super::LoginParams {
                 org: Some("acme".to_string()),
+                login_hint: None,
             }),
             ReqHeaderMap::new(),
         )
@@ -5596,7 +5605,7 @@ mod tests {
         let st = multi_tenant_state().await;
         let resp = super::oidc_login(
             State(st),
-            axum::extract::Query(super::LoginParams { org: None }),
+            axum::extract::Query(super::LoginParams { org: None, login_hint: None }),
             ReqHeaderMap::new(),
         )
         .await;
@@ -5610,6 +5619,7 @@ mod tests {
             State(st),
             axum::extract::Query(super::LoginParams {
                 org: Some(String::new()),
+                login_hint: None,
             }),
             ReqHeaderMap::new(),
         )

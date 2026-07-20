@@ -88,7 +88,7 @@ export function Login() {
     mutationFn: (candidate: string) => api.discoverSso(candidate),
     onSuccess: (result) => {
       if (result.org) {
-        window.location.href = oidcLoginUrl(result.org);
+        window.location.href = oidcLoginUrl(result.org, email);
       } else {
         // No SSO org for this domain: stop blocking on the email step and
         // let the visitor reach the shared login options.
@@ -182,7 +182,7 @@ export function Login() {
                     variant="outline"
                     className="w-full"
                     onClick={() => {
-                      window.location.href = oidcLoginUrl(org);
+                      window.location.href = oidcLoginUrl(org, email);
                     }}
                   >
                     {t("login.orgButton", { org })}
@@ -215,7 +215,7 @@ export function Login() {
                   variant="outline"
                   className="w-full"
                   onClick={() => {
-                    window.location.href = oidcLoginUrl();
+                    window.location.href = oidcLoginUrl(undefined, email);
                   }}
                 >
                   {oidcButtonLabel ?? t("login.oidcButton")}
