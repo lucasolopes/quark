@@ -105,11 +105,11 @@ describe("Login", () => {
     const originalLocation = window.location;
     // @ts-expect-error -- replacing window.location for assertion, restored below.
     delete window.location;
-    window.location = { ...originalLocation, href: "" } as Location;
+    window.location = { ...originalLocation, href: "" } as unknown as string & Location;
     render(withProviders(<Login />, { initialEntries: ["/login?org=acme"] }));
     await userEvent.click(await screen.findByRole("button", { name: /sign in to acme/i }));
     expect(window.location.href).toContain("/admin/login?org=acme");
-    window.location = originalLocation;
+    window.location = originalLocation as unknown as string & Location;
   });
 
   it("with no ?org= and OIDC enabled, shows the email-first step instead of the provider button", async () => {
@@ -127,14 +127,14 @@ describe("Login", () => {
     const originalLocation = window.location;
     // @ts-expect-error -- replacing window.location for assertion, restored below.
     delete window.location;
-    window.location = { ...originalLocation, href: "" } as Location;
+    window.location = { ...originalLocation, href: "" } as unknown as string & Location;
     render(withProviders(<Login />, { initialEntries: ["/login"] }));
     await userEvent.type(await screen.findByLabelText(/^email$/i), "jane@acme.com");
     await userEvent.click(screen.getByRole("button", { name: /continue/i }));
     await vi.waitFor(() => expect(window.location.href).toContain("/admin/login?org=acme"));
     // The typed email is forwarded as login_hint so the IdP pre-fills it (LUC-76).
     expect(window.location.href).toContain("login_hint=jane%40acme.com");
-    window.location = originalLocation;
+    window.location = originalLocation as unknown as string & Location;
   });
 
   it("submitting an email with no SSO org falls back to the shared provider button and token field (no redirect)", async () => {
@@ -142,7 +142,7 @@ describe("Login", () => {
     const originalLocation = window.location;
     // @ts-expect-error -- replacing window.location for assertion, restored below.
     delete window.location;
-    window.location = { ...originalLocation, href: "" } as Location;
+    window.location = { ...originalLocation, href: "" } as unknown as string & Location;
     render(withProviders(<Login />, { initialEntries: ["/login"] }));
     await userEvent.type(await screen.findByLabelText(/^email$/i), "jane@personal.com");
     await userEvent.click(screen.getByRole("button", { name: /continue/i }));
@@ -150,7 +150,7 @@ describe("Login", () => {
     expect(window.location.href).toBe("");
     // Token field is still present.
     expect(screen.getByLabelText(/token/i)).toBeInTheDocument();
-    window.location = originalLocation;
+    window.location = originalLocation as unknown as string & Location;
   });
 
   it("without ?org=, the shared provider button (revealed after the email fallback) still navigates to /admin/login with no org (regression)", async () => {
@@ -158,7 +158,7 @@ describe("Login", () => {
     const originalLocation = window.location;
     // @ts-expect-error -- replacing window.location for assertion, restored below.
     delete window.location;
-    window.location = { ...originalLocation, href: "" } as Location;
+    window.location = { ...originalLocation, href: "" } as unknown as string & Location;
     render(withProviders(<Login />, { initialEntries: ["/login"] }));
     await userEvent.type(await screen.findByLabelText(/^email$/i), "jane@personal.com");
     await userEvent.click(screen.getByRole("button", { name: /continue/i }));
@@ -169,6 +169,6 @@ describe("Login", () => {
     expect(window.location.href).toContain("login_hint=jane%40personal.com");
     // Token form is still present.
     expect(screen.getByLabelText(/token/i)).toBeInTheDocument();
-    window.location = originalLocation;
+    window.location = originalLocation as unknown as string & Location;
   });
 });

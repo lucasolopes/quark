@@ -567,7 +567,14 @@ impl OidcRuntime {
         challenge: &str,
         login_hint: Option<&str>,
     ) -> String {
-        authorize_url(&self.config, &self.discovery, state, nonce, challenge, login_hint)
+        authorize_url(
+            &self.config,
+            &self.discovery,
+            state,
+            nonce,
+            challenge,
+            login_hint,
+        )
     }
 
     /// Exchanges a callback code for the id_token.
@@ -785,10 +792,16 @@ mod tests {
         };
         // Present + non-empty -> forwarded (email percent-encoded).
         let u = authorize_url(&cfg(), &disco, "s", "n", "c", Some("jane@acme.com"));
-        assert!(u.contains("login_hint=jane%40acme.com"), "missing login_hint in {u}");
+        assert!(
+            u.contains("login_hint=jane%40acme.com"),
+            "missing login_hint in {u}"
+        );
         // Blank/whitespace -> omitted.
         let blank = authorize_url(&cfg(), &disco, "s", "n", "c", Some("   "));
-        assert!(!blank.contains("login_hint"), "blank login_hint must be dropped: {blank}");
+        assert!(
+            !blank.contains("login_hint"),
+            "blank login_hint must be dropped: {blank}"
+        );
     }
 
     #[test]
