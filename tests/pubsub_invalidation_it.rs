@@ -8,6 +8,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod common;
+
 /// These tests need a live Valkey/Redis. They are skipped (returning early)
 /// unless `QUARK_TEST_VALKEY_URL` is set, mirroring `tests/valkey_tier_it.rs`.
 /// They cover the cross-node path end to end: node A's request-path
@@ -61,31 +63,13 @@ async fn node(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>, url: &str) ->
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: 0,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".into(),
-        webhooks: webhooks(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    })
+    common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(webhooks())
+        .key(0)
+        .build()
 }
 
 /// Like `node`, but wires a real `Invalidator` into the `HostRouter` too (the
@@ -109,31 +93,13 @@ async fn node_with_host_invalidator(
         Some(host_inv),
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: 0,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".into(),
-        webhooks: webhooks(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    })
+    common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(webhooks())
+        .key(0)
+        .build()
 }
 
 #[tokio::test]

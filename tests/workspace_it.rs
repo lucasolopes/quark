@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::analytics::AnalyticsSink;
-use quark::api::{router, AppState};
+use quark::api::router;
 use quark::auth::{generate_token, hash_token, Session};
 use quark::cache::Cache;
 use quark::store::{open_backends, postgres::PostgresStore, Store};
@@ -9,6 +9,8 @@ use quark::tenant::{TenantId, User};
 use serial_test::serial;
 use std::sync::Arc;
 use tower::ServiceExt;
+
+mod common;
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
@@ -95,31 +97,17 @@ fn app_over_full(
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: true,
-        multi_tenant,
-        tenant_domain_suffix,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak,
-        keycloak_base_url,
-        cache,
-        store,
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .oidc_configured(true)
+        .multi_tenant(multi_tenant)
+        .tenant_domain_suffix(tenant_domain_suffix)
+        .keycloak(keycloak)
+        .keycloak_base_url(keycloak_base_url)
+        .build();
     router(state)
 }
 

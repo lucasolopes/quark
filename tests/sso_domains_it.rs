@@ -4,7 +4,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::analytics::AnalyticsSink;
-use quark::api::{router, AppState};
+use quark::api::router;
 use quark::auth::{hash_token, ApiToken, Scope};
 use quark::cache::Cache;
 use quark::dns::{Dns, DnsError, NullDns};
@@ -19,6 +19,8 @@ use serial_test::serial;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tower::ServiceExt;
+
+mod common;
 
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;
@@ -274,31 +276,16 @@ async fn admin_app_for_tenant(
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store_dyn,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink: sink_dyn,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: Some("quark.example.com".to_string()),
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns,
-    });
+    let state = common::TestState::new(store_dyn, sink_dyn)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .key(KEY)
+        .public_host(Some("quark.example.com".to_string()))
+        .multi_tenant(multi_tenant)
+        .dns(dns)
+        .build();
     (router(state), raw)
 }
 
@@ -817,31 +804,16 @@ fn discover_app(
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store_dyn,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink: sink_dyn,
-        admin_token: None,
-        ratelimiter,
-        block_private: true,
-        public_host: Some("quark.example.com".to_string()),
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: Arc::new(NullDns),
-    });
+    let state = common::TestState::new(store_dyn, sink_dyn)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .key(KEY)
+        .ratelimiter(ratelimiter)
+        .public_host(Some("quark.example.com".to_string()))
+        .multi_tenant(multi_tenant)
+        .build();
     router(state)
 }
 
@@ -1122,31 +1094,16 @@ async fn create_is_rate_limited() {
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: true,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store_dyn,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink: sink_dyn,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::memory(1),
-        block_private: true,
-        public_host: Some("quark.example.com".to_string()),
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: Arc::new(NullDns),
-    });
+    let state = common::TestState::new(store_dyn, sink_dyn)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .key(KEY)
+        .ratelimiter(quark::abuse::ratelimit::RateLimiter::memory(1))
+        .public_host(Some("quark.example.com".to_string()))
+        .multi_tenant(true)
+        .build();
     let app = router(state);
 
     let mk = |domain: &str| {

@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::analytics::{AnalyticsSink, ClickEvent};
-use quark::api::{router, AppState};
+use quark::api::router;
 use quark::auth::{hash_token, ApiToken, Scope};
 use quark::cache::Cache;
 use quark::store::{open_backends, postgres::PostgresStore, Record, Store};
@@ -9,6 +9,8 @@ use quark::tenant::TenantId;
 use serial_test::serial;
 use std::sync::Arc;
 use tower::ServiceExt;
+
+mod common;
 
 async fn app_with(
     admin: Option<&str>,
@@ -26,31 +28,13 @@ async fn app_with(
         None,
     ));
     let (tx, rx) = tokio::sync::mpsc::channel(chan_cap);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx: tx,
-        sink,
-        admin_token: admin.map(|s| s.to_string()),
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(admin.map(|s| s.to_string()))
+        .build();
     (router(state), rx)
 }
 
@@ -309,35 +293,21 @@ fn app_over_pg(store: Arc<PostgresStore>) -> axum::Router {
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let (wtx, _wrx) = tokio::sync::mpsc::channel(1);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: true,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store.clone() as Arc<dyn Store>,
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink: store as Arc<dyn AnalyticsSink>,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
-            wtx,
-            Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        )),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let webhooks = Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
+        wtx,
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    ));
+    let state = common::TestState::new(
+        store.clone() as Arc<dyn Store>,
+        store as Arc<dyn AnalyticsSink>,
+    )
+    .cache(cache)
+    .host_router(host_router)
+    .analytics_tx(analytics_tx)
+    .webhooks(webhooks)
+    .multi_tenant(true)
+    .build();
     router(state)
 }
 

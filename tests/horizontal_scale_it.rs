@@ -5,13 +5,15 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::analytics::AnalyticsSink;
-use quark::api::{router, AppState};
+use quark::api::router;
 use quark::cache::Cache;
 use quark::store::{postgres::PostgresStore, Store};
 use serial_test::serial;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tower::ServiceExt;
+
+mod common;
 
 fn test_url() -> Option<String> {
     std::env::var("QUARK_TEST_DATABASE_URL").ok()
@@ -29,31 +31,12 @@ async fn pg_replica(url: &str) -> axum::Router {
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: 0x1234,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: std::sync::Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .build();
     router(state)
 }
 

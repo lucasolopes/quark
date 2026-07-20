@@ -1,7 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::analytics::AnalyticsSink;
-use quark::api::{router, AppState};
+use quark::api::router;
 use quark::auth::{hash_token, ApiToken, Scope};
 use quark::cache::Cache;
 use quark::dns::{Dns, DnsError, NullDns};
@@ -14,6 +14,8 @@ use serial_test::serial;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tower::ServiceExt;
+
+mod common;
 
 fn rec(url: &str) -> Record {
     Record {
@@ -205,31 +207,15 @@ fn cloud_app(
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: true,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: Arc::new(quark::dns::NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .key(KEY)
+        .public_host(public_host)
+        .multi_tenant(true)
+        .build();
     router(state)
 }
 
@@ -620,31 +606,16 @@ async fn admin_app_for_tenant(
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store_dyn,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink: sink_dyn,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: Some("quark.example.com".to_string()),
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns,
-    });
+    let state = common::TestState::new(store_dyn, sink_dyn)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .key(KEY)
+        .public_host(Some("quark.example.com".to_string()))
+        .multi_tenant(multi_tenant)
+        .dns(dns)
+        .build();
     (router(state), raw)
 }
 
@@ -1111,31 +1082,13 @@ async fn wellknown_ignores_host_in_oss() {
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
     let store_dyn: Arc<dyn Store> = store.clone();
     let sink_dyn: Arc<dyn AnalyticsSink> = store;
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store_dyn,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink: sink_dyn,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: Arc::new(NullDns),
-    });
+    let state = common::TestState::new(store_dyn, sink_dyn)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .key(KEY)
+        .build();
     let app = router(state);
 
     // Any arbitrary Host header, even one that would resolve to something
@@ -1439,31 +1392,17 @@ fn cloud_app_with_suffix(
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: true,
-        multi_tenant: true,
-        tenant_domain_suffix,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: Arc::new(NullDns),
-    });
+    let state = common::TestState::new(store, sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(analytics_tx)
+        .webhooks(test_webhook_dispatcher())
+        .key(KEY)
+        .public_host(public_host)
+        .oidc_configured(true)
+        .multi_tenant(true)
+        .tenant_domain_suffix(tenant_domain_suffix)
+        .build();
     router(state)
 }
 
@@ -1688,31 +1627,16 @@ async fn oss_create_still_stamps_default_tenant_and_shared_domain() {
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store.clone() as Arc<dyn Store>,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink: store.clone() as Arc<dyn AnalyticsSink>,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: Arc::new(NullDns),
-    });
+    let state = common::TestState::new(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+    )
+    .cache(cache)
+    .host_router(host_router)
+    .analytics_tx(analytics_tx)
+    .webhooks(test_webhook_dispatcher())
+    .key(KEY)
+    .build();
     let app = router(state);
 
     let resp = app
@@ -1883,31 +1807,16 @@ async fn oss_admin_stats_and_delete_still_resolve_alias_in_shared_domain() {
         None,
     ));
     let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let state = Arc::new(AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        multi_tenant: false,
-        tenant_domain_suffix: None,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-        cache,
-        store: store.clone() as Arc<dyn Store>,
-        key: KEY,
-        signing_key: [0u8; 32],
-        analytics_tx,
-        sink: store.clone() as Arc<dyn AnalyticsSink>,
-        admin_token: None,
-        ratelimiter: quark::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: "cf-connecting-ip".to_string(),
-        webhooks: test_webhook_dispatcher(),
-        host_router,
-        dns: Arc::new(NullDns),
-    });
+    let state = common::TestState::new(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+    )
+    .cache(cache)
+    .host_router(host_router)
+    .analytics_tx(analytics_tx)
+    .webhooks(test_webhook_dispatcher())
+    .key(KEY)
+    .build();
     let app = router(state);
 
     let (status, body) = app_create_with_alias(

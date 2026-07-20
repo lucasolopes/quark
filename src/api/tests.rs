@@ -46,6 +46,31 @@ async fn guard_state_with_oidc(
     admin_token: Option<&str>,
     oidc_configured: bool,
 ) -> Arc<super::AppState> {
+    build_state(admin_token, oidc_configured, false, [0u8; 32]).await
+}
+
+/// Cloud-mode `AppState` for exercising the `?org=` login/callback
+/// decision logic (multi-tenancy P2d) without a live IdP: LMDB-backed
+/// (`multi_tenant: true`), no global env OIDC configured. LMDB's
+/// `get_oidc_config_bare`/`get_oidc_config` always return `Ok(None)` (see
+/// `src/store/lmdb.rs`), which is exactly the "tenant exists but has no
+/// IdP of its own" shape these tests need — the store-lookup and
+/// tenant-resolution branches never require reaching a real IdP over the
+/// network.
+async fn multi_tenant_state() -> Arc<super::AppState> {
+    build_state(None, false, true, [7u8; 32]).await
+}
+
+/// Shared LMDB-backed `AppState` builder for the unit tests above. The two
+/// public-to-the-module helpers differ only in these four axes; everything
+/// else (no OIDC/sheets/keycloak, disabled rate limiter, no-op webhook
+/// dispatcher with a dropped receiver) is fixed.
+async fn build_state(
+    admin_token: Option<&str>,
+    oidc_configured: bool,
+    multi_tenant: bool,
+    signing_key: [u8; 32],
+) -> Arc<super::AppState> {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let (store, sink) = crate::store::open_backends(dir.path(), false)
         .await
@@ -71,7 +96,7 @@ async fn guard_state_with_oidc(
         cache,
         store,
         key: 0x1234,
-        signing_key: [0u8; 32],
+        signing_key,
         analytics_tx,
         sink,
         admin_token: admin_token.map(str::to_string),
@@ -80,60 +105,7 @@ async fn guard_state_with_oidc(
         public_host: None,
         real_ip_header: super::DEFAULT_REAL_IP_HEADER.to_string(),
         webhooks,
-        multi_tenant: false,
-        host_router,
-        dns: Arc::new(crate::dns::NullDns),
-        tenant_domain_suffix: None,
-        oidc_tenants: crate::oidc::TenantOidcCache::new(),
-        keycloak: None,
-        keycloak_base_url: None,
-    })
-}
-
-/// Cloud-mode `AppState` for exercising the `?org=` login/callback
-/// decision logic (multi-tenancy P2d) without a live IdP: LMDB-backed
-/// (`multi_tenant: true`), no global env OIDC configured. LMDB's
-/// `get_oidc_config_bare`/`get_oidc_config` always return `Ok(None)` (see
-/// `src/store/lmdb.rs`), which is exactly the "tenant exists but has no
-/// IdP of its own" shape these tests need — the store-lookup and
-/// tenant-resolution branches never require reaching a real IdP over the
-/// network.
-async fn multi_tenant_state() -> Arc<super::AppState> {
-    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-    let (store, sink) = crate::store::open_backends(dir.path(), false)
-        .await
-        .unwrap();
-    let cache = crate::cache::Cache::new(store.clone(), 1000, None);
-    let host_router = Arc::new(crate::domain_router::HostRouter::new(
-        store.clone(),
-        None,
-        None,
-    ));
-    let (analytics_tx, _rx) = tokio::sync::mpsc::channel(100);
-    let (tx, _wrx) = tokio::sync::mpsc::channel(1);
-    let webhooks = Arc::new(crate::webhooks::delivery::WebhookDispatcher::new(
-        tx,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    ));
-    Arc::new(super::AppState {
-        oidc: None,
-        sheets: None,
-        sheets_api: None,
-        oidc_configured: false,
-        cache,
-        store,
-        key: 0x1234,
-        signing_key: [7u8; 32],
-        analytics_tx,
-        sink,
-        admin_token: None,
-        ratelimiter: crate::abuse::ratelimit::RateLimiter::disabled(),
-        block_private: true,
-        public_host: None,
-        real_ip_header: super::DEFAULT_REAL_IP_HEADER.to_string(),
-        webhooks,
-        multi_tenant: true,
+        multi_tenant,
         host_router,
         dns: Arc::new(crate::dns::NullDns),
         tenant_domain_suffix: None,
