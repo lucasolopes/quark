@@ -13,7 +13,7 @@ never committed. This runbook lists secret names and shapes, never values.
 | Panel `quark-panel` | Cloudflare Pages | The React SPA (`web/`), served at `app.quarkus.com.br`. Direct-upload (no Git integration). |
 | Store | Fly Managed Postgres cluster `quark` | The main store (`QUARK_DATABASE_URL`, attached to `quark-prod`) and a separate `keycloak` database for Keycloak. |
 | Cache/pubsub `quark-valkey` | Fly app, `gru` | Self-hosted Valkey on the private network. Optional for a single node; kept cheap (~256mb). |
-| IdP `quark-keycloak` | Fly app, `gru` | Keycloak 26 at `quark-keycloak.fly.dev`. Per-tenant realm provisioning + the `quark-panel` login realm. Backing DB is the `keycloak` database in the MPG cluster. |
+| IdP `quark-keycloak` | Fly app, `gru` | Keycloak 26 at `auth.quarkus.com.br`. Per-tenant realm provisioning + the `quark-panel` login realm. Backing DB is the `keycloak` database in the MPG cluster. |
 
 The panel and the API are on **different subdomains** (`app.` vs `backend.`).
 That split is the source of most of the gotchas below.
@@ -41,7 +41,7 @@ for OIDC client secrets and Sheets refresh tokens; **back it up**, losing it mea
 stored secrets cannot be decrypted).
 
 OIDC login (global, for the panel): `QUARK_OIDC_ISSUER`
-(`https://quark-keycloak.fly.dev/realms/quark-panel`), `QUARK_OIDC_CLIENT_ID`,
+(`https://auth.quarkus.com.br/realms/quark-panel`), `QUARK_OIDC_CLIENT_ID`,
 `QUARK_OIDC_CLIENT_SECRET`, `QUARK_OIDC_REDIRECT_URL`
 (`https://backend.quarkus.com.br/admin/callback`), `QUARK_OIDC_ADMIN_CLAIM=groups`,
 `QUARK_OIDC_ADMIN_VALUE=quark-admins`, `QUARK_OIDC_READONLY_VALUE=quark-readers`.
@@ -49,7 +49,7 @@ OIDC login (global, for the panel): `QUARK_OIDC_ISSUER`
 Split-domain redirects (see gotchas): `QUARK_OIDC_POST_LOGIN_URL=https://app.quarkus.com.br`,
 `QUARK_OIDC_POST_LOGOUT_URL=https://app.quarkus.com.br/login`.
 
-Keycloak provisioning: `QUARK_KEYCLOAK_BASE_URL=https://quark-keycloak.fly.dev`,
+Keycloak provisioning: `QUARK_KEYCLOAK_BASE_URL=https://auth.quarkus.com.br`,
 `QUARK_KEYCLOAK_ADMIN_CLIENT_ID`, `QUARK_KEYCLOAK_ADMIN_CLIENT_SECRET`, plus the
 SMTP family for invite/set-password emails: `QUARK_KEYCLOAK_SMTP_HOST`,
 `_PORT`, `_USER`, `_PASSWORD`, `_FROM`, `_STARTTLS`.
@@ -79,15 +79,19 @@ to the project as a custom domain.
   `A 66.241.124.165`, `AAAA 2a09:8280:1::14e:87d5:0`, and the ownership record
   `TXT _fly-ownership.backend = app-wlqdm0e`.
 - `app.quarkus.com.br` -> the Cloudflare Pages project.
+- `auth.quarkus.com.br` -> Fly (`quark-keycloak`), DNS only: `A 66.241.124.30`,
+  `AAAA 2a09:8280:1::151:73a4:0`, `TXT _fly-ownership.auth = app-ropxp68`. This is
+  the Keycloak issuer host (`KC_HOSTNAME`), so it must match `QUARK_OIDC_ISSUER` and
+  `QUARK_KEYCLOAK_BASE_URL` exactly.
 
-Get the current values any time with `fly certs setup backend.quarkus.com.br -a quark-prod`.
+Get the current values any time with `fly certs setup <hostname> -a <app>`.
 
 ## Keycloak (`quark-keycloak`)
 
 Runs the `quay.io/keycloak/keycloak:26.0` image (config in a `fly.toml`, not in this
 repo; env: `KC_DB=postgres`, `KC_DB_URL` pointing at the MPG `keycloak` database via
 its pgbouncer endpoint with `?prepareThreshold=0`, `KC_DB_USERNAME`/`KC_DB_PASSWORD`,
-`KC_HOSTNAME=https://quark-keycloak.fly.dev`, `KC_HTTP_ENABLED=true`,
+`KC_HOSTNAME=https://auth.quarkus.com.br`, `KC_HTTP_ENABLED=true`,
 `KC_PROXY_HEADERS=xforwarded`, `KC_HEALTH_ENABLED=true`, `KC_BOOTSTRAP_ADMIN_USERNAME`
 + `KC_BOOTSTRAP_ADMIN_PASSWORD` as secrets). VM `1024mb` (the JVM needs it).
 
@@ -148,7 +152,7 @@ Because the panel (`app.`) and the API (`backend.`) are different origins:
 - Redeploy backend: `fly deploy -a quark-prod`.
 - Redeploy panel: rebuild (`VITE_API_BASE_URL=...`) + `wrangler pages deploy`.
 - Rotate a secret: `fly secrets set NAME=value -a quark-prod` (rolling restart).
-- Keycloak admin console: `https://quark-keycloak.fly.dev/admin` (bootstrap admin).
+- Keycloak admin console: `https://auth.quarkus.com.br/admin` (bootstrap admin).
 - Tail logs: `fly logs -a <app>`.
 - Kill the Redis bill if it ever comes back: single-node needs no Valkey; unset
   `QUARK_VALKEY_URL` and destroy the resource.
