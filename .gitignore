@@ -16,3 +16,4 @@ web/node_modules/
 modal-*.png
 page-*.png
 web/.env.local
+/*.png
