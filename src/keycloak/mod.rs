@@ -122,6 +122,14 @@ pub struct KeycloakConfig {
     /// already be deployed on the Keycloak server (its files under
     /// `providers`/`themes`), otherwise every realm's login page breaks.
     pub login_theme: Option<String>,
+    /// Optional public base URL of the quark admin panel
+    /// (`QUARK_KEYCLOAK_PANEL_URL`), e.g. `https://app.example.com`. When set,
+    /// `ensure_client` registers `{panel}/*` as a valid redirect URI and
+    /// `send_set_password_email` sends the user back to `{panel}/login` after
+    /// the set-password action, instead of Keycloak's account console. `None`
+    /// (the default) keeps the account-console default: opt-in so nothing
+    /// breaks when the panel URL is unknown.
+    pub panel_url: Option<String>,
 }
 
 impl KeycloakConfig {
@@ -132,19 +140,22 @@ impl KeycloakConfig {
             &std::env::var("QUARK_KEYCLOAK_ADMIN_CLIENT_SECRET").unwrap_or_default(),
             SmtpConfig::from_env(),
             std::env::var("QUARK_KEYCLOAK_LOGIN_THEME").unwrap_or_default(),
+            std::env::var("QUARK_KEYCLOAK_PANEL_URL").ok(),
         )
     }
 
     /// Builds a config from explicit parts (used by `from_env` and tests, so
     /// tests do not need to mutate process env — mirrors
-    /// `sheets::SheetsConfig::from_parts`). `login_theme` is normalized to
-    /// `None` when empty, so an unset or blank env var means "no override".
+    /// `sheets::SheetsConfig::from_parts`). `login_theme` and `panel_url` are
+    /// each normalized to `None` when empty, so an unset or blank env var means
+    /// "no override".
     pub fn from_parts(
         base_url: &str,
         admin_client_id: &str,
         admin_client_secret: &str,
         smtp: SmtpConfig,
         login_theme: impl Into<String>,
+        panel_url: Option<String>,
     ) -> Option<KeycloakConfig> {
         if base_url.is_empty() {
             return None;
@@ -160,6 +171,11 @@ impl KeycloakConfig {
             } else {
                 Some(login_theme)
             },
+            // Normalize an unset or blank env var to "no override", mirroring
+            // `login_theme`.
+            panel_url: panel_url
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty()),
         })
     }
 }
@@ -314,7 +330,8 @@ mod tests {
     #[test]
     fn keycloak_config_from_parts_is_none_without_base_url() {
         assert!(
-            KeycloakConfig::from_parts("", "id", "secret", SmtpConfig::default(), "").is_none()
+            KeycloakConfig::from_parts("", "id", "secret", SmtpConfig::default(), "", None)
+                .is_none()
         );
     }
 
@@ -326,12 +343,14 @@ mod tests {
             "s3cr3t",
             SmtpConfig::default(),
             "",
+            None,
         )
         .unwrap();
         assert_eq!(cfg.base_url, "https://kc.example.com");
         assert_eq!(cfg.admin_client_id, "admin-cli");
         assert_eq!(cfg.admin_client_secret, "s3cr3t");
         assert_eq!(cfg.login_theme, None);
+        assert_eq!(cfg.panel_url, None);
     }
 
     #[test]
@@ -342,6 +361,7 @@ mod tests {
             "s3cr3t",
             SmtpConfig::default(),
             "",
+            None,
         )
         .unwrap();
         assert_eq!(cfg.login_theme, None);
@@ -355,9 +375,38 @@ mod tests {
             "s3cr3t",
             SmtpConfig::default(),
             "quark-branded",
+            None,
         )
         .unwrap();
         assert_eq!(cfg.login_theme, Some("quark-branded".to_string()));
+    }
+
+    #[test]
+    fn keycloak_config_from_parts_panel_url_blank_is_none() {
+        let cfg = KeycloakConfig::from_parts(
+            "https://kc.example.com",
+            "admin-cli",
+            "s3cr3t",
+            SmtpConfig::default(),
+            "",
+            Some("  ".to_string()),
+        )
+        .unwrap();
+        assert_eq!(cfg.panel_url, None);
+    }
+
+    #[test]
+    fn keycloak_config_from_parts_panel_url_set_is_some() {
+        let cfg = KeycloakConfig::from_parts(
+            "https://kc.example.com",
+            "admin-cli",
+            "s3cr3t",
+            SmtpConfig::default(),
+            "",
+            Some("https://app.example.com".to_string()),
+        )
+        .unwrap();
+        assert_eq!(cfg.panel_url, Some("https://app.example.com".to_string()));
     }
 
     #[test]
