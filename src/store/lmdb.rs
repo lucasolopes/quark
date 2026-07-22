@@ -1292,6 +1292,14 @@ impl Store for LmdbStore {
         Err(StoreError::Unsupported)
     }
 
+    async fn update_oidc_config_issuer(
+        &self,
+        _tenant: TenantId,
+        _issuer: &str,
+    ) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
     // The durable webhook outbox is Postgres-only. On the single-node LMDB
     // backend every event (lifecycle and clicked) rides the in-memory
     // best-effort channel, and `main.rs` never spawns the relay nor routes

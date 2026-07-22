@@ -1496,6 +1496,13 @@ mod tests {
         ) -> Result<(), StoreError> {
             unimplemented!()
         }
+        async fn update_oidc_config_issuer(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _issuer: &str,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
         async fn enqueue_deliveries(&self, _rows: &[OutboxRow]) -> Result<(), StoreError> {
             unimplemented!()
         }
