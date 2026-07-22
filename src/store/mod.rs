@@ -757,6 +757,17 @@ pub trait Store: Send + Sync + 'static {
     /// Deletes a tenant's OIDC config, tenant-scoped; a missing config is not
     /// an error.
     async fn delete_oidc_config(&self, tenant: TenantId) -> Result<(), StoreError>;
+    /// Updates ONLY the `issuer` of a tenant's OIDC config, leaving the rest of
+    /// the config (notably the encrypted-at-rest `client_secret` in the blob)
+    /// untouched. Used by the boot backfill to reconcile a stale issuer after
+    /// the Keycloak base URL changed (LUC-81) without ever re-serializing the
+    /// blob, so the secret cannot be lost in the round-trip. Tenant-scoped
+    /// write; a missing config is not an error (nothing to update).
+    async fn update_oidc_config_issuer(
+        &self,
+        tenant: TenantId,
+        issuer: &str,
+    ) -> Result<(), StoreError>;
     /// Looks up a tenant by its (UNIQUE) slug. Runs on the bare pool: this is
     /// how `/admin/login?org=<slug>` resolves which tenant's OIDC config to
     /// use, before any tenant context exists.

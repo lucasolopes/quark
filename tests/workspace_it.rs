@@ -1088,6 +1088,164 @@ async fn backfill_provisions_the_tenant_owner() {
     );
 }
 
+/// LUC-81: the boot backfill reconciles a STALE issuer on a tenant that
+/// already has an `oidc_config`. When the Keycloak base URL changes after
+/// provisioning, the stored issuer still points at the old base and every SSO
+/// login 401s (the token's `iss` no longer matches the stored value `verify`
+/// checks against). The backfill rewrites the issuer to the currently derived
+/// value, leaves an already-correct tenant untouched, and — critically — never
+/// disturbs the encrypted `client_secret` or any other field.
+#[tokio::test]
+#[file_serial]
+async fn backfill_reconciles_stale_issuer_preserving_client_secret() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store: Arc<dyn Store> = Arc::new(store);
+
+    const NEW_BASE: &str = "https://kc.new.example.com";
+    const OLD_BASE: &str = "https://kc.old.example.com";
+
+    // Keep the seeded default tenant (id 0) out of scope: give it a config
+    // whose issuer is already correct for NEW_BASE so the backfill skips it.
+    store
+        .put_oidc_config(&quark::oidc::TenantOidcConfig {
+            tenant_id: TenantId(0),
+            issuer: quark::keycloak::derive_issuer(NEW_BASE, "default"),
+            client_id: "quark".to_string(),
+            client_secret: String::new(),
+            scopes: vec!["openid".to_string()],
+            admin_claim: "groups".to_string(),
+            admin_value: "quark-admins".to_string(),
+            readonly_value: "quark-readers".to_string(),
+            required_value: Some("quark-readers".to_string()),
+            post_login_url: None,
+            post_logout_url: None,
+        })
+        .await
+        .unwrap();
+
+    // A tenant provisioned under the OLD base: its stored issuer is stale, and
+    // it holds a non-empty client_secret that MUST survive the reconcile.
+    let stale_id = store.next_tenant_id().await.unwrap();
+    store
+        .put_tenant(&quark::tenant::Tenant {
+            id: TenantId(stale_id),
+            name: "Stale Issuer".to_string(),
+            slug: "stale-issuer".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    store
+        .put_oidc_config(&quark::oidc::TenantOidcConfig {
+            tenant_id: TenantId(stale_id),
+            issuer: quark::keycloak::derive_issuer(OLD_BASE, "stale-issuer"),
+            client_id: "quark".to_string(),
+            client_secret: "super-secret-value".to_string(),
+            scopes: vec!["openid".to_string(), "profile".to_string()],
+            admin_claim: "groups".to_string(),
+            admin_value: "quark-admins".to_string(),
+            readonly_value: "quark-readers".to_string(),
+            required_value: Some("quark-readers".to_string()),
+            post_login_url: Some("/panel".to_string()),
+            post_logout_url: None,
+        })
+        .await
+        .unwrap();
+
+    // A tenant whose issuer is already correct for NEW_BASE: must be left alone.
+    let ok_id = store.next_tenant_id().await.unwrap();
+    store
+        .put_tenant(&quark::tenant::Tenant {
+            id: TenantId(ok_id),
+            name: "Already Correct".to_string(),
+            slug: "already-correct".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    let ok_issuer = quark::keycloak::derive_issuer(NEW_BASE, "already-correct");
+    store
+        .put_oidc_config(&quark::oidc::TenantOidcConfig {
+            tenant_id: TenantId(ok_id),
+            issuer: ok_issuer.clone(),
+            client_id: "quark".to_string(),
+            client_secret: "another-secret".to_string(),
+            scopes: vec!["openid".to_string()],
+            admin_claim: "groups".to_string(),
+            admin_value: "quark-admins".to_string(),
+            readonly_value: "quark-readers".to_string(),
+            required_value: Some("quark-readers".to_string()),
+            post_login_url: None,
+            post_logout_url: None,
+        })
+        .await
+        .unwrap();
+
+    let mock: Arc<dyn quark::keycloak::KeycloakAdmin> =
+        Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+
+    // Both tenants already have a config, so nothing is newly *provisioned*.
+    let provisioned = quark::api::backfill_keycloak_provisioning(&store, &mock, NEW_BASE)
+        .await
+        .unwrap();
+    assert_eq!(
+        provisioned, 0,
+        "a stale-issuer reconcile is not a fresh provision and must not be counted"
+    );
+
+    // The stale tenant's issuer is rewritten to the NEW_BASE-derived value, and
+    // every other field — above all the client_secret — is unchanged.
+    let reconciled = store
+        .get_oidc_config_bare(TenantId(stale_id))
+        .await
+        .unwrap()
+        .expect("stale tenant still has a config");
+    assert_eq!(
+        reconciled.issuer,
+        quark::keycloak::derive_issuer(NEW_BASE, "stale-issuer"),
+        "the stale issuer must be reconciled to the current base"
+    );
+    assert_eq!(
+        reconciled.client_secret, "super-secret-value",
+        "the client_secret MUST survive the reconcile"
+    );
+    assert_eq!(reconciled.client_id, "quark");
+    assert_eq!(
+        reconciled.scopes,
+        vec!["openid".to_string(), "profile".to_string()]
+    );
+    assert_eq!(reconciled.post_login_url.as_deref(), Some("/panel"));
+
+    // The already-correct tenant is untouched (issuer and secret both intact).
+    let untouched = store
+        .get_oidc_config_bare(TenantId(ok_id))
+        .await
+        .unwrap()
+        .expect("already-correct tenant still has a config");
+    assert_eq!(untouched.issuer, ok_issuer);
+    assert_eq!(untouched.client_secret, "another-secret");
+
+    // Idempotent: a second pass finds every issuer already correct, so it
+    // reconciles nothing and still provisions nothing.
+    let provisioned_again = quark::api::backfill_keycloak_provisioning(&store, &mock, NEW_BASE)
+        .await
+        .unwrap();
+    assert_eq!(provisioned_again, 0);
+    let after = store
+        .get_oidc_config_bare(TenantId(stale_id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after.issuer,
+        quark::keycloak::derive_issuer(NEW_BASE, "stale-issuer")
+    );
+    assert_eq!(after.client_secret, "super-secret-value");
+}
+
 /// Security sweep: provisioning a tenant only ever touches that tenant's own
 /// slug. Two different users self-serve two different tenants against the
 /// same `KeycloakAdmin`; every recorded call carries exactly one of the two

@@ -2976,6 +2976,25 @@ impl Store for PostgresStore {
         Ok(())
     }
 
+    async fn update_oidc_config_issuer(
+        &self,
+        tenant: TenantId,
+        issuer: &str,
+    ) -> Result<(), StoreError> {
+        // Only the `issuer` column is rewritten; the `blob` (which carries the
+        // encrypted-at-rest `client_secret`) is never touched, so the secret
+        // cannot be lost in this reconcile (LUC-81). A tenant with no config
+        // matches zero rows and is a no-op, not an error.
+        with_write!(self, tenant, |c| {
+            sqlx::query("UPDATE oidc_configs SET issuer = $2 WHERE tenant_id = $1")
+                .bind(tenant.0 as i64)
+                .bind(issuer)
+                .execute(&mut *c)
+                .await
+        });
+        Ok(())
+    }
+
     async fn enqueue_deliveries(&self, rows: &[OutboxRow]) -> Result<(), StoreError> {
         if rows.is_empty() {
             return Ok(());

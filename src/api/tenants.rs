@@ -152,6 +152,13 @@ pub async fn provision_tenant_keycloak(
 /// only got partway is retried to completion here. Returns how many tenants
 /// were (re-)provisioned this pass. Mirrors the shape of the per-tenant
 /// subdomain backfill next to it in `main.rs`.
+///
+/// It also reconciles a stale `issuer` on tenants that already have a config
+/// (LUC-81): when the Keycloak base URL changed after provisioning, the stored
+/// issuer still points at the old base and SSO logins 401, so the issuer is
+/// rewritten to the currently derived value (only that column; the encrypted
+/// `client_secret` is never touched). Reconciles are logged and counted
+/// separately, not folded into the returned provisioned count.
 pub async fn backfill_keycloak_provisioning(
     store: &Arc<dyn Store>,
     keycloak: &Arc<dyn crate::keycloak::KeycloakAdmin>,
@@ -159,9 +166,42 @@ pub async fn backfill_keycloak_provisioning(
 ) -> Result<usize, StoreError> {
     let tenants = store.list_tenants().await?;
     let mut provisioned = 0usize;
+    let mut reconciled = 0usize;
     for t in &tenants {
         match store.get_oidc_config_bare(t.id).await {
-            Ok(Some(_)) => {} // already provisioned
+            Ok(Some(cfg)) => {
+                // Reconcile a stale issuer (LUC-81): the stored `issuer` is
+                // derived from the Keycloak base URL at provision time, so if
+                // `QUARK_KEYCLOAK_BASE_URL`/`KC_HOSTNAME` changed since, it
+                // still points at the OLD base. Tokens now carry the new
+                // issuer, but `verify` checks the token's `iss` against this
+                // STORED value, so every existing tenant's SSO login 401s until
+                // it's corrected. Rewrite ONLY the issuer to the currently
+                // derived value (leaving the encrypted `client_secret` and the
+                // rest of the blob untouched). Verification semantics are
+                // unchanged: we still verify against the stored issuer, we're
+                // just fixing the stored value. A correct issuer is left alone.
+                let expected = crate::keycloak::derive_issuer(base_url, &t.slug);
+                if cfg.issuer != expected {
+                    match store.update_oidc_config_issuer(t.id, &expected).await {
+                        Ok(()) => {
+                            reconciled += 1;
+                            eprintln!(
+                                "{}",
+                                serde_json::json!({
+                                    "keycloak_issuer_reconciled": expected,
+                                    "previous_issuer": cfg.issuer,
+                                    "tenant_id": t.id.0,
+                                })
+                            );
+                        }
+                        Err(e) => eprintln!(
+                            "{}",
+                            serde_json::json!({ "keycloak_backfill_error": e.to_string(), "tenant_id": t.id.0 })
+                        ),
+                    }
+                }
+            }
             Ok(None) => {
                 // Provision the tenant's Owner in the realm too (LUC-56): a
                 // tenant that predates Keycloak has an Owner membership but no
@@ -177,6 +217,12 @@ pub async fn backfill_keycloak_provisioning(
                 serde_json::json!({ "keycloak_backfill_error": e.to_string(), "tenant_id": t.id.0 })
             ),
         }
+    }
+    // Reconciles are reported separately so the returned count keeps its
+    // original meaning (tenants newly provisioned this pass, logged by
+    // `main.rs`); a stale-issuer fix is not a fresh provision.
+    if reconciled > 0 {
+        eprintln!("keycloak issuer backfill: {reconciled} reconciled");
     }
     Ok(provisioned)
 }
