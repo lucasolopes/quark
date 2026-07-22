@@ -94,13 +94,23 @@ pub struct TenantOidcConfig {
     pub admin_claim: String,
     pub admin_value: String,
     pub readonly_value: String,
+    /// The group claim value that maps to `Role::Member` (write access to
+    /// links, no tenant administration). Distinct from `readonly_value`
+    /// (`Role::Viewer`, read-only): in cloud/Keycloak provisioning this is the
+    /// `quark-members` group, so an invited Member has the same write access
+    /// they would in OSS single-tenant. Empty disables the mapping (a claim in
+    /// no recognized group falls through to `claim_role`'s Member default only
+    /// if `passes_required_group` admits it). `#[serde(default)]` so a blob
+    /// written before this field existed still deserializes.
+    #[serde(default)]
+    pub member_value: String,
     /// Optional required-group gate (multi-tenancy P2d Task 4b), default-open
     /// when unset: `claim_role`'s open Member default (any authenticated
     /// tenant IdP user gets in) is unchanged. When set to a non-empty value,
-    /// `passes_required_group` denies anyone whose claim contains neither
-    /// `admin_value`, `readonly_value`, nor this value — the tenant opts into
-    /// default-closed login. `#[serde(default)]` so a blob written before
-    /// this field existed still deserializes.
+    /// `passes_required_group` denies anyone whose claim contains none of
+    /// `admin_value`, `member_value`, `readonly_value`, nor this value — the
+    /// tenant opts into default-closed login. `#[serde(default)]` so a blob
+    /// written before this field existed still deserializes.
     #[serde(default)]
     pub required_value: Option<String>,
     pub post_login_url: Option<String>,
@@ -430,6 +440,12 @@ pub fn claim_role(claims: &serde_json::Value, cfg: &TenantOidcConfig) -> Role {
     if !cfg.admin_value.is_empty() && claim_contains(claims, &cfg.admin_claim, &cfg.admin_value) {
         return Role::Admin;
     }
+    // Member (write) outranks Viewer (read-only): a user in both the member and
+    // readonly groups resolves to the higher-privilege Member, so this is
+    // checked before `readonly_value`.
+    if !cfg.member_value.is_empty() && claim_contains(claims, &cfg.admin_claim, &cfg.member_value) {
+        return Role::Member;
+    }
     if !cfg.readonly_value.is_empty()
         && claim_contains(claims, &cfg.admin_claim, &cfg.readonly_value)
     {
@@ -444,8 +460,8 @@ pub fn claim_role(claims: &serde_json::Value, cfg: &TenantOidcConfig) -> Role {
 /// this function's call. When `cfg.required_value` is unset (or empty), the
 /// gate is open — every authenticated tenant IdP user is admitted, matching
 /// today's behavior before this field existed. When set, only a user whose
-/// claim contains `admin_value`, `readonly_value`, or `required_value` is
-/// admitted; a claim matching none of the three is denied. Matching goes
+/// claim contains `admin_value`, `member_value`, `readonly_value`, or
+/// `required_value` is admitted; a claim matching none of them is denied. Matching goes
 /// through `claim_contains` (exact value match, not substring), the same
 /// helper `claim_role`/`map_scopes` use. The caller (`oidc_callback`) must
 /// check this BEFORE creating any membership or session — a denial here
@@ -455,6 +471,8 @@ pub fn passes_required_group(claims: &serde_json::Value, cfg: &TenantOidcConfig)
         return true;
     };
     (!cfg.admin_value.is_empty() && claim_contains(claims, &cfg.admin_claim, &cfg.admin_value))
+        || (!cfg.member_value.is_empty()
+            && claim_contains(claims, &cfg.admin_claim, &cfg.member_value))
         || (!cfg.readonly_value.is_empty()
             && claim_contains(claims, &cfg.admin_claim, &cfg.readonly_value))
         || claim_contains(claims, &cfg.admin_claim, required)
@@ -1007,6 +1025,7 @@ mod tests {
             admin_claim: "groups".into(),
             admin_value: "quark-admins".into(),
             readonly_value: String::new(),
+            member_value: String::new(),
             required_value: None,
             post_login_url: None,
             post_logout_url: None,
@@ -1229,6 +1248,7 @@ mod tests {
             admin_claim: "groups".into(),
             admin_value: "acme-admins".into(),
             readonly_value: "acme-viewers".into(),
+            member_value: String::new(),
             required_value: None,
             post_login_url: None,
             post_logout_url: None,
@@ -1276,6 +1296,7 @@ mod tests {
             admin_claim: "groups".into(),
             admin_value: "quark-admins".into(),
             readonly_value: "quark-readers".into(),
+            member_value: "quark-members".into(),
             required_value: Some("quark-readers".into()),
             post_login_url: None,
             post_logout_url: None,
@@ -1284,10 +1305,18 @@ mod tests {
         let admin = serde_json::json!({ "groups": ["quark-admins"] });
         assert_eq!(claim_role(&admin, &cfg), Role::Admin);
 
+        let member = serde_json::json!({ "groups": ["quark-members"] });
+        assert_eq!(claim_role(&member, &cfg), Role::Member);
+
         let reader = serde_json::json!({ "groups": ["quark-readers"] });
         assert_eq!(claim_role(&reader, &cfg), Role::Viewer);
 
-        for claims in [&admin, &reader] {
+        // Member (write) outranks Viewer (read-only) when a user is in both.
+        let member_and_reader =
+            serde_json::json!({ "groups": ["quark-readers", "quark-members"] });
+        assert_eq!(claim_role(&member_and_reader, &cfg), Role::Member);
+
+        for claims in [&admin, &member, &reader] {
             assert_ne!(claim_role(claims, &cfg), Role::Owner);
         }
     }
@@ -1302,6 +1331,7 @@ mod tests {
             admin_claim: "groups".into(),
             admin_value: "acme-admins".into(),
             readonly_value: "acme-viewers".into(),
+            member_value: "acme-members".into(),
             required_value: required_value.map(str::to_string),
             post_login_url: None,
             post_logout_url: None,
@@ -1335,6 +1365,11 @@ mod tests {
 
         let readonly = serde_json::json!({ "groups": ["acme-viewers"] });
         assert!(passes_required_group(&readonly, &cfg));
+
+        // The member group is admitted by the gate too (a Member must be able
+        // to log in, not just Admin/Viewer/required).
+        let member = serde_json::json!({ "groups": ["acme-members"] });
+        assert!(passes_required_group(&member, &cfg));
 
         let required = serde_json::json!({ "groups": ["acme-contractors"] });
         assert!(passes_required_group(&required, &cfg));

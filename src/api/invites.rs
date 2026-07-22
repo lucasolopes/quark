@@ -89,11 +89,11 @@ pub(crate) async fn admin_invites_create(
     if let Some(kc) = &st.keycloak {
         let group = match req.role {
             crate::tenant::Role::Admin => "quark-admins",
-            // `Role::Owner` is rejected above; Member and Viewer both land in
-            // the default-closed readers group so every invited role is
-            // admitted by the group gate `provision_tenant_keycloak` writes
-            // (`required_value: Some("quark-readers")`).
-            crate::tenant::Role::Member | crate::tenant::Role::Viewer => "quark-readers",
+            // Member gets its own group (mapped to Role::Member -> write) so an
+            // invited Member keeps OSS-equivalent link write access instead of
+            // collapsing to read-only Viewer. `Role::Owner` is rejected above.
+            crate::tenant::Role::Member => "quark-members",
+            crate::tenant::Role::Viewer => "quark-readers",
             crate::tenant::Role::Owner => unreachable!("owner invites are rejected above"),
         };
         match st.store.get_tenant(p.tenant).await {
@@ -204,6 +204,10 @@ pub(crate) struct PutOidcConfigReq {
     admin_value: String,
     #[serde(default)]
     readonly_value: String,
+    /// Group value mapping to `Role::Member` (write, no tenant admin). Empty
+    /// disables the mapping.
+    #[serde(default)]
+    member_value: String,
     /// Optional required-group gate (multi-tenancy P2d Task 4b): see
     /// `oidc::passes_required_group`. Not secret, so it is also readable back
     /// on `GET /admin/oidc-config` (`OidcConfigView`).
@@ -224,6 +228,7 @@ pub(crate) struct OidcConfigView {
     admin_claim: String,
     admin_value: String,
     readonly_value: String,
+    member_value: String,
     required_value: Option<String>,
     post_login_url: Option<String>,
     client_secret_set: bool,
@@ -238,6 +243,7 @@ impl From<&crate::oidc::TenantOidcConfig> for OidcConfigView {
             admin_claim: cfg.admin_claim.clone(),
             admin_value: cfg.admin_value.clone(),
             readonly_value: cfg.readonly_value.clone(),
+            member_value: cfg.member_value.clone(),
             required_value: cfg.required_value.clone(),
             post_login_url: cfg.post_login_url.clone(),
             client_secret_set: !cfg.client_secret.is_empty(),
@@ -278,6 +284,7 @@ pub(crate) async fn admin_oidc_config_put(
         admin_claim: req.admin_claim,
         admin_value: req.admin_value,
         readonly_value: req.readonly_value,
+        member_value: req.member_value,
         required_value: req.required_value,
         post_login_url: req.post_login_url,
         // Not part of the admin OIDC-config API surface (RP-initiated logout

@@ -232,6 +232,7 @@ async fn seed_oidc_config(store: &PostgresStore, tenant: TenantId) {
             admin_claim: "role".to_string(),
             admin_value: "admin".to_string(),
             readonly_value: "member".to_string(),
+            member_value: String::new(),
             required_value: None,
             post_login_url: None,
             post_logout_url: None,

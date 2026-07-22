@@ -281,6 +281,11 @@ struct OidcConfigBlob {
     admin_claim: String,
     admin_value: String,
     readonly_value: String,
+    /// Group value mapping to `Role::Member` (write, no tenant admin).
+    /// `#[serde(default)]` so a blob written before this field existed still
+    /// deserializes (as an empty string, i.e. no member group).
+    #[serde(default)]
+    member_value: String,
     /// Optional required-group gate (multi-tenancy P2d Task 4b). `#[serde(default)]`
     /// so a blob written before this field existed still deserializes.
     #[serde(default)]
@@ -305,6 +310,7 @@ fn oidc_config_blob(cfg: &TenantOidcConfig, sb: &Option<SecretBox>) -> serde_jso
         admin_claim: cfg.admin_claim.clone(),
         admin_value: cfg.admin_value.clone(),
         readonly_value: cfg.readonly_value.clone(),
+        member_value: cfg.member_value.clone(),
         required_value: cfg.required_value.clone(),
         post_login_url: cfg.post_login_url.clone(),
         post_logout_url: cfg.post_logout_url.clone(),
@@ -332,6 +338,7 @@ fn row_to_oidc_config(r: &PgRow, sb: &Option<SecretBox>) -> Result<TenantOidcCon
         admin_claim: b.admin_claim,
         admin_value: b.admin_value,
         readonly_value: b.readonly_value,
+        member_value: b.member_value,
         required_value: b.required_value,
         post_login_url: b.post_login_url,
         post_logout_url: b.post_logout_url,

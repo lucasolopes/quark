@@ -32,11 +32,30 @@ sequenceDiagram
     K-->>U: redirect with code
     U->>Q: GET /admin/callback?code=...
     Q->>K: verify_id_token (checks iss == oidc_config.issuer)
-    Q->>S: put_membership (role from quark-admins/quark-readers group claim)
+    Q->>S: put_membership (role from quark-admins/quark-members/quark-readers group claim)
     Q-->>U: session cookie
 ```
 
 Each step is idempotent on the real client (a `409` from Keycloak counts as success), so replaying provisioning for an already-provisioned tenant is safe.
+
+### Roles and groups
+
+Each provisioned realm has three groups, mapped to quark roles by the `groups`
+claim (`claim_role`):
+
+| Keycloak group | quark role | Access |
+|---|---|---|
+| `quark-admins` | Admin | Full: links + tenant administration (invites, members, SSO, OIDC config). |
+| `quark-members` | Member | Write: create/edit/delete links. No tenant administration. |
+| `quark-readers` | Viewer | Read-only: view links and analytics. |
+
+An invite places the user in the group for its role (`quark-admins` for Admin,
+`quark-members` for Member, `quark-readers` for Viewer). On a re-invite,
+`ensure_user` reconciles the group so the latest invited role wins. Membership
+is granted at first OIDC login off this group claim, never from redeeming the
+invite token. The role a user gets is driven by their Keycloak group, not the
+invite row, so moving a user between these groups in the Keycloak admin console
+changes their quark role on their next login.
 
 ## Prerequisites before turning this on
 

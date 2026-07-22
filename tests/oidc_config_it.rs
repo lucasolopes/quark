@@ -50,6 +50,7 @@ fn cfg(tenant_id: TenantId, issuer: &str) -> TenantOidcConfig {
         admin_claim: "groups".to_string(),
         admin_value: "acme-admins".to_string(),
         readonly_value: "acme-viewers".to_string(),
+        member_value: String::new(),
         required_value: None,
         post_login_url: Some("/dashboard".to_string()),
         post_logout_url: Some("/logged-out".to_string()),

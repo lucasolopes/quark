@@ -133,8 +133,12 @@ pub async fn provision_tenant_keycloak(
         admin_claim: "groups".to_string(),
         admin_value: "quark-admins".to_string(),
         readonly_value: "quark-readers".to_string(),
-        // Default-closed: only quark-admins/quark-readers members are
-        // admitted (see `oidc::passes_required_group`), never the open
+        // Maps the quark-members group to Role::Member (write, no tenant
+        // admin), so an invited Member has the same link write access as in
+        // OSS single-tenant rather than collapsing to read-only Viewer.
+        member_value: "quark-members".to_string(),
+        // Default-closed: only quark-admins/quark-members/quark-readers members
+        // are admitted (see `oidc::passes_required_group`), never the open
         // `Role::Member` fallback `claim_role` would otherwise grant to any
         // authenticated realm user.
         required_value: Some("quark-readers".to_string()),
