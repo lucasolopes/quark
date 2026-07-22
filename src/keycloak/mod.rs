@@ -47,8 +47,8 @@ pub trait KeycloakAdmin: Send + Sync {
     /// pointed at `redirect_uri`. Idempotent (409 = ok).
     async fn ensure_client(&self, slug: &str, redirect_uri: &str) -> Result<(), KcError>;
 
-    /// Creates the `quark-admins`/`quark-readers` groups and the `groups`
-    /// claim mapper on the `quark` client. Idempotent (409 = ok); requires
+    /// Creates the `quark-admins`/`quark-members`/`quark-readers` groups and
+    /// the `groups` claim mapper on the `quark` client. Idempotent (409 = ok); requires
     /// `ensure_client` to have run first (the mapper attaches to the client).
     async fn ensure_groups_and_mapper(&self, slug: &str) -> Result<(), KcError>;
 

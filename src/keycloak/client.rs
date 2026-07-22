@@ -314,10 +314,12 @@ impl HttpKeycloakAdmin {
     }
 }
 
-/// The Keycloak groups quark manages for role mapping (see `claim_role`). A
-/// user belongs to at most one; `reconcile_managed_group` enforces that on
-/// re-invite so the latest invited role always wins.
-const MANAGED_GROUPS: [&str; 2] = ["quark-admins", "quark-readers"];
+/// The Keycloak groups quark manages for role mapping (see `claim_role`):
+/// `quark-admins` -> Admin, `quark-members` -> Member (write), `quark-readers`
+/// -> Viewer (read-only). A user belongs to at most one;
+/// `reconcile_managed_group` enforces that on re-invite so the latest invited
+/// role always wins. `ensure_groups_and_mapper` creates all of them.
+const MANAGED_GROUPS: [&str; 3] = ["quark-admins", "quark-members", "quark-readers"];
 
 #[async_trait]
 impl KeycloakAdmin for HttpKeycloakAdmin {
@@ -351,7 +353,7 @@ impl KeycloakAdmin for HttpKeycloakAdmin {
     }
 
     async fn ensure_groups_and_mapper(&self, slug: &str) -> Result<(), KcError> {
-        for group in ["quark-admins", "quark-readers"] {
+        for group in MANAGED_GROUPS {
             self.admin_post_idempotent(
                 &format!("{}/admin/realms/{slug}/groups", self.base),
                 &json!({ "name": group }),
