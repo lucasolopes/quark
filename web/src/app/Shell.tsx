@@ -9,6 +9,7 @@ import { useT } from "@/i18n";
 import { api } from "@/lib/api";
 import { clearToken } from "@/lib/auth";
 import { useMe } from "@/lib/queries";
+import { useScopes } from "@/lib/scopes";
 import { cn } from "@/lib/utils";
 
 /** Roles that can manage the workspace's team (create/revoke invites). */
@@ -21,6 +22,7 @@ export function Shell() {
   const isDark = resolvedTheme === "dark";
   const toggle = () => setTheme(isDark ? "light" : "dark");
   const me = useMe();
+  const { has } = useScopes();
 
   // Members and SSO domains are cloud-only (`memberships` absent in OSS) and
   // restricted to the current tenant's Owner/Admin — Member/Viewer never
@@ -29,38 +31,44 @@ export function Shell() {
   const canManageMembers = me.data?.memberships !== undefined && currentRole != null && MEMBERS_MANAGER_ROLES.has(currentRole);
   const canManageSsoDomains = canManageMembers;
 
+  // Each item declares the scope it needs; `has` hides the ones the current
+  // principal cannot use (Viewer has no `links_write`, Member/Viewer have no
+  // `full`), so the nav never points at a page that would only 403. `full`
+  // covers everything (see `useScopes`), so an admin/token sees all of them.
   const navGroups = [
     {
       label: t("shell.navGroupLinks"),
       items: [
-        { to: "/links", label: t("shell.navLinks"), icon: Link2 },
-        { to: "/import", label: t("shell.navImport"), icon: Upload },
+        { to: "/links", label: t("shell.navLinks"), icon: Link2, show: has("links_read") },
+        { to: "/import", label: t("shell.navImport"), icon: Upload, show: has("links_write") },
       ],
     },
     {
       label: t("shell.navGroupData"),
       items: [
-        { to: "/analytics", label: t("shell.navAnalytics"), icon: BarChart3 },
-        { to: "/pixels", label: t("shell.navPixels"), icon: Radio },
+        { to: "/analytics", label: t("shell.navAnalytics"), icon: BarChart3, show: has("analytics") },
+        { to: "/pixels", label: t("shell.navPixels"), icon: Radio, show: has("analytics") },
       ],
     },
     {
       label: t("shell.navGroupAuto"),
       items: [
-        { to: "/webhooks", label: t("shell.navWebhooks"), icon: Webhook },
-        { to: "/extensions", label: t("shell.navExtensions"), icon: Blocks },
+        { to: "/webhooks", label: t("shell.navWebhooks"), icon: Webhook, show: has("webhooks") },
+        { to: "/extensions", label: t("shell.navExtensions"), icon: Blocks, show: has("full") },
       ],
     },
     {
       label: t("shell.navGroupDev"),
       items: [
-        { to: "/tokens", label: t("shell.navTokens"), icon: KeyRound },
-        { to: "/app-links", label: t("shell.navAppLinks"), icon: Smartphone },
-        ...(canManageMembers ? [{ to: "/members", label: t("shell.navMembers"), icon: Users }] : []),
-        ...(canManageSsoDomains ? [{ to: "/sso-domains", label: t("shell.navSsoDomains"), icon: ShieldCheck }] : []),
+        { to: "/tokens", label: t("shell.navTokens"), icon: KeyRound, show: has("full") },
+        { to: "/app-links", label: t("shell.navAppLinks"), icon: Smartphone, show: has("full") },
+        ...(canManageMembers ? [{ to: "/members", label: t("shell.navMembers"), icon: Users, show: true }] : []),
+        ...(canManageSsoDomains ? [{ to: "/sso-domains", label: t("shell.navSsoDomains"), icon: ShieldCheck, show: true }] : []),
       ],
     },
-  ];
+  ]
+    .map((group) => ({ ...group, items: group.items.filter((item) => item.show) }))
+    .filter((group) => group.items.length > 0);
 
   async function handleLogout() {
     clearToken();

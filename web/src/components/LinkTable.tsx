@@ -68,9 +68,13 @@ interface LinkTableProps {
   links: Link[];
   onEdit: (link: Link) => void;
   onDelete: (link: Link) => void;
+  /** When false (a Viewer), write affordances are hidden: bulk selection, and
+   * the Edit/Delete row actions. Defaults to true so read-only callers and
+   * existing tests keep the full table. The backend enforces this regardless. */
+  canWrite?: boolean;
 }
 
-export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
+export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTableProps) {
   const t = useT();
   const [justCopiedId, setJustCopiedId] = useState<number | null>(null);
   const [qrLink, setQrLink] = useState<Link | null>(null);
@@ -162,24 +166,30 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
   }
 
   const columns: ColumnDef<Link>[] = [
-    {
-      id: "select",
-      header: () => (
-        <Checkbox
-          checked={allSelected}
-          indeterminate={someSelected}
-          onCheckedChange={(checked) => toggleAll(checked === true)}
-          aria-label={t("linkTable.selectAllAria")}
-        />
-      ),
-      cell: ({ row }) => (
-        <Checkbox
-          checked={selected.has(row.original.code)}
-          onCheckedChange={(checked) => toggleRow(row.original.code, checked === true)}
-          aria-label={t("linkTable.selectRowAria", { code: row.original.code })}
-        />
-      ),
-    },
+    // Bulk selection is a write affordance (bulk edit/delete), so a Viewer
+    // never gets the select column.
+    ...(canWrite
+      ? [
+          {
+            id: "select",
+            header: () => (
+              <Checkbox
+                checked={allSelected}
+                indeterminate={someSelected}
+                onCheckedChange={(checked) => toggleAll(checked === true)}
+                aria-label={t("linkTable.selectAllAria")}
+              />
+            ),
+            cell: ({ row }) => (
+              <Checkbox
+                checked={selected.has(row.original.code)}
+                onCheckedChange={(checked) => toggleRow(row.original.code, checked === true)}
+                aria-label={t("linkTable.selectRowAria", { code: row.original.code })}
+              />
+            ),
+          } satisfies ColumnDef<Link>,
+        ]
+      : []),
     {
       accessorKey: "code",
       header: t("linkTable.columnCode"),
@@ -352,14 +362,18 @@ export function LinkTable({ links, onEdit, onDelete }: LinkTableProps) {
                   <QrCode className="size-3.5" />
                   {t("linkTable.qrMenuItem")}
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => onEdit(link)}>
-                  <Pencil className="size-3.5" />
-                  {t("linkTable.editMenuItem")}
-                </DropdownMenuItem>
-                <DropdownMenuItem variant="destructive" onClick={() => onDelete(link)}>
-                  <Trash2 className="size-3.5" />
-                  {t("linkTable.deleteMenuItem")}
-                </DropdownMenuItem>
+                {canWrite && (
+                  <>
+                    <DropdownMenuItem onClick={() => onEdit(link)}>
+                      <Pencil className="size-3.5" />
+                      {t("linkTable.editMenuItem")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem variant="destructive" onClick={() => onDelete(link)}>
+                      <Trash2 className="size-3.5" />
+                      {t("linkTable.deleteMenuItem")}
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
