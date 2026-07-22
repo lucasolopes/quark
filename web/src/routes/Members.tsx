@@ -29,7 +29,7 @@ import { useT, type MessageKey } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { isUnauthorized, mutationErrorToast } from "@/lib/mutation-error";
-import { useCreateInvite, useInvites, useRevokeInvite } from "@/lib/queries";
+import { useCreateInvite, useInvites, useMe, useRevokeInvite } from "@/lib/queries";
 import type { InviteView } from "@/lib/types";
 
 /** Roles invitable through this screen. Owner is never offered (there is exactly one path to it: transfer, out of scope here). */
@@ -54,11 +54,17 @@ export function Members() {
   const t = useT();
   const [createOpen, setCreateOpen] = useState(false);
   const [revokingInvite, setRevokingInvite] = useState<InviteView | null>(null);
-  const [createdLink, setCreatedLink] = useState<string | null>(null);
+  const [createdInvite, setCreatedInvite] = useState<{ token: string; email: string } | null>(null);
   const [justCopiedLink, setJustCopiedLink] = useState(false);
 
   const query = useInvites();
   const revokeInvite = useRevokeInvite();
+  const me = useMe();
+  // With an external IdP (Keycloak) the invited user is onboarded by an emailed
+  // set-password link; the `/invite/<token>` link never onboards a new user in
+  // that mode, so we confirm "email sent" instead of offering the dead link.
+  const ssoProvisioning = me.data?.sso_provisioning ?? false;
+  const createdLink = createdInvite ? `${window.location.origin}/invite/${createdInvite.token}` : null;
 
   const invites = query.data ?? [];
 
@@ -188,7 +194,7 @@ export function Members() {
       <CreateInviteDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={(token) => setCreatedLink(`${window.location.origin}/invite/${token}`)}
+        onCreated={(token, email) => setCreatedInvite({ token, email })}
       />
 
       <AlertDialog open={revokingInvite != null} onOpenChange={(open) => !open && setRevokingInvite(null)}>
@@ -211,35 +217,53 @@ export function Members() {
       </AlertDialog>
 
       <Dialog
-        open={createdLink != null}
+        open={createdInvite != null}
         onOpenChange={(open) => {
-          if (!open) setCreatedLink(null);
+          if (!open) setCreatedInvite(null);
         }}
       >
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("invites.createdSuccess")}</DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col gap-1.5 py-3">
-            <Label htmlFor="invite-link">{t("invites.copyLink")}</Label>
-            <div className="flex items-center gap-2">
-              <Input id="invite-link" type="text" readOnly value={createdLink ?? ""} className="font-mono" />
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                aria-label={t("invites.copyLink")}
-                onClick={handleCopyLink}
-              >
-                {justCopiedLink ? <Check className="size-4 text-brand-ink" /> : <Copy className="size-4" />}
-              </Button>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button type="button" onClick={() => setCreatedLink(null)}>
-              {t("common.cancel")}
-            </Button>
-          </DialogFooter>
+          {ssoProvisioning ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{t("invites.emailSentTitle")}</DialogTitle>
+                <DialogDescription>
+                  {t("invites.emailSentBody", { email: createdInvite?.email ?? "" })}
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button type="button" onClick={() => setCreatedInvite(null)}>
+                  {t("common.cancel")}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>{t("invites.createdSuccess")}</DialogTitle>
+              </DialogHeader>
+              <div className="flex flex-col gap-1.5 py-3">
+                <Label htmlFor="invite-link">{t("invites.copyLink")}</Label>
+                <div className="flex items-center gap-2">
+                  <Input id="invite-link" type="text" readOnly value={createdLink ?? ""} className="font-mono" />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    aria-label={t("invites.copyLink")}
+                    onClick={handleCopyLink}
+                  >
+                    {justCopiedLink ? <Check className="size-4 text-brand-ink" /> : <Copy className="size-4" />}
+                  </Button>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button type="button" onClick={() => setCreatedInvite(null)}>
+                  {t("common.cancel")}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>
@@ -264,8 +288,8 @@ interface FormErrors {
 interface CreateInviteDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Called with the raw token right after a successful creation, before the dialog closes. */
-  onCreated: (token: string) => void;
+  /** Called with the raw token and the invited email right after a successful creation, before the dialog closes. */
+  onCreated: (token: string, email: string) => void;
 }
 
 function CreateInviteDialog({ open, onOpenChange, onCreated }: CreateInviteDialogProps) {
@@ -305,11 +329,12 @@ function CreateInviteDialog({ open, onOpenChange, onCreated }: CreateInviteDialo
     }
     setErrors({});
     try {
-      const result = await createInvite.mutateAsync({ email: email.trim(), role });
+      const invitedEmail = email.trim();
+      const result = await createInvite.mutateAsync({ email: invitedEmail, role });
       toast.success(t("invites.createdSuccess"));
       reset();
       onOpenChange(false);
-      onCreated(result.token);
+      onCreated(result.token, invitedEmail);
     } catch (err) {
       if (isUnauthorized(err)) return;
       if (err instanceof ApiError && err.status === 429) {

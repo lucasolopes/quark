@@ -691,6 +691,8 @@ export const en = {
     loadError: "Could not load the invites.",
     forbidden: "You don't have permission to view members.",
     createdSuccess: "Invite sent.",
+    emailSentTitle: "Invite email sent",
+    emailSentBody: "We emailed {email} a link to set a password and join this workspace.",
     createGenericError: "Could not send the invite. Try again.",
     revokedSuccess: "Invite revoked.",
     revokeGenericError: "Could not revoke the invite. Try again.",
