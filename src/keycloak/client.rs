@@ -152,6 +152,44 @@ impl HttpKeycloakAdmin {
             .map_err(|e| KcError(e.to_string()))
     }
 
+    /// PUTs `body` to `url`, retrying once with a fresh token on `401`/`403`
+    /// (same rationale as `admin_post_idempotent`). Keycloak exposes the
+    /// execute-actions-email endpoint as `PUT`, not `POST`, so the set-password
+    /// email must use this rather than `admin_post_idempotent` (a `POST` there
+    /// is a `404`).
+    async fn admin_put_idempotent(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<(), KcError> {
+        let token = self.admin_token().await?;
+        let resp = self.put_json(url, &token, body).await?;
+        if matches!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
+            let token = self.fetch_token().await?;
+            let resp = self.put_json(url, &token, body).await?;
+            return Self::ok_or_conflict(resp).await;
+        }
+        Self::ok_or_conflict(resp).await
+    }
+
+    async fn put_json(
+        &self,
+        url: &str,
+        token: &str,
+        body: &serde_json::Value,
+    ) -> Result<reqwest::Response, KcError> {
+        self.client
+            .put(url)
+            .bearer_auth(token)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| KcError(e.to_string()))
+    }
+
     async fn ok_or_conflict(resp: reqwest::Response) -> Result<(), KcError> {
         if resp.status().is_success() || resp.status() == StatusCode::CONFLICT {
             return Ok(());
@@ -332,7 +370,7 @@ impl KeycloakAdmin for HttpKeycloakAdmin {
             "{}/admin/realms/{slug}/users/{user_id}/execute-actions-email",
             self.base
         );
-        self.admin_post_idempotent(&url, &json!(["UPDATE_PASSWORD"]))
+        self.admin_put_idempotent(&url, &json!(["UPDATE_PASSWORD"]))
             .await
     }
 }
