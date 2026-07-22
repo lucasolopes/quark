@@ -616,18 +616,16 @@ impl OidcRuntime {
         )
     }
 
-    /// The RP-initiated logout URL for `id_token`, or `None` when this IdP's
-    /// discovery advertised no `end_session_endpoint`. The
-    /// `post_logout_redirect_uri` is the config's `post_logout_url` when set,
-    /// otherwise its `post_login_url` (which itself defaults to `/`).
-    pub fn logout_url(&self, id_token: &str) -> Option<String> {
+    /// The RP-initiated logout URL for `id_token`, sending the browser to
+    /// `post_logout_redirect_uri` once the IdP ends the session; `None` when
+    /// this IdP's discovery advertised no `end_session_endpoint`. The caller
+    /// supplies the redirect (the panel) rather than reading it off this
+    /// runtime's config, so a per-tenant session and the global one both return
+    /// to the same panel regardless of the tenant config's (often unset,
+    /// `/`-defaulting) values.
+    pub fn logout_url(&self, id_token: &str, post_logout_redirect_uri: &str) -> Option<String> {
         let endpoint = self.discovery.end_session_endpoint.as_deref()?;
-        let redirect = self
-            .config
-            .post_logout_url
-            .as_deref()
-            .unwrap_or(&self.config.post_login_url);
-        Some(build_logout_url(endpoint, id_token, redirect))
+        Some(build_logout_url(endpoint, id_token, post_logout_redirect_uri))
     }
 
     /// Exchanges a callback code for the id_token.
