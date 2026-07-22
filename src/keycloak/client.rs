@@ -234,7 +234,90 @@ impl HttpKeycloakAdmin {
         }
         resp.json().await.map_err(|e| KcError(e.to_string()))
     }
+
+    /// DELETEs `url` with a bearer admin token, retrying once with a fresh
+    /// token on `401`/`403` (see `admin_post_idempotent` for why `403`). A
+    /// `404` counts as success: removing a membership the user does not have
+    /// is a no-op, which keeps `reconcile_managed_group` idempotent.
+    async fn admin_delete(&self, url: &str) -> Result<(), KcError> {
+        let token = self.admin_token().await?;
+        let mut resp = self
+            .client
+            .delete(url)
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|e| KcError(e.to_string()))?;
+        if matches!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
+            let token = self.fetch_token().await?;
+            resp = self
+                .client
+                .delete(url)
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(|e| KcError(e.to_string()))?;
+        }
+        if resp.status().is_success() || resp.status() == StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+        Err(KcError(format!(
+            "keycloak request failed: {}",
+            resp.status()
+        )))
+    }
+
+    /// Resolves a top-level group's id by exact `name` in `slug`'s realm, or
+    /// `None` if the realm has no such group. `search` is a substring match, so
+    /// the result is filtered to an exact name match before returning.
+    async fn group_id(&self, slug: &str, name: &str) -> Result<Option<String>, KcError> {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("search", name)
+            .finish();
+        let url = format!("{}/admin/realms/{slug}/groups?{query}", self.base);
+        let v = self.admin_get(&url).await?;
+        Ok(pick_group_id(&v, name))
+    }
+
+    /// Makes `group` the user's sole role group: joins it and leaves every
+    /// other group in `MANAGED_GROUPS`. Keycloak sets a group inline at user
+    /// creation, but an already-provisioned user keeps whatever group they were
+    /// first given; without this a Member/Viewer re-invite of someone
+    /// previously placed in `quark-admins` would silently keep them an Admin
+    /// (the group claim, not the invite row, drives `claim_role`). Idempotent:
+    /// the join PUT and the leave DELETE are both no-ops when already in the
+    /// target state. A group that does not exist in the realm is skipped.
+    async fn reconcile_managed_group(
+        &self,
+        slug: &str,
+        user_id: &str,
+        group: &str,
+    ) -> Result<(), KcError> {
+        for managed in MANAGED_GROUPS {
+            let Some(gid) = self.group_id(slug, managed).await? else {
+                continue;
+            };
+            let url = format!(
+                "{}/admin/realms/{slug}/users/{user_id}/groups/{gid}",
+                self.base
+            );
+            if managed == group {
+                self.admin_put_idempotent(&url, &json!({})).await?;
+            } else {
+                self.admin_delete(&url).await?;
+            }
+        }
+        Ok(())
+    }
 }
+
+/// The Keycloak groups quark manages for role mapping (see `claim_role`). A
+/// user belongs to at most one; `reconcile_managed_group` enforces that on
+/// re-invite so the latest invited role always wins.
+const MANAGED_GROUPS: [&str; 2] = ["quark-admins", "quark-readers"];
 
 #[async_trait]
 impl KeycloakAdmin for HttpKeycloakAdmin {
@@ -323,6 +406,11 @@ impl KeycloakAdmin for HttpKeycloakAdmin {
 
         let existing = self.admin_get(&lookup_url).await?;
         if let Some(id) = first_user_id(&existing) {
+            // The user is already provisioned. Reconcile their role group so a
+            // re-invite with a different role takes effect: without this an
+            // existing quark-admins user re-invited as Member/Viewer would keep
+            // their Admin group (and thus Admin scopes) unchanged.
+            self.reconcile_managed_group(slug, &id, group).await?;
             return Ok(id);
         }
 
@@ -420,6 +508,20 @@ fn first_user_id(v: &serde_json::Value) -> Option<String> {
     v.as_array()?.first()?.get("id")?.as_str().map(String::from)
 }
 
+/// Picks the `id` of the group named exactly `name` from a Keycloak list-groups
+/// response. The groups endpoint's `search` is a substring match, so a query
+/// for `quark-admins` could in principle return unrelated groups whose name
+/// merely contains it; this filters to the exact name so the wrong group's id
+/// is never returned. `None` when no group matches exactly.
+fn pick_group_id(v: &serde_json::Value, name: &str) -> Option<String> {
+    v.as_array()?
+        .iter()
+        .find(|g| g.get("name").and_then(|n| n.as_str()) == Some(name))
+        .and_then(|g| g.get("id"))
+        .and_then(|i| i.as_str())
+        .map(String::from)
+}
+
 /// Builds the realm-create request body for `ensure_realm`. `login_theme` is
 /// only included as `loginTheme` when `Some`: leaving it out entirely (not
 /// even `null`) keeps Keycloak's own default login theme in place, since a
@@ -444,6 +546,20 @@ fn realm_body(slug: &str, smtp: &SmtpConfig, login_theme: Option<&str>) -> serde
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pick_group_id_matches_exact_name_only() {
+        // `search` is a substring match, so the response can carry more than the
+        // one group we asked for; the exact-name filter must not pick a sibling.
+        let groups = json!([
+            { "id": "id-readers", "name": "quark-readers" },
+            { "id": "id-admins", "name": "quark-admins" },
+        ]);
+        assert_eq!(pick_group_id(&groups, "quark-admins").as_deref(), Some("id-admins"));
+        assert_eq!(pick_group_id(&groups, "quark-readers").as_deref(), Some("id-readers"));
+        assert_eq!(pick_group_id(&groups, "quark-writers"), None);
+        assert_eq!(pick_group_id(&json!([]), "quark-admins"), None);
+    }
 
     #[test]
     fn realm_body_omits_login_theme_when_none() {
