@@ -378,18 +378,33 @@ pub(crate) async fn oidc_logout(State(st): State<Arc<AppState>>, headers: Header
     // global one (a cross-realm `id_token_hint` is rejected with 400). Global
     // sessions (DEFAULT tenant) use the env-configured IdP. `None` (local-only
     // logout) whenever a piece is missing.
+    // Where to send the browser after the IdP ends the session: the GLOBAL
+    // config's post-logout URL (the panel), falling back to its post-login URL
+    // then "/". The panel is the same for every realm, so a per-tenant logout
+    // returns here too (the tenant client allows it via `post.logout.redirect
+    // .uris`), instead of the tenant config's own (usually `/`) value.
+    let redirect = st
+        .oidc
+        .as_ref()
+        .map(|rt| {
+            rt.config
+                .post_logout_url
+                .clone()
+                .unwrap_or_else(|| rt.config.post_login_url.clone())
+        })
+        .unwrap_or_else(|| "/".to_string());
     let logout_url = match id_token.as_deref() {
         None => None,
         Some(tok) if sess_tenant != crate::tenant::DEFAULT_TENANT => {
             match st.store.get_oidc_config_bare(sess_tenant).await {
                 Ok(Some(cfg)) => match st.oidc_tenants.get_or_build(sess_tenant, &cfg).await {
-                    Ok(rt) => rt.logout_url(tok),
+                    Ok(rt) => rt.logout_url(tok, &redirect),
                     Err(_) => None,
                 },
                 _ => None,
             }
         }
-        Some(tok) => st.oidc.as_ref().and_then(|rt| rt.logout_url(tok)),
+        Some(tok) => st.oidc.as_ref().and_then(|rt| rt.logout_url(tok, &redirect)),
     };
     let clear = format!("{SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
     (
