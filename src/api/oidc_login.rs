@@ -395,16 +395,32 @@ pub(crate) async fn oidc_logout(State(st): State<Arc<AppState>>, headers: Header
         .unwrap_or_else(|| "/".to_string());
     let logout_url = match id_token.as_deref() {
         None => None,
-        Some(tok) if sess_tenant != crate::tenant::DEFAULT_TENANT => {
-            match st.store.get_oidc_config_bare(sess_tenant).await {
-                Ok(Some(cfg)) => match st.oidc_tenants.get_or_build(sess_tenant, &cfg).await {
-                    Ok(rt) => rt.logout_url(tok, &redirect),
-                    Err(_) => None,
-                },
-                _ => None,
+        Some(tok) => {
+            // Route the logout to the realm that ISSUED this token (its `iss`),
+            // not the session's tenant: a global sign-in can leave the session
+            // pointed at a tenant, so `tenant_id` may name a different realm
+            // than the one that minted the id_token, and a cross-realm
+            // `id_token_hint` is rejected with 400.
+            let iss = crate::oidc::token_issuer(tok);
+            let is_global = st
+                .oidc
+                .as_ref()
+                .is_some_and(|rt| Some(rt.config.issuer.as_str()) == iss.as_deref());
+            if is_global {
+                st.oidc.as_ref().and_then(|rt| rt.logout_url(tok, &redirect))
+            } else if sess_tenant != crate::tenant::DEFAULT_TENANT {
+                // Per-tenant sign-in: the tenant's own realm issued the token.
+                match st.store.get_oidc_config_bare(sess_tenant).await {
+                    Ok(Some(cfg)) => match st.oidc_tenants.get_or_build(sess_tenant, &cfg).await {
+                        Ok(rt) => rt.logout_url(tok, &redirect),
+                        Err(_) => None,
+                    },
+                    _ => None,
+                }
+            } else {
+                None
             }
         }
-        Some(tok) => st.oidc.as_ref().and_then(|rt| rt.logout_url(tok, &redirect)),
     };
     let clear = format!("{SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
     (
