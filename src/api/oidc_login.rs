@@ -250,8 +250,14 @@ pub(crate) async fn oidc_callback(
                 crate::tenant::role_scopes(role).to_vec(),
                 Some((tenant_id, role)),
                 tenant_id,
+                // Fall back to the GLOBAL post-login URL (the panel) before "/":
+                // in a split-domain deploy the panel lives on a different host
+                // than the API, so "/" would land on the API root (a 405). A
+                // per-tenant login should return to the same panel as the
+                // global one when the tenant config doesn't override it.
                 cfg.post_login_url
                     .clone()
+                    .or_else(|| st.oidc.as_ref().map(|rt| rt.config.post_login_url.clone()))
                     .unwrap_or_else(|| "/".to_string()),
             )
         }
