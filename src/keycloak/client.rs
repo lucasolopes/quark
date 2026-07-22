@@ -38,6 +38,7 @@ pub struct HttpKeycloakAdmin {
     admin_client_secret: String,
     smtp: SmtpConfig,
     login_theme: Option<String>,
+    panel_url: Option<String>,
     token: Mutex<Option<CachedToken>>,
 }
 
@@ -50,6 +51,7 @@ impl HttpKeycloakAdmin {
             admin_client_secret: cfg.admin_client_secret,
             smtp: cfg.smtp,
             login_theme: cfg.login_theme,
+            panel_url: cfg.panel_url,
             token: Mutex::new(None),
         }
     }
@@ -245,6 +247,7 @@ impl KeycloakAdmin for HttpKeycloakAdmin {
     async fn ensure_client(&self, slug: &str, redirect_uri: &str) -> Result<(), KcError> {
         // Public + PKCE only: quark never holds a client secret for the
         // tenant-facing login client.
+        let redirect_uris = client_redirect_uris(redirect_uri, self.panel_url.as_deref());
         let body = json!({
             "clientId": "quark",
             "enabled": true,
@@ -252,7 +255,7 @@ impl KeycloakAdmin for HttpKeycloakAdmin {
             "publicClient": true,
             "standardFlowEnabled": true,
             "directAccessGrantsEnabled": false,
-            "redirectUris": [redirect_uri],
+            "redirectUris": redirect_uris,
             "attributes": {
                 "pkce.code.challenge.method": "S256",
                 // Accept the client's registered redirect URIs as valid
@@ -366,12 +369,49 @@ impl KeycloakAdmin for HttpKeycloakAdmin {
     }
 
     async fn send_set_password_email(&self, slug: &str, user_id: &str) -> Result<(), KcError> {
-        let url = format!(
-            "{}/admin/realms/{slug}/users/{user_id}/execute-actions-email",
-            self.base
-        );
+        let url = actions_email_url(&self.base, slug, user_id, self.panel_url.as_deref());
         self.admin_put_idempotent(&url, &json!(["UPDATE_PASSWORD"]))
             .await
+    }
+}
+
+/// Builds the `redirectUris` list for the tenant's `quark` client. Always
+/// includes `redirect_uri` (the admin OIDC callback). When `panel_url` is
+/// `Some(panel)`, also registers `{panel}/*` so the panel is a valid
+/// post-action/redirect target (e.g. the `{panel}/login` page the set-password
+/// action returns to); `None` keeps just the single callback — today's
+/// behavior.
+fn client_redirect_uris(redirect_uri: &str, panel_url: Option<&str>) -> Vec<String> {
+    let mut uris = vec![redirect_uri.to_string()];
+    if let Some(panel) = panel_url {
+        uris.push(format!("{}/*", panel.trim_end_matches('/')));
+    }
+    uris
+}
+
+/// Builds the execute-actions-email URL for `send_set_password_email`. When
+/// `panel_url` is `None` this returns the plain endpoint, so Keycloak applies
+/// its default post-action redirect (the realm's account console) — today's
+/// behavior. When `Some(panel)`, it appends
+/// `?client_id=quark&redirect_uri={panel}/login&lifespan=43200`, so after the
+/// user sets their password Keycloak returns the browser to the panel's login
+/// page rather than the account console. `client_id=quark` is the tenant's
+/// public client that `ensure_client` provisions; `lifespan` is the action
+/// token's validity in seconds (12h). The `redirect_uri` value is URL-encoded
+/// with `form_urlencoded::Serializer`, mirroring `oidc::authorize_url`.
+fn actions_email_url(base: &str, slug: &str, user_id: &str, panel_url: Option<&str>) -> String {
+    let url = format!("{base}/admin/realms/{slug}/users/{user_id}/execute-actions-email");
+    match panel_url {
+        None => url,
+        Some(panel) => {
+            let redirect_uri = format!("{}/login", panel.trim_end_matches('/'));
+            let query = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("client_id", "quark")
+                .append_pair("redirect_uri", &redirect_uri)
+                .append_pair("lifespan", "43200")
+                .finish();
+            format!("{url}?{query}")
+        }
     }
 }
 
@@ -416,5 +456,72 @@ mod tests {
     fn realm_body_includes_login_theme_when_set() {
         let body = realm_body("acme", &SmtpConfig::default(), Some("quark-branded"));
         assert_eq!(body["loginTheme"], "quark-branded");
+    }
+
+    #[test]
+    fn actions_email_url_is_plain_without_panel() {
+        let url = actions_email_url("https://kc.example.com", "acme", "user-1", None);
+        assert_eq!(
+            url,
+            "https://kc.example.com/admin/realms/acme/users/user-1/execute-actions-email"
+        );
+        assert!(!url.contains('?'));
+    }
+
+    #[test]
+    fn actions_email_url_appends_panel_redirect_query() {
+        let url = actions_email_url(
+            "https://kc.example.com",
+            "acme",
+            "user-1",
+            Some("https://app.example.com"),
+        );
+        assert!(url.starts_with(
+            "https://kc.example.com/admin/realms/acme/users/user-1/execute-actions-email?"
+        ));
+        assert!(url.contains("client_id=quark"), "url was {url}");
+        assert!(
+            url.contains("redirect_uri=https%3A%2F%2Fapp.example.com%2Flogin"),
+            "url was {url}"
+        );
+        assert!(url.contains("lifespan=43200"), "url was {url}");
+    }
+
+    #[test]
+    fn actions_email_url_trims_trailing_slash_on_panel() {
+        let url = actions_email_url(
+            "https://kc.example.com",
+            "acme",
+            "user-1",
+            Some("https://app.example.com/"),
+        );
+        assert!(
+            url.contains("redirect_uri=https%3A%2F%2Fapp.example.com%2Flogin"),
+            "url was {url}"
+        );
+    }
+
+    #[test]
+    fn client_redirect_uris_is_single_without_panel() {
+        let uris = client_redirect_uris("https://acme.example/admin/callback", None);
+        assert_eq!(
+            uris,
+            vec!["https://acme.example/admin/callback".to_string()]
+        );
+    }
+
+    #[test]
+    fn client_redirect_uris_includes_panel_wildcard_when_set() {
+        let uris = client_redirect_uris(
+            "https://acme.example/admin/callback",
+            Some("https://app.example.com"),
+        );
+        assert_eq!(
+            uris,
+            vec![
+                "https://acme.example/admin/callback".to_string(),
+                "https://app.example.com/*".to_string(),
+            ]
+        );
     }
 }
