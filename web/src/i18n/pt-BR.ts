@@ -693,6 +693,8 @@ export const ptBR: Messages = {
     loadError: "Não foi possível carregar os convites.",
     forbidden: "Você não tem permissão para ver os membros.",
     createdSuccess: "Convite enviado.",
+    emailSentTitle: "Convite enviado por e-mail",
+    emailSentBody: "Enviamos um e-mail para {email} com um link para definir a senha e entrar neste workspace.",
     createGenericError: "Não foi possível enviar o convite. Tente de novo.",
     revokedSuccess: "Convite revogado.",
     revokeGenericError: "Não foi possível revogar o convite. Tente de novo.",

@@ -73,6 +73,50 @@ describe("Members", () => {
     expect(await screen.findByDisplayValue(/\/invite\/tok_abc123$/)).toBeInTheDocument();
   });
 
+  it("in SSO-provisioning mode confirms an email was sent instead of a copyable link", async () => {
+    // No break-glass token, so `useMe` runs and reports the IdP-provisioning flag.
+    localStorage.removeItem("quark_admin_token");
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes("/admin/me")) {
+        return Promise.resolve(
+          jsonResponse({
+            authenticated: true,
+            oidc_enabled: true,
+            multi_tenant: true,
+            sso_provisioning: true,
+            memberships: [{ tenant_id: 1, name: "W", slug: "w", role: "owner" }],
+            current_tenant: 1,
+          }),
+        );
+      }
+      if (url.includes("/admin/invites") && init?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse(
+            { id: 5, token: "tok_abc123", email: "bob@example.com", role: "member", expires: 1720100000 },
+            201,
+          ),
+        );
+      }
+      return Promise.resolve(jsonResponse([]));
+    });
+
+    render(withProviders(<Members />, { withRouter: false }));
+    await screen.findByText(/no invites yet/i);
+
+    const openButtons = screen.getAllByRole("button", { name: /invite member/i });
+    await userEvent.click(openButtons[0]);
+    await userEvent.type(screen.getByLabelText(/^email$/i), "bob@example.com");
+
+    const submitButtons = screen.getAllByRole("button", { name: /send invite/i });
+    await userEvent.click(submitButtons[submitButtons.length - 1]);
+
+    expect(await screen.findByText(/invite email sent/i)).toBeInTheDocument();
+    expect(screen.getByText(/emailed bob@example\.com/i)).toBeInTheDocument();
+    // The dead `/invite/<token>` link must not be offered under IdP provisioning.
+    expect(screen.queryByDisplayValue(/\/invite\//)).not.toBeInTheDocument();
+  });
+
   it("revoke asks for confirmation and calls the delete endpoint", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
       if (init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));

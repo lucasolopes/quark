@@ -94,6 +94,13 @@ export interface MeResponse {
    * SSO-only deployment where it could never work. Absent = assume enabled
    * (backward compatible with older servers). */
   admin_login_enabled?: boolean;
+  /** True when the server provisions users through an external IdP (Keycloak,
+   * `st.keycloak` set). In this mode invited users are onboarded by an emailed
+   * set-password link, so the Members screen shows an "email sent" confirmation
+   * instead of a copyable `/invite/<token>` link (that link never onboards a
+   * new user under IdP provisioning). Absent/false = the OSS invite-token flow,
+   * where the copyable link is the onboarding path. */
+  sso_provisioning?: boolean;
   display?: string;
   scopes?: string[];
   memberships?: Membership[];
