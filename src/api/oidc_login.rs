@@ -360,21 +360,36 @@ pub(crate) async fn oidc_logout(State(st): State<Arc<AppState>>, headers: Header
     if headers.get(HEADER_CSRF).is_none() {
         return StatusCode::FORBIDDEN.into_response();
     }
-    // Read the session BEFORE deleting it, so we still have its `id_token` to
-    // build the end-session URL.
+    // Read the session BEFORE deleting it, so we still have its `id_token` (the
+    // end-session hint) and `tenant_id` (which realm issued it).
     let mut id_token: Option<String> = None;
+    let mut sess_tenant = crate::tenant::DEFAULT_TENANT;
     if let Some(raw) = cookie_value(&headers, SESSION_COOKIE) {
         let hash = hash_token(raw);
         if let Ok(Some(session)) = st.store.get_session_by_hash(&hash, now()).await {
             id_token = session.id_token;
+            sess_tenant = session.tenant_id;
         }
         let _ = st.store.delete_session(&hash).await;
     }
-    // Build the RP-initiated logout URL from the GLOBAL runtime's discovery +
-    // the session's id_token. `None` whenever any piece is missing.
-    let logout_url = match (st.oidc.as_ref(), id_token.as_deref()) {
-        (Some(rt), Some(tok)) => rt.logout_url(tok),
-        _ => None,
+    // Build the RP-initiated logout URL on the realm the session belongs to. A
+    // per-tenant session (multi-tenancy P2d) was issued by the TENANT's realm,
+    // so its `id_token` must go to that realm's end-session endpoint, not the
+    // global one (a cross-realm `id_token_hint` is rejected with 400). Global
+    // sessions (DEFAULT tenant) use the env-configured IdP. `None` (local-only
+    // logout) whenever a piece is missing.
+    let logout_url = match id_token.as_deref() {
+        None => None,
+        Some(tok) if sess_tenant != crate::tenant::DEFAULT_TENANT => {
+            match st.store.get_oidc_config_bare(sess_tenant).await {
+                Ok(Some(cfg)) => match st.oidc_tenants.get_or_build(sess_tenant, &cfg).await {
+                    Ok(rt) => rt.logout_url(tok),
+                    Err(_) => None,
+                },
+                _ => None,
+            }
+        }
+        Some(tok) => st.oidc.as_ref().and_then(|rt| rt.logout_url(tok)),
     };
     let clear = format!("{SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
     (
