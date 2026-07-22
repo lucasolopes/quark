@@ -768,6 +768,17 @@ pub trait Store: Send + Sync + 'static {
         tenant: TenantId,
         issuer: &str,
     ) -> Result<(), StoreError>;
+    /// Updates ONLY the `member_value` field inside a tenant's OIDC config
+    /// blob, leaving every other field (notably the encrypted-at-rest
+    /// `client_secret`) untouched. Used by the boot backfill to add the
+    /// `quark-members` group mapping to tenants provisioned before the Member
+    /// role existed, so their invited Members stop collapsing to read-only
+    /// Viewer. Tenant-scoped write; a missing config is not an error.
+    async fn update_oidc_config_member_value(
+        &self,
+        tenant: TenantId,
+        member_value: &str,
+    ) -> Result<(), StoreError>;
     /// Looks up a tenant by its (UNIQUE) slug. Runs on the bare pool: this is
     /// how `/admin/login?org=<slug>` resolves which tenant's OIDC config to
     /// use, before any tenant context exists.

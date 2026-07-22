@@ -1292,6 +1292,14 @@ impl Store for LmdbStore {
         Err(StoreError::Unsupported)
     }
 
+    async fn update_oidc_config_member_value(
+        &self,
+        _tenant: TenantId,
+        _member_value: &str,
+    ) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
     async fn update_oidc_config_issuer(
         &self,
         _tenant: TenantId,
