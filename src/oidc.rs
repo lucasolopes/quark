@@ -167,6 +167,18 @@ pub fn token_kid(id_token: &str) -> Option<String> {
     decode_header(id_token).ok().and_then(|h| h.kid)
 }
 
+/// The UNVERIFIED `iss` claim of an id_token. Used only to route an
+/// RP-initiated logout to the realm that actually issued the token: a user can
+/// sign in through the global IdP yet hold a session pointed at a tenant, so
+/// the session's `tenant_id` is not a reliable indicator of the issuing realm.
+/// Never used for authentication (that path always verifies the signature).
+pub fn token_issuer(id_token: &str) -> Option<String> {
+    let payload = id_token.split('.').nth(1)?;
+    let bytes = b64url.decode(payload).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    v.get("iss")?.as_str().map(str::to_string)
+}
+
 /// Builds a verification key for the JWT's `kid` from a JWKS. When the token
 /// carries no `kid` and there is exactly one key, that key is used.
 pub fn select_key(jwks: &Jwks, kid: Option<&str>) -> Result<DecodingKey, String> {
