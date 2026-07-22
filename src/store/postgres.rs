@@ -3002,6 +3002,27 @@ impl Store for PostgresStore {
         Ok(())
     }
 
+    async fn update_oidc_config_member_value(
+        &self,
+        tenant: TenantId,
+        member_value: &str,
+    ) -> Result<(), StoreError> {
+        // Rewrites only the blob's `member_value` key via `jsonb_set`; every
+        // other key (including the encrypted `client_secret`) is preserved, so
+        // this reconcile cannot lose the secret. A tenant with no config
+        // matches zero rows and is a no-op, not an error.
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "UPDATE oidc_configs SET blob = jsonb_set(blob, '{member_value}', to_jsonb($2::text)) WHERE tenant_id = $1",
+            )
+            .bind(tenant.0 as i64)
+            .bind(member_value)
+            .execute(&mut *c)
+            .await
+        });
+        Ok(())
+    }
+
     async fn enqueue_deliveries(&self, rows: &[OutboxRow]) -> Result<(), StoreError> {
         if rows.is_empty() {
             return Ok(());

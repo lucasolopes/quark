@@ -205,6 +205,42 @@ pub async fn backfill_keycloak_provisioning(
                         ),
                     }
                 }
+                // Member-role backfill: tenants provisioned before the
+                // `quark-members` group existed have an empty `member_value`
+                // and no such group in their realm, so an invited Member
+                // collapsed to read-only Viewer. Create the groups (idempotent)
+                // and set `member_value` so `claim_role`/`passes_required_group`
+                // recognise the member group. Scoped to Keycloak-provisioned
+                // tenants (`client_id == "quark"`); an external-IdP tenant keeps
+                // whatever it configured.
+                if cfg.client_id == "quark" && cfg.member_value.is_empty() {
+                    if let Err(e) = keycloak.ensure_groups_and_mapper(&t.slug).await {
+                        eprintln!(
+                            "{}",
+                            serde_json::json!({ "keycloak_backfill_error": e.to_string(), "tenant_id": t.id.0 })
+                        );
+                    } else {
+                        match store
+                            .update_oidc_config_member_value(t.id, "quark-members")
+                            .await
+                        {
+                            Ok(()) => {
+                                reconciled += 1;
+                                eprintln!(
+                                    "{}",
+                                    serde_json::json!({
+                                        "keycloak_member_value_reconciled": "quark-members",
+                                        "tenant_id": t.id.0,
+                                    })
+                                );
+                            }
+                            Err(e) => eprintln!(
+                                "{}",
+                                serde_json::json!({ "keycloak_backfill_error": e.to_string(), "tenant_id": t.id.0 })
+                            ),
+                        }
+                    }
+                }
             }
             Ok(None) => {
                 // Provision the tenant's Owner in the realm too (LUC-56): a
@@ -226,7 +262,7 @@ pub async fn backfill_keycloak_provisioning(
     // original meaning (tenants newly provisioned this pass, logged by
     // `main.rs`); a stale-issuer fix is not a fresh provision.
     if reconciled > 0 {
-        eprintln!("keycloak issuer backfill: {reconciled} reconciled");
+        eprintln!("keycloak config backfill: {reconciled} reconciled");
     }
     Ok(provisioned)
 }

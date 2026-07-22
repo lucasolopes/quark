@@ -673,6 +673,13 @@ mod tests {
         async fn delete_oidc_config(&self, _tenant: TenantId) -> Result<(), StoreError> {
             unimplemented!()
         }
+        async fn update_oidc_config_member_value(
+            &self,
+            _tenant: TenantId,
+            _member_value: &str,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
         async fn update_oidc_config_issuer(
             &self,
             _tenant: TenantId,
