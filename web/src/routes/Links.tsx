@@ -23,6 +23,7 @@ import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { mutationErrorToast } from "@/lib/mutation-error";
 import { useDeleteLink, useFolders, useLinks, useTags } from "@/lib/queries";
+import { useScopes } from "@/lib/scopes";
 import type { Link } from "@/lib/types";
 
 function matches(link: Link, query: string): boolean {
@@ -52,6 +53,11 @@ export function Links() {
   const deleteLink = useDeleteLink();
   const tagsQuery = useTags();
   const foldersQuery = useFolders();
+  // Viewers have no `links_write`: hide every write affordance (create/edit/
+  // delete) so the page offers only what they can actually do. The backend
+  // enforces this regardless; this just stops the UI from promising a 403.
+  const { has } = useScopes();
+  const canWrite = has("links_write");
 
   const dq = useDebounce(search, 300);
   const serverSearchEnabled = dq !== "" && !clientMode;
@@ -98,10 +104,12 @@ export function Links() {
           <h1 className="font-heading text-2xl font-semibold">{t("links.heading")}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{t("links.subtitle")}</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4" />
-          {t("links.createButton")}
-        </Button>
+        {canWrite && (
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" />
+            {t("links.createButton")}
+          </Button>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -196,12 +204,14 @@ export function Links() {
             <Link2 className="size-8 text-muted-foreground" aria-hidden="true" />
             <div>
               <p className="font-medium">{t("links.emptyTitle")}</p>
-              <p className="text-sm text-muted-foreground">{t("links.emptySubtitle")}</p>
+              {canWrite && <p className="text-sm text-muted-foreground">{t("links.emptySubtitle")}</p>}
             </div>
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" />
-              {t("links.createButton")}
-            </Button>
+            {canWrite && (
+              <Button onClick={() => setCreateOpen(true)}>
+                <Plus className="size-4" />
+                {t("links.createButton")}
+              </Button>
+            )}
           </CardContent>
         </Card>
       )}
@@ -242,6 +252,7 @@ export function Links() {
         <Card className="py-0">
           <LinkTable
             links={filtered}
+            canWrite={canWrite}
             onEdit={(link) => setEditingLink(link)}
             onDelete={(link) => setDeletingLink(link)}
           />

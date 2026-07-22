@@ -26,6 +26,35 @@ describe("Links", () => {
     expect(screen.getByText(/example\.com\/a/)).toBeInTheDocument();
   });
 
+  it("hides write actions for a Viewer (no links_write scope)", async () => {
+    // No break-glass token, so `useMe` runs and reports the Viewer's scopes.
+    localStorage.removeItem("quark_admin_token");
+    mockFetchByUrl((url) => {
+      if (url.includes("/admin/me")) {
+        return jsonResponse({
+          authenticated: true,
+          oidc_enabled: true,
+          multi_tenant: true,
+          scopes: ["links_read", "analytics"],
+          memberships: [{ tenant_id: 1, name: "W", slug: "w", role: "viewer" }],
+          current_tenant: 1,
+        });
+      }
+      if (url.includes("/admin/tags")) return jsonResponse({ tags: [] });
+      if (url.includes("/admin/folders")) return jsonResponse({ folders: [] });
+      return jsonResponse({
+        links: [{ id: 1, code: "6lB362J", url: "https://example.com/a", expiry: null, created: 1700000000, rules: [], variants: [] }],
+        next_after: null,
+      });
+    });
+    render(withProviders(<Links />));
+    // The list still renders (Viewer can read)…
+    expect(await screen.findByText("6lB362J")).toBeInTheDocument();
+    // …but no create affordance, and no per-row bulk-select checkbox.
+    expect(screen.queryByRole("button", { name: /create link/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /select/i })).not.toBeInTheDocument();
+  });
+
   it("searches on the server when the backend supports it (?q= in the querystring)", async () => {
     const base = {
       links: [
