@@ -203,7 +203,7 @@ pub fn spawn_webhook_worker(
             tokio::select! {
                 maybe = rx.recv() => {
                     match maybe {
-                        Some(ev) => deliver_to_matching(&client, &subs, &ev).await,
+                        Some(ev) => deliver_to_matching(&client, &store, &subs, &ev).await,
                         None => break,
                     }
                 }
@@ -286,10 +286,11 @@ async fn refresh_snapshot(
 /// equals `ev.tenant_id` is consulted.
 async fn deliver_to_matching(
     client: &reqwest::Client,
+    store: &Arc<dyn Store>,
     subs: &[(crate::tenant::TenantId, Vec<WebhookSubscription>)],
     ev: &WebhookEvent,
 ) {
-    deliver_to_matching_guarded(client, subs, ev, is_internal_host).await
+    deliver_to_matching_guarded(client, store, subs, ev, is_internal_host).await
 }
 
 /// Same as `deliver_to_matching`, but with the SSRF host-block predicate
@@ -302,6 +303,7 @@ async fn deliver_to_matching(
 /// predicate, by `worker_refuses_internal_destination`).
 async fn deliver_to_matching_guarded(
     client: &reqwest::Client,
+    store: &Arc<dyn Store>,
     subs: &[(crate::tenant::TenantId, Vec<WebhookSubscription>)],
     ev: &WebhookEvent,
     is_blocked: impl Fn(&str) -> bool,
@@ -321,7 +323,7 @@ async fn deliver_to_matching_guarded(
             eprintln!("{}", serde_json::json!({"webhook_ssrf_blocked": &sub.url}));
             continue;
         }
-        deliver_one(client, sub, ev).await;
+        deliver_one(client, store, sub, ev).await;
     }
 }
 
@@ -399,11 +401,17 @@ pub(crate) fn build_outgoing_request(
 /// Delivers `ev` to `sub`, retrying up to `DELIVERY_ATTEMPTS` times with
 /// exponential backoff + jitter on non-2xx responses or transport errors.
 /// Fail-open: exhausting the budget only logs, it never propagates an error.
-async fn deliver_one(client: &reqwest::Client, sub: &WebhookSubscription, ev: &WebhookEvent) {
+async fn deliver_one(
+    client: &reqwest::Client,
+    store: &Arc<dyn Store>,
+    sub: &WebhookSubscription,
+    ev: &WebhookEvent,
+) {
     let Some(req) = build_outgoing_request(sub, ev, None) else {
         return;
     };
 
+    let mut outcome = crate::health::HealthStatus::Error("no attempt".into());
     for attempt in 0..DELIVERY_ATTEMPTS {
         let mut builder = client
             .post(&sub.url)
@@ -414,8 +422,15 @@ async fn deliver_one(client: &reqwest::Client, sub: &WebhookSubscription, ev: &W
         let res = builder.body(req.body.clone()).send().await;
 
         match res {
-            Ok(resp) if resp.status().is_success() => return,
+            Ok(resp) if resp.status().is_success() => {
+                outcome = crate::health::HealthStatus::Ok;
+                break;
+            }
             Ok(resp) => {
+                outcome = crate::health::HealthStatus::Error(format!(
+                    "status {}",
+                    resp.status().as_u16()
+                ));
                 eprintln!(
                     "{}",
                     serde_json::json!({
@@ -426,6 +441,7 @@ async fn deliver_one(client: &reqwest::Client, sub: &WebhookSubscription, ev: &W
                 );
             }
             Err(e) => {
+                outcome = crate::health::HealthStatus::Error(e.to_string());
                 eprintln!(
                     "{}",
                     serde_json::json!({
@@ -442,17 +458,34 @@ async fn deliver_one(client: &reqwest::Client, sub: &WebhookSubscription, ev: &W
         }
     }
 
-    // `webhook-id` is only present for `Generic` (Standard Webhooks signing);
-    // channel kinds have no per-attempt id to report.
-    let msg_id = req
-        .extra_headers
-        .iter()
-        .find(|(name, _)| *name == "webhook-id")
-        .map(|(_, value)| value.as_str());
-    eprintln!(
-        "{}",
-        serde_json::json!({"webhook_delivery_exhausted": &sub.url, "msg_id": msg_id})
-    );
+    if !matches!(outcome, crate::health::HealthStatus::Ok) {
+        // `webhook-id` is only present for `Generic` (Standard Webhooks
+        // signing); channel kinds have no per-attempt id to report.
+        let msg_id = req
+            .extra_headers
+            .iter()
+            .find(|(name, _)| *name == "webhook-id")
+            .map(|(_, value)| value.as_str());
+        eprintln!(
+            "{}",
+            serde_json::json!({"webhook_delivery_exhausted": &sub.url, "msg_id": msg_id})
+        );
+    }
+
+    // Health passive recording, off the redirect hot path: `link.clicked`
+    // must never touch the store from here (that event is emitted on the
+    // synchronous redirect path). Best-effort: log and swallow any error.
+    if ev.event_type != EventType::LinkClicked {
+        if let Err(e) = store
+            .record_webhook_health(ev.tenant_id, sub.id, crate::now(), outcome)
+            .await
+        {
+            eprintln!(
+                "{}",
+                serde_json::json!({"webhook_health_record_error": e.to_string()})
+            );
+        }
+    }
 }
 
 /// How often the relay polls the outbox for due deliveries.
@@ -661,7 +694,30 @@ async fn deliver_claimed(
                 serde_json::json!({"webhook_relay_mark_delivered_error": e.to_string()})
             );
         }
+        // Health passive recording, off the redirect hot path (see
+        // `deliver_one`'s comment): `link.clicked` never records here either.
+        if !matches!(event_type, EventType::LinkClicked) {
+            let _ = store
+                .record_webhook_health(
+                    delivery.tenant_id,
+                    sub.id,
+                    now,
+                    crate::health::HealthStatus::Ok,
+                )
+                .await;
+        }
         return;
+    }
+
+    if !matches!(event_type, EventType::LinkClicked) {
+        let _ = store
+            .record_webhook_health(
+                delivery.tenant_id,
+                sub.id,
+                now,
+                crate::health::HealthStatus::Error("delivery failed".into()),
+            )
+            .await;
     }
 
     let attempts = delivery.attempts.saturating_add(1);
@@ -1608,6 +1664,99 @@ mod tests {
         }
     }
 
+    /// Builds a `WebhookSubscription` for the health-recording tests (Step
+    /// 1 of the brief): same shape as `sub`, but with an explicit `kind` and
+    /// a fixed valid secret (only `Generic` subscriptions sign, but the
+    /// secret must still decode).
+    fn test_sub(
+        id: u64,
+        url: &str,
+        kind: SubscriptionKind,
+        events: Vec<EventType>,
+    ) -> WebhookSubscription {
+        let mut s = sub(
+            id,
+            url,
+            events,
+            true,
+            "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+        );
+        s.kind = kind;
+        s
+    }
+
+    /// Builds a `WebhookEvent` with a valid JSON body for the health tests.
+    fn test_event(event_type: EventType, tenant: crate::tenant::TenantId) -> WebhookEvent {
+        WebhookEvent {
+            event_type,
+            body: r#"{"id":"evt_test"}"#.to_string(),
+            tenant_id: tenant,
+        }
+    }
+
+    /// Clones the captured `record_webhook_health` calls off a concrete
+    /// `StubStore` (kept alongside the `Arc<dyn Store>` used to drive
+    /// delivery, since `Arc<dyn Store>` has no downcast).
+    fn store_health_calls(
+        store: &Arc<StubStore>,
+    ) -> Vec<(
+        crate::tenant::TenantId,
+        u64,
+        u64,
+        crate::health::HealthStatus,
+    )> {
+        store.health_calls.lock().unwrap().clone()
+    }
+
+    /// LUC-87 fase 3: a non-`link.clicked` delivery to a 200 server must
+    /// record exactly one `HealthStatus::Ok` health call for the delivered
+    /// subscription.
+    #[tokio::test]
+    async fn records_health_ok_for_non_clicked_event() {
+        let (url, _state) = spawn_test_server(vec![200]).await;
+        let webhook_sub = test_sub(
+            1,
+            &url,
+            SubscriptionKind::Generic,
+            vec![EventType::LinkCreated],
+        );
+        let stub = Arc::new(StubStore::new(vec![webhook_sub.clone()]));
+        let store: Arc<dyn Store> = stub.clone();
+        let subs = vec![(crate::tenant::DEFAULT_TENANT, vec![webhook_sub])];
+        let ev = test_event(EventType::LinkCreated, crate::tenant::DEFAULT_TENANT);
+
+        deliver_to_matching_guarded(&reqwest::Client::new(), &store, &subs, &ev, |_| false).await;
+
+        let calls = store_health_calls(&stub);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, 1); // id
+        assert_eq!(calls[0].3, crate::health::HealthStatus::Ok);
+    }
+
+    /// LUC-87 fase 3: `link.clicked` is the redirect hot path and must never
+    /// record health from the in-memory delivery worker.
+    #[tokio::test]
+    async fn does_not_record_health_for_link_clicked() {
+        let (url, _state) = spawn_test_server(vec![200]).await;
+        let webhook_sub = test_sub(
+            2,
+            &url,
+            SubscriptionKind::Generic,
+            vec![EventType::LinkClicked],
+        );
+        let stub = Arc::new(StubStore::new(vec![webhook_sub.clone()]));
+        let store: Arc<dyn Store> = stub.clone();
+        let subs = vec![(crate::tenant::DEFAULT_TENANT, vec![webhook_sub])];
+        let ev = test_event(EventType::LinkClicked, crate::tenant::DEFAULT_TENANT);
+
+        deliver_to_matching_guarded(&reqwest::Client::new(), &store, &subs, &ev, |_| false).await;
+
+        assert!(
+            store_health_calls(&stub).is_empty(),
+            "link.clicked nunca deve gravar health (hot path)"
+        );
+    }
+
     /// Exercises real HTTP delivery (matching, signing, headers) against a
     /// local test server via the guarded seam (see
     /// `deliver_to_matching_guarded`'s doc comment for why: every address a
@@ -1634,8 +1783,9 @@ mod tests {
             body: body.clone(),
             tenant_id: crate::tenant::DEFAULT_TENANT,
         };
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![]));
 
-        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+        deliver_to_matching_guarded(&client, &store, &subs, &ev, |_| false).await;
 
         let captured = state.captured.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1679,8 +1829,9 @@ mod tests {
             body,
             tenant_id: crate::tenant::DEFAULT_TENANT,
         };
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![]));
 
-        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+        deliver_to_matching_guarded(&client, &store, &subs, &ev, |_| false).await;
 
         let captured = state.captured.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1717,8 +1868,9 @@ mod tests {
             body,
             tenant_id: crate::tenant::DEFAULT_TENANT,
         };
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![]));
 
-        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+        deliver_to_matching_guarded(&client, &store, &subs, &ev, |_| false).await;
 
         let captured = state.captured.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1754,8 +1906,9 @@ mod tests {
             body,
             tenant_id: crate::tenant::DEFAULT_TENANT,
         };
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![]));
 
-        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+        deliver_to_matching_guarded(&client, &store, &subs, &ev, |_| false).await;
 
         let captured = state.captured.lock().unwrap();
         assert_eq!(captured.len(), 1);
@@ -1806,8 +1959,9 @@ mod tests {
             body: "{}".to_string(),
             tenant_id: crate::tenant::DEFAULT_TENANT,
         };
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![]));
 
-        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+        deliver_to_matching_guarded(&client, &store, &subs, &ev, |_| false).await;
 
         assert_eq!(state.captured.lock().unwrap().len(), 0);
     }
@@ -1870,8 +2024,9 @@ mod tests {
             body: "{}".to_string(),
             tenant_id: crate::tenant::DEFAULT_TENANT,
         };
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![]));
 
-        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+        deliver_to_matching_guarded(&client, &store, &subs, &ev, |_| false).await;
 
         assert_eq!(state.captured.lock().unwrap().len(), 2);
     }
@@ -2021,8 +2176,9 @@ mod tests {
             body: "{}".to_string(),
             tenant_id: tenant_b,
         };
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![]));
 
-        deliver_to_matching_guarded(&client, &subs, &ev, |_| false).await;
+        deliver_to_matching_guarded(&client, &store, &subs, &ev, |_| false).await;
 
         assert_eq!(
             state_b.captured.lock().unwrap().len(),
