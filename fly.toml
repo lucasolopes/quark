@@ -21,6 +21,10 @@ primary_region = "gru"
   # <slug>.quarkus.com.br for its short links, served via the *.quarkus.com.br
   # wildcard cert.
   QUARK_TENANT_DOMAIN_SUFFIX = "quarkus.com.br"
+  # Scheduled Google Sheets sync interval, seconds (LUC-87 fase 1b). Every
+  # connected tenant's catalog is mirrored on this cadence (lease-coordinated,
+  # floored to 60s). Needs QUARK_PUBLIC_HOST (set above) for correct short URLs.
+  QUARK_SHEETS_SYNC_SECS = "900"
 
 [http_service]
   internal_port = 8080
