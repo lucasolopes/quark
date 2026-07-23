@@ -1,9 +1,40 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
+  "plugins": ["react", "typescript", "oxc", "import", "unicorn"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
   "rules": {
     "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
+    "typescript/consistent-type-imports": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/array-type": ["error", { "default": "array-simple" }],
+    "typescript/no-non-null-assertion": "warn",
+    "import/no-default-export": "error",
+    "eqeqeq": ["error", "smart"],
+    "no-var": "error",
+    "prefer-const": "error",
+    "no-throw-literal": "error",
+    "unicorn/prefer-node-protocol": "error",
+
+    // --- Deltas vs. the brief, added while fixing violations (see commit message) ---
+    // react-in-jsx-scope assumes the classic JSX transform; this project uses the
+    // automatic runtime (tsconfig `jsx: "react-jsx"`, no `React` import anywhere).
+    // oxlint 1.73 has no jsxRuntime/version knob that makes the rule aware of that
+    // (checked node_modules/oxlint/configuration_schema.json), and "fixing" it by
+    // adding `import React from 'react'` would leave `React` unused in every file,
+    // which fails `tsc -b` (tsconfig has `noUnusedLocals: true`). Off, not fixable.
+    "react/react-in-jsx-scope": "off",
+    // TanStack Table's `ColumnDef.header`/`.cell` are render-prop-shaped (a function
+    // returning JSX, handed to the table via a plain object property) but aren't
+    // named `render*`, the rule's default allowance. Widened the pattern instead of
+    // restructuring LinkTable's columns around table `meta` plumbing.
+    "react/no-unstable-nested-components": ["warn", { "allowAsProps": true, "propNamePattern": "{header,cell,render*}" }],
+    // Legitimate side-effect-only imports (global stylesheet, test-matcher setup)
+    // have nothing to assign to a variable.
+    "import/no-unassigned-import": ["warn", { "allow": ["**/*.css", "@testing-library/jest-dom/vitest"] }]
   },
   "overrides": [
     {
@@ -16,6 +47,12 @@
       "files": ["src/app/router.tsx"],
       "rules": {
         "react/only-export-components": "off"
+      }
+    },
+    {
+      "files": ["vite.config.ts", "playwright.config.ts", "e2e/**"],
+      "rules": {
+        "import/no-default-export": "off"
       }
     }
   ]

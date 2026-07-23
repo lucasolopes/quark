@@ -8,7 +8,7 @@
  */
 export type DurationUnitKey = "minutes" | "hours" | "days" | "weeks" | "months";
 
-export const DURATION_UNITS: { key: DurationUnitKey; seconds: number }[] = [
+export const DURATION_UNITS: Array<{ key: DurationUnitKey; seconds: number }> = [
   { key: "minutes", seconds: 60 },
   { key: "hours", seconds: 3600 },
   { key: "days", seconds: 86400 },

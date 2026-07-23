@@ -172,7 +172,7 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
     }
   }
 
-  const columns: ColumnDef<Link>[] = [
+  const columns: Array<ColumnDef<Link>> = [
     // Bulk selection is a write affordance (bulk edit/delete), so a Viewer
     // never gets the select column.
     ...(canWrite

@@ -44,19 +44,19 @@ export function useVariantRows(initialRows: VariantRow[]): UseVariantRows {
   const [rows, setRows] = useState<VariantRow[]>(initialRows);
 
   function addRow() {
-    setRows((rows) => (rows.length >= MAX_VARIANTS ? rows : rebalance([...rows, { url: "", weight: "0" }])));
+    setRows((prev) => (prev.length >= MAX_VARIANTS ? prev : rebalance([...prev, { url: "", weight: "0" }])));
   }
 
   function removeRow(index: number) {
-    setRows((rows) => rebalance(rows.filter((_, i) => i !== index)));
+    setRows((prev) => rebalance(prev.filter((_, i) => i !== index)));
   }
 
   function updateRow(index: number, patch: Partial<VariantRow>) {
-    setRows((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+    setRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   }
 
   function distribute() {
-    setRows((rows) => rebalance(rows));
+    setRows((prev) => rebalance(prev));
   }
 
   function reset() {

@@ -23,7 +23,7 @@ export function CollapsibleSection({ title, children, defaultOpen = false }: Col
         type="button"
         className="flex items-center gap-1.5 text-sm font-medium"
         aria-expanded={open}
-        onClick={() => setOpen((open) => !open)}
+        onClick={() => setOpen((prev) => !prev)}
       >
         {open ? (
           <ChevronDown className="size-4 text-muted-foreground" aria-hidden />

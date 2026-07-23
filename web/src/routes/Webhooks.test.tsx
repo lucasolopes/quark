@@ -58,8 +58,10 @@ describe("Webhooks", () => {
       expect.stringContaining("/admin/webhooks"),
       expect.objectContaining({ method: "POST" }),
     );
-    const [, requestInit] = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
-    expect(JSON.parse(requestInit!.body as string)).toMatchObject({ kind: "generic" });
+    const postCall = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    const requestInit = postCall?.[1];
+    if (!requestInit) throw new Error("expected a POST call with an init");
+    expect(JSON.parse(requestInit.body as string)).toMatchObject({ kind: "generic" });
     expect(await screen.findByDisplayValue("whsec_rawsecret123")).toBeInTheDocument();
     expect(screen.getByText(/won't be shown again/i)).toBeInTheDocument();
   });

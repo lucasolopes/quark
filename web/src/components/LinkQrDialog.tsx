@@ -73,7 +73,7 @@ export function LinkQrDialog({ code, url, open, onOpenChange }: LinkQrDialogProp
     const svgBlobUrl = URL.createObjectURL(new Blob([svgString], { type: "image/svg+xml;charset=utf-8" }));
 
     const image = new Image();
-    image.onload = () => {
+    image.addEventListener("load", () => {
       const canvas = document.createElement("canvas");
       canvas.width = EXPORT_PIXEL_SIZE;
       canvas.height = EXPORT_PIXEL_SIZE;
@@ -85,7 +85,7 @@ export function LinkQrDialog({ code, url, open, onOpenChange }: LinkQrDialogProp
         triggerDownload(canvas.toDataURL("image/png"), `quark-${code}.png`);
       }
       URL.revokeObjectURL(svgBlobUrl);
-    };
+    });
     image.src = svgBlobUrl;
   }
 

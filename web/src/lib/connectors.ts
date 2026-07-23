@@ -50,7 +50,7 @@ export const INTEGRATIONS: Integration[] = [
 ];
 
 /** Render order of the category groups, with their eyebrow label keys. */
-export const CATEGORY_ORDER: { category: Category; labelKey: MessageKey }[] = [
+export const CATEGORY_ORDER: Array<{ category: Category; labelKey: MessageKey }> = [
   { category: "automation", labelKey: "extensions.categoryAutomation" },
   { category: "notifications", labelKey: "extensions.categoryNotifications" },
   { category: "analytics", labelKey: "extensions.categoryAnalytics" },

@@ -37,6 +37,16 @@ function patchBody(fetchMock: ReturnType<typeof vi.spyOn>): Record<string, unkno
   return JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
 }
 
+function mockAlertFetch(currentRule: { threshold: number; window_secs: number } | null = null) {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init?: RequestInit) => {
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (method === "GET") return new Response(JSON.stringify(currentRule), { status: 200 });
+    if (method === "DELETE") return new Response(null, { status: 204 });
+    // PUT: echo the body back like the real endpoint does.
+    return new Response(String(init?.body ?? "null"), { status: 200 });
+  });
+}
+
 describe("EditLinkDialog — tags", () => {
   beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
 
@@ -58,7 +68,7 @@ describe("EditLinkDialog — tags", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [, init] = fetchMock.mock.calls[0];
-    const body = JSON.parse(String(init!.body)) as { tags?: string[] };
+    const body = JSON.parse(String(init?.body)) as { tags?: string[] };
     expect(body.tags).toEqual(["promo", "winter"]);
   });
 });
@@ -283,16 +293,6 @@ describe("EditLinkDialog — password", () => {
 describe("EditLinkDialog — click-threshold alert (LUC-66)", () => {
   beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
 
-  function mockAlertFetch(currentRule: { threshold: number; window_secs: number } | null = null) {
-    return vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init?: RequestInit) => {
-      const method = (init?.method ?? "GET").toUpperCase();
-      if (method === "GET") return new Response(JSON.stringify(currentRule), { status: 200 });
-      if (method === "DELETE") return new Response(null, { status: 204 });
-      // PUT: echo the body back like the real endpoint does.
-      return new Response(String(init?.body ?? "null"), { status: 200 });
-    });
-  }
-
   it("does not fetch the alert rule until the section is expanded", () => {
     const fetchMock = mockAlertFetch();
     const l = makeLink();
@@ -327,7 +327,8 @@ describe("EditLinkDialog — click-threshold alert (LUC-66)", () => {
       const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT");
       expect(putCall).toBeDefined();
     });
-    const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT")!;
+    const putCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT");
+    if (!putCall) throw new Error("expected a PUT call");
     const [url, init] = putCall;
     expect(String(url)).toContain(`/admin/links/${l.code}/alert`);
     const body = JSON.parse(String((init as RequestInit).body));
@@ -348,7 +349,8 @@ describe("EditLinkDialog — click-threshold alert (LUC-66)", () => {
       const delCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "DELETE");
       expect(delCall).toBeDefined();
     });
-    const delCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "DELETE")!;
+    const delCall = fetchMock.mock.calls.find(([, init]) => (init as RequestInit)?.method === "DELETE");
+    if (!delCall) throw new Error("expected a DELETE call");
     expect(String(delCall[0])).toContain(`/admin/links/${l.code}/alert`);
   });
 

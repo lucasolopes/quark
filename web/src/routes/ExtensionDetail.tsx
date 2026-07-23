@@ -229,6 +229,16 @@ function SheetsPanel() {
   );
 }
 
+/** A stable, non-secret label for a channel webhook: its host (the token in the
+ * path is elided so it is never shown in full). */
+function webhookLabel(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).host + "/…";
+  } catch {
+    return "…";
+  }
+}
+
 /**
  * Webhook connect form for a notifications/automation integration. Renders the
  * destination URL + event selection inline on the page and creates the
@@ -265,16 +275,6 @@ function WebhookPanel({ integration }: { integration: Integration }) {
       toast.success(t("extensions.channelDisconnectedToast"));
     } catch (err) {
       mutationErrorToast(err, () => t("extensions.channelDisconnectError"));
-    }
-  }
-
-  /** A stable, non-secret label for a channel webhook: its host (the token in the
-   * path is elided so it is never shown in full). */
-  function webhookLabel(rawUrl: string): string {
-    try {
-      return new URL(rawUrl).host + "/…";
-    } catch {
-      return "…";
     }
   }
 

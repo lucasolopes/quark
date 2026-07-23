@@ -28,5 +28,3 @@ export function App() {
     </I18nProvider>
   );
 }
-
-export default App;

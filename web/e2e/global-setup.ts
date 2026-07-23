@@ -62,7 +62,7 @@ export default async function globalSetup(): Promise<void> {
   ]
     .map((p) => resolve(p))
     .filter(existsSync)
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+    .toSorted((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
   if (!bin) {
     throw new Error(
       `quark binary not found. Build it first from the repo root:\n  cargo build`,

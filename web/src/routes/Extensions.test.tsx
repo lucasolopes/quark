@@ -32,8 +32,8 @@ function renderCatalog() {
 function mockStatusFetch(opts: {
   sheetsStatus: number;
   sheetsBody?: SheetsStatus;
-  webhooks?: { kind: string }[];
-  pixels?: { provider: string }[];
+  webhooks?: Array<{ kind: string }>;
+  pixels?: Array<{ provider: string }>;
 } = { sheetsStatus: 404 }) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = String(typeof input === "string" ? input : (input as Request).url ?? input);

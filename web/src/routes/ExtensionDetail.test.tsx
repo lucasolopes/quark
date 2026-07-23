@@ -27,7 +27,7 @@ function renderDetail(id: string) {
 }
 
 /** Base status mock: Sheets off (404), no webhooks, no pixels. Extra handlers can be layered by the caller's own spy. */
-function mockBase(opts: { sheetsStatus?: number; sheetsBody?: SheetsStatus; slackConnect?: boolean; webhooks?: { id: number; kind: string; url: string; label?: string; connector_id?: string | null; last_delivery_at?: number | null; last_delivery_status?: { state: string; detail?: string } }[]; pixels?: { id: number; provider: string; credentials?: Record<string, unknown>; active?: boolean; created?: number; last_forward_at?: number | null; last_forward_status?: { state: string; detail?: string } }[] } = {}) {
+function mockBase(opts: { sheetsStatus?: number; sheetsBody?: SheetsStatus; slackConnect?: boolean; webhooks?: Array<{ id: number; kind: string; url: string; label?: string; connector_id?: string | null; last_delivery_at?: number | null; last_delivery_status?: { state: string; detail?: string } }>; pixels?: Array<{ id: number; provider: string; credentials?: Record<string, unknown>; active?: boolean; created?: number; last_forward_at?: number | null; last_forward_status?: { state: string; detail?: string } }> } = {}) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(typeof input === "string" ? input : (input as Request).url ?? input);
     const method = (init as RequestInit | undefined)?.method ?? "GET";

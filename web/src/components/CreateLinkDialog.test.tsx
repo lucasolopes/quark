@@ -45,7 +45,7 @@ describe("CreateLinkDialog", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [, init] = fetchMock.mock.calls[0];
-    const body = JSON.parse(String(init!.body)) as { tags?: string[] };
+    const body = JSON.parse(String(init?.body)) as { tags?: string[] };
     expect(body.tags).toEqual(["promo", "summer", "2026"]);
   });
 

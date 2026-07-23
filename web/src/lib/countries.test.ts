@@ -10,7 +10,7 @@ describe("countryOptions", () => {
     const options = countryOptions("en");
     const br = options.find((o) => o.value === "BR");
     expect(br).toBeDefined();
-    expect(br!.label).toContain("(BR)");
+    expect(br?.label).toContain("(BR)");
   });
 
   it("localizes the country name (Intl.DisplayNames)", () => {
@@ -18,13 +18,13 @@ describe("countryOptions", () => {
     const pt = countryOptions("pt-BR").find((o) => o.value === "BR");
     // Names differ by locale when Intl data is present; if not, both fall back
     // to the bare code, so at minimum the code is always present.
-    expect(en!.label).toMatch(/BR/);
-    expect(pt!.label).toMatch(/BR/);
+    expect(en?.label).toMatch(/BR/);
+    expect(pt?.label).toMatch(/BR/);
   });
 
   it("sorts options by their localized label", () => {
     const labels = countryOptions("en").map((o) => o.label);
-    const sorted = [...labels].sort((a, b) => a.localeCompare(b, "en"));
+    const sorted = [...labels].toSorted((a, b) => a.localeCompare(b, "en"));
     expect(labels).toEqual(sorted);
   });
 

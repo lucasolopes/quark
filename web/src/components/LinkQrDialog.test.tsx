@@ -108,13 +108,16 @@ describe("LinkQrDialog", () => {
 
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
-    // Auto-fire the onload callback as soon as `src` is assigned, mimicking
+    // Auto-fire the "load" listener as soon as `src` is assigned, mimicking
     // the browser's image-decode completion (jsdom does not decode images).
     const originalImage = window.Image;
     class FakeImage {
-      onload: (() => void) | null = null;
+      private loadListener: (() => void) | null = null;
+      addEventListener(type: string, listener: () => void) {
+        if (type === "load") this.loadListener = listener;
+      }
       set src(_value: string) {
-        this.onload?.();
+        this.loadListener?.();
       }
     }
     vi.stubGlobal("Image", FakeImage as unknown as typeof Image);

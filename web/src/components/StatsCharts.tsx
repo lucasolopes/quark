@@ -69,7 +69,7 @@ function ChartCard({ title, empty, emptyLabel, children }: ChartCardProps) {
 function PerDayChart({ perDay }: { perDay: Record<string, number> }) {
   const t = useT();
   const data = Object.entries(perDay)
-    .sort(([a], [b]) => a.localeCompare(b))
+    .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([day, count]) => ({ day, count, label: formatDay(day) }));
 
   return (
@@ -110,7 +110,7 @@ function toBreakdownData(
   relabel?: (label: string) => string,
 ): BreakdownDatum[] {
   const sorted = Object.entries(map)
-    .sort(([, a], [, b]) => b - a)
+    .toSorted(([, a], [, b]) => b - a)
     .map(([label, count]) => ({ label: label ? (relabel ? relabel(label) : label) : unknownLabel, count }));
   return topN === undefined ? sorted : sorted.slice(0, topN);
 }
@@ -159,7 +159,7 @@ interface DonutChartProps {
 function PerVariantChart({ perVariant }: { perVariant: Record<string, number> }) {
   const t = useT();
   const data = Object.entries(perVariant)
-    .sort(([a], [b]) => Number(a) - Number(b))
+    .toSorted(([a], [b]) => Number(a) - Number(b))
     .map(([index, count]) => ({ index, count, label: t("charts.variantLabel", { n: index }) }));
 
   return (

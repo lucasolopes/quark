@@ -19,7 +19,7 @@ interface RecentEventsTableProps {
  */
 export function RecentEventsTable({ events }: RecentEventsTableProps) {
   const t = useT();
-  const sorted = [...events].sort((a, b) => b.ts - a.ts);
+  const sorted = [...events].toSorted((a, b) => b.ts - a.ts);
 
   if (sorted.length === 0) {
     return <p className="py-8 text-center text-sm text-muted-foreground">{t("events.empty")}</p>;
