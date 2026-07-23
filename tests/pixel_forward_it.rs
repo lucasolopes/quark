@@ -422,3 +422,99 @@ async fn forward_error_display_never_contains_provider_url_or_credentials() {
         "error message still embeds a query string: {message}"
     );
 }
+
+/// A successful forward (mock 200) records passive pixel health as `Ok`,
+/// with a `last_forward_at` timestamp (LUC-87 fase 3).
+#[tokio::test]
+async fn worker_flush_records_pixel_health_ok_on_successful_forward() {
+    let (mock_base, _captured) = mock_server("/mp/collect").await;
+    let dir = tempfile::tempdir().unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    store
+        .put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1))
+        .await
+        .unwrap();
+
+    let bases = PixelBases {
+        ga4: mock_base,
+        meta: "http://127.0.0.1:1".to_string(),
+        anonymize_ip: false,
+    };
+    let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(100);
+    let handle = spawn_worker(
+        rx,
+        sink.clone(),
+        store.clone(),
+        reqwest::Client::new(),
+        KEY,
+        bases,
+        noop_dispatcher(),
+        None,
+    );
+
+    tx.send(ev(42, 1_752_300_000)).await.unwrap();
+    drop(tx);
+    handle.await.unwrap();
+
+    let pixel = store
+        .get_pixel(quark::tenant::DEFAULT_TENANT, 1)
+        .await
+        .unwrap()
+        .expect("pixel still exists");
+    assert_eq!(pixel.last_forward_status, quark::health::HealthStatus::Ok);
+    assert!(pixel.last_forward_at.is_some());
+}
+
+/// A failed forward (mock 500) records passive pixel health as `Error`,
+/// still with a `last_forward_at` timestamp (LUC-87 fase 3).
+#[tokio::test]
+async fn worker_flush_records_pixel_health_error_on_failed_forward() {
+    async fn err_handler() -> axum::http::StatusCode {
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    }
+    let app = Router::new().route("/mp/collect", post(err_handler));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    store
+        .put_pixel(quark::tenant::DEFAULT_TENANT, &ga4_config(1))
+        .await
+        .unwrap();
+
+    let bases = PixelBases {
+        ga4: format!("http://{addr}"),
+        meta: "http://127.0.0.1:1".to_string(),
+        anonymize_ip: false,
+    };
+    let (tx, rx) = tokio::sync::mpsc::channel::<ClickEvent>(100);
+    let handle = spawn_worker(
+        rx,
+        sink.clone(),
+        store.clone(),
+        reqwest::Client::new(),
+        KEY,
+        bases,
+        noop_dispatcher(),
+        None,
+    );
+
+    tx.send(ev(9, 1_752_300_000)).await.unwrap();
+    drop(tx);
+    handle.await.unwrap();
+
+    let pixel = store
+        .get_pixel(quark::tenant::DEFAULT_TENANT, 1)
+        .await
+        .unwrap()
+        .expect("pixel still exists");
+    assert!(matches!(
+        pixel.last_forward_status,
+        quark::health::HealthStatus::Error(_)
+    ));
+    assert!(pixel.last_forward_at.is_some());
+}
