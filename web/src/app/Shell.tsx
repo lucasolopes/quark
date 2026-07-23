@@ -1,4 +1,4 @@
-import { BarChart3, Blocks, Fingerprint, KeyRound, Link2, LogOut, Moon, Radio, ShieldCheck, Smartphone, Sun, Upload, Users, Webhook } from "lucide-react";
+import { BarChart3, Blocks, Fingerprint, Globe, KeyRound, Link2, LogOut, Moon, Radio, ShieldCheck, Smartphone, Sun, Upload, Users, Webhook } from "lucide-react";
 import { useTheme } from "next-themes";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { QuarkMark } from "@/components/brand/QuarkMark";
@@ -61,6 +61,7 @@ export function Shell() {
       label: t("shell.navGroupDev"),
       items: [
         { to: "/tokens", label: t("shell.navTokens"), icon: KeyRound, show: has("full") },
+        { to: "/domains", label: t("shell.navDomains"), icon: Globe, show: has("full") },
         { to: "/app-links", label: t("shell.navAppLinks"), icon: Smartphone, show: has("full") },
         ...(canManageMembers ? [{ to: "/members", label: t("shell.navMembers"), icon: Users, show: true }] : []),
         ...(canManageSsoDomains ? [{ to: "/sso-provider", label: t("shell.navSsoProvider"), icon: Fingerprint, show: true }] : []),

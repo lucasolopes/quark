@@ -249,6 +249,20 @@ export interface SsoDomainView {
   txt_value: string;
 }
 
+/** A custom link domain (or the tenant's auto subdomain) with its DNS
+ * verification instructions. Verified domains serve the tenant's short links. */
+export interface LinkDomainView {
+  id: number;
+  host: string;
+  status: DomainStatus;
+  created: number;
+  verified_at: number | null;
+  txt_name: string;
+  txt_value: string;
+  /** CNAME target to point `host` at; null when the deploy has no shared public host. */
+  cname_target: string | null;
+}
+
 /** The tenant's own OIDC provider, redacted: the `client_secret` never leaves
  * the server, so only `client_secret_set` reports whether one is on file. */
 export interface OidcConfigView {

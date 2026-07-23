@@ -12,6 +12,7 @@ const PIXELS_QUERY_KEY = ["pixels"];
 const SHEETS_STATUS_QUERY_KEY = ["sheets", "status"];
 const INVITES_QUERY_KEY = ["invites"];
 const SSO_DOMAINS_QUERY_KEY = ["sso-domains"];
+const DOMAINS_QUERY_KEY = ["domains"];
 const OIDC_CONFIGURED_QUERY_KEY = ["oidc-configured"];
 const OIDC_CONFIG_QUERY_KEY = ["oidc-config"];
 
@@ -486,6 +487,41 @@ export function useDeleteSsoDomain() {
   return useMutation({
     mutationFn: (id: number) => api.deleteSsoDomain(id),
     onSuccess: () => { void client.invalidateQueries({ queryKey: SSO_DOMAINS_QUERY_KEY }); },
+  });
+}
+
+/** List of custom link domains (+ the auto subdomain) for the current workspace. */
+export function useDomains() {
+  return useQuery({
+    queryKey: DOMAINS_QUERY_KEY,
+    queryFn: () => api.listDomains(),
+  });
+}
+
+/** Registers a custom link domain; on success invalidates `useDomains`. */
+export function useCreateDomain() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (host: string) => api.createDomain(host),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: DOMAINS_QUERY_KEY }); },
+  });
+}
+
+/** Checks a link domain's DNS TXT record; on success invalidates `useDomains` (status may have flipped). */
+export function useVerifyDomain() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.verifyDomain(id),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: DOMAINS_QUERY_KEY }); },
+  });
+}
+
+/** Removes a custom link domain; on success invalidates `useDomains`. */
+export function useDeleteDomain() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.deleteDomain(id),
+    onSuccess: () => { void client.invalidateQueries({ queryKey: DOMAINS_QUERY_KEY }); },
   });
 }
 
