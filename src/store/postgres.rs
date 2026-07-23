@@ -724,10 +724,6 @@ impl PostgresStore {
                 "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS last_delivery_status JSONB",
                 "CREATE TABLE IF NOT EXISTS api_tokens (id BIGINT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, scopes JSONB NOT NULL, rate_limit_per_min BIGINT, created BIGINT NOT NULL)",
                 "CREATE INDEX IF NOT EXISTS api_tokens_token_hash_idx ON api_tokens (token_hash)",
-                // Primary link domain per tenant (LUC-86): the domain the copy
-                // button and new links default to. NULL = fall back to the auto
-                // subdomain, then the shared host.
-                "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS primary_domain_id BIGINT",
                 // Idempotent migrations for pre-existing `links` tables (max-visits feature).
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS max_visits BIGINT",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS visits BIGINT NOT NULL DEFAULT 0",
@@ -769,6 +765,12 @@ impl PostgresStore {
                 // --- Multi-tenancy (P1a): identity tables + seeded default tenant ---
                 "CREATE TABLE IF NOT EXISTS tenants (id BIGINT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, created BIGINT NOT NULL)",
                 "INSERT INTO tenants (id, name, slug, created) VALUES (0, 'default', 'default', 0) ON CONFLICT (id) DO NOTHING",
+                // Primary link domain per tenant (LUC-86): the domain the copy
+                // button and new links default to. NULL = fall back to the auto
+                // subdomain, then the shared host. Must run AFTER `tenants` is
+                // created above, or a fresh DB fails with "relation tenants does
+                // not exist" on first boot.
+                "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS primary_domain_id BIGINT",
                 "CREATE TABLE IF NOT EXISTS users (id BIGINT PRIMARY KEY, subject TEXT NOT NULL UNIQUE, email TEXT NOT NULL, display TEXT NOT NULL, created BIGINT NOT NULL)",
                 "CREATE SEQUENCE IF NOT EXISTS quark_user_id_seq",
                 // Starts at 1 so it never collides with the seeded default tenant (id 0).
