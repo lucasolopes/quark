@@ -333,4 +333,23 @@ mod tests {
         );
         assert_eq!(idx, None);
     }
+
+    #[test]
+    fn dedup_ignores_label_fallback_when_channel_id_present() {
+        let existing = vec![slack_sub(
+            1,
+            None,
+            Some("#general"),
+            "https://hooks.slack.com/services/T/B/old",
+        )];
+        // When a channel_id is provided, the label fallback must NOT be used
+        // even if the existing row has the same label but no external_id.
+        let idx = slack_dup_index(
+            &existing,
+            Some("C999"),
+            Some("#general"),
+            "https://hooks.slack.com/services/T/B/new",
+        );
+        assert_eq!(idx, None);
+    }
 }
