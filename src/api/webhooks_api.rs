@@ -671,14 +671,24 @@ pub(crate) async fn send_test_event_guarded(
                 Some(health),
             )
         }
-        Err(e) => (
-            Json(serde_json::json!({
-                "delivered": false,
-                "error": e.to_string(),
-            }))
-            .into_response(),
-            Some(crate::health::HealthStatus::Error(e.to_string())),
-        ),
+        Err(e) => {
+            // Same redaction as `deliver_one` (LUC-87 fase 3): the health
+            // detail is persisted and returned by `GET /admin/webhooks`, so
+            // it must never carry the request URL (which, for channel
+            // webhooks, contains the secret token). The JSON response below
+            // is only ever seen by the admin who owns this webhook, so it
+            // keeps the full (non-redacted) error string.
+            let full = e.to_string();
+            let detail = e.without_url().to_string();
+            (
+                Json(serde_json::json!({
+                    "delivered": false,
+                    "error": full,
+                }))
+                .into_response(),
+                Some(crate::health::HealthStatus::Error(detail)),
+            )
+        }
     }
 }
 

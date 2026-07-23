@@ -441,7 +441,12 @@ async fn deliver_one(
                 );
             }
             Err(e) => {
-                outcome = crate::health::HealthStatus::Error(e.to_string());
+                // The health detail is persisted (LMDB/Postgres) and returned by
+                // `GET /admin/webhooks`, so it must never carry the request URL:
+                // for channel webhooks (Slack/Discord/Telegram/...) the secret
+                // token lives in the URL itself, and reqwest's `Display`
+                // includes it by default. Log the full error first (operators
+                // need it), then redact only for the persisted health detail.
                 eprintln!(
                     "{}",
                     serde_json::json!({
@@ -450,6 +455,7 @@ async fn deliver_one(
                         "attempt": attempt + 1,
                     })
                 );
+                outcome = crate::health::HealthStatus::Error(e.without_url().to_string());
             }
         }
 
