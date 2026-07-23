@@ -181,7 +181,7 @@ export interface Webhook {
   connector_id?: string | null;
   /** Unix timestamp of the last delivery attempt; null/absent when never attempted. */
   last_delivery_at?: number | null;
-  last_delivery_status: HealthStatus;
+  last_delivery_status?: HealthStatus;
 }
 export interface ListWebhooksResponse { webhooks: Webhook[]; }
 export interface CreateWebhookRequest { url: string; events: WebhookEvent[]; active?: boolean; kind: SubscriptionKind; connector_id?: string; }
@@ -225,7 +225,7 @@ export interface Pixel {
   created: number;
   /** Unix timestamp of the last forward attempt; null/absent when never attempted. */
   last_forward_at?: number | null;
-  last_forward_status: HealthStatus;
+  last_forward_status?: HealthStatus;
 }
 export interface ListPixelsResponse { pixels: Pixel[]; }
 export interface CreatePixelRequest {
