@@ -29,7 +29,7 @@ import {
 } from "@/lib/connectors";
 import { formatDateTime } from "@/lib/format";
 import { isUnauthorized, mutationErrorToast } from "@/lib/mutation-error";
-import { useCreatePixel, useCreateWebhook, useMe, useSheetsStatus, useSheetsSync, useSheetsDisconnect } from "@/lib/queries";
+import { useCreatePixel, useCreateWebhook, useDeleteWebhook, useMe, useSheetsStatus, useSheetsSync, useSheetsDisconnect, useWebhooks } from "@/lib/queries";
 import { WEBHOOK_EVENTS, type WebhookEvent } from "@/lib/types";
 
 /**
@@ -240,13 +240,41 @@ function WebhookPanel({ integration }: { integration: Integration }) {
   const t = useT();
   const navigate = useNavigate();
   const me = useMe();
+  const webhooks = useWebhooks();
+  const deleteWebhook = useDeleteWebhook();
   const kind = WEBHOOK_KIND_BY_ID[integration.id] ?? "generic";
   const isChannel = kind !== "generic";
+  // Existing subscriptions that belong to THIS integration. Channel kinds
+  // (slack/discord/telegram) map 1:1 to a card, so we can show their connected
+  // state and let the user disconnect. Generic (Zapier/Make/n8n) all share
+  // `kind: "generic"`, so they can't be told apart until the connection model
+  // stores a connector id (fase 3) — we don't claim a connected state for them.
+  const existing = isChannel ? (webhooks.data?.webhooks ?? []).filter((w) => w.kind === kind) : [];
+  const connected = existing.length > 0;
   // Slack "Add to Slack": when the OAuth connector is configured on the server,
   // lead with a one-click install (Slack returns the webhook URL — zero fields).
   // The manual URL form stays below as a fallback for any channel.
   const slackOauth = integration.id === "slack" && me.data?.slack_connect === true;
   const [connectingSlack, setConnectingSlack] = useState(false);
+
+  async function handleDisconnect(id: number) {
+    try {
+      await deleteWebhook.mutateAsync(id);
+      toast.success(t("extensions.channelDisconnectedToast"));
+    } catch (err) {
+      mutationErrorToast(err, () => t("extensions.channelDisconnectError"));
+    }
+  }
+
+  /** A stable, non-secret label for a channel webhook: its host (the token in the
+   * path is elided so it is never shown in full). */
+  function webhookLabel(rawUrl: string): string {
+    try {
+      return new URL(rawUrl).host + "/…";
+    } catch {
+      return "…";
+    }
+  }
 
   async function handleAddToSlack() {
     setConnectingSlack(true);
@@ -315,13 +343,39 @@ function WebhookPanel({ integration }: { integration: Integration }) {
 
   return (
     <div className="flex flex-col gap-3">
+      {connected && (
+        <Card>
+          <CardContent className="flex flex-col gap-3 py-6">
+            <p className="text-sm font-medium">{t("extensions.channelConnectedTitle", { name: integration.name })}</p>
+            <ul className="flex flex-col gap-2">
+              {existing.map((w) => (
+                <li key={w.id} className="flex items-center justify-between gap-3 text-sm">
+                  <span className="font-mono text-muted-foreground">{webhookLabel(w.url)}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={deleteWebhook.isPending}
+                    onClick={() => handleDisconnect(w.id)}
+                  >
+                    {t("extensions.channelDisconnect")}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
       {slackOauth && (
         <Card>
           <CardContent className="flex flex-col items-start gap-3 py-6">
             <p className="text-sm text-muted-foreground">{t("extensions.slackConnectPrompt")}</p>
-            <Button disabled={connectingSlack} onClick={handleAddToSlack}>
+            <Button
+              variant={connected ? "outline" : "default"}
+              disabled={connectingSlack}
+              onClick={handleAddToSlack}
+            >
               {connectingSlack && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-              {t("extensions.slackAddToSlack")}
+              {connected ? t("extensions.slackAddAnother") : t("extensions.slackAddToSlack")}
             </Button>
           </CardContent>
         </Card>
@@ -329,7 +383,7 @@ function WebhookPanel({ integration }: { integration: Integration }) {
       <Card>
         <CardContent className="py-6">
           <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-            {slackOauth && <p className="text-sm font-medium">{t("extensions.orManual")}</p>}
+            {(slackOauth || connected) && <p className="text-sm font-medium">{t("extensions.orManual")}</p>}
             <p className="text-sm text-muted-foreground">{t("extensions.webhookModalDescription")}</p>
 
             <div className="flex flex-col gap-1.5">

@@ -27,7 +27,7 @@ function renderDetail(id: string) {
 }
 
 /** Base status mock: Sheets off (404), no webhooks, no pixels. Extra handlers can be layered by the caller's own spy. */
-function mockBase(opts: { sheetsStatus?: number; sheetsBody?: SheetsStatus; slackConnect?: boolean } = {}) {
+function mockBase(opts: { sheetsStatus?: number; sheetsBody?: SheetsStatus; slackConnect?: boolean; webhooks?: { id: number; kind: string; url: string }[] } = {}) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(typeof input === "string" ? input : (input as Request).url ?? input);
     const method = (init as RequestInit | undefined)?.method ?? "GET";
@@ -44,7 +44,8 @@ function mockBase(opts: { sheetsStatus?: number; sheetsBody?: SheetsStatus; slac
     if (url.includes("/admin/integrations/slack/connect")) {
       return new Response(JSON.stringify({ url: "https://slack.com/oauth/v2/authorize?x=1" }), { status: 200 });
     }
-    if (url.includes("/admin/webhooks") && method === "GET") return new Response(JSON.stringify({ webhooks: [] }), { status: 200 });
+    if (url.includes("/admin/webhooks/") && method === "DELETE") return new Response("", { status: 204 });
+    if (url.includes("/admin/webhooks") && method === "GET") return new Response(JSON.stringify({ webhooks: opts.webhooks ?? [] }), { status: 200 });
     if (url.includes("/admin/pixels") && method === "GET") return new Response(JSON.stringify({ pixels: [] }), { status: 200 });
     if (url.includes("/admin/webhooks") && method === "POST") return new Response(JSON.stringify({ id: 1, secret: "" }), { status: 201 });
     if (url.includes("/admin/pixels") && method === "POST") return new Response(JSON.stringify({ id: 1 }), { status: 201 });
@@ -146,6 +147,28 @@ describe("ExtensionDetail", () => {
     renderDetail("slack");
     expect(await screen.findByLabelText(/webhook url/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add to slack/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the connected channel with a disconnect action when a Slack subscription exists", async () => {
+    const fetchMock = mockBase({
+      slackConnect: true,
+      webhooks: [{ id: 7, kind: "slack", url: "https://hooks.slack.com/services/T/B/secret" }],
+    });
+    renderDetail("slack");
+
+    // Connected state is shown; the OAuth CTA is demoted to "add another channel".
+    expect(await screen.findByText(/slack is connected/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add another channel/i })).toBeInTheDocument();
+    // The raw token is never rendered in full.
+    expect(screen.queryByText(/secret/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /disconnect/i }));
+    await vi.waitFor(() => {
+      const c = fetchMock.mock.calls.find(
+        ([u, o]) => String(u).includes("/admin/webhooks/7") && (o as RequestInit | undefined)?.method === "DELETE",
+      );
+      if (!c) throw new Error("DELETE /admin/webhooks/7 not called yet");
+    });
   });
 
   it("shows an unavailable notice for Sheets when the connector is off (no Webhooks fallback)", async () => {

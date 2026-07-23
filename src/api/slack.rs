@@ -113,13 +113,32 @@ pub(crate) async fn slack_callback(
     if validate_webhook_url(&url).is_err() {
         return (StatusCode::BAD_GATEWAY, "slack returned an unusable webhook url").into_response();
     }
-    // Enforce the same per-tenant subscription cap the manual create does.
-    match st.store.list_webhooks(tenant).await {
-        Ok(subs) if subs.len() >= MAX_WEBHOOK_SUBSCRIPTIONS => {
-            return (StatusCode::BAD_REQUEST, "webhook subscription cap reached").into_response();
-        }
-        Ok(_) => {}
+    let existing = match st.store.list_webhooks(tenant).await {
+        Ok(subs) => subs,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    // Idempotent: re-installing the SAME channel (a double-click, or a repeat
+    // "Add to Slack" for a channel already connected) must not create a
+    // duplicate subscription. Slack returns the same incoming webhook URL for
+    // the same channel, so match on it and just return to the panel.
+    if existing
+        .iter()
+        .any(|s| s.kind == SubscriptionKind::Slack && s.url == url)
+    {
+        let clear = format!("{SLACK_STATE_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
+        return (
+            StatusCode::SEE_OTHER,
+            [
+                (header::LOCATION, slack_return_url(&st)),
+                (header::SET_COOKIE, clear),
+                (header::CACHE_CONTROL, "no-store".to_string()),
+            ],
+        )
+            .into_response();
+    }
+    // Enforce the same per-tenant subscription cap the manual create does.
+    if existing.len() >= MAX_WEBHOOK_SUBSCRIPTIONS {
+        return (StatusCode::BAD_REQUEST, "webhook subscription cap reached").into_response();
     }
     let id = match st.store.next_webhook_id(tenant).await {
         Ok(id) => id,
