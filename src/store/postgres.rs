@@ -502,15 +502,21 @@ fn row_to_pixel(r: &PgRow) -> Result<PixelConfig, StoreError> {
     let credentials: serde_json::Value = r.try_get("credentials").map_err(StoreError::backend)?;
     let active: bool = r.try_get("active").map_err(StoreError::backend)?;
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    let last_forward_at: Option<i64> = r.try_get("last_forward_at").map_err(StoreError::backend)?;
+    let last_forward_status: Option<serde_json::Value> = r
+        .try_get("last_forward_status")
+        .map_err(StoreError::backend)?;
     Ok(PixelConfig {
         id: id as u64,
         provider: provider_from_str(&provider)?,
         credentials: serde_json::from_value::<PixelCredentials>(credentials)?,
         active,
         created: created as u64,
-        // DB columns for pixel health land in a later task; default until then.
-        last_forward_at: None,
-        last_forward_status: Default::default(),
+        last_forward_at: last_forward_at.map(|v| v as u64),
+        last_forward_status: match last_forward_status {
+            Some(v) => serde_json::from_value(v)?,
+            None => crate::health::HealthStatus::Never,
+        },
     })
 }
 
@@ -727,6 +733,9 @@ impl PostgresStore {
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS visits BIGINT NOT NULL DEFAULT 0",
                 "CREATE SEQUENCE IF NOT EXISTS quark_pixel_id_seq",
                 "CREATE TABLE IF NOT EXISTS pixels (id BIGINT PRIMARY KEY, provider TEXT NOT NULL, credentials JSONB NOT NULL, active BOOLEAN NOT NULL, created BIGINT NOT NULL)",
+                // Health passivo por pixel (LUC-87 fase 3).
+                "ALTER TABLE pixels ADD COLUMN IF NOT EXISTS last_forward_at BIGINT",
+                "ALTER TABLE pixels ADD COLUMN IF NOT EXISTS last_forward_status JSONB",
                 // Per-link click-threshold alert rules (LUC-38). Tenant-owned,
                 // keyed by `(tenant_id, link_id)`.
                 "CREATE TABLE IF NOT EXISTS alert_rules (tenant_id BIGINT NOT NULL DEFAULT 0, link_id BIGINT NOT NULL, threshold BIGINT NOT NULL, window_secs BIGINT NOT NULL, PRIMARY KEY (tenant_id, link_id))",
@@ -2070,7 +2079,7 @@ impl Store for PostgresStore {
     ) -> Result<Option<PixelConfig>, StoreError> {
         let row = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, provider, credentials, active, created FROM pixels WHERE tenant_id = $1 AND id = $2",
+                "SELECT id, provider, credentials, active, created, last_forward_at, last_forward_status FROM pixels WHERE tenant_id = $1 AND id = $2",
             )
             .bind(tenant.0 as i64)
             .bind(id as i64)
@@ -2085,10 +2094,11 @@ impl Store for PostgresStore {
 
     async fn put_pixel(&self, tenant: TenantId, config: &PixelConfig) -> Result<(), StoreError> {
         let credentials = serde_json::to_value(&config.credentials)?;
+        let last_forward_status = serde_json::to_value(&config.last_forward_status)?;
         with_write!(self, tenant, |c| {
             sqlx::query(
-                "INSERT INTO pixels (id, provider, credentials, active, created, tenant_id) VALUES ($1,$2,$3,$4,$5,$6) \
-                 ON CONFLICT (id) DO UPDATE SET provider=$2, credentials=$3, active=$4, created=$5, tenant_id=$6",
+                "INSERT INTO pixels (id, provider, credentials, active, created, tenant_id, last_forward_at, last_forward_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) \
+                 ON CONFLICT (id) DO UPDATE SET provider=$2, credentials=$3, active=$4, created=$5, tenant_id=$6, last_forward_at=$7, last_forward_status=$8",
             )
             .bind(config.id as i64)
             .bind(provider_to_str(config.provider))
@@ -2096,6 +2106,30 @@ impl Store for PostgresStore {
             .bind(config.active)
             .bind(config.created as i64)
             .bind(tenant.0 as i64)
+            .bind(config.last_forward_at.map(|v| v as i64))
+            .bind(&last_forward_status)
+            .execute(&mut *c)
+            .await
+        });
+        Ok(())
+    }
+
+    async fn record_pixel_health(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        at: u64,
+        status: crate::health::HealthStatus,
+    ) -> Result<(), StoreError> {
+        let status = serde_json::to_value(&status)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "UPDATE pixels SET last_forward_at=$1, last_forward_status=$2 WHERE tenant_id=$3 AND id=$4",
+            )
+            .bind(at as i64)
+            .bind(&status)
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
             .execute(&mut *c)
             .await
         });
@@ -2116,7 +2150,7 @@ impl Store for PostgresStore {
     async fn list_pixels(&self, tenant: TenantId) -> Result<Vec<PixelConfig>, StoreError> {
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, provider, credentials, active, created FROM pixels WHERE tenant_id = $1 ORDER BY id",
+                "SELECT id, provider, credentials, active, created, last_forward_at, last_forward_status FROM pixels WHERE tenant_id = $1 ORDER BY id",
             )
             .bind(tenant.0 as i64)
             .fetch_all(&mut *c)

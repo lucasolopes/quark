@@ -984,6 +984,26 @@ impl Store for LmdbStore {
         Ok(out)
     }
 
+    async fn record_pixel_health(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        at: u64,
+        status: crate::health::HealthStatus,
+    ) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        let key = tkey_id(tenant, id);
+        if let Some(bytes) = self.pixels.get(&wtxn, &key)? {
+            let mut cfg: PixelConfig = serde_json::from_slice(bytes)?;
+            cfg.last_forward_at = Some(at);
+            cfg.last_forward_status = status;
+            let out = serde_json::to_vec(&cfg)?;
+            self.pixels.put(&mut wtxn, &key, &out)?;
+            wtxn.commit()?;
+        }
+        Ok(())
+    }
+
     async fn get_wellknown(
         &self,
         tenant: TenantId,
@@ -1899,6 +1919,47 @@ mod tests {
         assert_eq!(got.connector_id.as_deref(), Some("zapier"));
         assert_eq!(got.url, "https://h/x");
         assert!(got.active);
+    }
+
+    #[tokio::test]
+    async fn record_pixel_health_updates_only_health_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let cfg = crate::pixel::PixelConfig {
+            id: 3,
+            provider: crate::pixel::Provider::Ga4,
+            credentials: crate::pixel::PixelCredentials {
+                measurement_id: Some("G-X".into()),
+                api_secret: Some("s".into()),
+                pixel_id: None,
+                access_token: None,
+            },
+            active: true,
+            created: 10,
+            last_forward_at: None,
+            last_forward_status: crate::health::HealthStatus::Never,
+        };
+        s.put_pixel(crate::tenant::DEFAULT_TENANT, &cfg)
+            .await
+            .unwrap();
+
+        s.record_pixel_health(
+            crate::tenant::DEFAULT_TENANT,
+            3,
+            300,
+            crate::health::HealthStatus::Ok,
+        )
+        .await
+        .unwrap();
+
+        let got = s
+            .get_pixel(crate::tenant::DEFAULT_TENANT, 3)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.last_forward_at, Some(300));
+        assert_eq!(got.last_forward_status, crate::health::HealthStatus::Ok);
+        assert_eq!(got.credentials.measurement_id.as_deref(), Some("G-X"));
     }
 
     #[tokio::test]

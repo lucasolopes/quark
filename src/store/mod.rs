@@ -587,6 +587,16 @@ pub trait Store: Send + Sync + 'static {
     async fn put_pixel(&self, tenant: TenantId, config: &PixelConfig) -> Result<(), StoreError>;
     async fn delete_pixel(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError>;
     async fn list_pixels(&self, tenant: TenantId) -> Result<Vec<PixelConfig>, StoreError>;
+    /// Registra o resultado do ultimo forward de um pixel (health passivo,
+    /// LUC-87 fase 3). Update cirurgico; best-effort no caller; no-op se o
+    /// pixel nao existe mais.
+    async fn record_pixel_health(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        at: u64,
+        status: crate::health::HealthStatus,
+    ) -> Result<(), StoreError>;
     /// Reads a well-known app-association document by name. The raw JSON is
     /// returned verbatim (no parsing here; validation lives at the HTTP layer).
     async fn get_wellknown(

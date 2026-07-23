@@ -1277,6 +1277,15 @@ mod tests {
         ) -> Result<Vec<crate::pixel::PixelConfig>, StoreError> {
             unimplemented!()
         }
+        async fn record_pixel_health(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+            _at: u64,
+            _status: crate::health::HealthStatus,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
         async fn get_wellknown(
             &self,
             _tenant: crate::tenant::TenantId,
