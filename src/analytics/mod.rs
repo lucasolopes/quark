@@ -710,7 +710,9 @@ async fn flush(
 }
 
 /// Forwards the flushed batch to every active pixel config in the cached
-/// `pixels` snapshot (no store access on this path, see `spawn_worker`).
+/// `pixels` snapshot. After each forward, records pixel delivery health via
+/// store.record_pixel_health as a best-effort write (errors ignored, never
+/// blocks).
 ///
 /// Tenant isolation: the batch mixes clicks from every tenant, so for each
 /// tenant we forward only that tenant's own events to that tenant's pixels.
