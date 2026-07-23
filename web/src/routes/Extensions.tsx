@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { ArrowRight, Check, Copy, ExternalLink, Loader2 } from "lucide-react";
+import { ArrowRight, Check, CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +20,7 @@ import { useT, type MessageKey } from "@/i18n";
 import { ApiError, api } from "@/lib/api";
 import { isHttpUrl } from "@/lib/codeguard";
 import { isUnauthorized, mutationErrorToast } from "@/lib/mutation-error";
-import { useCreatePixel, useCreateWebhook, useSheetsStatus, useSheetsSync, useSheetsDisconnect } from "@/lib/queries";
+import { useCreatePixel, useCreateWebhook, usePixels, useSheetsStatus, useSheetsSync, useSheetsDisconnect, useWebhooks } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
 import { WEBHOOK_EVENTS, type PixelProvider, type SubscriptionKind, type WebhookEvent } from "@/lib/types";
 
@@ -112,6 +112,23 @@ const PIXEL_PROVIDER_BY_ID: Record<string, PixelProvider> = {
 
 export function Extensions() {
   const t = useT();
+  // Per-connector connection status derived from the existing feature APIs
+  // (LUC-87 fase 1): a card shows "Conectado" when its backing resource exists.
+  // Limitation: the generic-webhook connectors (Zapier/Make/n8n) share
+  // `kind: "generic"`, so they cannot be told apart until the connection model
+  // stores a connector id (fase 3) — they light up together once any generic
+  // webhook exists.
+  const webhooks = useWebhooks();
+  const pixels = usePixels();
+  const sheets = useSheetsStatus();
+  const connected = new Set<string>();
+  const webhookKinds = new Set((webhooks.data?.webhooks ?? []).map((w) => w.kind));
+  const pixelProviders = new Set((pixels.data?.pixels ?? []).map((p) => p.provider));
+  for (const it of INTEGRATIONS) {
+    if (it.poweredBy === "webhooks" && webhookKinds.has(WEBHOOK_KIND_BY_ID[it.id])) connected.add(it.id);
+    if (it.poweredBy === "pixels" && pixelProviders.has(PIXEL_PROVIDER_BY_ID[it.id])) connected.add(it.id);
+  }
+  if (sheets.data?.connected) connected.add("sheets");
 
   return (
     <div className="flex flex-col gap-6">
@@ -133,7 +150,11 @@ export function Extensions() {
             </h2>
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {items.map((integration) => (
-                <IntegrationCard key={integration.id} integration={integration} />
+                <IntegrationCard
+                  key={integration.id}
+                  integration={integration}
+                  connected={connected.has(integration.id)}
+                />
               ))}
             </div>
           </section>
@@ -143,7 +164,7 @@ export function Extensions() {
   );
 }
 
-function IntegrationCard({ integration }: { integration: Integration }) {
+function IntegrationCard({ integration, connected }: { integration: Integration; connected: boolean }) {
   const t = useT();
   const isSoon = integration.poweredBy === "soon";
 
@@ -158,7 +179,14 @@ function IntegrationCard({ integration }: { integration: Integration }) {
           >
             {integration.mono}
           </span>
-          {isSoon && <Badge variant="secondary">{t("extensions.comingSoon")}</Badge>}
+          {connected ? (
+            <Badge>
+              <CheckCircle2 className="size-3" aria-hidden="true" />
+              {t("extensions.connected")}
+            </Badge>
+          ) : (
+            isSoon && <Badge variant="secondary">{t("extensions.comingSoon")}</Badge>
+          )}
         </div>
         <div className="font-heading text-base font-medium">{integration.name}</div>
         <p className="text-sm text-muted-foreground">{t(integration.descKey)}</p>

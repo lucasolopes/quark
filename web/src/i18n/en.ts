@@ -621,6 +621,7 @@ export const en = {
     heading: "Extensions",
     subtitle: "Connect quark to the tools you already use. Each integration runs on a real panel feature.",
     comingSoon: "Coming soon",
+    connected: "Connected",
     viaWebhooks: "Set up via Webhooks",
     viaPixels: "Set up via Pixels",
     categoryAutomation: "Automation",
