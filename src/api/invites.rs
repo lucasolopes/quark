@@ -195,6 +195,11 @@ pub(crate) async fn admin_invites_delete(
 pub(crate) struct PutOidcConfigReq {
     issuer: String,
     client_id: String,
+    /// Optional on update: an empty/absent secret preserves the one already on
+    /// file (the panel never sees the stored secret to echo it back), so an
+    /// admin editing other fields does not have to re-enter it. Required in
+    /// practice only on first setup of a confidential client.
+    #[serde(default)]
     client_secret: String,
     #[serde(default)]
     scopes: Vec<String>,
@@ -275,11 +280,24 @@ pub(crate) async fn admin_oidc_config_put(
     if issuer.is_empty() || client_id.is_empty() {
         return (StatusCode::BAD_REQUEST, "issuer and client_id are required").into_response();
     }
+    // Preserve the stored secret when the caller sends an empty one: the panel
+    // never receives the secret to echo back, so a blank field on an edit means
+    // "keep the existing secret", not "clear it". A first-time setup with no
+    // existing config keeps the empty value (e.g. a public client).
+    let client_secret = if req.client_secret.is_empty() {
+        match st.store.get_oidc_config(p.tenant).await {
+            Ok(Some(existing)) => existing.client_secret,
+            Ok(None) => String::new(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        }
+    } else {
+        req.client_secret
+    };
     let cfg = crate::oidc::TenantOidcConfig {
         tenant_id: p.tenant,
         issuer,
         client_id,
-        client_secret: req.client_secret,
+        client_secret,
         scopes: req.scopes,
         admin_claim: req.admin_claim,
         admin_value: req.admin_value,
