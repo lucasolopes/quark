@@ -566,6 +566,10 @@ pub trait Store: Send + Sync + 'static {
         holder: &str,
         ttl_secs: u64,
     ) -> Result<bool, StoreError>;
+    /// Releases the scheduled-sync lease if (and only if) `holder` still owns it,
+    /// so it does not stay held between ticks and block an on-demand "Sync now"
+    /// (which uses a different holder). A no-op when someone else already took it.
+    async fn release_sheets_lease(&self, holder: &str) -> Result<(), StoreError>;
     async fn next_pixel_id(&self, tenant: TenantId) -> Result<u64, StoreError>;
     async fn get_pixel(&self, tenant: TenantId, id: u64)
         -> Result<Option<PixelConfig>, StoreError>;

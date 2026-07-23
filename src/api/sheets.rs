@@ -277,6 +277,9 @@ pub(crate) async fn sheets_sync(State(st): State<Arc<AppState>>, headers: Header
     if let Err(e) = sync_result {
         conn.last_status = crate::sheets::SyncStatus::Error(e);
     }
+    // The sync work is done: release the lease so it does not block a scheduled
+    // tick (or the next on-demand sync) for the rest of its TTL.
+    let _ = st.store.release_sheets_lease(&holder).await;
     if st
         .store
         .put_sheets_connection(p.tenant, &conn)

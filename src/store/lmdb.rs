@@ -694,6 +694,11 @@ impl Store for LmdbStore {
         Ok(true)
     }
 
+    async fn release_sheets_lease(&self, _holder: &str) -> Result<(), StoreError> {
+        // Single-node: no lease to release.
+        Ok(())
+    }
+
     async fn put_session(
         &self,
         _tenant: TenantId,

@@ -515,7 +515,11 @@ async fn main() {
             let mut hb = [0u8; 8];
             let _ = getrandom::fill(&mut hb);
             let holder: String = format!("sheets_{}", quark::hex(&hb));
-            let ttl = secs.saturating_mul(2);
+            // Lease TTL is a crash-safety cap only: the tick RELEASES the lease
+            // when done (see end of loop), so it never stays held between ticks
+            // and block the on-demand "Sync now". Capped at 300s (and at the
+            // interval) so even a missed release frees it before the next tick.
+            let ttl = secs.min(300);
             tokio::spawn(async move {
                 let client = quark::sheets::client::http_client();
                 let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
@@ -583,6 +587,9 @@ async fn main() {
                             );
                         }
                     }
+                    // Release the lease now that this tick finished so it is not
+                    // held between ticks and does not block the on-demand sync.
+                    let _ = store.release_sheets_lease(&holder).await;
                 }
             });
         }
