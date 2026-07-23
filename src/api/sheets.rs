@@ -156,12 +156,25 @@ pub(crate) async fn sheets_callback(
     (
         StatusCode::SEE_OTHER,
         [
-            (header::LOCATION, "/".to_string()),
+            (header::LOCATION, sheets_return_url(&st)),
             (header::SET_COOKIE, clear),
             (header::CACHE_CONTROL, "no-store".to_string()),
         ],
     )
         .into_response()
+}
+
+/// Where to send the browser after a Sheets connect. On a split-domain deploy
+/// the panel is a different origin and the backend root is POST-only (a bare
+/// "/" would 405), so return to the panel's Extensions page via the global OIDC
+/// post-login URL (the panel base). Falls back to "/" for OSS single-origin.
+fn sheets_return_url(st: &AppState) -> String {
+    st.oidc
+        .as_ref()
+        .map(|rt| rt.config.post_login_url.trim_end_matches('/').to_string())
+        .filter(|u| !u.is_empty() && u != "/")
+        .map(|u| format!("{u}/extensions"))
+        .unwrap_or_else(|| "/".to_string())
 }
 
 /// The Sheets status the panel renders. Deliberately its own struct (never
