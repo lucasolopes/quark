@@ -27,16 +27,22 @@ function renderDetail(id: string) {
 }
 
 /** Base status mock: Sheets off (404), no webhooks, no pixels. Extra handlers can be layered by the caller's own spy. */
-function mockBase(opts: { sheetsStatus?: number; sheetsBody?: SheetsStatus } = {}) {
+function mockBase(opts: { sheetsStatus?: number; sheetsBody?: SheetsStatus; slackConnect?: boolean } = {}) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(typeof input === "string" ? input : (input as Request).url ?? input);
     const method = (init as RequestInit | undefined)?.method ?? "GET";
+    if (url.includes("/admin/me")) {
+      return new Response(JSON.stringify({ authenticated: true, slack_connect: opts.slackConnect ?? false }), { status: 200 });
+    }
     if (url.includes("/admin/integrations/sheets/status")) {
       const s = opts.sheetsStatus ?? 404;
       return new Response(s === 200 ? JSON.stringify(opts.sheetsBody) : "", { status: s });
     }
     if (url.includes("/admin/integrations/sheets/sync") && method === "POST") {
       return new Response(JSON.stringify({ ...opts.sheetsBody, last_status: { state: "ok" } }), { status: 200 });
+    }
+    if (url.includes("/admin/integrations/slack/connect")) {
+      return new Response(JSON.stringify({ url: "https://slack.com/oauth/v2/authorize?x=1" }), { status: 200 });
     }
     if (url.includes("/admin/webhooks") && method === "GET") return new Response(JSON.stringify({ webhooks: [] }), { status: 200 });
     if (url.includes("/admin/pixels") && method === "GET") return new Response(JSON.stringify({ pixels: [] }), { status: 200 });
@@ -118,6 +124,28 @@ describe("ExtensionDetail", () => {
       "href",
       "https://docs.google.com/spreadsheets/d/abc",
     );
+  });
+
+  it("offers Add to Slack when the OAuth connector is configured, and starts the install on click", async () => {
+    const fetchMock = mockBase({ slackConnect: true });
+    renderDetail("slack");
+
+    const addBtn = await screen.findByRole("button", { name: /add to slack/i });
+    // The manual form still exists as a fallback, under the "or set up manually" label.
+    expect(screen.getByText(/or set up manually/i)).toBeInTheDocument();
+
+    await userEvent.click(addBtn);
+    await vi.waitFor(() => {
+      const c = fetchMock.mock.calls.find(([u]) => String(u).includes("/admin/integrations/slack/connect"));
+      if (!c) throw new Error("GET /admin/integrations/slack/connect not called yet");
+    });
+  });
+
+  it("shows only the manual webhook form when the Slack OAuth connector is off", async () => {
+    mockBase({ slackConnect: false });
+    renderDetail("slack");
+    expect(await screen.findByLabelText(/webhook url/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add to slack/i })).not.toBeInTheDocument();
   });
 
   it("shows an unavailable notice for Sheets when the connector is off (no Webhooks fallback)", async () => {

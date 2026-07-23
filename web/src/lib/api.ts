@@ -244,6 +244,10 @@ export const api = {
     const res = await req("/admin/integrations/sheets", { method: "DELETE" });
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
+  /** Starts the Slack "Add to Slack" OAuth install: returns the authorize URL to navigate to (the server also sets a signed state cookie). */
+  async slackConnect(): Promise<{ url: string }> {
+    return jsonOrThrow(await req("/admin/integrations/slack/connect"));
+  },
   /** Pending and accepted team invites for the current workspace (cloud only). */
   async listInvites(): Promise<InviteView[]> {
     return jsonOrThrow(await req("/admin/invites"));

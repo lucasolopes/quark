@@ -199,3 +199,51 @@ reconectar-in-place preservando o id.
 - Backend: `src/webhooks/` (tipos + `delivery.rs` = fonte de health de entrega),
   `src/pixel.rs` (forwarding), e o conector OAuth do Sheets + endpoints
   status/sync/disconnect (a referencia de OAuth).
+
+## Fase 1 - implementada (2026-07-22/23)
+
+Entregue e validada em prod. Catalogo (`web/src/routes/Extensions.tsx`) virou
+cards clicaveis com pill de status; view dedicada por integracao em
+`/extensions/:id` (`web/src/routes/ExtensionDetail.tsx`) com painel por conector
+(sheets/webhooks/pixels/soon). Catalogo/tipos/derivacao de status extraidos pra
+`web/src/lib/connectors.ts`. Fallback confuso do Sheets morto (mostra
+"indisponivel" em vez de rotear pro Webhooks generico).
+
+## Fase 2 - implementada (2026-07-23): Slack "Add to Slack"
+
+Fluxo OAuth v2 incoming-webhook: o usuario clica "Adicionar ao Slack", escolhe
+um canal no consent do Slack, e o callback grava a `incoming_webhook.url` como
+uma subscription `kind: Slack`. Sem storage novo — a entrega de canal Slack ja
+existe. Gated por config; quando o conector esta off, a view do Slack mostra so
+o form manual de webhook URL (comportamento anterior).
+
+- Backend: `src/slack.rs` (config + `connect_url` + `exchange_code`, espelha
+  `sheets`), `src/api/slack.rs` (`slack_connect` seta cookie de state assinado
+  amarrado ao tenant; `slack_callback` valida o state, troca o code, grava a
+  subscription). Rotas `GET /admin/integrations/slack/connect|callback`.
+  `admin_me` expoe `slack_connect: bool` (conector configurado?).
+- Frontend: `api.slackConnect()`; `WebhookPanel` lidera com "Adicionar ao Slack"
+  quando `me.slack_connect`, mantendo o form manual sob "ou configure manualmente".
+
+### Setup do app Slack (passo do Lucas, conta Slack)
+
+1. https://api.slack.com/apps -> **Create New App** -> From scratch -> nome
+   "quark" -> escolher o workspace.
+2. **OAuth & Permissions** -> **Redirect URLs** -> adicionar
+   `https://backend.quarkus.com.br/admin/integrations/slack/callback` -> Save.
+3. Na mesma tela, **Scopes -> Bot Token Scopes** -> adicionar `incoming-webhook`.
+   (E o unico scope; o quark so precisa postar via incoming webhook.)
+4. **Basic Information** -> copiar **Client ID** e **Client Secret**.
+5. Setar no Fly (o secret via `fly secrets`, o resto pode ir no `[env]`):
+   ```
+   fly secrets set -a quark-prod \
+     QUARK_SLACK_CLIENT_ID=<client id> \
+     QUARK_SLACK_CLIENT_SECRET=<client secret> \
+     QUARK_SLACK_REDIRECT_URL=https://backend.quarkus.com.br/admin/integrations/slack/callback
+   ```
+6. (Pra outros workspaces alem do teu) **Manage Distribution** -> ativar public
+   distribution depois de revisar. Instalacao no proprio workspace ja funciona
+   sem isso. Review do Slack e mais leve que o do Google.
+
+Com os secrets setados, o card do Slack em `/extensions/slack` passa a mostrar
+"Adicionar ao Slack".

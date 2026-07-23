@@ -17,6 +17,7 @@ use quark::dns::{Dns, NullDns};
 use quark::domain_router::HostRouter;
 use quark::keycloak::KeycloakAdmin;
 use quark::sheets::SheetsConfig;
+use quark::slack::SlackConfig;
 use quark::store::Store;
 use quark::webhooks::delivery::WebhookDispatcher;
 
@@ -57,6 +58,7 @@ pub struct TestState {
     real_ip_header: String,
     oidc_configured: bool,
     sheets: Option<Arc<SheetsConfig>>,
+    slack: Option<Arc<SlackConfig>>,
     multi_tenant: bool,
     tenant_domain_suffix: Option<String>,
     keycloak: Option<Arc<dyn KeycloakAdmin>>,
@@ -82,6 +84,7 @@ impl TestState {
             real_ip_header: DEFAULT_REAL_IP_HEADER.to_string(),
             oidc_configured: false,
             sheets: None,
+            slack: None,
             multi_tenant: false,
             tenant_domain_suffix: None,
             keycloak: None,
@@ -155,6 +158,11 @@ impl TestState {
         self
     }
 
+    pub fn slack(mut self, slack: Option<Arc<SlackConfig>>) -> Self {
+        self.slack = slack;
+        self
+    }
+
     pub fn multi_tenant(mut self, multi_tenant: bool) -> Self {
         self.multi_tenant = multi_tenant;
         self
@@ -209,6 +217,7 @@ impl TestState {
             oidc_configured: self.oidc_configured,
             sheets: self.sheets,
             sheets_api: None,
+            slack: self.slack,
             multi_tenant: self.multi_tenant,
             host_router,
             dns: self.dns,
