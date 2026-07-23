@@ -71,6 +71,8 @@ pub struct IncomingWebhook {
     #[serde(default)]
     pub channel: Option<String>,
     #[serde(default)]
+    pub channel_id: Option<String>,
+    #[serde(default)]
     pub configuration_url: Option<String>,
 }
 
@@ -148,6 +150,14 @@ mod tests {
             parsed.incoming_webhook.unwrap().url,
             "https://hooks.slack.com/services/T/B/x"
         );
+    }
+
+    #[test]
+    fn parses_channel_id_from_incoming_webhook() {
+        let json = r##"{"ok":true,"incoming_webhook":{"url":"https://hooks.slack.com/services/T/B/x","channel":"#general","channel_id":"C012AB3CD","configuration_url":"https://team.slack.com/services/B"}}"##;
+        let parsed: OAuthAccess = serde_json::from_str(json).unwrap();
+        let wh = parsed.incoming_webhook.unwrap();
+        assert_eq!(wh.channel_id.as_deref(), Some("C012AB3CD"));
     }
 
     #[test]
