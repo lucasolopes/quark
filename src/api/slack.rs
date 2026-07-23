@@ -23,9 +23,14 @@ pub(crate) async fn slack_connect(State(st): State<Arc<AppState>>, headers: Head
     let signed =
         crate::oidc::sign_login_state(&st.signing_key, &state, &p.tenant.0.to_string(), "", None);
     let url = crate::slack::connect_url(cfg, &state);
-    let secure = if request_is_https(&headers) { "; Secure" } else { "" };
-    let cookie =
-        format!("{SLACK_STATE_COOKIE}={signed}; Max-Age=600; Path=/; HttpOnly; SameSite=Lax{secure}");
+    let secure = if request_is_https(&headers) {
+        "; Secure"
+    } else {
+        ""
+    };
+    let cookie = format!(
+        "{SLACK_STATE_COOKIE}={signed}; Max-Age=600; Path=/; HttpOnly; SameSite=Lax{secure}"
+    );
     (
         StatusCode::OK,
         [
@@ -106,7 +111,11 @@ pub(crate) async fn slack_callback(
         return (StatusCode::BAD_GATEWAY, "slack rejected the install").into_response();
     }
     let Some(webhook) = access.incoming_webhook else {
-        return (StatusCode::BAD_GATEWAY, "no incoming webhook in slack response").into_response();
+        return (
+            StatusCode::BAD_GATEWAY,
+            "no incoming webhook in slack response",
+        )
+            .into_response();
     };
     let url = webhook.url;
     // The channel the operator picked (e.g. "#general"), shown in the panel so
@@ -115,7 +124,11 @@ pub(crate) async fn slack_callback(
     // The URL comes from Slack (`hooks.slack.com`), but still run it through the
     // same guard every stored webhook destination passes (defense in depth).
     if validate_webhook_url(&url).is_err() {
-        return (StatusCode::BAD_GATEWAY, "slack returned an unusable webhook url").into_response();
+        return (
+            StatusCode::BAD_GATEWAY,
+            "slack returned an unusable webhook url",
+        )
+            .into_response();
     }
     let existing = match st.store.list_webhooks(tenant).await {
         Ok(subs) => subs,
@@ -167,6 +180,10 @@ pub(crate) async fn slack_callback(
         created: now(),
         kind: SubscriptionKind::Slack,
         label,
+        connector_id: Some("slack".to_string()),
+        external_id: None,
+        last_delivery_at: None,
+        last_delivery_status: Default::default(),
     };
     if st.store.put_webhook(tenant, &sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

@@ -382,6 +382,10 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
         created: created as u64,
         kind: SubscriptionKind::from_str_or_generic(&kind),
         label,
+        connector_id: None,
+        external_id: None,
+        last_delivery_at: None,
+        last_delivery_status: Default::default(),
     })
 }
 
@@ -2658,7 +2662,9 @@ impl Store for PostgresStore {
             .map_err(StoreError::backend)?;
         match row {
             Some(r) => {
-                let id: Option<i64> = r.try_get("primary_domain_id").map_err(StoreError::backend)?;
+                let id: Option<i64> = r
+                    .try_get("primary_domain_id")
+                    .map_err(StoreError::backend)?;
                 Ok(id.map(|v| v as u64))
             }
             None => Ok(None),

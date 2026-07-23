@@ -1363,12 +1363,27 @@ fn normalize_admin_host_strips_port_dot_case() {
     // Host header comparison must ignore port, trailing dot, and case, so the
     // admin-host gate matches `backend.quarkus.com.br` regardless of how the
     // client formats the Host header.
-    assert_eq!(normalize_admin_host("Backend.Quarkus.COM.br"), "backend.quarkus.com.br");
-    assert_eq!(normalize_admin_host("backend.quarkus.com.br:443"), "backend.quarkus.com.br");
-    assert_eq!(normalize_admin_host("backend.quarkus.com.br."), "backend.quarkus.com.br");
-    assert_eq!(normalize_admin_host("  backend.quarkus.com.br  "), "backend.quarkus.com.br");
+    assert_eq!(
+        normalize_admin_host("Backend.Quarkus.COM.br"),
+        "backend.quarkus.com.br"
+    );
+    assert_eq!(
+        normalize_admin_host("backend.quarkus.com.br:443"),
+        "backend.quarkus.com.br"
+    );
+    assert_eq!(
+        normalize_admin_host("backend.quarkus.com.br."),
+        "backend.quarkus.com.br"
+    );
+    assert_eq!(
+        normalize_admin_host("  backend.quarkus.com.br  "),
+        "backend.quarkus.com.br"
+    );
     // A tenant link domain normalizes to itself (never equals the admin host).
-    assert_ne!(normalize_admin_host("go.meuchat.ai"), "backend.quarkus.com.br");
+    assert_ne!(
+        normalize_admin_host("go.meuchat.ai"),
+        "backend.quarkus.com.br"
+    );
 }
 
 /// Captured request: headers (lowercased names) + raw body. Mirrors the
@@ -1428,6 +1443,10 @@ fn sub(url: &str, secret: &str, kind: SubscriptionKind) -> WebhookSubscription {
         created: 0,
         kind,
         label: None,
+        connector_id: None,
+        external_id: None,
+        last_delivery_at: None,
+        last_delivery_status: Default::default(),
     }
 }
 

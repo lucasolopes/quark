@@ -111,6 +111,10 @@ async fn add_sub(store: &Arc<dyn Store>, url: &str) -> WebhookSubscription {
         created: 1,
         kind: SubscriptionKind::Generic,
         label: None,
+        connector_id: None,
+        external_id: None,
+        last_delivery_at: None,
+        last_delivery_status: Default::default(),
     };
     store
         .put_webhook(quark::tenant::DEFAULT_TENANT, &sub)

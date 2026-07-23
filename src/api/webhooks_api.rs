@@ -241,6 +241,10 @@ pub(crate) async fn admin_webhooks_create(
         created: now(),
         kind: req.kind,
         label: None,
+        connector_id: None,
+        external_id: None,
+        last_delivery_at: None,
+        last_delivery_status: Default::default(),
     };
     if st.store.put_webhook(p.tenant, &sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

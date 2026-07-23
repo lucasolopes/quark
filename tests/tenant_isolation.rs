@@ -229,6 +229,10 @@ async fn assert_full_isolation(store: Arc<dyn Store>) {
         created: 0,
         kind: quark::webhooks::SubscriptionKind::Generic,
         label: None,
+        connector_id: None,
+        external_id: None,
+        last_delivery_at: None,
+        last_delivery_status: Default::default(),
     };
     a.put_webhook(&webhook).await.unwrap();
     assert!(

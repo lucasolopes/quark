@@ -88,6 +88,7 @@ fn bench(c: &mut Criterion) {
             oidc_tenants: quark::oidc::TenantOidcCache::new(),
             keycloak: None,
             keycloak_base_url: None,
+            slack: None,
             cache,
             store: store.clone(),
             key,

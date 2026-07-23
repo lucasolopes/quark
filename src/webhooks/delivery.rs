@@ -1568,6 +1568,10 @@ mod tests {
             created: 0,
             kind: SubscriptionKind::Generic,
             label: None,
+            connector_id: None,
+            external_id: None,
+            last_delivery_at: None,
+            last_delivery_status: Default::default(),
         }
     }
 

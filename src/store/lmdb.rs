@@ -1797,6 +1797,10 @@ mod tests {
             created: 1,
             kind: crate::webhooks::SubscriptionKind::Generic,
             label: None,
+            connector_id: None,
+            external_id: None,
+            last_delivery_at: None,
+            last_delivery_status: Default::default(),
         };
         store
             .put_webhook(crate::tenant::DEFAULT_TENANT, &sub)
