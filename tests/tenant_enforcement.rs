@@ -126,6 +126,7 @@ async fn cloud_analytics_and_outbox_accessors_survive_force_rls() {
         active: true,
         created: 0,
         kind: SubscriptionKind::Generic,
+        label: None,
     };
     t1.put_webhook(&sub).await.unwrap();
 

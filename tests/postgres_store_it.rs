@@ -56,6 +56,7 @@ async fn add_sub(store: &PostgresStore, url: &str) -> WebhookSubscription {
         active: true,
         created: 1,
         kind: SubscriptionKind::Generic,
+        label: None,
     };
     store
         .put_webhook(quark::tenant::DEFAULT_TENANT, &sub)

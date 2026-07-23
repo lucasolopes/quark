@@ -26,6 +26,8 @@ pub(crate) struct WebhookRow {
     created: u64,
     secret_masked: String,
     kind: SubscriptionKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
 }
 
 pub(crate) async fn admin_webhooks_list(
@@ -48,6 +50,7 @@ pub(crate) async fn admin_webhooks_list(
                     created: s.created,
                     secret_masked: mask_secret(&s.secret),
                     kind: s.kind,
+                    label: s.label,
                 })
                 .collect();
             Json(serde_json::json!({ "webhooks": rows })).into_response()
@@ -237,6 +240,7 @@ pub(crate) async fn admin_webhooks_create(
         active: req.active.unwrap_or(true),
         created: now(),
         kind: req.kind,
+        label: None,
     };
     if st.store.put_webhook(p.tenant, &sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

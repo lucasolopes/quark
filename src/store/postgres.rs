@@ -372,6 +372,7 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
     let active: bool = r.try_get("active").map_err(StoreError::backend)?;
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
     let kind: String = r.try_get("kind").map_err(StoreError::backend)?;
+    let label: Option<String> = r.try_get("label").map_err(StoreError::backend)?;
     Ok(WebhookSubscription {
         id: id as u64,
         url,
@@ -380,6 +381,7 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
         active,
         created: created as u64,
         kind: SubscriptionKind::from_str_or_generic(&kind),
+        label,
     })
 }
 
@@ -686,6 +688,10 @@ impl PostgresStore {
                 // (same fallback `SubscriptionKind::from_str_or_generic` and
                 // the LMDB/serde `#[serde(default)]` path use).
                 "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'generic'",
+                // Optional destination label (LUC-87 fase 2): the Slack OAuth
+                // install captures the chosen channel name here so the panel can
+                // tell channels apart. Nullable; pre-existing rows stay NULL.
+                "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS label TEXT",
                 "CREATE TABLE IF NOT EXISTS api_tokens (id BIGINT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, scopes JSONB NOT NULL, rate_limit_per_min BIGINT, created BIGINT NOT NULL)",
                 "CREATE INDEX IF NOT EXISTS api_tokens_token_hash_idx ON api_tokens (token_hash)",
                 // Primary link domain per tenant (LUC-86): the domain the copy
@@ -1430,8 +1436,8 @@ impl Store for PostgresStore {
         let events = serde_json::to_value(&sub.events)?;
         with_write!(self, tenant, |c| {
             sqlx::query(
-                "INSERT INTO webhooks (id, url, events, secret, active, created, kind, tenant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) \
-                 ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6, kind=$7, tenant_id=$8",
+                "INSERT INTO webhooks (id, url, events, secret, active, created, kind, tenant_id, label) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) \
+                 ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6, kind=$7, tenant_id=$8, label=$9",
             )
             .bind(sub.id as i64)
             .bind(&sub.url)
@@ -1441,6 +1447,7 @@ impl Store for PostgresStore {
             .bind(sub.created as i64)
             .bind(sub.kind.as_str())
             .bind(tenant.0 as i64)
+            .bind(&sub.label)
             .execute(&mut *c)
             .await
         });

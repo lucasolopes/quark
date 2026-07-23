@@ -105,9 +105,13 @@ pub(crate) async fn slack_callback(
     if !access.ok {
         return (StatusCode::BAD_GATEWAY, "slack rejected the install").into_response();
     }
-    let Some(url) = access.incoming_webhook.map(|w| w.url) else {
+    let Some(webhook) = access.incoming_webhook else {
         return (StatusCode::BAD_GATEWAY, "no incoming webhook in slack response").into_response();
     };
+    let url = webhook.url;
+    // The channel the operator picked (e.g. "#general"), shown in the panel so
+    // multiple Slack connections can be told apart.
+    let label = webhook.channel.filter(|c| !c.is_empty());
     // The URL comes from Slack (`hooks.slack.com`), but still run it through the
     // same guard every stored webhook destination passes (defense in depth).
     if validate_webhook_url(&url).is_err() {
@@ -121,10 +125,19 @@ pub(crate) async fn slack_callback(
     // "Add to Slack" for a channel already connected) must not create a
     // duplicate subscription. Slack returns the same incoming webhook URL for
     // the same channel, so match on it and just return to the panel.
-    if existing
+    if let Some(dup) = existing
         .iter()
-        .any(|s| s.kind == SubscriptionKind::Slack && s.url == url)
+        .find(|s| s.kind == SubscriptionKind::Slack && s.url == url)
     {
+        // Backfill the channel label if this connection predates label capture
+        // (or was made manually) and Slack now told us the channel.
+        if dup.label.is_none() && label.is_some() {
+            let updated = WebhookSubscription {
+                label,
+                ..dup.clone()
+            };
+            let _ = st.store.put_webhook(tenant, &updated).await;
+        }
         let clear = format!("{SLACK_STATE_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
         return (
             StatusCode::SEE_OTHER,
@@ -152,6 +165,7 @@ pub(crate) async fn slack_callback(
         active: true,
         created: now(),
         kind: SubscriptionKind::Slack,
+        label,
     };
     if st.store.put_webhook(tenant, &sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

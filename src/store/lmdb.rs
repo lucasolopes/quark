@@ -1796,6 +1796,7 @@ mod tests {
             active: true,
             created: 1,
             kind: crate::webhooks::SubscriptionKind::Generic,
+            label: None,
         };
         store
             .put_webhook(crate::tenant::DEFAULT_TENANT, &sub)

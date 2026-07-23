@@ -172,6 +172,8 @@ export interface Webhook {
   kind: SubscriptionKind;
   /** Masked form of the signing secret, e.g. `whsec_••••` — the raw secret is only ever returned once, at creation. Empty for channel kinds (no signing secret). */
   secret_masked: string;
+  /** Optional human label for the destination (e.g. the Slack channel `#general` from the OAuth install), used to tell connections apart. Null for manual webhooks. */
+  label?: string | null;
 }
 export interface ListWebhooksResponse { webhooks: Webhook[]; }
 export interface CreateWebhookRequest { url: string; events: WebhookEvent[]; active?: boolean; kind: SubscriptionKind; }
