@@ -1399,7 +1399,7 @@ impl Store for PostgresStore {
     ) -> Result<Vec<WebhookSubscription>, StoreError> {
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, url, events, secret, active, created, kind FROM webhooks WHERE tenant_id = $1 ORDER BY id",
+                "SELECT id, url, events, secret, active, created, kind, label FROM webhooks WHERE tenant_id = $1 ORDER BY id",
             )
             .bind(tenant.0 as i64)
             .fetch_all(&mut *c)
@@ -1415,7 +1415,7 @@ impl Store for PostgresStore {
     ) -> Result<Option<WebhookSubscription>, StoreError> {
         let row = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, url, events, secret, active, created, kind FROM webhooks WHERE tenant_id = $1 AND id = $2",
+                "SELECT id, url, events, secret, active, created, kind, label FROM webhooks WHERE tenant_id = $1 AND id = $2",
             )
             .bind(tenant.0 as i64)
             .bind(id as i64)
