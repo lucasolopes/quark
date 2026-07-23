@@ -60,7 +60,26 @@ pub fn router(state: Arc<AppState>) -> Router {
     router_with_cors(state, origins)
 }
 
+/// Normalizes a `Host` header (or configured host) for comparison: drop any
+/// `:port`, a trailing dot, surrounding whitespace, and lowercase it.
+pub(crate) fn normalize_admin_host(h: &str) -> String {
+    h.split(':')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
+}
+
 pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
+    // Admin-surface host gate (cloud only): when `QUARK_ADMIN_HOST` is set,
+    // `/admin/*` answers only on that host (the API host), never on a tenant's
+    // link domain (`<slug>.<suffix>` or a custom domain), which must serve only
+    // the public redirect path. Captured before `state` is moved into the app.
+    let admin_host = std::env::var("QUARK_ADMIN_HOST")
+        .ok()
+        .map(|h| normalize_admin_host(&h))
+        .filter(|h| !h.is_empty() && state.multi_tenant);
     let app = Router::new()
         .route("/", post(create))
         .route("/health", get(health))
@@ -179,6 +198,32 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
                 .delete(admin_wellknown_delete),
         )
         .with_state(state);
+
+    // Apply the admin-host gate as an inner layer (runs after CORS, so a
+    // preflight is still answered): a `/admin/*` request whose `Host` is not
+    // the admin host gets a 404, as if the route did not exist on that domain.
+    let app = if let Some(admin_host) = admin_host {
+        app.layer(axum::middleware::from_fn(move |req: Request, next: Next| {
+            let admin_host = admin_host.clone();
+            async move {
+                let path = req.uri().path();
+                if path.starts_with("/admin/") || path == "/admin" {
+                    let host = req
+                        .headers()
+                        .get(header::HOST)
+                        .and_then(|h| h.to_str().ok())
+                        .map(normalize_admin_host)
+                        .unwrap_or_default();
+                    if host != admin_host {
+                        return StatusCode::NOT_FOUND.into_response();
+                    }
+                }
+                next.run(req).await
+            }
+        }))
+    } else {
+        app
+    };
 
     let app = if origins.is_empty() {
         app
