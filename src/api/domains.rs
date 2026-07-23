@@ -45,9 +45,12 @@ pub(crate) struct DomainView {
     /// CNAME target the caller should point `host` at. `None` when this
     /// deploy has no shared `public_host` configured.
     cname_target: Option<String>,
+    /// True when this is the tenant's primary link domain (LUC-86): the one the
+    /// copy button and new links use by default.
+    primary: bool,
 }
 
-pub(crate) fn domain_view(d: &Domain, public_host: &Option<String>) -> DomainView {
+pub(crate) fn domain_view(d: &Domain, public_host: &Option<String>, primary: bool) -> DomainView {
     DomainView {
         id: d.id,
         host: d.host.clone(),
@@ -57,6 +60,7 @@ pub(crate) fn domain_view(d: &Domain, public_host: &Option<String>) -> DomainVie
         txt_name: verify_txt_name(&d.host),
         txt_value: d.token.clone(),
         cname_target: public_host.clone(),
+        primary,
     }
 }
 
@@ -73,11 +77,12 @@ pub(crate) async fn admin_domains_list(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
+    let primary_id = st.store.get_primary_domain_id(p.tenant).await.ok().flatten();
     match st.store.list_domains(p.tenant).await {
         Ok(domains) => Json(
             domains
                 .iter()
-                .map(|d| domain_view(d, &st.public_host))
+                .map(|d| domain_view(d, &st.public_host, Some(d.id) == primary_id))
                 .collect::<Vec<_>>(),
         )
         .into_response(),
@@ -130,7 +135,8 @@ pub(crate) async fn admin_domains_create(
     if let Err(e) = st.store.put_domain(&domain).await {
         return conflict_or_503(e).into_response();
     }
-    Json(domain_view(&domain, &st.public_host)).into_response()
+    // A freshly created domain is pending and never the primary yet.
+    Json(domain_view(&domain, &st.public_host, false)).into_response()
 }
 
 /// `POST /admin/domains/:id/verify`: look up the `_quark-verify.<host>` TXT
@@ -179,7 +185,8 @@ pub(crate) async fn admin_domains_verify(
         domain.status = DomainStatus::Verified;
         domain.verified_at = Some(verified_at);
     }
-    Json(domain_view(&domain, &st.public_host)).into_response()
+    let primary_id = st.store.get_primary_domain_id(p.tenant).await.ok().flatten();
+    Json(domain_view(&domain, &st.public_host, Some(domain.id) == primary_id)).into_response()
 }
 
 /// `DELETE /admin/domains/:id`: remove the caller's tenant's custom domain
@@ -204,8 +211,45 @@ pub(crate) async fn admin_domains_delete(
     if st.store.delete_domain(p.tenant, id).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    // If the deleted domain was the tenant's primary, clear the pointer so the
+    // default falls back to the subdomain (a dangling primary is harmless — the
+    // resolvers already ignore it — but clearing keeps the row honest).
+    if st.store.get_primary_domain_id(p.tenant).await.ok().flatten() == Some(id) {
+        let _ = st.store.set_primary_domain(p.tenant, None).await;
+    }
     st.host_router.invalidate(&domain.host).await;
     StatusCode::NO_CONTENT.into_response()
+}
+
+/// `POST /admin/domains/:id/primary`: make the caller's tenant's domain its
+/// primary link domain (LUC-86) — the one the copy button and new links use by
+/// default (cloud only, Owner/Admin). The domain must exist and be `Verified`;
+/// setting it replaces any previous primary (stored as a single pointer on the
+/// tenant row).
+pub(crate) async fn admin_domains_set_primary(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let p = match admin_guard(&st, &headers, Scope::Full).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let domain = match st.store.get_domain(p.tenant, id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if domain.status != DomainStatus::Verified {
+        return (StatusCode::BAD_REQUEST, "domain must be verified first").into_response();
+    }
+    if st.store.set_primary_domain(p.tenant, Some(id)).await.is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    Json(domain_view(&domain, &st.public_host, true)).into_response()
 }
 
 // --- SSO email-domain discovery (LUC-57 Task 2), cloud-only ---

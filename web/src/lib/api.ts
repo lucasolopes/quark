@@ -307,6 +307,10 @@ export const api = {
     const res = await req(`/admin/domains/${id}`, { method: "DELETE" });
     if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
+  /** Makes a verified domain the tenant's primary link domain (copy button + new links use it). */
+  async setPrimaryDomain(id: number): Promise<LinkDomainView> {
+    return jsonOrThrow(await req(`/admin/domains/${id}/primary`, { method: "POST" }));
+  },
   /** The current workspace's own OIDC provider, redacted (never the secret). Throws 404 when none is configured. */
   async getOidcConfig(): Promise<OidcConfigView> {
     return jsonOrThrow(await req("/admin/oidc-config"));

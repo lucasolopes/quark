@@ -110,6 +110,10 @@ export interface MeResponse {
   /** Shared short-link host (`QUARK_PUBLIC_HOST`, e.g. `go.quarkus.com.br`); the
    * fallback host for a tenant without its own subdomain. Null/absent when unset. */
   public_host?: string | null;
+  /** Resolved host for building/copying this tenant's short links: primary
+   * custom domain → subdomain → shared host. Present once a workspace is
+   * selected (cloud); absent in OSS. */
+  primary_link_host?: string | null;
 }
 /** A pending or accepted team invite (cloud only), for the Members screen. */
 export interface InviteView {
@@ -264,6 +268,8 @@ export interface LinkDomainView {
   txt_value: string;
   /** CNAME target to point `host` at; null when the deploy has no shared public host. */
   cname_target: string | null;
+  /** True when this is the tenant's primary link domain (copy button + new links use it). */
+  primary: boolean;
 }
 
 /** The tenant's own OIDC provider, redacted: the `client_secret` never leaves

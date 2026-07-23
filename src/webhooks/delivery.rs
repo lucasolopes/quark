@@ -1383,6 +1383,19 @@ mod tests {
         ) -> Result<(), StoreError> {
             unimplemented!()
         }
+        async fn set_primary_domain(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _domain_id: Option<u64>,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn get_primary_domain_id(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Option<u64>, StoreError> {
+            Ok(None)
+        }
         async fn next_sso_domain_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }

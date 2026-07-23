@@ -497,6 +497,13 @@ pub(crate) async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap
                 };
                 body["memberships"] = serde_json::json!(out);
                 body["current_tenant"] = serde_json::json!(current_tenant);
+                // Host the panel uses to build/copy short links (LUC-86): the
+                // tenant's primary custom domain, else its subdomain, else the
+                // shared host. Only meaningful once a workspace is selected.
+                if current_tenant.is_some() {
+                    body["primary_link_host"] =
+                        serde_json::json!(primary_link_host(&st, session.tenant_id).await);
+                }
             }
             return Json(body).into_response();
         }

@@ -477,6 +477,15 @@ pub(crate) async fn default_domain_id(st: &AppState, tenant: crate::tenant::Tena
     if !st.multi_tenant || tenant == crate::tenant::DEFAULT_TENANT {
         return SHARED_DOMAIN_ID;
     }
+    // Primary link domain override (LUC-86): a verified custom domain the tenant
+    // marked primary wins over the auto subdomain, so new links bind to it.
+    if let Ok(Some(pid)) = st.store.get_primary_domain_id(tenant).await {
+        if let Ok(Some(d)) = st.store.get_domain(tenant, pid).await {
+            if d.status == crate::domain::DomainStatus::Verified {
+                return d.id;
+            }
+        }
+    }
     let Some(suffix) = st.tenant_domain_suffix.as_deref() else {
         return SHARED_DOMAIN_ID;
     };
@@ -488,6 +497,32 @@ pub(crate) async fn default_domain_id(st: &AppState, tenant: crate::tenant::Tena
         Ok(Some(domain)) => domain.id,
         _ => SHARED_DOMAIN_ID,
     }
+}
+
+/// The host the panel should show/copy for a tenant's short links: the verified
+/// primary custom domain if set (LUC-86), else the auto `<slug>.<suffix>`
+/// subdomain, else the shared `public_host`. `None` only when nothing is
+/// configured (OSS with no public host). Exposed on `/admin/me` so the panel
+/// builds the copy URL without listing every domain.
+pub(crate) async fn primary_link_host(
+    st: &AppState,
+    tenant: crate::tenant::TenantId,
+) -> Option<String> {
+    if st.multi_tenant && tenant != crate::tenant::DEFAULT_TENANT {
+        if let Ok(Some(pid)) = st.store.get_primary_domain_id(tenant).await {
+            if let Ok(Some(d)) = st.store.get_domain(tenant, pid).await {
+                if d.status == crate::domain::DomainStatus::Verified {
+                    return Some(d.host);
+                }
+            }
+        }
+        if let Some(suffix) = st.tenant_domain_suffix.as_deref() {
+            if let Ok(Some(t)) = st.store.get_tenant(tenant).await {
+                return Some(subdomain_host(&t.slug, suffix));
+            }
+        }
+    }
+    st.public_host.clone()
 }
 
 pub(crate) async fn create(

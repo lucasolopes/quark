@@ -1163,6 +1163,18 @@ impl Store for LmdbStore {
         Err(StoreError::Unsupported)
     }
 
+    async fn set_primary_domain(
+        &self,
+        _tenant: TenantId,
+        _domain_id: Option<u64>,
+    ) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn get_primary_domain_id(&self, _tenant: TenantId) -> Result<Option<u64>, StoreError> {
+        Ok(None)
+    }
+
     // SSO email-domain discovery (LUC-57) is cloud-only, same reasoning as
     // custom domains above: OSS is single-tenant, and the SSO-domain endpoints
     // are gated behind `multi_tenant`, so these are never invoked here.

@@ -1,4 +1,4 @@
-import { AlertTriangle, Globe, Plus, RotateCw, ShieldCheck, Trash2 } from "lucide-react";
+import { AlertTriangle, Globe, Plus, RotateCw, ShieldCheck, Star, Trash2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import {
@@ -29,7 +29,7 @@ import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { isUnauthorized, mutationErrorToast } from "@/lib/mutation-error";
-import { useCreateDomain, useDeleteDomain, useDomains, useMe, useVerifyDomain } from "@/lib/queries";
+import { useCreateDomain, useDeleteDomain, useDomains, useMe, useSetPrimaryDomain, useVerifyDomain } from "@/lib/queries";
 import type { LinkDomainView } from "@/lib/types";
 
 const HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
@@ -60,8 +60,23 @@ function DomainsPanel() {
   const query = useDomains();
   const verifyDomain = useVerifyDomain();
   const deleteDomain = useDeleteDomain();
+  const setPrimary = useSetPrimaryDomain();
+  const [settingPrimaryId, setSettingPrimaryId] = useState<number | null>(null);
 
   const domains = query.data ?? [];
+
+  async function handleSetPrimary(domain: LinkDomainView) {
+    setSettingPrimaryId(domain.id);
+    try {
+      await setPrimary.mutateAsync(domain.id);
+      toast.success(t("domains.setPrimarySuccess"));
+    } catch (err) {
+      if (isUnauthorized(err)) return;
+      toast.error(t("domains.setPrimaryError"));
+    } finally {
+      setSettingPrimaryId(null);
+    }
+  }
 
   // The automatic subdomain (`<slug>.<suffix>`) is managed by the server, so
   // it is shown read-only (no verify/remove) and labelled. Derived from `me`,
@@ -175,21 +190,38 @@ function DomainsPanel() {
                         )}
                       </Badge>
                       {isAuto && <Badge variant="secondary">{t("domains.autoBadge")}</Badge>}
+                      {domain.primary && (
+                        <Badge>
+                          <Star className="size-3" aria-hidden="true" />
+                          {t("domains.primaryBadge")}
+                        </Badge>
+                      )}
                       <span className="text-xs text-muted-foreground">{formatDateTime(domain.created)}</span>
                     </div>
-                    {!isAuto && (
-                      <div className="flex items-center gap-1">
-                        {domain.status === "pending" && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            aria-label={t("domains.verifyAria", { host: domain.host })}
-                            disabled={verifyingId === domain.id}
-                            onClick={() => handleVerify(domain)}
-                          >
-                            {verifyingId === domain.id ? t("domains.verifying") : t("domains.verify")}
-                          </Button>
-                        )}
+                    <div className="flex items-center gap-1">
+                      {domain.status === "verified" && !domain.primary && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-label={t("domains.setPrimaryAria", { host: domain.host })}
+                          disabled={settingPrimaryId === domain.id}
+                          onClick={() => handleSetPrimary(domain)}
+                        >
+                          {t("domains.setPrimary")}
+                        </Button>
+                      )}
+                      {!isAuto && domain.status === "pending" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-label={t("domains.verifyAria", { host: domain.host })}
+                          disabled={verifyingId === domain.id}
+                          onClick={() => handleVerify(domain)}
+                        >
+                          {verifyingId === domain.id ? t("domains.verifying") : t("domains.verify")}
+                        </Button>
+                      )}
+                      {!isAuto && (
                         <Button
                           variant="ghost"
                           size="icon-sm"
@@ -198,8 +230,8 @@ function DomainsPanel() {
                         >
                           <Trash2 className="size-3.5" />
                         </Button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
 
                   {!isAuto && domain.status === "pending" && (
