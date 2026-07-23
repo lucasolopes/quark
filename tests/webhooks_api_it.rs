@@ -219,6 +219,54 @@ async fn webhooks_crud_and_secret_masking() {
 }
 
 #[tokio::test]
+async fn create_and_list_webhook_exposes_connector_id_and_health() {
+    let app = app_admin("secret").await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/webhooks")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(
+                    r#"{"url":"https://example.com/hook","events":["link.created"],"kind":"generic","connector_id":"zapier"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let id = created["id"].as_u64().unwrap();
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/webhooks")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let row = &list["webhooks"][0];
+    assert_eq!(row["id"], id);
+    assert_eq!(row["connector_id"], "zapier");
+    assert_eq!(
+        row["last_delivery_status"],
+        serde_json::json!({"state": "never"})
+    );
+    assert!(row.get("last_delivery_at").is_none() || row["last_delivery_at"].is_null());
+}
+
+#[tokio::test]
 async fn creating_a_link_emits_link_created() {
     let (app, mut wh_rx) = app_admin_with_dispatcher("secret").await;
 

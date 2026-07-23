@@ -7,6 +7,8 @@ pub(crate) struct WebhookCreateReq {
     active: Option<bool>,
     #[serde(default)]
     kind: SubscriptionKind,
+    #[serde(default)]
+    connector_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -28,6 +30,10 @@ pub(crate) struct WebhookRow {
     kind: SubscriptionKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connector_id: Option<String>,
+    last_delivery_at: Option<u64>,
+    last_delivery_status: crate::health::HealthStatus,
 }
 
 pub(crate) async fn admin_webhooks_list(
@@ -51,6 +57,9 @@ pub(crate) async fn admin_webhooks_list(
                     secret_masked: mask_secret(&s.secret),
                     kind: s.kind,
                     label: s.label,
+                    connector_id: s.connector_id,
+                    last_delivery_at: s.last_delivery_at,
+                    last_delivery_status: s.last_delivery_status,
                 })
                 .collect();
             Json(serde_json::json!({ "webhooks": rows })).into_response()
@@ -118,6 +127,8 @@ pub(crate) struct PixelRow {
     credentials: MaskedCredentials,
     active: bool,
     created: u64,
+    last_forward_at: Option<u64>,
+    last_forward_status: crate::health::HealthStatus,
 }
 
 pub(crate) fn to_pixel_row(config: &PixelConfig) -> PixelRow {
@@ -127,6 +138,8 @@ pub(crate) fn to_pixel_row(config: &PixelConfig) -> PixelRow {
         credentials: mask_credentials(&config.credentials),
         active: config.active,
         created: config.created,
+        last_forward_at: config.last_forward_at,
+        last_forward_status: config.last_forward_status.clone(),
     }
 }
 
@@ -241,7 +254,7 @@ pub(crate) async fn admin_webhooks_create(
         created: now(),
         kind: req.kind,
         label: None,
-        connector_id: None,
+        connector_id: req.connector_id,
         external_id: None,
         last_delivery_at: None,
         last_delivery_status: Default::default(),
