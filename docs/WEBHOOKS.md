@@ -299,6 +299,61 @@ loopback host: the same SSRF guard (`is_internal_host`) that protects link
 destinations applies here, checked both at subscription-create time and
 again at delivery time. A deployment caps out at 50 subscriptions.
 
+### Distinguishing Zapier, Make, and n8n
+
+Zapier, Make, and n8n all register a plain `kind: "generic"` subscription:
+quark has no special integration with any of them, they just catch a
+webhook. Historically that meant the integrations panel couldn't tell them
+apart either, since all it had to go on was `kind`, and any one of the three
+being connected lit up all three.
+
+`CreateReq` now accepts an optional `connector_id` (a catalog id, e.g.
+`"zapier"`, `"make"`, `"n8n"`). Each integration's own page in the panel
+sends its id when it creates the subscription, so the panel can match a row
+back to the exact connector that created it instead of guessing from `kind`.
+A subscription created before this existed has no `connector_id`; the panel
+falls back to the old `kind`-based match for those, so nothing already
+connected breaks.
+
+```bash
+curl -X POST localhost:8080/admin/webhooks \
+  -H 'x-admin-token: <token>' -H 'content-type: application/json' \
+  -d '{"url": "https://hooks.zapier.com/hooks/catch/000000/xxxxxx", "events": ["link.created"], "connector_id": "zapier"}'
+```
+
+## Connection health
+
+Each subscription row in the panel and the API shows the result of its last
+delivery: `last_delivery_status` is one of `never` (created, nothing sent
+yet), `ok` (the last attempt succeeded), or `error` (with a short `detail`
+string, never a secret or token). `last_delivery_at` is the unix timestamp
+of that attempt. Pixels carry the same shape under `last_forward_status` /
+`last_forward_at` for their last conversion forward.
+
+This is **passive health**: quark never polls a receiver to ask "are you
+still there?". The status is just whatever the last real delivery attempt
+returned, recorded as a side effect of sending it.
+
+`link.clicked` is deliberately excluded. It's the one event that fires from
+the redirect's hot path, and recording health there would mean a write for
+every single click, which is exactly the cost the async/best-effort design
+of that event exists to avoid (see [Events](#events)). So health reflects:
+
+- the lifecycle events: `link.created`, `link.updated`, `link.deleted`,
+  `link.expired`, `link.threshold_reached`,
+- and the `/admin/webhooks/:id/test` button, which always records health
+  since it's never a real click.
+
+A subscription that only ever receives `link.clicked` can sit at `never`
+indefinitely even while delivering clicks correctly. That's expected: use
+"Test" to check it, or subscribe it to a lifecycle event too if you want the
+status to reflect live traffic.
+
+Pixel health follows the conversion forward path in
+[Conversion forwarding](CONVERSION-FORWARDING.md), which already runs off
+the redirect hot path in the analytics worker; the write there is
+best-effort and never blocks that worker's next batch.
+
 ## Click-threshold alerts
 
 A link can carry an alert rule: fire `link.threshold_reached` when it is
