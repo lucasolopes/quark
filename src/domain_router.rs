@@ -299,6 +299,15 @@ mod tests {
         async fn next_webhook_id(&self, _tenant: TenantId) -> Result<u64, StoreError> {
             unimplemented!()
         }
+        async fn record_webhook_health(
+            &self,
+            _tenant: TenantId,
+            _id: u64,
+            _at: u64,
+            _status: crate::health::HealthStatus,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
         async fn put_alert_rule(
             &self,
             _tenant: TenantId,

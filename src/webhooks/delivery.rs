@@ -859,6 +859,16 @@ mod tests {
             std::collections::HashMap<crate::tenant::TenantId, Vec<WebhookSubscription>>,
         seen_tenant: std::sync::Mutex<Option<crate::tenant::TenantId>>,
         fail: std::sync::atomic::AtomicBool,
+        /// Captures every `record_webhook_health` call for assertions (LUC-87
+        /// fase 3).
+        health_calls: std::sync::Mutex<
+            Vec<(
+                crate::tenant::TenantId,
+                u64,
+                u64,
+                crate::health::HealthStatus,
+            )>,
+        >,
     }
 
     impl StubStore {
@@ -876,6 +886,7 @@ mod tests {
                 subs_by_tenant: pairs.into_iter().collect(),
                 seen_tenant: std::sync::Mutex::new(None),
                 fail: std::sync::atomic::AtomicBool::new(false),
+                health_calls: std::sync::Mutex::new(Vec::new()),
             }
         }
 
@@ -1048,6 +1059,19 @@ mod tests {
             _tenant: crate::tenant::TenantId,
         ) -> Result<u64, StoreError> {
             unimplemented!()
+        }
+        async fn record_webhook_health(
+            &self,
+            tenant: crate::tenant::TenantId,
+            id: u64,
+            at: u64,
+            status: crate::health::HealthStatus,
+        ) -> Result<(), StoreError> {
+            self.health_calls
+                .lock()
+                .unwrap()
+                .push((tenant, id, at, status));
+            Ok(())
         }
         async fn put_alert_rule(
             &self,

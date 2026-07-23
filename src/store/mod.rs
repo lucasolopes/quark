@@ -433,6 +433,17 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<(), StoreError>;
     async fn delete_webhook(&self, tenant: TenantId, id: u64) -> Result<bool, StoreError>;
     async fn next_webhook_id(&self, tenant: TenantId) -> Result<u64, StoreError>;
+    /// Registra o resultado da ultima entrega de um webhook (health passivo,
+    /// LUC-87 fase 3). Update cirurgico: nao reescreve os outros campos da
+    /// subscription. Best-effort no caller (erro logado, nunca propagado ao
+    /// hot path). No-op silencioso se a subscription nao existe mais.
+    async fn record_webhook_health(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        at: u64,
+        status: crate::health::HealthStatus,
+    ) -> Result<(), StoreError>;
     /// Upserts the click-threshold alert rule for a link (LUC-38), keyed by
     /// `(tenant, link_id)`. Replaces any existing rule for that link.
     async fn put_alert_rule(

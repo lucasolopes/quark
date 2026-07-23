@@ -532,6 +532,26 @@ impl Store for LmdbStore {
         Ok(next)
     }
 
+    async fn record_webhook_health(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        at: u64,
+        status: crate::health::HealthStatus,
+    ) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        let key = tkey_id(tenant, id);
+        if let Some(bytes) = self.webhooks.get(&wtxn, &key)? {
+            let mut sub: WebhookSubscription = serde_json::from_slice(bytes)?;
+            sub.last_delivery_at = Some(at);
+            sub.last_delivery_status = status;
+            let out = serde_json::to_vec(&sub)?;
+            self.webhooks.put(&mut wtxn, &key, &out)?;
+            wtxn.commit()?;
+        }
+        Ok(())
+    }
+
     async fn put_alert_rule(
         &self,
         tenant: TenantId,
@@ -1832,6 +1852,53 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn record_webhook_health_updates_only_health_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let sub = WebhookSubscription {
+            id: 1,
+            url: "https://h/x".into(),
+            events: vec![crate::webhooks::EventType::LinkCreated],
+            secret: String::new(),
+            active: true,
+            created: 10,
+            kind: crate::webhooks::SubscriptionKind::Generic,
+            label: None,
+            connector_id: Some("zapier".into()),
+            external_id: None,
+            last_delivery_at: None,
+            last_delivery_status: crate::health::HealthStatus::Never,
+        };
+        s.put_webhook(crate::tenant::DEFAULT_TENANT, &sub)
+            .await
+            .unwrap();
+
+        s.record_webhook_health(
+            crate::tenant::DEFAULT_TENANT,
+            1,
+            200,
+            crate::health::HealthStatus::Error("502".into()),
+        )
+        .await
+        .unwrap();
+
+        let got = s
+            .get_webhook(crate::tenant::DEFAULT_TENANT, 1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.last_delivery_at, Some(200));
+        assert_eq!(
+            got.last_delivery_status,
+            crate::health::HealthStatus::Error("502".into())
+        );
+        // Campos nao-health preservados.
+        assert_eq!(got.connector_id.as_deref(), Some("zapier"));
+        assert_eq!(got.url, "https://h/x");
+        assert!(got.active);
     }
 
     #[tokio::test]

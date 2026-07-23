@@ -373,6 +373,13 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
     let kind: String = r.try_get("kind").map_err(StoreError::backend)?;
     let label: Option<String> = r.try_get("label").map_err(StoreError::backend)?;
+    let connector_id: Option<String> = r.try_get("connector_id").map_err(StoreError::backend)?;
+    let external_id: Option<String> = r.try_get("external_id").map_err(StoreError::backend)?;
+    let last_delivery_at: Option<i64> =
+        r.try_get("last_delivery_at").map_err(StoreError::backend)?;
+    let last_delivery_status: Option<serde_json::Value> = r
+        .try_get("last_delivery_status")
+        .map_err(StoreError::backend)?;
     Ok(WebhookSubscription {
         id: id as u64,
         url,
@@ -382,10 +389,13 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
         created: created as u64,
         kind: SubscriptionKind::from_str_or_generic(&kind),
         label,
-        connector_id: None,
-        external_id: None,
-        last_delivery_at: None,
-        last_delivery_status: Default::default(),
+        connector_id,
+        external_id,
+        last_delivery_at: last_delivery_at.map(|v| v as u64),
+        last_delivery_status: match last_delivery_status {
+            Some(v) => serde_json::from_value(v)?,
+            None => crate::health::HealthStatus::Never,
+        },
     })
 }
 
@@ -699,6 +709,13 @@ impl PostgresStore {
                 // install captures the chosen channel name here so the panel can
                 // tell channels apart. Nullable; pre-existing rows stay NULL.
                 "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS label TEXT",
+                // Health passivo por webhook (LUC-87 fase 3): connector_id
+                // desambigua os genericos; external_id casa o destino do lado
+                // do provedor; last_delivery_* guardam a ultima entrega.
+                "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS connector_id TEXT",
+                "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS external_id TEXT",
+                "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS last_delivery_at BIGINT",
+                "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS last_delivery_status JSONB",
                 "CREATE TABLE IF NOT EXISTS api_tokens (id BIGINT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, scopes JSONB NOT NULL, rate_limit_per_min BIGINT, created BIGINT NOT NULL)",
                 "CREATE INDEX IF NOT EXISTS api_tokens_token_hash_idx ON api_tokens (token_hash)",
                 // Primary link domain per tenant (LUC-86): the domain the copy
@@ -1406,7 +1423,7 @@ impl Store for PostgresStore {
     ) -> Result<Vec<WebhookSubscription>, StoreError> {
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, url, events, secret, active, created, kind, label FROM webhooks WHERE tenant_id = $1 ORDER BY id",
+                "SELECT id, url, events, secret, active, created, kind, label, connector_id, external_id, last_delivery_at, last_delivery_status FROM webhooks WHERE tenant_id = $1 ORDER BY id",
             )
             .bind(tenant.0 as i64)
             .fetch_all(&mut *c)
@@ -1422,7 +1439,7 @@ impl Store for PostgresStore {
     ) -> Result<Option<WebhookSubscription>, StoreError> {
         let row = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, url, events, secret, active, created, kind, label FROM webhooks WHERE tenant_id = $1 AND id = $2",
+                "SELECT id, url, events, secret, active, created, kind, label, connector_id, external_id, last_delivery_at, last_delivery_status FROM webhooks WHERE tenant_id = $1 AND id = $2",
             )
             .bind(tenant.0 as i64)
             .bind(id as i64)
@@ -1441,10 +1458,12 @@ impl Store for PostgresStore {
         sub: &WebhookSubscription,
     ) -> Result<(), StoreError> {
         let events = serde_json::to_value(&sub.events)?;
+        let last_delivery_status = serde_json::to_value(&sub.last_delivery_status)?;
         with_write!(self, tenant, |c| {
             sqlx::query(
-                "INSERT INTO webhooks (id, url, events, secret, active, created, kind, tenant_id, label) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) \
-                 ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6, kind=$7, tenant_id=$8, label=$9",
+                "INSERT INTO webhooks (id, url, events, secret, active, created, kind, tenant_id, label, connector_id, external_id, last_delivery_at, last_delivery_status) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) \
+                 ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6, kind=$7, tenant_id=$8, label=$9, connector_id=$10, external_id=$11, last_delivery_at=$12, last_delivery_status=$13",
             )
             .bind(sub.id as i64)
             .bind(&sub.url)
@@ -1455,6 +1474,10 @@ impl Store for PostgresStore {
             .bind(sub.kind.as_str())
             .bind(tenant.0 as i64)
             .bind(&sub.label)
+            .bind(&sub.connector_id)
+            .bind(&sub.external_id)
+            .bind(sub.last_delivery_at.map(|v| v as i64))
+            .bind(&last_delivery_status)
             .execute(&mut *c)
             .await
         });
@@ -1480,6 +1503,28 @@ impl Store for PostgresStore {
             .map_err(StoreError::backend)?;
         let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
         Ok(id as u64)
+    }
+
+    async fn record_webhook_health(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        at: u64,
+        status: crate::health::HealthStatus,
+    ) -> Result<(), StoreError> {
+        let status = serde_json::to_value(&status)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "UPDATE webhooks SET last_delivery_at=$1, last_delivery_status=$2 WHERE tenant_id=$3 AND id=$4",
+            )
+            .bind(at as i64)
+            .bind(&status)
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .execute(&mut *c)
+            .await
+        });
+        Ok(())
     }
 
     async fn list_tags(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError> {
