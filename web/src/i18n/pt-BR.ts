@@ -623,6 +623,7 @@ export const ptBR: Messages = {
     heading: "Extensões",
     subtitle: "Conecte o quark às ferramentas que você já usa. Cada integração roda em cima de um recurso real do painel.",
     comingSoon: "Em breve",
+    connected: "Conectado",
     viaWebhooks: "Configurar via Webhooks",
     viaPixels: "Configurar via Pixels",
     categoryAutomation: "Automação",
