@@ -1,0 +1,49 @@
+<sc-if value="{{ createOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeCreate }}" style="position: fixed; inset: 0; z-index: 100; background: rgba(6,7,10,.6); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 24px;">
+    <div onClick="{{ stop }}" style="width: 100%; max-width: 540px; max-height: 90vh; overflow-y: auto; overflow-x: hidden; background: {{ pal.card }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 16px; padding: 24px; box-shadow: 0 40px 90px -30px rgba(0,0,0,.7); animation: qrise .3s cubic-bezier(.23,1,.32,1) both;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+        <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 20px; letter-spacing: -.02em; color: {{ pal.strong }}; margin: 0;">{{ P.create.title }}</h2>
+        <button class="qbtn" onClick="{{ closeCreate }}" style="background: transparent; border: none; cursor: pointer; color: {{ pal.muted }}; padding: 4px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+      </div>
+      <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.dest }}</label>
+      <input placeholder="{{ P.create.destPh }}" style="width: 100%; background: {{ pal.input }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 10px; padding: 11px 13px; color: {{ pal.text }}; font-size: 14.5px; outline: none; margin-bottom: 16px;">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+        <div>
+          <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.alias }}</label>
+          <div style="display: flex; align-items: center; background: {{ pal.input }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 10px; padding: 0 12px;"><span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: {{ pal.muted }};">q.rk/</span><input placeholder="{{ P.create.aliasPh }}" style="flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: {{ pal.text }}; font-size: 14px; padding: 11px 2px;"></div>
+        </div>
+        <div>
+          <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.folder }}</label>
+          <div style="display: flex; align-items: center; justify-content: space-between; background: {{ pal.input }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 10px; padding: 11px 13px; cursor: pointer;"><span style="font-size: 14px; color: {{ pal.text }};">Marketing</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"></polyline></svg></div>
+        </div>
+      </div>
+      <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.tags }}</label>
+      <div style="display: flex; align-items: center; gap: 7px; background: {{ pal.input }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 10px; padding: 8px 12px; margin-bottom: 16px; flex-wrap: wrap;">
+        <span style="font-size: 11px; font-weight: 600; color: #C6F94E; background: rgba(198,249,78,.14); border-radius: 5px; padding: 3px 8px;">campanha ×</span>
+        <input placeholder="{{ P.create.tagsPh }}" style="flex: 1; min-width: 100px; background: transparent; border: none; outline: none; color: {{ pal.text }}; font-size: 14px; padding: 3px 0;">
+      </div>
+      <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.ttl }}</label>
+      <div style="display: flex; gap: 7px; margin-bottom: 18px; flex-wrap: wrap;">
+        <sc-for list="{{ ttlChips }}" as="tc" hint-placeholder-count="5">
+          <button class="qbtn" style="background: {{ tc.bg }}; border: 1px solid {{ tc.border }}; border-radius: 8px; padding: 7px 13px; color: {{ tc.color }}; font-size: 13px; font-weight: 500; cursor: pointer;">{{ tc.label }}</button>
+        </sc-for>
+      </div>
+      <div style="border-top: 1px solid {{ pal.border }}; padding-top: 16px; margin-bottom: 16px;">
+        <div style="font-size: 13px; font-weight: 600; color: {{ pal.text }}; margin-bottom: 12px;">{{ P.create.utmToggle }}</div>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+          <input placeholder="{{ P.create.src }}" value="instagram" style="background: {{ pal.input }}; border: 1px solid {{ pal.border }}; border-radius: 9px; padding: 9px 11px; color: {{ pal.text }}; font-size: 13px; outline: none;">
+          <input placeholder="{{ P.create.med }}" value="social" style="background: {{ pal.input }}; border: 1px solid {{ pal.border }}; border-radius: 9px; padding: 9px 11px; color: {{ pal.text }}; font-size: 13px; outline: none;">
+          <input placeholder="{{ P.create.camp }}" value="verao26" style="background: {{ pal.input }}; border: 1px solid {{ pal.border }}; border-radius: 9px; padding: 9px 11px; color: {{ pal.text }}; font-size: 13px; outline: none;">
+        </div>
+      </div>
+      <div style="background: {{ pal.card2 }}; border: 1px dashed {{ pal.borderStrong }}; border-radius: 10px; padding: 13px 15px; margin-bottom: 20px;">
+        <div style="font-size: 11px; color: {{ pal.muted }}; margin-bottom: 5px;">{{ P.create.preview }}</div>
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 500; color: {{ pal.brand }};">q.rk/verao-promo</div>
+      </div>
+      <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <button class="qbtn" onClick="{{ closeCreate }}" style="background: transparent; border: 1px solid {{ pal.borderStrong }}; border-radius: 9px; padding: 10px 18px; color: {{ pal.text }}; font-size: 14px; font-weight: 600; cursor: pointer;">{{ P.create.cancel }}</button>
+        <button class="qbtn" onClick="{{ closeCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 10px 20px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer;">{{ P.create.submit }}</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>

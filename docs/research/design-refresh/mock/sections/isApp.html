@@ -1,0 +1,341 @@
+<sc-if value="{{ isApp }}" hint-placeholder-val="{{ false }}">
+<div style="min-height: 100vh; height: 100vh; display: flex; background: {{ pal.bg }}; color: {{ pal.text }}; font-size: 15px; overflow: hidden;">
+
+  <!-- SIDEBAR -->
+  <aside style="width: 250px; flex-shrink: 0; background: {{ pal.ink2 }}; border-right: 1px solid {{ pal.border }}; display: flex; flex-direction: column; padding: 16px 14px;">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 16px;">
+      <svg width="26" height="26" viewBox="0 0 48 48" fill="none" style="filter: drop-shadow(0 0 8px rgba(198,249,78,.3));"><g stroke="#C6F94E" stroke-width="4" stroke-linecap="round" fill="none"><path d="M14 14 L34 34"></path><path d="M34 14 L14 34"></path></g><circle cx="24" cy="24" r="7" fill="none" stroke="#C6F94E" stroke-width="4"></circle><g fill="#C6F94E"><circle cx="14" cy="14" r="2.6"></circle><circle cx="34" cy="14" r="2.6"></circle><circle cx="14" cy="34" r="2.6"></circle><circle cx="34" cy="34" r="2.6"></circle></g></svg>
+      <span style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 18px; letter-spacing: -.04em; color: {{ pal.strong }};">quark</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid {{ pal.border }}; border-radius: 10px; margin-bottom: 18px; cursor: pointer;" class="qlift">
+      <div style="width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg, #C6F94E, #4ADEDE); display: flex; align-items: center; justify-content: center; font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 12px; color: #0A0B0F; flex-shrink: 0;">A</div>
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Acme Inc</div>
+        <div style="font-size: 11px; color: {{ pal.muted }};">{{ P.plan }}</div>
+      </div>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </div>
+
+    <div style="font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .12em; color: {{ pal.muted }}; padding: 0 10px 8px;">{{ P.groupMain }}</div>
+    <div style="display: flex; flex-direction: column; gap: 3px;">
+      <button class="qbtn qlift" onClick="{{ navLinks }}" style="display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: {{ ns.links.bg }}; border: none; border-radius: 9px; padding: 9px 11px; color: {{ ns.links.c }}; font-size: 14.5px; font-weight: 500; cursor: pointer; white-space: nowrap;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ ns.links.c }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5"></path></svg>{{ P.nav.links }}
+      </button>
+      <button class="qbtn qlift" onClick="{{ navAnalytics }}" style="display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: {{ ns.analytics.bg }}; border: none; border-radius: 9px; padding: 9px 11px; color: {{ ns.analytics.c }}; font-size: 14.5px; font-weight: 500; cursor: pointer; white-space: nowrap;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ ns.analytics.c }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"></line><line x1="18" y1="20" x2="18" y2="4"></line><line x1="6" y1="20" x2="6" y2="15"></line></svg>{{ P.nav.analytics }}
+      </button>
+    </div>
+
+    <div style="font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .12em; color: {{ pal.muted }}; padding: 20px 10px 8px;">{{ P.groupSettings }}</div>
+    <div style="display: flex; flex-direction: column; gap: 3px;">
+      <button class="qbtn qlift" onClick="{{ navDomains }}" style="display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: {{ ns.domains.bg }}; border: none; border-radius: 9px; padding: 9px 11px; color: {{ ns.domains.c }}; font-size: 14.5px; font-weight: 500; cursor: pointer; white-space: nowrap;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ ns.domains.c }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18"></path></svg>{{ P.nav.domains }}
+      </button>
+      <button class="qbtn qlift" onClick="{{ navMembers }}" style="display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: {{ ns.members.bg }}; border: none; border-radius: 9px; padding: 9px 11px; color: {{ ns.members.c }}; font-size: 14.5px; font-weight: 500; cursor: pointer; white-space: nowrap;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ ns.members.c }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"></path><circle cx="10" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path></svg>{{ P.nav.members }}
+      </button>
+      <button class="qbtn qlift" onClick="{{ navTokens }}" style="display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: {{ ns.tokens.bg }}; border: none; border-radius: 9px; padding: 9px 11px; color: {{ ns.tokens.c }}; font-size: 14.5px; font-weight: 500; cursor: pointer; white-space: nowrap;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ ns.tokens.c }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="3.5"></circle><path d="M10 13l9-9"></path><path d="M16 6l3 3"></path></svg>{{ P.nav.tokens }}
+      </button>
+      <button class="qbtn qlift" onClick="{{ navWebhooks }}" style="display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: {{ ns.webhooks.bg }}; border: none; border-radius: 9px; padding: 9px 11px; color: {{ ns.webhooks.c }}; font-size: 14.5px; font-weight: 500; cursor: pointer; white-space: nowrap;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ ns.webhooks.c }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"></path></svg>{{ P.nav.webhooks }}
+      </button>
+    </div>
+
+    <div style="flex: 1;"></div>
+    <div style="background: {{ pal.wash }}; border: 1px solid rgba(198,249,78,.24); border-radius: 11px; padding: 13px; margin-bottom: 12px;">
+      <div style="font-size: 12.5px; font-weight: 600; color: {{ pal.strong }};">{{ P.plan }}</div>
+      <div style="font-size: 11.5px; color: {{ pal.muted }}; margin: 3px 0 9px;">{{ seatsUsed }} · {{ P.mem.seats }}</div>
+      <button class="qbtn" onClick="{{ goLanding }}" style="width: 100%; background: {{ pal.fill }}; border: none; border-radius: 8px; padding: 7px; color: #0A0B0F; font-size: 12.5px; font-weight: 700; cursor: pointer;">{{ P.upgrade }}</button>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-top: 1px solid {{ pal.border }}; padding-top: 12px;">
+      <div style="width: 30px; height: 30px; border-radius: 50%; background: #C6F94E; display: flex; align-items: center; justify-content: center; font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 12px; color: #0A0B0F;">LO</div>
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-size: 13px; font-weight: 600; color: {{ pal.strong }};">Lucas Olopes</div>
+        <div style="font-size: 11px; color: {{ pal.muted }};">lucas@acme.com</div>
+      </div>
+      <button class="qbtn" onClick="{{ goLanding }}" style="background: transparent; border: none; cursor: pointer; padding: 4px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></button>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div style="flex: 1; display: flex; flex-direction: column; min-width: 0;">
+    <!-- TOPBAR -->
+    <header style="height: 62px; flex-shrink: 0; border-bottom: 1px solid {{ pal.border }}; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 26px; background: {{ pal.bg }};">
+      <div style="flex: 1; max-width: 440px; display: flex; align-items: center; gap: 10px; background: {{ pal.card2 }}; border: 1px solid {{ pal.border }}; border-radius: 10px; padding: 0 13px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input placeholder="{{ P.search }}" style="flex: 1; background: transparent; border: none; outline: none; color: {{ pal.text }}; font-size: 14px; padding: 9px 0;">
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <button class="qbtn" onClick="{{ toggleLang }}" style="background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; padding: 7px 10px; color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 11px; cursor: pointer; white-space: nowrap;">{{ t.nav.langLabel }}</button>
+        <button class="qbtn" onClick="{{ toggleTheme }}" style="background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; color: {{ pal.muted }}; cursor: pointer;">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"></path></svg>
+        </button>
+        <button class="qbtn" onClick="{{ openCreate }}" style="display: flex; align-items: center; gap: 7px; background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 9px 15px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0A0B0F" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>{{ P.newLink }}
+        </button>
+      </div>
+    </header>
+
+    <!-- CONTENT -->
+    <main style="flex: 1; overflow: auto; padding: 26px 30px 60px;">
+
+      <!-- ===== LINKS TAB ===== -->
+      <sc-if value="{{ isTabLinks }}" hint-placeholder-val="{{ true }}">
+      <div style="max-width: 1000px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div>
+            <h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.links.title }}</h1>
+            <div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ linkCount }} links · {{ totalClicksF }} {{ P.links.clicks }}</div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 18px; flex-wrap: wrap;">
+          <sc-for list="{{ folderChips }}" as="fc" hint-placeholder-count="3">
+            <button class="qbtn" style="display: flex; align-items: center; gap: 7px; background: {{ fc.chipBg }}; border: 1px solid {{ fc.chipBorder }}; border-radius: 999px; padding: 6px 13px; color: {{ fc.chipColor }}; font-size: 13px; font-weight: 500; cursor: pointer;">{{ fc.name }}<span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; opacity: .7;">{{ fc.count }}</span></button>
+          </sc-for>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{ linksView }}" as="l" hint-placeholder-count="6">
+            <div class="qcard-hov" style="display: flex; align-items: center; gap: 15px; background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 14px 16px; box-shadow: {{ pal.shadow }};">
+              <div style="width: 40px; height: 40px; flex-shrink: 0; border-radius: 9px; background: {{ pal.wash }}; border: 1px solid rgba(198,249,78,.2); display: flex; align-items: center; justify-content: center;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ pal.brand }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5"></path></svg>
+              </div>
+              <div style="flex: 1; min-width: 0;">
+                <div style="display: flex; align-items: center; gap: 9px;">
+                  <span style="font-family: 'JetBrains Mono', monospace; font-size: 14.5px; font-weight: 500; color: {{ pal.brand }};">{{ l.short }}</span>
+                  <sc-if value="{{ l.alias }}" hint-placeholder-val="{{ false }}"><span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .06em; color: {{ pal.muted }}; border: 1px solid {{ pal.border }}; border-radius: 5px; padding: 1px 6px;">alias</span></sc-if>
+                </div>
+                <div style="font-size: 13px; color: {{ pal.muted }}; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 440px;">{{ l.dest }}</div>
+                <div style="display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap;">
+                  <sc-for list="{{ l.tagObjs }}" as="tg" hint-placeholder-count="2">
+                    <span style="font-size: 11px; font-weight: 600; color: {{ tg.color }}; background: {{ tg.bg }}; border-radius: 5px; padding: 2px 7px;">{{ tg.name }}</span>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="text-align: right; flex-shrink: 0;">
+                <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 18px; color: {{ pal.strong }}; font-feature-settings: 'tnum';">{{ l.clicksF }}</div>
+                <div style="font-size: 11px; color: {{ pal.muted }};">{{ P.links.clicks }}</div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+                <button class="qbtn" onClick="{{ l.onCopy }}" title="{{ l.copyLabel }}" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; cursor: pointer;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{ l.copyColor }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+                <button class="qbtn" onClick="{{ l.onStats }}" title="{{ P.links.stats }}" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; cursor: pointer;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"></line><line x1="18" y1="20" x2="18" y2="4"></line><line x1="6" y1="20" x2="6" y2="15"></line></svg></button>
+                <button class="qbtn" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; cursor: pointer;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg></button>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== ANALYTICS TAB ===== -->
+      <sc-if value="{{ isTabAnalytics }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 1000px;">
+        <button class="qbtn qlift" onClick="{{ navLinks }}" style="background: transparent; border: none; color: {{ pal.muted }}; font-size: 13.5px; cursor: pointer; padding: 0; margin-bottom: 14px;">{{ P.an.back }}</button>
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px; flex-wrap: wrap; gap: 12px;">
+          <div>
+            <h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ statShort }}</h1>
+            <div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 520px;">{{ statDest }}</div>
+          </div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: {{ pal.muted }}; border: 1px solid {{ pal.border }}; border-radius: 8px; padding: 7px 12px;">{{ P.an.range }}</div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px;">
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 18px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 12.5px; color: {{ pal.muted }};">{{ P.an.total }}</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 30px; color: {{ pal.brand }}; margin-top: 6px; font-feature-settings: 'tnum';">{{ an.total }}</div>
+          </div>
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 18px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 12.5px; color: {{ pal.muted }};">{{ P.an.unique }}</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 30px; color: {{ pal.strong }}; margin-top: 6px; font-feature-settings: 'tnum';">{{ an.unique }}</div>
+          </div>
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 18px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 12.5px; color: {{ pal.muted }};">{{ P.an.topGeo }}</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px; color: {{ pal.strong }}; margin-top: 8px;">{{ an.topGeo }} <span style="font-size: 14px; color: {{ pal.muted }};">{{ an.topGeoPct }}</span></div>
+          </div>
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 18px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 12.5px; color: {{ pal.muted }};">{{ P.an.topDev }}</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px; color: {{ pal.strong }}; margin-top: 8px;">{{ an.topDev }} <span style="font-size: 14px; color: {{ pal.muted }};">{{ an.topDevPct }}</span></div>
+          </div>
+        </div>
+        <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: {{ pal.shadow }};">
+          <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; margin-bottom: 18px;">{{ P.an.perDay }}</div>
+          <div style="display: flex; align-items: flex-end; gap: 6px; height: 150px;">
+            <sc-for list="{{ anBars }}" as="b" hint-placeholder-count="14">
+              <div style="flex: 1; height: {{ b.h }}; background: linear-gradient(180deg, #C6F94E, rgba(198,249,78,.35)); border-radius: 4px 4px 0 0; min-height: 4px;"></div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 16px;">
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 20px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; margin-bottom: 16px;">{{ P.an.byCountry }}</div>
+            <sc-for list="{{ anCountry }}" as="x" hint-placeholder-count="5">
+              <div style="margin-bottom: 12px;"><div style="display: flex; justify-content: space-between; font-size: 13px; color: {{ pal.text }}; margin-bottom: 5px;"><span>{{ x.name }}</span><span style="color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 12px;">{{ x.pct }}%</span></div><div style="height: 7px; background: {{ pal.card2 }}; border-radius: 4px; overflow: hidden;"><div style="height: 100%; width: {{ x.w }}; background: {{ x.c }}; border-radius: 4px;"></div></div></div>
+            </sc-for>
+          </div>
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 20px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; margin-bottom: 16px;">{{ P.an.byDevice }}</div>
+            <sc-for list="{{ anDevice }}" as="x" hint-placeholder-count="3">
+              <div style="margin-bottom: 12px;"><div style="display: flex; justify-content: space-between; font-size: 13px; color: {{ pal.text }}; margin-bottom: 5px;"><span>{{ x.name }}</span><span style="color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 12px;">{{ x.pct }}%</span></div><div style="height: 7px; background: {{ pal.card2 }}; border-radius: 4px; overflow: hidden;"><div style="height: 100%; width: {{ x.w }}; background: {{ x.c }}; border-radius: 4px;"></div></div></div>
+            </sc-for>
+            <div style="height: 12px;"></div>
+            <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; margin-bottom: 16px;">{{ P.an.byBrowser }}</div>
+            <sc-for list="{{ anBrowser }}" as="x" hint-placeholder-count="4">
+              <div style="margin-bottom: 12px;"><div style="display: flex; justify-content: space-between; font-size: 13px; color: {{ pal.text }}; margin-bottom: 5px;"><span>{{ x.name }}</span><span style="color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 12px;">{{ x.pct }}%</span></div><div style="height: 7px; background: {{ pal.card2 }}; border-radius: 4px; overflow: hidden;"><div style="height: 100%; width: {{ x.w }}; background: {{ x.c }}; border-radius: 4px;"></div></div></div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 20px; box-shadow: {{ pal.shadow }};">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;"><div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }};">{{ P.an.recent }}</div><div style="font-size: 12px; color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace;">{{ an.bots }} {{ P.an.bots }}</div></div>
+          <div style="display: grid; grid-template-columns: 1fr 1.4fr 1.4fr 1fr; gap: 8px; padding: 0 4px 8px; border-bottom: 1px solid {{ pal.border }}; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: {{ pal.muted }};">
+            <div>{{ P.an.colWhen }}</div><div>{{ P.an.colGeo }}</div><div>{{ P.an.colDev }}</div><div>{{ P.an.colRef }}</div>
+          </div>
+          <sc-for list="{{ anRecent }}" as="r" hint-placeholder-count="5">
+            <div style="display: grid; grid-template-columns: 1fr 1.4fr 1.4fr 1fr; gap: 8px; padding: 11px 4px; border-bottom: 1px solid {{ pal.border }}; font-size: 13px; color: {{ pal.text }};"><div style="color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 12px;">{{ r.when }}</div><div>{{ r.geo }}</div><div style="color: {{ pal.muted }};">{{ r.dev }}</div><div>{{ r.ref }}</div></div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== DOMAINS TAB ===== -->
+      <sc-if value="{{ isTabDomains }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 860px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div><h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.dom.title }}</h1><div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ P.dom.sub }}</div></div>
+          <button class="qbtn" onClick="{{ openCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 9px 15px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;">{{ P.dom.add }}</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{ domainsView }}" as="dm" hint-placeholder-count="3">
+            <div class="qcard-hov" style="display: flex; align-items: center; gap: 14px; background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 16px 18px; box-shadow: {{ pal.shadow }};">
+              <div style="width: 38px; height: 38px; border-radius: 9px; background: {{ pal.card2 }}; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18"></path></svg></div>
+              <div style="flex: 1;">
+                <div style="display: flex; align-items: center; gap: 9px;"><span style="font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 500; color: {{ pal.strong }};">{{ dm.host }}</span><sc-if value="{{ dm.primary }}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; letter-spacing: .06em; color: {{ pal.brand }}; background: {{ pal.wash }}; border-radius: 5px; padding: 2px 7px;">{{ P.dom.primary }}</span></sc-if></div>
+                <div style="font-size: 12.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ dm.links }} {{ P.dom.links }}</div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: {{ dm.sc }};"></span><span style="font-size: 13px; color: {{ pal.text }};">{{ dm.slabel }}</span></div>
+              <sc-if value="{{ dm.primary }}" hint-placeholder-val="{{ false }}"></sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== MEMBERS TAB ===== -->
+      <sc-if value="{{ isTabMembers }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 860px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div><h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.mem.title }}</h1><div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ P.mem.sub }}</div></div>
+          <button class="qbtn" onClick="{{ openCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 9px 15px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;">{{ P.mem.invite }}</button>
+        </div>
+        <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; overflow: hidden; box-shadow: {{ pal.shadow }};">
+          <sc-for list="{{ membersView }}" as="m" hint-placeholder-count="4">
+            <div style="display: flex; align-items: center; gap: 14px; padding: 15px 18px; border-bottom: 1px solid {{ pal.border }};">
+              <div style="width: 36px; height: 36px; border-radius: 50%; background: {{ m.color }}; display: flex; align-items: center; justify-content: center; font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 13px; color: #0A0B0F; flex-shrink: 0;">{{ m.initials }}</div>
+              <div style="flex: 1; min-width: 0;"><div style="font-size: 14.5px; font-weight: 600; color: {{ pal.strong }};">{{ m.name }}</div><div style="font-size: 12.5px; color: {{ pal.muted }};">{{ m.subline }}</div></div>
+              <span style="font-size: 12.5px; color: {{ pal.muted }}; border: 1px solid {{ pal.border }}; border-radius: 999px; padding: 4px 12px;">{{ m.roleLabel }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== TOKENS TAB ===== -->
+      <sc-if value="{{ isTabTokens }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 860px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div><h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.tok.title }}</h1><div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ P.tok.sub }}</div></div>
+          <button class="qbtn" onClick="{{ openCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 9px 15px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;">{{ P.tok.create }}</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{ tokensView }}" as="tk" hint-placeholder-count="3">
+            <div class="qcard-hov" style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 16px 18px; box-shadow: {{ pal.shadow }};">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                <div style="min-width: 0;"><div style="font-size: 14.5px; font-weight: 600; color: {{ pal.strong }};">{{ tk.name }}</div><div style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ tk.prefix }}••••••••</div></div>
+                <button class="qbtn" style="background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; padding: 6px 12px; color: #FF6B6B; font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap;">{{ P.tok.revoke }}</button>
+              </div>
+              <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center;">
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: {{ pal.text }}; background: {{ pal.card2 }}; border-radius: 6px; padding: 3px 9px;">{{ tk.scopeStr }}</span>
+                <span style="font-size: 12px; color: {{ pal.muted }};">· {{ tk.rate }}</span>
+                <span style="font-size: 12px; color: {{ pal.muted }};">· {{ P.tok.lastUsed }}: {{ tk.lastUsedF }}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== WEBHOOKS TAB ===== -->
+      <sc-if value="{{ isTabWebhooks }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 860px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div><h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.wh.title }}</h1><div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ P.wh.sub }}</div></div>
+          <button class="qbtn" onClick="{{ openCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 9px 15px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;">{{ P.wh.add }}</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{ webhooksView }}" as="w" hint-placeholder-count="3">
+            <div class="qcard-hov" style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 16px 18px; box-shadow: {{ pal.shadow }};">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px; min-width: 0;"><span style="width: 8px; height: 8px; border-radius: 50%; background: {{ w.sc }}; flex-shrink: 0;"></span><span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: {{ pal.strong }}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ w.urlShort }}</span></div>
+                <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;"><span style="font-size: 11px; color: {{ pal.muted }}; border: 1px solid {{ pal.border }}; border-radius: 5px; padding: 2px 7px;">{{ w.kind }}</span><button class="qbtn" style="background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; padding: 5px 11px; color: {{ pal.muted }}; font-size: 12px; font-weight: 600; cursor: pointer;">{{ P.wh.test }}</button></div>
+              </div>
+              <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center;"><span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: {{ pal.text }}; background: {{ pal.card2 }}; border-radius: 6px; padding: 3px 9px;">{{ w.evStr }}</span><span style="font-size: 12px; color: {{ pal.muted }};">· {{ w.del }} {{ P.wh.delivered }}</span></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+    </main>
+  </div>
+
+  <!-- ===== CREATE DIALOG ===== -->
+  <sc-if value="{{ createOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeCreate }}" style="position: fixed; inset: 0; z-index: 100; background: rgba(6,7,10,.6); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 24px;">
+    <div onClick="{{ stop }}" style="width: 100%; max-width: 540px; max-height: 90vh; overflow-y: auto; overflow-x: hidden; background: {{ pal.card }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 16px; padding: 24px; box-shadow: 0 40px 90px -30px rgba(0,0,0,.7); animation: qrise .3s cubic-bezier(.23,1,.32,1) both;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+        <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 20px; letter-spacing: -.02em; color: {{ pal.strong }}; margin: 0;">{{ P.create.title }}</h2>
+        <button class="qbtn" onClick="{{ closeCreate }}" style="background: transparent; border: none; cursor: pointer; color: {{ pal.muted }}; padding: 4px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+      </div>
+      <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.dest }}</label>
+      <input placeholder="{{ P.create.destPh }}" style="width: 100%; background: {{ pal.input }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 10px; padding: 11px 13px; color: {{ pal.text }}; font-size: 14.5px; outline: none; margin-bottom: 16px;">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+        <div>
+          <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.alias }}</label>
+          <div style="display: flex; align-items: center; background: {{ pal.input }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 10px; padding: 0 12px;"><span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: {{ pal.muted }};">q.rk/</span><input placeholder="{{ P.create.aliasPh }}" style="flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: {{ pal.text }}; font-size: 14px; padding: 11px 2px;"></div>
+        </div>
+        <div>
+          <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.folder }}</label>
+          <div style="display: flex; align-items: center; justify-content: space-between; background: {{ pal.input }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 10px; padding: 11px 13px; cursor: pointer;"><span style="font-size: 14px; color: {{ pal.text }};">Marketing</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"></polyline></svg></div>
+        </div>
+      </div>
+      <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.tags }}</label>
+      <div style="display: flex; align-items: center; gap: 7px; background: {{ pal.input }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 10px; padding: 8px 12px; margin-bottom: 16px; flex-wrap: wrap;">
+        <span style="font-size: 11px; font-weight: 600; color: #C6F94E; background: rgba(198,249,78,.14); border-radius: 5px; padding: 3px 8px;">campanha ×</span>
+        <input placeholder="{{ P.create.tagsPh }}" style="flex: 1; min-width: 100px; background: transparent; border: none; outline: none; color: {{ pal.text }}; font-size: 14px; padding: 3px 0;">
+      </div>
+      <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.ttl }}</label>
+      <div style="display: flex; gap: 7px; margin-bottom: 18px; flex-wrap: wrap;">
+        <sc-for list="{{ ttlChips }}" as="tc" hint-placeholder-count="5">
+          <button class="qbtn" style="background: {{ tc.bg }}; border: 1px solid {{ tc.border }}; border-radius: 8px; padding: 7px 13px; color: {{ tc.color }}; font-size: 13px; font-weight: 500; cursor: pointer;">{{ tc.label }}</button>
+        </sc-for>
+      </div>
+      <div style="border-top: 1px solid {{ pal.border }}; padding-top: 16px; margin-bottom: 16px;">
+        <div style="font-size: 13px; font-weight: 600; color: {{ pal.text }}; margin-bottom: 12px;">{{ P.create.utmToggle }}</div>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+          <input placeholder="{{ P.create.src }}" value="instagram" style="background: {{ pal.input }}; border: 1px solid {{ pal.border }}; border-radius: 9px; padding: 9px 11px; color: {{ pal.text }}; font-size: 13px; outline: none;">
+          <input placeholder="{{ P.create.med }}" value="social" style="background: {{ pal.input }}; border: 1px solid {{ pal.border }}; border-radius: 9px; padding: 9px 11px; color: {{ pal.text }}; font-size: 13px; outline: none;">
+          <input placeholder="{{ P.create.camp }}" value="verao26" style="background: {{ pal.input }}; border: 1px solid {{ pal.border }}; border-radius: 9px; padding: 9px 11px; color: {{ pal.text }}; font-size: 13px; outline: none;">
+        </div>
+      </div>
+      <div style="background: {{ pal.card2 }}; border: 1px dashed {{ pal.borderStrong }}; border-radius: 10px; padding: 13px 15px; margin-bottom: 20px;">
+        <div style="font-size: 11px; color: {{ pal.muted }}; margin-bottom: 5px;">{{ P.create.preview }}</div>
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 500; color: {{ pal.brand }};">q.rk/verao-promo</div>
+      </div>
+      <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <button class="qbtn" onClick="{{ closeCreate }}" style="background: transparent; border: 1px solid {{ pal.borderStrong }}; border-radius: 9px; padding: 10px 18px; color: {{ pal.text }}; font-size: 14px; font-weight: 600; cursor: pointer;">{{ P.create.cancel }}</button>
+        <button class="qbtn" onClick="{{ closeCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 10px 20px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer;">{{ P.create.submit }}</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+</div>
+</sc-if>

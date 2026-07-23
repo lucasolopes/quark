@@ -1,0 +1,27 @@
+:root {
+  /* families */
+  --font-display: 'Space Grotesk', system-ui, sans-serif;  /* headings, big numbers */
+  --font-body: 'Hanken Grotesk', system-ui, sans-serif;     /* running text, UI */
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;   /* code, codes, data, labels */
+
+  /* display scale (Space Grotesk, tight tracking) */
+  --fs-hero: 60px;    --lh-hero: 1.02;  --tr-hero: -0.035em;
+  --fs-h1: 44px;      --lh-h1: 1.05;    --tr-h1: -0.035em;
+  --fs-h2: 40px;      --lh-h2: 1.08;    --tr-h2: -0.03em;
+  --fs-h3: 26px;      --lh-h3: 1.15;    --tr-h3: -0.02em;
+  --fs-stat: 40px;    --tr-stat: -0.02em;   /* metric numerals */
+
+  /* body scale (Hanken Grotesk) */
+  --fs-lead: 19px;    --lh-lead: 1.55;
+  --fs-body: 15px;    --lh-body: 1.55;
+  --fs-sm: 13px;      --lh-sm: 1.5;
+
+  /* mono / eyebrow */
+  --fs-mono: 13.5px;
+  --fs-label: 12px;   --tr-label: 0.18em;   /* uppercase section eyebrows */
+  --fs-chip: 10px;
+  --weight-body: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+}

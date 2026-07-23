@@ -1,0 +1,19 @@
+<sc-if value="{{ isTabWebhooks }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 860px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div><h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.wh.title }}</h1><div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ P.wh.sub }}</div></div>
+          <button class="qbtn" onClick="{{ openCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 9px 15px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;">{{ P.wh.add }}</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{ webhooksView }}" as="w" hint-placeholder-count="3">
+            <div class="qcard-hov" style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 16px 18px; box-shadow: {{ pal.shadow }};">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px; min-width: 0;"><span style="width: 8px; height: 8px; border-radius: 50%; background: {{ w.sc }}; flex-shrink: 0;"></span><span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: {{ pal.strong }}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ w.urlShort }}</span></div>
+                <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;"><span style="font-size: 11px; color: {{ pal.muted }}; border: 1px solid {{ pal.border }}; border-radius: 5px; padding: 2px 7px;">{{ w.kind }}</span><button class="qbtn" style="background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; padding: 5px 11px; color: {{ pal.muted }}; font-size: 12px; font-weight: 600; cursor: pointer;">{{ P.wh.test }}</button></div>
+              </div>
+              <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center;"><span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: {{ pal.text }}; background: {{ pal.card2 }}; border-radius: 6px; padding: 3px 9px;">{{ w.evStr }}</span><span style="font-size: 12px; color: {{ pal.muted }};">· {{ w.del }} {{ P.wh.delivered }}</span></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>

@@ -1,0 +1,49 @@
+:root {
+  /* ---- base neutrals (dark, the primary surface) ---- */
+  --ink: #0A0B0F;            /* page background */
+  --ink-2: #0C0D13;          /* alternating section background */
+  --panel: #131521;          /* card / raised surface */
+  --panel-2: #1A1D2B;        /* nested surface, table header */
+  --surface-input: #0E1018;  /* input wells, terminal body */
+
+  /* ---- text ---- */
+  --text: #E8EAF2;           /* default body text */
+  --text-strong: #F3F5FA;    /* headings */
+  --text-muted: #8A90A2;     /* secondary / labels */
+  --text-dim: #6B7180;       /* tertiary / footnotes */
+
+  /* ---- borders / lines ---- */
+  --border: rgba(255,255,255,0.09);
+  --border-strong: rgba(255,255,255,0.16);
+
+  /* ---- brand accent: plasma lime ---- */
+  --accent: #C6F94E;
+  --accent-hover: #D8FF70;
+  --accent-dim: #8FD12E;     /* bar gradient tail, pressed */
+  --on-accent: #0A0B0F;      /* text on lime fills */
+
+  /* ---- secondary signal colors (charts, tags) ---- */
+  --cyan: #4ADEDE;           /* geography / country */
+  --violet: #8B7CF6;         /* device / segment */
+  --danger: #FF6B6B;         /* destructive, blocklist */
+
+  /* ---- accent washes ---- */
+  --accent-wash: rgba(198,249,78,0.06);
+  --accent-line: rgba(198,249,78,0.28);
+  --accent-active: rgba(198,249,78,0.12);
+
+  /* ---- semantic aliases ---- */
+  --bg: var(--ink);
+  --surface-card: var(--panel);
+  --text-body: var(--text);
+  --text-heading: var(--text-strong);
+  --focus-ring: var(--accent);
+
+  /* ---- light theme surfaces (admin panel light mode) ---- */
+  --l-bg: #EEF0F4;
+  --l-card: #FFFFFF;
+  --l-card-2: #F4F5F8;
+  --l-text: #12141C;
+  --l-muted: #5E6472;
+  --l-border: rgba(0,0,0,0.10);
+}
