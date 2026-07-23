@@ -1427,6 +1427,7 @@ fn sub(url: &str, secret: &str, kind: SubscriptionKind) -> WebhookSubscription {
         active: true,
         created: 0,
         kind,
+        label: None,
     }
 }
 

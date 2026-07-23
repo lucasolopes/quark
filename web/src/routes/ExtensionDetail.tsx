@@ -350,7 +350,9 @@ function WebhookPanel({ integration }: { integration: Integration }) {
             <ul className="flex flex-col gap-2">
               {existing.map((w) => (
                 <li key={w.id} className="flex items-center justify-between gap-3 text-sm">
-                  <span className="font-mono text-muted-foreground">{webhookLabel(w.url)}</span>
+                  <span className={w.label ? "font-medium" : "font-mono text-muted-foreground"}>
+                    {w.label || webhookLabel(w.url)}
+                  </span>
                   <Button
                     variant="ghost"
                     size="sm"

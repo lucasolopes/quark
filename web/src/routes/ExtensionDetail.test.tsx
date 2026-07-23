@@ -27,7 +27,7 @@ function renderDetail(id: string) {
 }
 
 /** Base status mock: Sheets off (404), no webhooks, no pixels. Extra handlers can be layered by the caller's own spy. */
-function mockBase(opts: { sheetsStatus?: number; sheetsBody?: SheetsStatus; slackConnect?: boolean; webhooks?: { id: number; kind: string; url: string }[] } = {}) {
+function mockBase(opts: { sheetsStatus?: number; sheetsBody?: SheetsStatus; slackConnect?: boolean; webhooks?: { id: number; kind: string; url: string; label?: string }[] } = {}) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(typeof input === "string" ? input : (input as Request).url ?? input);
     const method = (init as RequestInit | undefined)?.method ?? "GET";
@@ -152,12 +152,14 @@ describe("ExtensionDetail", () => {
   it("shows the connected channel with a disconnect action when a Slack subscription exists", async () => {
     const fetchMock = mockBase({
       slackConnect: true,
-      webhooks: [{ id: 7, kind: "slack", url: "https://hooks.slack.com/services/T/B/secret" }],
+      webhooks: [{ id: 7, kind: "slack", url: "https://hooks.slack.com/services/T/B/secret", label: "#general" }],
     });
     renderDetail("slack");
 
     // Connected state is shown; the OAuth CTA is demoted to "add another channel".
     expect(await screen.findByText(/slack is connected/i)).toBeInTheDocument();
+    // The channel name identifies the connection (not the opaque URL).
+    expect(screen.getByText("#general")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add another channel/i })).toBeInTheDocument();
     // The raw token is never rendered in full.
     expect(screen.queryByText(/secret/)).not.toBeInTheDocument();

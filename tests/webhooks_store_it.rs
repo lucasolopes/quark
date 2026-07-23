@@ -28,6 +28,7 @@ async fn webhook_crud_round_trip_pg() {
         active: true,
         created: 1,
         kind: SubscriptionKind::Generic,
+        label: None,
     };
     store
         .put_webhook(quark::tenant::DEFAULT_TENANT, &sub)

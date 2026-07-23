@@ -128,6 +128,12 @@ pub struct WebhookSubscription {
     /// never had this field) deserialize unchanged.
     #[serde(default)]
     pub kind: SubscriptionKind,
+    /// Optional human label for the destination, used by the panel to identify
+    /// a connection whose URL is otherwise opaque (e.g. the Slack channel name
+    /// `#general` captured from the OAuth install). `None` for manually-entered
+    /// webhooks and pre-existing rows.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// A concrete event ready to be delivered: the event kind plus the exact
@@ -349,6 +355,7 @@ mod tests {
             active: true,
             created: 0,
             kind: SubscriptionKind::Generic,
+            label: None,
         };
         assert!(matches(&sub, &EventType::LinkCreated));
         assert!(!matches(&sub, &EventType::LinkClicked));

@@ -1567,6 +1567,7 @@ mod tests {
             active,
             created: 0,
             kind: SubscriptionKind::Generic,
+            label: None,
         }
     }
 
