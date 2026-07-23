@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -48,7 +51,7 @@
     "oxlint": "^1.71.0",
     "postcss": "^8.5.19",
     "tailwindcss": "^4.3.2",
-    "typescript": "~6.0.2",
+    "typescript": "7.0.2",
     "vite": "^8.1.1",
     "vitest": "^4.1.10"
   }
