@@ -561,7 +561,21 @@ pub(crate) async fn admin_webhooks_test(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    send_test_event_guarded(&sub, is_internal_host).await
+    let (resp, health) = send_test_event_guarded(&sub, is_internal_host).await;
+    // Passive health recording: a subscription that only listens to
+    // `link.clicked` never records health on the redirect hot path (see
+    // `webhooks::delivery::deliver_one`), so Test is its only way to get a
+    // signal. Only recorded when a delivery attempt actually happened (not
+    // for an SSRF block / invalid url / build failure, where `health` is
+    // `None`). Best-effort: never let a store hiccup change the response
+    // the caller already got back from the test-send.
+    if let Some(status) = health {
+        let _ = st
+            .store
+            .record_webhook_health(p.tenant, id, crate::now(), status)
+            .await;
+    }
+    resp
 }
 
 /// Core of `admin_webhooks_test`, with the SSRF host-block predicate
@@ -574,21 +588,29 @@ pub(crate) async fn admin_webhooks_test(
 pub(crate) async fn send_test_event_guarded(
     sub: &WebhookSubscription,
     is_blocked: impl Fn(&str) -> bool,
-) -> Response {
+) -> (Response, Option<crate::health::HealthStatus>) {
     // SSRF guard applies to the test-send too: an admin-controlled URL is
     // still an operator-supplied URL, and this endpoint fires synchronously
     // instead of through the queue's own guard (see
     // `webhooks::delivery::deliver_to_matching_guarded`).
     let host = match extract_host(&sub.url) {
         Some(h) => h,
-        None => return (StatusCode::BAD_REQUEST, "invalid webhook url").into_response(),
+        None => {
+            return (
+                (StatusCode::BAD_REQUEST, "invalid webhook url").into_response(),
+                None,
+            )
+        }
     };
     if is_blocked(&host) {
         return (
-            StatusCode::BAD_REQUEST,
-            "webhook url resolves to an internal host",
-        )
-            .into_response();
+            (
+                StatusCode::BAD_REQUEST,
+                "webhook url resolves to an internal host",
+            )
+                .into_response(),
+            None,
+        );
     }
     let body = webhook_event_payload(
         EventType::LinkCreated,
@@ -615,7 +637,7 @@ pub(crate) async fn send_test_event_guarded(
     // must exercise the same branch a real event would take.
     let req = match webhooks::delivery::build_outgoing_request(sub, &ev, None) {
         Some(r) => r,
-        None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        None => return (StatusCode::INTERNAL_SERVER_ERROR.into_response(), None),
     };
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(WEBHOOK_TEST_TIMEOUT_SECS))
@@ -623,7 +645,7 @@ pub(crate) async fn send_test_event_guarded(
         .build()
     {
         Ok(c) => c,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR.into_response(), None),
     };
     let mut builder = client
         .post(&sub.url)
@@ -633,16 +655,30 @@ pub(crate) async fn send_test_event_guarded(
     }
     let result = builder.body(req.body).send().await;
     match result {
-        Ok(resp) => Json(serde_json::json!({
-            "delivered": resp.status().is_success(),
-            "status": resp.status().as_u16(),
-        }))
-        .into_response(),
-        Err(e) => Json(serde_json::json!({
-            "delivered": false,
-            "error": e.to_string(),
-        }))
-        .into_response(),
+        Ok(resp) => {
+            let status = resp.status();
+            let health = if status.is_success() {
+                crate::health::HealthStatus::Ok
+            } else {
+                crate::health::HealthStatus::Error(format!("status {}", status.as_u16()))
+            };
+            (
+                Json(serde_json::json!({
+                    "delivered": status.is_success(),
+                    "status": status.as_u16(),
+                }))
+                .into_response(),
+                Some(health),
+            )
+        }
+        Err(e) => (
+            Json(serde_json::json!({
+                "delivered": false,
+                "error": e.to_string(),
+            }))
+            .into_response(),
+            Some(crate::health::HealthStatus::Error(e.to_string())),
+        ),
     }
 }
 

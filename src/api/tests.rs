@@ -1463,8 +1463,9 @@ async fn test_send_on_slack_sub_is_unsigned_channel_payload() {
     let (url, state) = spawn_test_server().await;
     let slack_sub = sub(&url, "", SubscriptionKind::Slack);
 
-    let resp = send_test_event_guarded(&slack_sub, |_| false).await;
+    let (resp, health) = send_test_event_guarded(&slack_sub, |_| false).await;
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    assert_eq!(health, Some(crate::health::HealthStatus::Ok));
 
     let captured = state.captured.lock().unwrap();
     assert_eq!(captured.len(), 1);
@@ -1484,8 +1485,9 @@ async fn test_send_on_generic_sub_stays_signed() {
     let secret = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw".to_string();
     let generic_sub = sub(&url, &secret, SubscriptionKind::Generic);
 
-    let resp = send_test_event_guarded(&generic_sub, |_| false).await;
+    let (resp, health) = send_test_event_guarded(&generic_sub, |_| false).await;
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    assert_eq!(health, Some(crate::health::HealthStatus::Ok));
 
     let captured = state.captured.lock().unwrap();
     assert_eq!(captured.len(), 1);
