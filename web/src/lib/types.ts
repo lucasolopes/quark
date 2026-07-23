@@ -107,6 +107,9 @@ export interface MeResponse {
   current_tenant?: number | null;
   /** `<slug>.<suffix>` domain wildcard for the cloud tenant's own short links; null/absent in OSS or when unconfigured. */
   tenant_domain_suffix?: string | null;
+  /** Shared short-link host (`QUARK_PUBLIC_HOST`, e.g. `go.quarkus.com.br`); the
+   * fallback host for a tenant without its own subdomain. Null/absent when unset. */
+  public_host?: string | null;
 }
 /** A pending or accepted team invite (cloud only), for the Members screen. */
 export interface InviteView {
