@@ -649,6 +649,19 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<(), StoreError>;
     /// Deletes a domain, scoped to `tenant`.
     async fn delete_domain(&self, tenant: TenantId, id: u64) -> Result<(), StoreError>;
+    /// Sets (or clears, with `None`) the tenant's primary link domain — the one
+    /// `default_domain_id` and the copy button use by default. Stored on the
+    /// `tenants` row, so it is naturally at most one per tenant. Tenant-global
+    /// write; the caller validates the domain belongs to the tenant and is
+    /// verified before setting it.
+    async fn set_primary_domain(
+        &self,
+        tenant: TenantId,
+        domain_id: Option<u64>,
+    ) -> Result<(), StoreError>;
+    /// The tenant's primary link domain id, or `None` when unset (callers fall
+    /// back to the auto subdomain, then the shared host).
+    async fn get_primary_domain_id(&self, tenant: TenantId) -> Result<Option<u64>, StoreError>;
 
     // --- SSO email-domain discovery (multi-tenancy LUC-57), cloud-only ---
     /// Allocates the next global SSO email-domain id.

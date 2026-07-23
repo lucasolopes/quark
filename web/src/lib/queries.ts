@@ -525,6 +525,18 @@ export function useDeleteDomain() {
   });
 }
 
+/** Sets a domain as primary; invalidates `useDomains` (badges move) and `me` (primary_link_host, used by the copy button). */
+export function useSetPrimaryDomain() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.setPrimaryDomain(id),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: DOMAINS_QUERY_KEY });
+      void client.invalidateQueries({ queryKey: ["me"] });
+    },
+  });
+}
+
 /** The workspace's own OIDC provider (redacted). `enabled` gates it; `retry:false` so a 404 (none configured) settles without retries. */
 export function useOidcConfig(enabled = true) {
   return useQuery({

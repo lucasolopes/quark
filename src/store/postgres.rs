@@ -688,6 +688,10 @@ impl PostgresStore {
                 "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'generic'",
                 "CREATE TABLE IF NOT EXISTS api_tokens (id BIGINT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, scopes JSONB NOT NULL, rate_limit_per_min BIGINT, created BIGINT NOT NULL)",
                 "CREATE INDEX IF NOT EXISTS api_tokens_token_hash_idx ON api_tokens (token_hash)",
+                // Primary link domain per tenant (LUC-86): the domain the copy
+                // button and new links default to. NULL = fall back to the auto
+                // subdomain, then the shared host.
+                "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS primary_domain_id BIGINT",
                 // Idempotent migrations for pre-existing `links` tables (max-visits feature).
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS max_visits BIGINT",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS visits BIGINT NOT NULL DEFAULT 0",
@@ -2610,6 +2614,37 @@ impl Store for PostgresStore {
                 .await
         });
         Ok(())
+    }
+
+    async fn set_primary_domain(
+        &self,
+        tenant: TenantId,
+        domain_id: Option<u64>,
+    ) -> Result<(), StoreError> {
+        // `tenants` is a global table (not RLS-scoped), so mirror `put_tenant`'s
+        // bare-pool access rather than `with_write!`. `None` clears the primary.
+        sqlx::query("UPDATE tenants SET primary_domain_id = $2 WHERE id = $1")
+            .bind(tenant.0 as i64)
+            .bind(domain_id.map(|d| d as i64))
+            .execute(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn get_primary_domain_id(&self, tenant: TenantId) -> Result<Option<u64>, StoreError> {
+        let row = sqlx::query("SELECT primary_domain_id FROM tenants WHERE id = $1")
+            .bind(tenant.0 as i64)
+            .fetch_optional(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        match row {
+            Some(r) => {
+                let id: Option<i64> = r.try_get("primary_domain_id").map_err(StoreError::backend)?;
+                Ok(id.map(|v| v as u64))
+            }
+            None => Ok(None),
+        }
     }
 
     // --- SSO email-domain discovery (LUC-57), cloud-only ---

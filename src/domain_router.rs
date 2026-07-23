@@ -571,6 +571,16 @@ mod tests {
         async fn delete_domain(&self, _tenant: TenantId, _id: u64) -> Result<(), StoreError> {
             unimplemented!()
         }
+        async fn set_primary_domain(
+            &self,
+            _tenant: TenantId,
+            _domain_id: Option<u64>,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn get_primary_domain_id(&self, _tenant: TenantId) -> Result<Option<u64>, StoreError> {
+            Ok(None)
+        }
         async fn next_sso_domain_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }

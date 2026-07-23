@@ -137,6 +137,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             axum::routing::delete(admin_domains_delete),
         )
         .route("/admin/domains/:id/verify", post(admin_domains_verify))
+        .route("/admin/domains/:id/primary", post(admin_domains_set_primary))
         .route(
             "/admin/sso-domains",
             get(admin_sso_domains_list).post(admin_sso_domains_create),

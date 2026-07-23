@@ -20,9 +20,9 @@ const ME = {
 
 const DOMAINS = [
   // Automatic subdomain (empty token, verified) — matches `<slug>.<suffix>`.
-  { id: 1, host: "w.quarkus.com.br", status: "verified", created: 1, verified_at: 1, txt_name: "_quark-verify.w.quarkus.com.br", txt_value: "", cname_target: "backend.quarkus.com.br" },
+  { id: 1, host: "w.quarkus.com.br", status: "verified", created: 1, verified_at: 1, txt_name: "_quark-verify.w.quarkus.com.br", txt_value: "", cname_target: "go.quarkus.com.br", primary: false },
   // Custom domain, pending.
-  { id: 2, host: "go.acme.com", status: "pending", created: 2, verified_at: null, txt_name: "_quark-verify.go.acme.com", txt_value: "tok123", cname_target: "backend.quarkus.com.br" },
+  { id: 2, host: "go.acme.com", status: "pending", created: 2, verified_at: null, txt_name: "_quark-verify.go.acme.com", txt_value: "tok123", cname_target: "go.quarkus.com.br", primary: false },
 ];
 
 describe("Domains", () => {
@@ -45,9 +45,37 @@ describe("Domains", () => {
 
     // Custom domain shows CNAME target + TXT value.
     expect(screen.getAllByText("go.acme.com").length).toBeGreaterThan(0);
-    expect(screen.getByText(/backend\.quarkus\.com\.br/)).toBeInTheDocument();
+    expect(screen.getByText(/go\.quarkus\.com\.br/)).toBeInTheDocument();
     expect(screen.getByText(/tok123/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /verify go\.acme\.com/i })).toBeInTheDocument();
+  });
+
+  it("sets a verified custom domain as primary", async () => {
+    const verifiedCustom = [
+      { id: 1, host: "w.quarkus.com.br", status: "verified", created: 1, verified_at: 1, txt_name: "_quark-verify.w.quarkus.com.br", txt_value: "", cname_target: "go.quarkus.com.br", primary: true },
+      { id: 2, host: "go.acme.com", status: "verified", created: 2, verified_at: 2, txt_name: "_quark-verify.go.acme.com", txt_value: "tok123", cname_target: "go.quarkus.com.br", primary: false },
+    ];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes("/admin/me")) return Promise.resolve(jsonResponse(ME));
+      if (url.includes("/admin/domains/2/primary") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse({ ...verifiedCustom[1], primary: true }));
+      }
+      if (url.includes("/admin/domains")) return Promise.resolve(jsonResponse(verifiedCustom));
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    render(withProviders(<Domains />, { withRouter: false }));
+
+    // The subdomain is primary; the verified custom offers "Set as primary".
+    expect(await screen.findByText(/^primary$/i)).toBeInTheDocument();
+    const setPrimaryBtn = screen.getByRole("button", { name: /set go\.acme\.com as the primary domain/i });
+    await userEvent.click(setPrimaryBtn);
+
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find(([u, i]) => String(u).includes("/admin/domains/2/primary") && i?.method === "POST");
+      expect(post).toBeDefined();
+    });
   });
 
   it("adds a custom domain", async () => {

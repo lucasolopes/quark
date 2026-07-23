@@ -44,22 +44,25 @@ const PUBLIC_BASE = (
   (import.meta.env.VITE_API_BASE_URL as string | undefined) || window.location.origin
 ).replace(/\/+$/, "");
 
-/** The current tenant's own subdomain, when the cloud has provisioned one. */
+/** Hosts the cloud may provide for building a short URL. */
 interface TenantDomain {
+  /** The server-resolved primary host (LUC-86): primary custom domain →
+   * subdomain → shared host. When present it wins over everything below. */
+  primaryHost?: string | null;
   slug?: string | null;
   suffix?: string | null;
-  /** The shared short-link host (`QUARK_PUBLIC_HOST`, e.g. `go.quarkus.com.br`),
-   * used as the fallback host instead of the API origin. */
+  /** Shared short-link host (`QUARK_PUBLIC_HOST`), fallback before the API origin. */
   publicHost?: string | null;
 }
 
 /**
- * Builds the short URL shown/copied for a code. Cloud tenants with a
- * provisioned `<slug>.<suffix>` subdomain get links on their own domain; a
- * tenant without one falls back to the shared short-link host (`publicHost`),
- * and only when even that is absent (OSS) to `PUBLIC_BASE` (the API origin).
+ * Builds the short URL shown/copied for a code. Prefers the tenant's
+ * server-resolved primary host (which already prioritizes a verified custom
+ * domain over the subdomain). Falls back to `<slug>.<suffix>`, then the shared
+ * host, then `PUBLIC_BASE` (the API origin, OSS).
  */
-function buildShortUrl(code: string, { slug, suffix, publicHost }: TenantDomain): string {
+function buildShortUrl(code: string, { primaryHost, slug, suffix, publicHost }: TenantDomain): string {
+  if (primaryHost) return `https://${primaryHost}/${code}`;
   if (slug && suffix) return `https://${slug}.${suffix}/${code}`;
   if (publicHost) return `https://${publicHost}/${code}`;
   return `${PUBLIC_BASE}/${code}`;
@@ -89,7 +92,7 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
   const { data: me } = useMe();
   const bulkLinks = useBulkLinks();
   const currentMembership = me?.memberships?.find((m) => m.tenant_id === me.current_tenant);
-  const tenantDomain: TenantDomain = { slug: currentMembership?.slug, suffix: me?.tenant_domain_suffix, publicHost: me?.public_host };
+  const tenantDomain: TenantDomain = { primaryHost: me?.primary_link_host, slug: currentMembership?.slug, suffix: me?.tenant_domain_suffix, publicHost: me?.public_host };
 
   const pageCodes = links.map((l) => l.code);
   const allSelected = pageCodes.length > 0 && pageCodes.every((c) => selected.has(c));
