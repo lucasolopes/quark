@@ -17,6 +17,7 @@ const Links = lazy(() => import("@/routes/Links").then((m) => ({ default: m.Link
 const Login = lazy(() => import("@/routes/Login").then((m) => ({ default: m.Login })));
 const Members = lazy(() => import("@/routes/Members").then((m) => ({ default: m.Members })));
 const SsoDomains = lazy(() => import("@/routes/SsoDomains").then((m) => ({ default: m.SsoDomains })));
+const OidcProvider = lazy(() => import("@/routes/OidcProvider").then((m) => ({ default: m.OidcProvider })));
 const Webhooks = lazy(() => import("@/routes/Webhooks").then((m) => ({ default: m.Webhooks })));
 const Tokens = lazy(() => import("@/routes/Tokens").then((m) => ({ default: m.Tokens })));
 const Pixels = lazy(() => import("@/routes/Pixels").then((m) => ({ default: m.Pixels })));
@@ -59,6 +60,7 @@ export const router = createBrowserRouter([
       { path: "analytics", element: suspended(<Analytics />) },
       { path: "members", element: suspended(<Members />) },
       { path: "sso-domains", element: suspended(<SsoDomains />) },
+      { path: "sso-provider", element: suspended(<OidcProvider />) },
       { path: "app-links", element: suspended(<AppLinks />) },
     ],
   },

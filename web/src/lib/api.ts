@@ -11,6 +11,7 @@ import type {
   WellknownName, MeResponse, SheetsStatus,
   InviteView, CreateInviteResponse,
   SsoDomainView, AlertRule,
+  OidcConfigView, PutOidcConfigInput,
 } from "./types";
 
 /**
@@ -288,6 +289,19 @@ export const api = {
     if (token) headers.set("x-admin-token", token);
     const res = await fetch(BASE + "/admin/oidc-config", { headers, credentials: "include" });
     return res.ok;
+  },
+  /** The current workspace's own OIDC provider, redacted (never the secret). Throws 404 when none is configured. */
+  async getOidcConfig(): Promise<OidcConfigView> {
+    return jsonOrThrow(await req("/admin/oidc-config"));
+  },
+  /** Upserts the workspace's OIDC provider. An empty `client_secret` keeps the stored one. */
+  async putOidcConfig(input: PutOidcConfigInput): Promise<OidcConfigView> {
+    return jsonOrThrow(await req("/admin/oidc-config", { method: "PUT", body: JSON.stringify(input) }));
+  },
+  /** Removes the workspace's OIDC provider (falls back to the shared/global login). */
+  async deleteOidcConfig(): Promise<void> {
+    const res = await req("/admin/oidc-config", { method: "DELETE" });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
   /** Lists the current workspace's SSO email domains with their DNS verification instructions (cloud only). */
   async listSsoDomains(): Promise<SsoDomainView[]> {

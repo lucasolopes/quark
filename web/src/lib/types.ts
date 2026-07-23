@@ -248,3 +248,33 @@ export interface SsoDomainView {
   txt_name: string;
   txt_value: string;
 }
+
+/** The tenant's own OIDC provider, redacted: the `client_secret` never leaves
+ * the server, so only `client_secret_set` reports whether one is on file. */
+export interface OidcConfigView {
+  issuer: string;
+  client_id: string;
+  scopes: string[];
+  admin_claim: string;
+  admin_value: string;
+  readonly_value: string;
+  member_value: string;
+  required_value: string | null;
+  post_login_url: string | null;
+  client_secret_set: boolean;
+}
+
+/** Payload to upsert the tenant's OIDC provider. An empty `client_secret`
+ * preserves the one already stored (the panel never receives it to echo back). */
+export interface PutOidcConfigInput {
+  issuer: string;
+  client_id: string;
+  client_secret: string;
+  scopes: string[];
+  admin_claim: string;
+  admin_value: string;
+  readonly_value: string;
+  member_value: string;
+  required_value: string | null;
+  post_login_url: string | null;
+}

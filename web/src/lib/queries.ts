@@ -1,7 +1,7 @@
 import { QueryClient, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import { hasToken } from "./auth";
-import type { AlertRule, BulkOp, CreateLinkRequest, CreatePixelRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest, WellknownName } from "./types";
+import type { AlertRule, BulkOp, CreateLinkRequest, CreatePixelRequest, CreateTokenRequest, CreateWebhookRequest, PatchLinkRequest, PatchWebhookRequest, PutOidcConfigInput, WellknownName } from "./types";
 
 const LINKS_QUERY_KEY = ["links"];
 const WEBHOOKS_QUERY_KEY = ["webhooks"];
@@ -13,6 +13,7 @@ const SHEETS_STATUS_QUERY_KEY = ["sheets", "status"];
 const INVITES_QUERY_KEY = ["invites"];
 const SSO_DOMAINS_QUERY_KEY = ["sso-domains"];
 const OIDC_CONFIGURED_QUERY_KEY = ["oidc-configured"];
+const OIDC_CONFIG_QUERY_KEY = ["oidc-config"];
 
 /**
  * The application's single TanStack Query client. `retry: false` because a
@@ -485,5 +486,39 @@ export function useDeleteSsoDomain() {
   return useMutation({
     mutationFn: (id: number) => api.deleteSsoDomain(id),
     onSuccess: () => { void client.invalidateQueries({ queryKey: SSO_DOMAINS_QUERY_KEY }); },
+  });
+}
+
+/** The workspace's own OIDC provider (redacted). `enabled` gates it; `retry:false` so a 404 (none configured) settles without retries. */
+export function useOidcConfig(enabled = true) {
+  return useQuery({
+    queryKey: OIDC_CONFIG_QUERY_KEY,
+    queryFn: () => api.getOidcConfig(),
+    retry: false,
+    enabled,
+  });
+}
+
+/** Upserts the OIDC provider; invalidates the config and the "configured?" probe (SSO domains gates on it). */
+export function usePutOidcConfig() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: PutOidcConfigInput) => api.putOidcConfig(input),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: OIDC_CONFIG_QUERY_KEY });
+      void client.invalidateQueries({ queryKey: OIDC_CONFIGURED_QUERY_KEY });
+    },
+  });
+}
+
+/** Removes the OIDC provider; invalidates the config and the "configured?" probe. */
+export function useDeleteOidcConfig() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.deleteOidcConfig(),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: OIDC_CONFIG_QUERY_KEY });
+      void client.invalidateQueries({ queryKey: OIDC_CONFIGURED_QUERY_KEY });
+    },
   });
 }
