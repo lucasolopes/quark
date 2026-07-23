@@ -11,7 +11,7 @@ import type {
   WellknownName, MeResponse, SheetsStatus,
   InviteView, CreateInviteResponse,
   SsoDomainView, AlertRule,
-  OidcConfigView, PutOidcConfigInput,
+  OidcConfigView, PutOidcConfigInput, LinkDomainView,
 } from "./types";
 
 /**
@@ -289,6 +289,23 @@ export const api = {
     if (token) headers.set("x-admin-token", token);
     const res = await fetch(BASE + "/admin/oidc-config", { headers, credentials: "include" });
     return res.ok;
+  },
+  /** Lists the current workspace's link domains (custom + the auto subdomain), each with DNS instructions (cloud only). */
+  async listDomains(): Promise<LinkDomainView[]> {
+    return jsonOrThrow(await req("/admin/domains"));
+  },
+  /** Registers a custom link domain (pending DNS verification). 409 if taken; 400 on an implausible host. */
+  async createDomain(host: string): Promise<LinkDomainView> {
+    return jsonOrThrow(await req("/admin/domains", { method: "POST", body: JSON.stringify({ host }) }));
+  },
+  /** Checks the domain's `_quark-verify.<host>` TXT record and flips it to verified on a match; returns the domain either way. */
+  async verifyDomain(id: number): Promise<LinkDomainView> {
+    return jsonOrThrow(await req(`/admin/domains/${id}/verify`, { method: "POST" }));
+  },
+  /** Removes a custom link domain. */
+  async deleteDomain(id: number): Promise<void> {
+    const res = await req(`/admin/domains/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
   },
   /** The current workspace's own OIDC provider, redacted (never the secret). Throws 404 when none is configured. */
   async getOidcConfig(): Promise<OidcConfigView> {
