@@ -232,6 +232,7 @@ pub fn catalog_rows(
 pub async fn sync(
     store: &std::sync::Arc<dyn crate::store::Store>,
     api: &dyn client::SheetsApi,
+    sink: &dyn crate::analytics::AnalyticsSink,
     key: u64,
     base_url: &str,
     conn: &mut SheetsConnection,
@@ -273,12 +274,11 @@ pub async fn sync(
         }
     }
 
-    let mut visits = std::collections::HashMap::with_capacity(links.len());
-    for (id, _) in &links {
-        if let Ok(v) = store.visits(tenant, *id).await {
-            visits.insert(*id, v);
-        }
-    }
+    // Real click totals from analytics (LUC-89), so the sheet's "visits" column
+    // matches the Analytics view instead of the `max_visits` enforcement
+    // counter (0 for links with no limit).
+    let ids: Vec<u64> = links.iter().map(|(id, _)| *id).collect();
+    let visits = sink.click_totals(&ids).await.unwrap_or_default();
 
     let rows = catalog_rows(&links, key, base_url, &visits);
     api.update_values(access_token, &sid, &rows).await?;

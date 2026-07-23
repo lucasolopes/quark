@@ -509,6 +509,7 @@ async fn main() {
         }
         if let (Some(secs), Some(public_host)) = (cfg.sync_secs, state.public_host.clone()) {
             let store = state.store.clone();
+            let sink = state.sink.clone();
             let key = state.key;
             let base_url = format!("https://{public_host}");
             // Per-process holder id for the sync lease (mirrors the health checker).
@@ -557,6 +558,7 @@ async fn main() {
                                 quark::sheets::sync(
                                     &store,
                                     api.as_ref(),
+                                    sink.as_ref(),
                                     key,
                                     &base_url,
                                     &mut conn,

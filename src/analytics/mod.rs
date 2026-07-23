@@ -335,6 +335,26 @@ pub trait AnalyticsSink: Send + Sync + 'static {
     /// returns aggregates only, and it never returns `None`: a tenant with no
     /// clicks yet gets `Aggregates::default()`, not a missing-record signal.
     async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError>;
+    /// Total real clicks per link id (LUC-89): the number the panel's "Visitas"
+    /// column and the Sheets mirror show, so they match the Analytics view
+    /// instead of the `max_visits` enforcement counter (which is 0 for links
+    /// with no limit). Ids with no clicks are omitted (callers default to 0).
+    /// Default is per-id via `stats`; backends with a cheap aggregate (Postgres
+    /// `click_counters`) override it with a single batched query.
+    async fn click_totals(
+        &self,
+        ids: &[u64],
+    ) -> Result<std::collections::HashMap<u64, u64>, StoreError> {
+        let mut out = std::collections::HashMap::new();
+        for &id in ids {
+            if let Some(s) = self.stats(id).await? {
+                if s.aggregates.total > 0 {
+                    out.insert(id, s.aggregates.total);
+                }
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// Batch size that triggers an immediate flush (in addition to the 5s timer).

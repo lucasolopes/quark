@@ -46,7 +46,7 @@ fn rec(url: &str, tenant: TenantId) -> Record {
 #[tokio::test]
 async fn sync_reads_catalog_of_the_given_tenant_only() {
     let dir = tempfile::tempdir().unwrap();
-    let (store, _sink) = open_backends(dir.path(), true).await.unwrap();
+    let (store, sink) = open_backends(dir.path(), true).await.unwrap();
 
     let tenant_b = Tenant {
         id: TenantId(1),
@@ -83,6 +83,7 @@ async fn sync_reads_catalog_of_the_given_tenant_only() {
     sync(
         &store,
         &api,
+        sink.as_ref(),
         0x1234,
         "https://s.example",
         &mut conn,
