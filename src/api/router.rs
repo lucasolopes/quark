@@ -137,7 +137,10 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             axum::routing::delete(admin_domains_delete),
         )
         .route("/admin/domains/:id/verify", post(admin_domains_verify))
-        .route("/admin/domains/:id/primary", post(admin_domains_set_primary))
+        .route(
+            "/admin/domains/:id/primary",
+            post(admin_domains_set_primary),
+        )
         .route(
             "/admin/sso-domains",
             get(admin_sso_domains_list).post(admin_sso_domains_create),
@@ -206,24 +209,26 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
     // preflight is still answered): a `/admin/*` request whose `Host` is not
     // the admin host gets a 404, as if the route did not exist on that domain.
     let app = if let Some(admin_host) = admin_host {
-        app.layer(axum::middleware::from_fn(move |req: Request, next: Next| {
-            let admin_host = admin_host.clone();
-            async move {
-                let path = req.uri().path();
-                if path.starts_with("/admin/") || path == "/admin" {
-                    let host = req
-                        .headers()
-                        .get(header::HOST)
-                        .and_then(|h| h.to_str().ok())
-                        .map(normalize_admin_host)
-                        .unwrap_or_default();
-                    if host != admin_host {
-                        return StatusCode::NOT_FOUND.into_response();
+        app.layer(axum::middleware::from_fn(
+            move |req: Request, next: Next| {
+                let admin_host = admin_host.clone();
+                async move {
+                    let path = req.uri().path();
+                    if path.starts_with("/admin/") || path == "/admin" {
+                        let host = req
+                            .headers()
+                            .get(header::HOST)
+                            .and_then(|h| h.to_str().ok())
+                            .map(normalize_admin_host)
+                            .unwrap_or_default();
+                        if host != admin_host {
+                            return StatusCode::NOT_FOUND.into_response();
+                        }
                     }
+                    next.run(req).await
                 }
-                next.run(req).await
-            }
-        }))
+            },
+        ))
     } else {
         app
     };

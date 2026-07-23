@@ -77,7 +77,12 @@ pub(crate) async fn admin_domains_list(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
-    let primary_id = st.store.get_primary_domain_id(p.tenant).await.ok().flatten();
+    let primary_id = st
+        .store
+        .get_primary_domain_id(p.tenant)
+        .await
+        .ok()
+        .flatten();
     match st.store.list_domains(p.tenant).await {
         Ok(domains) => Json(
             domains
@@ -185,8 +190,18 @@ pub(crate) async fn admin_domains_verify(
         domain.status = DomainStatus::Verified;
         domain.verified_at = Some(verified_at);
     }
-    let primary_id = st.store.get_primary_domain_id(p.tenant).await.ok().flatten();
-    Json(domain_view(&domain, &st.public_host, Some(domain.id) == primary_id)).into_response()
+    let primary_id = st
+        .store
+        .get_primary_domain_id(p.tenant)
+        .await
+        .ok()
+        .flatten();
+    Json(domain_view(
+        &domain,
+        &st.public_host,
+        Some(domain.id) == primary_id,
+    ))
+    .into_response()
 }
 
 /// `DELETE /admin/domains/:id`: remove the caller's tenant's custom domain
@@ -214,7 +229,14 @@ pub(crate) async fn admin_domains_delete(
     // If the deleted domain was the tenant's primary, clear the pointer so the
     // default falls back to the subdomain (a dangling primary is harmless — the
     // resolvers already ignore it — but clearing keeps the row honest).
-    if st.store.get_primary_domain_id(p.tenant).await.ok().flatten() == Some(id) {
+    if st
+        .store
+        .get_primary_domain_id(p.tenant)
+        .await
+        .ok()
+        .flatten()
+        == Some(id)
+    {
         let _ = st.store.set_primary_domain(p.tenant, None).await;
     }
     st.host_router.invalidate(&domain.host).await;
@@ -246,7 +268,12 @@ pub(crate) async fn admin_domains_set_primary(
     if domain.status != DomainStatus::Verified {
         return (StatusCode::BAD_REQUEST, "domain must be verified first").into_response();
     }
-    if st.store.set_primary_domain(p.tenant, Some(id)).await.is_err() {
+    if st
+        .store
+        .set_primary_domain(p.tenant, Some(id))
+        .await
+        .is_err()
+    {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     Json(domain_view(&domain, &st.public_host, true)).into_response()
