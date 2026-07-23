@@ -1147,13 +1147,14 @@ async fn list_and_delete_invites_http_are_tenant_scoped_for_non_superuser() {
 // configured it stops after validating the invite and points the caller at
 // their org's login, granting nothing.
 
-/// `role: "member"` maps to the `quark-readers` group (the default-closed
-/// group gate written by `provision_tenant_keycloak` denies anyone outside
-/// `quark-admins`/`quark-readers`, so every invited role must land in one of
-/// the two).
+/// `role: "member"` maps to the `quark-members` group (`member_value` in the
+/// tenant's OIDC config). The default-closed group gate written by
+/// `provision_tenant_keycloak` admits `quark-admins`/`quark-members`/
+/// `quark-readers` (see `oidc::passes_required_group`), so an invited Member
+/// keeps link write access instead of collapsing to read-only Viewer.
 #[tokio::test]
 #[file_serial]
-async fn create_invite_with_keycloak_provisions_member_into_readers_group() {
+async fn create_invite_with_keycloak_provisions_member_into_members_group() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
@@ -1180,10 +1181,10 @@ async fn create_invite_with_keycloak_provisions_member_into_readers_group() {
     assert_eq!(
         mock.calls(),
         vec![
-            "ensure_user(invites-kc-member,member-invite@acme.com,quark-readers)".to_string(),
+            "ensure_user(invites-kc-member,member-invite@acme.com,quark-members)".to_string(),
             "send_set_password_email(invites-kc-member,kc-user-invite-member)".to_string(),
         ],
-        "a Member invite must provision the realm user into quark-readers"
+        "a Member invite must provision the realm user into quark-members"
     );
 
     let stored = store.list_invites(tenant).await.unwrap();
