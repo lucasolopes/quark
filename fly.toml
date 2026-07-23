@@ -9,8 +9,18 @@ primary_region = "gru"
 
 [env]
   QUARK_ADDR = "0.0.0.0:8080"
-  # Public host: makes short URLs and OAuth redirects use the real domain.
-  QUARK_PUBLIC_HOST = "backend.quarkus.com.br"
+  # Shared short-link host + CNAME target for tenant custom domains (LUC-84).
+  # Not the API host (that's QUARK_ADMIN_HOST) and not the OIDC redirect
+  # (QUARK_OIDC_REDIRECT_URL); it is only where shared/default short links live.
+  QUARK_PUBLIC_HOST = "go.quarkus.com.br"
+  # API/admin host: in cloud, /admin/* only answers here — never on a tenant's
+  # link domain (LUC-85). The panel talks to this host; the OIDC callback lands
+  # here too.
+  QUARK_ADMIN_HOST = "backend.quarkus.com.br"
+  # Auto per-tenant subdomain base (LUC-82): each workspace gets
+  # <slug>.quarkus.com.br for its short links, served via the *.quarkus.com.br
+  # wildcard cert.
+  QUARK_TENANT_DOMAIN_SUFFIX = "quarkus.com.br"
 
 [http_service]
   internal_port = 8080

@@ -20,8 +20,12 @@ That split is the source of most of the gotchas below.
 
 ## Backend (`quark-prod`)
 
-Config lives in `fly.toml` (`app = "quark-prod"`, `primary_region = "gru"`,
-`QUARK_PUBLIC_HOST = "backend.quarkus.com.br"`). Everything else is a secret.
+Config lives in `fly.toml` (`app = "quark-prod"`, `primary_region = "gru"`).
+Non-secret host config is in `fly.toml` `[env]`: `QUARK_PUBLIC_HOST = "go.quarkus.com.br"`
+(shared short-link host + CNAME target for custom domains), `QUARK_ADMIN_HOST =
+"backend.quarkus.com.br"` (the only host `/admin/*` answers on in cloud), and
+`QUARK_TENANT_DOMAIN_SUFFIX = "quarkus.com.br"` (auto per-tenant subdomain base).
+Everything sensitive is a secret.
 
 Deploy the current `main`:
 
@@ -85,6 +89,39 @@ to the project as a custom domain.
   `QUARK_KEYCLOAK_BASE_URL` exactly.
 
 Get the current values any time with `fly certs setup <hostname> -a <app>`.
+
+## Link domains (short-link hosts)
+
+Short links resolve on hosts separate from the panel (`app.`) and API (`backend.`):
+
+- **Shared / default host:** `go.quarkus.com.br` (`QUARK_PUBLIC_HOST`). Where
+  the default tenant's links live and the CNAME target shown to custom-domain
+  customers. Covered by the `*.quarkus.com.br` wildcard (DNS + cert), so no
+  dedicated DNS record is needed for it.
+- **Per-tenant subdomain:** each workspace gets `<slug>.quarkus.com.br`
+  automatically (`QUARK_TENANT_DOMAIN_SUFFIX = quarkus.com.br`). The boot
+  backfill seeds a verified `domains` row per tenant; new links for that tenant
+  bind to its subdomain.
+- **Custom domains:** an Owner/Admin adds `go.acme.com` in the panel
+  (`/domains`), publishes the shown DNS records (`CNAME go.acme.com →
+  go.quarkus.com.br` and `TXT _quark-verify.go.acme.com → <token>`), and clicks
+  Verify. Then issue TLS: `fly certs add go.acme.com -a quark-prod`.
+
+### Wildcard DNS + cert (one-time)
+
+- Cloudflare (DNS-only / grey): `A *.quarkus.com.br → 66.241.124.165`,
+  `AAAA *.quarkus.com.br → 2a09:8280:1::14e:87d5:0`.
+- `fly certs add "*.quarkus.com.br" -a quark-prod`, then add the DNS-01
+  challenge it prints: `CNAME _acme-challenge.quarkus.com.br →
+  quarkus.com.br.<id>.flydns.net.`. Check with `fly certs check "*.quarkus.com.br"`.
+
+### Admin host gate
+
+In cloud, `/admin/*` answers **only** on `QUARK_ADMIN_HOST`
+(`backend.quarkus.com.br`); a request to `/admin/*` on any link domain (a
+tenant subdomain or custom domain) gets a `404`. Link domains serve only the
+public redirect path. Verify: `curl -sI https://<tenant-domain>/admin/me`
+returns `404`, `https://backend.quarkus.com.br/admin/me` returns `200`.
 
 ## Keycloak (`quark-keycloak`)
 
