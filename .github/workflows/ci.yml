@@ -83,3 +83,20 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run build
+
+  # Deploy do backend no Fly (quark-prod) só quando um push na main passa nos
+  # testes. O front deploya sozinho pelo Cloudflare Pages (integração Git), então
+  # não entra aqui. `concurrency` garante um deploy por vez.
+  deploy-backend:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-backend
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
