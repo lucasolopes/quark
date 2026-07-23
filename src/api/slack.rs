@@ -121,23 +121,24 @@ pub(crate) async fn slack_callback(
         Ok(subs) => subs,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    // Idempotent: re-installing the SAME channel (a double-click, or a repeat
-    // "Add to Slack" for a channel already connected) must not create a
-    // duplicate subscription. Slack returns the same incoming webhook URL for
-    // the same channel, so match on it and just return to the panel.
-    if let Some(dup) = existing
-        .iter()
-        .find(|s| s.kind == SubscriptionKind::Slack && s.url == url)
-    {
-        // Backfill the channel label if this connection predates label capture
-        // (or was made manually) and Slack now told us the channel.
-        if dup.label.is_none() && label.is_some() {
-            let updated = WebhookSubscription {
-                label,
-                ..dup.clone()
-            };
-            let _ = st.store.put_webhook(tenant, &updated).await;
-        }
+    // Idempotent: re-installing a channel that is already connected must not
+    // create a duplicate. Slack mints a BRAND-NEW incoming webhook URL on every
+    // install, so the URL cannot identify a re-install — the stable identity is
+    // the channel itself. Match on the channel name (falling back to an exact
+    // URL match for the legacy/no-channel case) and, when found, refresh that
+    // subscription in place (new URL + label) instead of inserting a new row.
+    let label_ref = label.as_deref();
+    let dup = existing.iter().find(|s| {
+        s.kind == SubscriptionKind::Slack
+            && ((label_ref.is_some() && s.label.as_deref() == label_ref) || s.url == url)
+    });
+    if let Some(dup) = dup {
+        let updated = WebhookSubscription {
+            url: url.clone(),
+            label: label.clone().or_else(|| dup.label.clone()),
+            ..dup.clone()
+        };
+        let _ = st.store.put_webhook(tenant, &updated).await;
         let clear = format!("{SLACK_STATE_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
         return (
             StatusCode::SEE_OTHER,
