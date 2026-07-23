@@ -48,16 +48,20 @@ const PUBLIC_BASE = (
 interface TenantDomain {
   slug?: string | null;
   suffix?: string | null;
+  /** The shared short-link host (`QUARK_PUBLIC_HOST`, e.g. `go.quarkus.com.br`),
+   * used as the fallback host instead of the API origin. */
+  publicHost?: string | null;
 }
 
 /**
  * Builds the short URL shown/copied for a code. Cloud tenants with a
- * provisioned `<slug>.<suffix>` subdomain get links on their own domain;
- * everyone else (OSS, or a cloud tenant with no suffix configured yet)
- * falls back to `PUBLIC_BASE`, unchanged from before subdomains existed.
+ * provisioned `<slug>.<suffix>` subdomain get links on their own domain; a
+ * tenant without one falls back to the shared short-link host (`publicHost`),
+ * and only when even that is absent (OSS) to `PUBLIC_BASE` (the API origin).
  */
-function buildShortUrl(code: string, { slug, suffix }: TenantDomain): string {
+function buildShortUrl(code: string, { slug, suffix, publicHost }: TenantDomain): string {
   if (slug && suffix) return `https://${slug}.${suffix}/${code}`;
+  if (publicHost) return `https://${publicHost}/${code}`;
   return `${PUBLIC_BASE}/${code}`;
 }
 
@@ -85,7 +89,7 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
   const { data: me } = useMe();
   const bulkLinks = useBulkLinks();
   const currentMembership = me?.memberships?.find((m) => m.tenant_id === me.current_tenant);
-  const tenantDomain: TenantDomain = { slug: currentMembership?.slug, suffix: me?.tenant_domain_suffix };
+  const tenantDomain: TenantDomain = { slug: currentMembership?.slug, suffix: me?.tenant_domain_suffix, publicHost: me?.public_host };
 
   const pageCodes = links.map((l) => l.code);
   const allSelected = pageCodes.length > 0 && pageCodes.every((c) => selected.has(c));
