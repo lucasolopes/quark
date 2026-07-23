@@ -1947,6 +1947,17 @@ impl Store for PostgresStore {
         Ok(row.is_some())
     }
 
+    async fn release_sheets_lease(&self, holder: &str) -> Result<(), StoreError> {
+        // Only the current holder can release; if another node already took over
+        // (after a TTL expiry) this matches zero rows and is a harmless no-op.
+        sqlx::query("DELETE FROM sheets_lease WHERE id = 1 AND holder = $1")
+            .bind(holder)
+            .execute(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
     async fn link_health_for(
         &self,
         tenant: TenantId,

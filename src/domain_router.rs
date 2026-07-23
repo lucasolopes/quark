@@ -449,6 +449,9 @@ mod tests {
         ) -> Result<bool, StoreError> {
             unimplemented!()
         }
+        async fn release_sheets_lease(&self, _holder: &str) -> Result<(), StoreError> {
+            unimplemented!()
+        }
         async fn next_pixel_id(&self, _tenant: TenantId) -> Result<u64, StoreError> {
             unimplemented!()
         }
