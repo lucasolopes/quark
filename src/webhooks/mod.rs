@@ -134,6 +134,21 @@ pub struct WebhookSubscription {
     /// webhooks and pre-existing rows.
     #[serde(default)]
     pub label: Option<String>,
+    /// Id do conector do catalogo (`"zapier"`, `"make"`, `"n8n"`, `"slack"`...).
+    /// Desambigua os webhooks genericos, que compartilham `kind: Generic`.
+    /// `None` em linhas anteriores a fase 3.
+    #[serde(default)]
+    pub connector_id: Option<String>,
+    /// Id estavel do destino do lado do provedor (o Slack usa o `channel_id`),
+    /// para dedup a prova de rename. Generico de proposito para reuso futuro.
+    #[serde(default)]
+    pub external_id: Option<String>,
+    /// Timestamp (epoch secs) da ultima tentativa de entrega registrada.
+    #[serde(default)]
+    pub last_delivery_at: Option<u64>,
+    /// Resultado da ultima entrega registrada (health passivo).
+    #[serde(default)]
+    pub last_delivery_status: crate::health::HealthStatus,
 }
 
 /// A concrete event ready to be delivered: the event kind plus the exact
@@ -356,6 +371,10 @@ mod tests {
             created: 0,
             kind: SubscriptionKind::Generic,
             label: None,
+            connector_id: None,
+            external_id: None,
+            last_delivery_at: None,
+            last_delivery_status: Default::default(),
         };
         assert!(matches(&sub, &EventType::LinkCreated));
         assert!(!matches(&sub, &EventType::LinkClicked));
@@ -488,5 +507,17 @@ mod tests {
     #[test]
     fn channel_payload_generic_is_none() {
         assert_eq!(channel_payload(SubscriptionKind::Generic, "hello"), None);
+    }
+
+    #[test]
+    fn legacy_json_without_phase3_fields_deserializes_with_defaults() {
+        // Um blob gravado antes da fase 3 (sem connector_id/external_id/health).
+        let legacy = r#"{"id":7,"url":"https://h/x","events":["link.created"],
+            "secret":"","active":true,"created":100,"kind":"generic"}"#;
+        let sub: WebhookSubscription = serde_json::from_str(legacy).unwrap();
+        assert_eq!(sub.connector_id, None);
+        assert_eq!(sub.external_id, None);
+        assert_eq!(sub.last_delivery_at, None);
+        assert_eq!(sub.last_delivery_status, crate::health::HealthStatus::Never);
     }
 }

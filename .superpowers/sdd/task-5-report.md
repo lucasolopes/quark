@@ -1,49 +1,131 @@
-# LUC-57 Task 5 report: admin UI for SSO email domains
+# Task 5 Report: `record_pixel_health` no trait `Store`
 
-Commit: `b4092f8` on `feat/sso-email-discovery` (frontend-only, no backend changes).
+## TDD evidence
 
-## What changed
-
-- `web/src/lib/types.ts`: `DomainStatus` (`"pending" | "verified"`) and `SsoDomainView` (`id, domain, status, created, verified_at, txt_name, txt_value`), matching `SsoDomainView`/`sso_domain_view` in `src/api.rs`.
-- `web/src/lib/api.ts`: `listSsoDomains()`, `createSsoDomain(domain)`, `verifySsoDomain(id)`, `deleteSsoDomain(id)` next to the existing CRUD-style methods. Also `oidcConfigured(): Promise<boolean>` — a plain (non-throwing) fetch to `GET /admin/oidc-config`, mapping 200→true / 404→false, mirroring the existing `sheetsStatus` pattern (a workspace with no OIDC provider yet is a normal `false`, not a 401 to bounce the panel on).
-- `web/src/lib/queries.ts`: `useSsoDomains` (list query), `useCreateSsoDomain`, `useVerifySsoDomain`, `useDeleteSsoDomain` (mutations invalidating the list), and `useOidcConfigured` (the gating query, `retry: false`).
-- `web/src/routes/SsoDomains.tsx` (new): the admin screen.
-  - Gate: renders `null` when `me().memberships === undefined` (OSS — mirrors `RequireAuth`/`Shell`'s existing cloud-detection). When cloud, calls `GET /admin/oidc-config` via `useOidcConfigured`; while pending shows a skeleton, when `false` shows a short "set up an SSO provider first" message with no domain list, when `true` renders the full panel. This satisfies "cloud + SSO-configured" using the real backend signal (`GET /admin/oidc-config`, already shipped in Task 2/P2d, just not previously wired to the frontend) rather than approximating it — there was no existing P2d admin UI in `web/src/` to mirror, so I used the endpoint itself as the more precise precedent per the brief's fallback guidance ("mirror whatever the OIDC-config admin UI does, OR gate on cloud and let calls 409 gracefully").
-  - Panel: list of domains as cards (domain, status badge, created date, Verify button for pending rows, Remove button always); a pending domain's card also shows its `_quark-sso.<domain>` TXT name/value inline (plain JSX text, no `dangerouslySetInnerHTML`); an "Add domain" dialog (mirrors `Members`'/`Webhooks`' create-dialog pattern) with client-side domain-shape validation and 409/400/429 error mapping; a remove confirmation `AlertDialog` (mirrors `Members`' revoke flow).
-- `web/src/app/router.tsx`: route `sso-domains` → `<SsoDomains />`, alongside the existing `members` route.
-- `web/src/app/Shell.tsx`: nav item "SSO domains" (`ShieldCheck` icon) in the Dev group, gated the same way as the existing Members item (`canManageSsoDomains = canManageMembers`, i.e. cloud + Owner/Admin) — the SSO-domains screen's own internal gate (above) is what enforces "SSO configured".
-- i18n: `shell.navSsoDomains` + a new `ssoDomains` namespace (title, subtitle, not-configured message, empty state, add form, column headers, status labels, TXT-record instructions/labels, verify/remove actions and their toasts, error mappings for 400/409/429) added to both `web/src/i18n/en.ts` and `web/src/i18n/pt-BR.ts`.
-- Tests:
-  - `web/src/lib/api.test.ts` (+8 tests): `oidcConfigured` true (200) / false (404); `listSsoDomains` GETs `/admin/sso-domains`; `createSsoDomain` POSTs `{domain}` to `/admin/sso-domains`; `verifySsoDomain` POSTs to `/admin/sso-domains/:id/verify`; `deleteSsoDomain` DELETEs `/admin/sso-domains/:id` + throws `ApiError` on a non-ok response.
-  - `web/src/routes/SsoDomains.test.tsx` (new, 7 tests): OSS (no `memberships`) renders nothing; cloud without an SSO provider configured shows the not-configured message and no domain list; cloud+configured lists a pending and a verified domain, with the TXT record shown only for the pending one; empty state; clicking Verify calls the verify endpoint and the list refetches; the add form posts the trimmed domain; Remove asks for confirmation then DELETEs.
-
-## Test command + output
+### RED (Step 2)
 
 ```
-cd web
-npx vitest run
+export PATH="$HOME/.cargo/bin:$PATH" && cargo test -j1 --lib store::lmdb::tests::record_pixel_health
 ```
 
-Full-suite result: **2 failed | 190 passed (192)**, both failures in `src/routes/Extensions.test.tsx` ("create flow calls the API" / a setup-Zapier click assertion) — confirmed pre-existing and unrelated to this change:
-- A first full run (accidentally concurrent with a separate `tsc --noEmit` invocation) also transiently failed `Webhooks.test.tsx` on a timeout; re-ran `Webhooks.test.tsx` + `Extensions.test.tsx` together and `Webhooks.test.tsx` alone — it passed cleanly every time in isolation, confirming that failure was resource contention from running two heavy processes in parallel, not a real regression.
-- Re-ran the full suite alone (no other process running): consistently 190/192, the same 2 `Extensions.test.tsx` failures, matching the documented pre-existing flake.
-- `SsoDomains.test.tsx` and `api.test.ts` on their own: 7/7 and 29/29 green, including a final standalone run after the last Shell.tsx cleanup.
+```
+error[E0599]: no method named `record_pixel_health` found for struct `LmdbStore` in the current scope
+    --> src\store\lmdb.rs:1926:11
+help: there is a method `record_webhook_health` with a similar name
+```
+
+Test added in `src/store/lmdb.rs` (`record_pixel_health_updates_only_health_fields`), following the
+same shape as the existing `record_webhook_health_updates_only_health_fields` test (uses
+`LmdbStore::open_with_node_id` + `tempfile::tempdir`, not the brief's pseudo `new_test_store()`
+helper, which does not exist in this codebase).
+
+### GREEN (Step 7)
+
+After implementing trait decl (Step 3), LMDB impl (Step 4), Postgres (Step 5), and fixing the two
+stub sites (Step 6):
 
 ```
-npx tsc --noEmit
+export PATH="$HOME/.cargo/bin:$PATH" && cargo test -j1 --lib store::lmdb::tests::record_pixel_health
 ```
-No output (clean).
 
 ```
-npx oxlint
+running 1 test
+test store::lmdb::tests::record_pixel_health_updates_only_health_fields ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 345 filtered out; finished in 0.02s
 ```
-One pre-existing warning, unrelated to this change (`vite.config.ts:1:1: triple-slash-reference`). My test file's own transient warning (`method` declared but unused in an overridden mock) was fixed before the final run — final `oxlint` run shows only the pre-existing warning.
 
-## Design decision worth flagging
+## Gated Postgres test
 
-The brief's "gate to cloud + SSO-configured" left the exact signal open (no P2d admin UI existed to mirror in `web/src/`). I found the backend already exposes `GET /admin/oidc-config` (404 when unset, 200 otherwise, cloud-only, `Scope::Full`) — unused by any existing frontend code — and used it directly as the gating signal instead of approximating with cloud-only + graceful 409 handling. This is a small, self-contained addition (`api.oidcConfigured()` + `useOidcConfigured()`), reuses an existing endpoint rather than inventing a signal, and gives an exact answer instead of a heuristic. Flagging in case the reviewer would rather see the simpler cloud-only + 409-toast approach the brief also explicitly permitted.
+Added `record_pixel_health_updates_only_health_fields_pg` to `tests/pixel_store_it.rs`, mirroring
+`record_webhook_health_updates_only_health_fields_pg` in `tests/webhooks_store_it.rs` (same
+`fresh()` helper, same `#[file_serial]`, `eprintln!("skip: QUARK_TEST_DATABASE_URL not set")` early
+return).
 
-## Concerns
+`QUARK_TEST_DATABASE_URL` is NOT set in this environment, so the test took its skip/early-return
+path:
 
-- No existing P3 custom-domains admin UI was found in `web/src/` (confirmed by grep for `domains`/`Domains` across `web/src`) — I mirrored `Members.tsx`/`Webhooks.tsx` instead, per the brief's fallback instruction.
-- The nav item's role gate (Owner/Admin only) reuses `Members`' `MEMBERS_MANAGER_ROLES` set. I confirmed `admin_guard` in `src/api.rs` checks scope, not role, directly for `Scope::Full`; I did not trace how OIDC-session roles map to scopes for every possible role. This mirrors the exact same (pre-existing) assumption `Shell.tsx` already makes for the Members nav item, so it is not a new risk introduced by this task — worth a second look together with Members' gating, not in isolation.
+```
+export PATH="$HOME/.cargo/bin:$PATH" && cargo test -j1 --test pixel_store_it record_pixel_health
+running 1 test
+test record_pixel_health_updates_only_health_fields_pg ... ok
+```
+
+(reported "ok" because the function returns `Ok(())` immediately on the `None` branch of `fresh()`
+-- it did not touch a real database). The test compiles cleanly as part of `cargo build --all-targets`
+and `cargo test`, confirming it will run for real once `QUARK_TEST_DATABASE_URL` is set.
+
+## Every `impl Store for` site touched
+
+- `src/store/mod.rs` -- trait declaration for `record_pixel_health` added next to the other pixel
+  methods (after `list_pixels`).
+- `src/store/lmdb.rs` (real impl, `LmdbStore`) -- `record_pixel_health` added right after
+  `list_pixels`: surgical write-txn read-modify-write, no-op if the pixel key is absent.
+- `src/store/postgres.rs` (real impl, `PostgresStore`) -- `record_pixel_health` added right after
+  `put_pixel`: surgical `UPDATE pixels SET last_forward_at=$1, last_forward_status=$2 WHERE
+  tenant_id=$3 AND id=$4`.
+- `src/domain_router.rs` (`FakeStore` test stub) -- `record_pixel_health` added after `list_pixels`,
+  body `Ok(())` (this stub already used `Ok(())` for `record_webhook_health` rather than
+  `unimplemented!()`, so followed the same convention).
+- `src/webhooks/delivery.rs` (`StubStore` test stub used by the webhook delivery worker tests) --
+  `record_pixel_health` added after `list_pixels`, body `Ok(())`. This stub does capture
+  `record_webhook_health` calls in a `Mutex<Vec<...>>` for webhook-delivery-worker assertions, but
+  pixel forwarding is out of scope for this stub (that capture belongs to a later pixel-forwarding
+  task, per the brief's "para a Task 7" note) -- a plain `Ok(())` is correct here since nothing in
+  this file's tests exercises pixel health yet.
+
+Confirmed via `grep -rn "impl Store for"` across `src/` that no other `impl Store for` blocks exist
+besides these four. `cargo build --all-targets` initially reported exactly two missing-method
+errors (`domain_router.rs`, `webhooks/delivery.rs`), and after the fix rebuilt clean.
+
+## Postgres changes in detail (Step 5)
+
+- 5a -- DDL (idempotent, inside the existing migrations block right after the `pixels` table
+  creation): `ALTER TABLE pixels ADD COLUMN IF NOT EXISTS last_forward_at BIGINT` and
+  `... last_forward_status JSONB`.
+- 5b -- `row_to_pixel`: reads `last_forward_at` (`Option<i64>`) and `last_forward_status`
+  (`Option<serde_json::Value>`), maps to `Option<u64>` / `HealthStatus` (defaulting to
+  `HealthStatus::Never` when the column is `NULL`, e.g. rows written before this migration).
+- 5c -- `get_pixel`'s and `list_pixels`'s `SELECT` column lists both extended with
+  `last_forward_at, last_forward_status`.
+- 5d -- `put_pixel`'s INSERT/ON CONFLICT extended with `last_forward_at`/`last_forward_status` as
+  `$7`/`$8`, binding `config.last_forward_at.map(|v| v as i64)` and
+  `serde_json::to_value(&config.last_forward_status)?` (hoisted to a `let` above `with_write!`,
+  same pattern used for `credentials`, since `?` doesn't type-check as an inline expression inside
+  the macro's closure).
+- 5e -- `record_pixel_health` impl using `with_write!` + a single surgical `UPDATE`.
+
+## `put_pixel` column/placeholder/bind alignment (explicit confirmation)
+
+Checked line-by-line, all four lists in the same order, 8 items each:
+
+- Columns: `id, provider, credentials, active, created, tenant_id, last_forward_at, last_forward_status`
+- VALUES: `$1, $2, $3, $4, $5, $6, $7, $8`
+- ON CONFLICT DO UPDATE SET: `provider=$2, credentials=$3, active=$4, created=$5, tenant_id=$6, last_forward_at=$7, last_forward_status=$8`
+- `.bind(...)` chain: `config.id, provider_to_str(config.provider), &credentials, config.active, config.created, tenant.0, config.last_forward_at.map(...), &last_forward_status`
+
+All four line up 1:1.
+
+## Full gate (pristine output)
+
+```
+export PATH="$HOME/.cargo/bin:$PATH" && cargo fmt --all && cargo clippy -j1 --all-targets -- -D warnings && cargo test -j1 --lib
+```
+
+- `cargo fmt --all` -- no diff.
+- `cargo clippy -j1 --all-targets -- -D warnings` -- `Finished` cleanly, zero warnings.
+- `cargo test -j1 --lib` -- `test result: ok. 345 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out`.
+
+## Self-review
+
+- Trait method signature matches the brief exactly across all 4 sites (trait decl, LMDB, Postgres,
+  and both stubs): `async fn record_pixel_health(&self, tenant: TenantId, id: u64, at: u64, status:
+  crate::health::HealthStatus) -> Result<(), StoreError>`.
+- LMDB impl is a true no-op (no write-txn commit) when the pixel key is absent -- matches the
+  "no-op se o pixel nao existe mais" doc comment.
+- Postgres `UPDATE` is unconditional (no existence check) but is a correct no-op in effect: 0 rows
+  affected when the `(tenant_id, id)` pair doesn't exist, same externally-visible behavior as LMDB
+  and consistent with `record_webhook_health`'s Postgres impl.
+- Did not touch `reset_for_tests` TRUNCATE list, `src/codec.rs`, or `src/permute.rs`, per
+  instructions.
+- Did not add a new table.
+- rustfmt-clean, clippy-clean, no new warnings introduced.

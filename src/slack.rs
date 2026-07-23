@@ -71,6 +71,8 @@ pub struct IncomingWebhook {
     #[serde(default)]
     pub channel: Option<String>,
     #[serde(default)]
+    pub channel_id: Option<String>,
+    #[serde(default)]
     pub configuration_url: Option<String>,
 }
 
@@ -115,7 +117,8 @@ mod tests {
     use super::*;
 
     fn cfg() -> SlackConfig {
-        SlackConfig::from_parts("cid", "sec", "https://h/admin/integrations/slack/callback").unwrap()
+        SlackConfig::from_parts("cid", "sec", "https://h/admin/integrations/slack/callback")
+            .unwrap()
     }
 
     #[test]
@@ -133,7 +136,9 @@ mod tests {
         assert!(url.contains("scope=incoming-webhook"));
         assert!(url.contains("client_id=cid"));
         assert!(url.contains("state=xyz"));
-        assert!(url.contains("redirect_uri=https%3A%2F%2Fh%2Fadmin%2Fintegrations%2Fslack%2Fcallback"));
+        assert!(
+            url.contains("redirect_uri=https%3A%2F%2Fh%2Fadmin%2Fintegrations%2Fslack%2Fcallback")
+        );
     }
 
     #[test]
@@ -141,12 +146,24 @@ mod tests {
         let json = r##"{"ok":true,"incoming_webhook":{"url":"https://hooks.slack.com/services/T/B/x","channel":"#general","configuration_url":"https://team.slack.com/services/B"}}"##;
         let parsed: OAuthAccess = serde_json::from_str(json).unwrap();
         assert!(parsed.ok);
-        assert_eq!(parsed.incoming_webhook.unwrap().url, "https://hooks.slack.com/services/T/B/x");
+        assert_eq!(
+            parsed.incoming_webhook.unwrap().url,
+            "https://hooks.slack.com/services/T/B/x"
+        );
+    }
+
+    #[test]
+    fn parses_channel_id_from_incoming_webhook() {
+        let json = r##"{"ok":true,"incoming_webhook":{"url":"https://hooks.slack.com/services/T/B/x","channel":"#general","channel_id":"C012AB3CD","configuration_url":"https://team.slack.com/services/B"}}"##;
+        let parsed: OAuthAccess = serde_json::from_str(json).unwrap();
+        let wh = parsed.incoming_webhook.unwrap();
+        assert_eq!(wh.channel_id.as_deref(), Some("C012AB3CD"));
     }
 
     #[test]
     fn parses_error_oauth_access() {
-        let parsed: OAuthAccess = serde_json::from_str(r#"{"ok":false,"error":"invalid_code"}"#).unwrap();
+        let parsed: OAuthAccess =
+            serde_json::from_str(r#"{"ok":false,"error":"invalid_code"}"#).unwrap();
         assert!(!parsed.ok);
         assert_eq!(parsed.error.as_deref(), Some("invalid_code"));
         assert!(parsed.incoming_webhook.is_none());

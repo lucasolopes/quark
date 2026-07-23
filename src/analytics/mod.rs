@@ -625,11 +625,11 @@ pub fn spawn_worker(
                         Some(ev) => {
                             buf.push(ev);
                             if buf.len() >= BATCH {
-                                flush(&sink, &mut buf, &pixels, &client, key, &bases, &counter, &alerts, &webhooks).await;
+                                flush(&sink, &mut buf, &pixels, &client, key, &bases, &counter, &alerts, &webhooks, &store).await;
                             }
                         }
                         None => {
-                            flush(&sink, &mut buf, &pixels, &client, key, &bases, &counter, &alerts, &webhooks).await;
+                            flush(&sink, &mut buf, &pixels, &client, key, &bases, &counter, &alerts, &webhooks, &store).await;
                             break;
                         }
                     }
@@ -637,7 +637,7 @@ pub fn spawn_worker(
                 _ = ticker.tick() => {
                     refresh_pixel_snapshot(&store, &mut pixels).await;
                     refresh_alert_snapshot(&store, &mut alerts).await;
-                    flush(&sink, &mut buf, &pixels, &client, key, &bases, &counter, &alerts, &webhooks).await;
+                    flush(&sink, &mut buf, &pixels, &client, key, &bases, &counter, &alerts, &webhooks, &store).await;
                 }
             }
         }
@@ -693,6 +693,7 @@ async fn flush(
     counter: &AlertCounter,
     alerts: &[(TenantId, HashMap<u64, AlertRule>)],
     webhooks: &WebhookDispatcher,
+    store: &Arc<dyn Store>,
 ) {
     if buf.is_empty() {
         return;
@@ -703,13 +704,15 @@ async fn flush(
             serde_json::json!({"analytics_flush_error": e.to_string()})
         );
     }
-    forward_to_pixels(pixels, client, key, bases, buf).await;
+    forward_to_pixels(pixels, client, key, bases, buf, store).await;
     process_alerts(counter, alerts, webhooks, key, buf).await;
     buf.clear();
 }
 
 /// Forwards the flushed batch to every active pixel config in the cached
-/// `pixels` snapshot (no store access on this path, see `spawn_worker`).
+/// `pixels` snapshot. After each forward, records pixel delivery health via
+/// store.record_pixel_health as a best-effort write (errors ignored, never
+/// blocks).
 ///
 /// Tenant isolation: the batch mixes clicks from every tenant, so for each
 /// tenant we forward only that tenant's own events to that tenant's pixels.
@@ -724,6 +727,7 @@ async fn forward_to_pixels(
     key: u64,
     bases: &PixelBases,
     events: &[ClickEvent],
+    store: &Arc<dyn Store>,
 ) {
     for (tenant, configs) in pixels {
         if !configs.iter().any(|c| c.active) {
@@ -739,17 +743,31 @@ async fn forward_to_pixels(
         }
         for config in configs.iter().filter(|c| c.active) {
             let base = bases.base_for(config.provider);
-            if let Err(e) =
-                pixel::forward(client, base, config, &scoped, key, bases.anonymize_ip).await
+            let status = match pixel::forward(
+                client,
+                base,
+                config,
+                &scoped,
+                key,
+                bases.anonymize_ip,
+            )
+            .await
             {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({
-                        "pixel_forward_error": e.to_string(),
-                        "pixel_id": config.id,
-                    })
-                );
-            }
+                Ok(()) => crate::health::HealthStatus::Ok,
+                Err(e) => {
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({
+                            "pixel_forward_error": e.to_string(),
+                            "pixel_id": config.id,
+                        })
+                    );
+                    crate::health::HealthStatus::Error(e.to_string())
+                }
+            };
+            let _ = store
+                .record_pixel_health(*tenant, config.id, crate::now(), status)
+                .await;
         }
     }
 }

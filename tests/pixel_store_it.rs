@@ -45,6 +45,8 @@ async fn pixel_round_trip_pg() {
         },
         active: true,
         created: 42,
+        last_forward_at: None,
+        last_forward_status: Default::default(),
     };
     s.put_pixel(quark::tenant::DEFAULT_TENANT, &config)
         .await
@@ -92,6 +94,50 @@ async fn pixel_round_trip_pg() {
 
 #[tokio::test]
 #[file_serial]
+async fn record_pixel_health_updates_only_health_fields_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let cfg = PixelConfig {
+        id: 3,
+        provider: Provider::Ga4,
+        credentials: PixelCredentials {
+            measurement_id: Some("G-X".into()),
+            api_secret: Some("s".into()),
+            pixel_id: None,
+            access_token: None,
+        },
+        active: true,
+        created: 10,
+        last_forward_at: None,
+        last_forward_status: quark::health::HealthStatus::Never,
+    };
+    s.put_pixel(quark::tenant::DEFAULT_TENANT, &cfg)
+        .await
+        .unwrap();
+
+    s.record_pixel_health(
+        quark::tenant::DEFAULT_TENANT,
+        3,
+        300,
+        quark::health::HealthStatus::Ok,
+    )
+    .await
+    .unwrap();
+
+    let got = s
+        .get_pixel(quark::tenant::DEFAULT_TENANT, 3)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.last_forward_at, Some(300));
+    assert_eq!(got.last_forward_status, quark::health::HealthStatus::Ok);
+    assert_eq!(got.credentials.measurement_id.as_deref(), Some("G-X"));
+}
+
+#[tokio::test]
+#[file_serial]
 async fn pixel_put_upserts_pg() {
     let Some(s) = fresh().await else {
         return;
@@ -107,6 +153,8 @@ async fn pixel_put_upserts_pg() {
         },
         active: true,
         created: 1,
+        last_forward_at: None,
+        last_forward_status: Default::default(),
     };
     s.put_pixel(quark::tenant::DEFAULT_TENANT, &config)
         .await

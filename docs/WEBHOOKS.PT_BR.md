@@ -307,6 +307,63 @@ destinos de link se aplica aqui, checada tanto na criação da assinatura
 quanto de novo no momento da entrega. Um deployment tem um teto de 50
 assinaturas.
 
+### Distinguindo Zapier, Make e n8n
+
+Zapier, Make e n8n registram uma assinatura `kind: "generic"` simples: o
+quark não tem nenhuma integração especial com nenhum deles, eles só recebem
+um webhook. Historicamente isso significava que o painel de integrações
+também não conseguia diferenciá-los, já que a única coisa que ele tinha para
+comparar era o `kind`, e qualquer um dos três conectado acendia os três
+juntos.
+
+O `CreateReq` agora aceita um `connector_id` opcional (um id do catálogo,
+ex. `"zapier"`, `"make"`, `"n8n"`). A página de cada integração no painel
+envia o próprio id ao criar a assinatura, então o painel consegue casar uma
+linha de volta com o conector exato que a criou, em vez de adivinhar pelo
+`kind`. Uma assinatura criada antes disso existir não tem `connector_id`; o
+painel cai de volta no casamento antigo por `kind` nesses casos, então nada
+que já estava conectado quebra.
+
+```bash
+curl -X POST localhost:8080/admin/webhooks \
+  -H 'x-admin-token: <token>' -H 'content-type: application/json' \
+  -d '{"url": "https://hooks.zapier.com/hooks/catch/000000/xxxxxx", "events": ["link.created"], "connector_id": "zapier"}'
+```
+
+## Health da conexão
+
+Cada linha de assinatura no painel e na API mostra o resultado da última
+entrega: `last_delivery_status` é um de `never` (criada, nada entregue
+ainda), `ok` (a última tentativa deu certo) ou `error` (com um `detail`
+curto, nunca um segredo ou token). `last_delivery_at` é o timestamp unix
+dessa tentativa. Pixels carregam o mesmo formato em `last_forward_status` /
+`last_forward_at` para o último forward de conversão.
+
+Isso é **health passivo**: o quark nunca faz polling num receptor pra
+perguntar "você ainda está aí?". O status é só o que a última tentativa real
+de entrega retornou, gravado como efeito colateral de enviá-la.
+
+`link.clicked` é excluído de propósito. É o único evento que dispara do
+caminho quente do redirect, e gravar health ali significaria uma escrita por
+clique, exatamente o custo que o design assíncrono e best-effort desse
+evento existe para evitar (veja [Eventos](#eventos)). Então o health
+reflete:
+
+- os eventos de ciclo de vida: `link.created`, `link.updated`,
+  `link.deleted`, `link.expired`, `link.threshold_reached`,
+- e o botão `/admin/webhooks/:id/test`, que sempre grava health já que
+  nunca é um clique de verdade.
+
+Uma assinatura que só recebe `link.clicked` pode ficar em `never`
+indefinidamente mesmo entregando cliques direitinho. Isso é esperado: use o
+"Testar" pra checar, ou assine também um evento de ciclo de vida se você
+quer que o status reflita o tráfego ao vivo.
+
+O health de pixel segue o caminho do forward de conversão em [Conversion
+forwarding](CONVERSION-FORWARDING.PT_BR.md), que já roda fora do caminho
+quente do redirect no worker de analytics; a gravação ali é best-effort e
+nunca trava o próximo lote desse worker.
+
 ## Alertas de limiar de cliques
 
 Um link pode carregar uma regra de alerta: disparar `link.threshold_reached`

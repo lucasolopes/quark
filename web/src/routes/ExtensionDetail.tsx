@@ -29,7 +29,7 @@ import {
 } from "@/lib/connectors";
 import { formatDateTime } from "@/lib/format";
 import { isUnauthorized, mutationErrorToast } from "@/lib/mutation-error";
-import { useCreatePixel, useCreateWebhook, useDeleteWebhook, useMe, useSheetsStatus, useSheetsSync, useSheetsDisconnect, useWebhooks } from "@/lib/queries";
+import { useCreatePixel, useCreateWebhook, useDeleteWebhook, useMe, usePixels, useSheetsStatus, useSheetsSync, useSheetsDisconnect, useWebhooks } from "@/lib/queries";
 import { WEBHOOK_EVENTS, type WebhookEvent } from "@/lib/types";
 
 /**
@@ -244,12 +244,14 @@ function WebhookPanel({ integration }: { integration: Integration }) {
   const deleteWebhook = useDeleteWebhook();
   const kind = WEBHOOK_KIND_BY_ID[integration.id] ?? "generic";
   const isChannel = kind !== "generic";
-  // Existing subscriptions that belong to THIS integration. Channel kinds
-  // (slack/discord/telegram) map 1:1 to a card, so we can show their connected
-  // state and let the user disconnect. Generic (Zapier/Make/n8n) all share
-  // `kind: "generic"`, so they can't be told apart until the connection model
-  // stores a connector id (fase 3) — we don't claim a connected state for them.
-  const existing = isChannel ? (webhooks.data?.webhooks ?? []).filter((w) => w.kind === kind) : [];
+  // Existing subscriptions that belong to THIS integration. Webhooks created
+  // via this panel (fase 3) carry `connector_id`, so we match on it exactly.
+  // Legacy webhooks (no `connector_id`) fall back to matching by `kind`, which
+  // still can't tell Zapier/Make/n8n apart from each other (they share
+  // `kind: "generic"`).
+  const existing = (webhooks.data?.webhooks ?? []).filter((w) =>
+    w.connector_id != null ? w.connector_id === integration.id : isChannel && w.kind === kind,
+  );
   const connected = existing.length > 0;
   // Slack "Add to Slack": when the OAuth connector is configured on the server,
   // lead with a one-click install (Slack returns the webhook URL — zero fields).
@@ -310,7 +312,7 @@ function WebhookPanel({ integration }: { integration: Integration }) {
     }
     setErrors({});
     try {
-      const result = await createWebhook.mutateAsync({ url: url.trim(), events, active: true, kind });
+      const result = await createWebhook.mutateAsync({ url: url.trim(), events, active: true, kind, connector_id: integration.id });
       setUrl("");
       setEvents([...WEBHOOK_EVENTS]);
       if (isChannel) {
@@ -347,22 +349,36 @@ function WebhookPanel({ integration }: { integration: Integration }) {
         <Card>
           <CardContent className="flex flex-col gap-3 py-6">
             <p className="text-sm font-medium">{t("extensions.channelConnectedTitle", { name: integration.name })}</p>
-            <ul className="flex flex-col gap-2">
-              {existing.map((w) => (
-                <li key={w.id} className="flex items-center justify-between gap-3 text-sm">
-                  <span className={w.label ? "font-medium" : "font-mono text-muted-foreground"}>
-                    {w.label || webhookLabel(w.url)}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={deleteWebhook.isPending}
-                    onClick={() => handleDisconnect(w.id)}
-                  >
-                    {t("extensions.channelDisconnect")}
-                  </Button>
-                </li>
-              ))}
+            <ul className="flex flex-col gap-3">
+              {existing.map((w) => {
+                const health = w.last_delivery_status?.state ?? "never";
+                const deliveryError = health === "error" ? w.last_delivery_status?.detail : undefined;
+                return (
+                  <li key={w.id} className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className={w.label ? "font-medium" : "font-mono text-muted-foreground"}>
+                        {w.label || webhookLabel(w.url)}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={deleteWebhook.isPending}
+                        onClick={() => handleDisconnect(w.id)}
+                      >
+                        {t("extensions.channelDisconnect")}
+                      </Button>
+                    </div>
+                    {health === "ok" && w.last_delivery_at && (
+                      <p className="text-xs text-muted-foreground">
+                        {t("extensions.webhookLastDelivery", { time: formatDateTime(w.last_delivery_at) })}
+                      </p>
+                    )}
+                    {deliveryError && (
+                      <p className="text-xs text-destructive">{t("extensions.webhookDeliveryError", { detail: deliveryError })}</p>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </CardContent>
         </Card>
@@ -501,6 +517,10 @@ function PixelPanel({ integration }: { integration: Integration }) {
   const navigate = useNavigate();
   const provider = PIXEL_PROVIDER_BY_ID[integration.id] ?? "ga4";
   const isGa4 = provider === "ga4";
+  const pixels = usePixels();
+  const existingPixel = (pixels.data?.pixels ?? []).find((p) => p.provider === provider);
+  const forwardHealth = existingPixel?.last_forward_status?.state ?? "never";
+  const forwardError = forwardHealth === "error" ? existingPixel?.last_forward_status?.detail : undefined;
 
   const [measurementId, setMeasurementId] = useState("");
   const [apiSecret, setApiSecret] = useState("");
@@ -547,68 +567,82 @@ function PixelPanel({ integration }: { integration: Integration }) {
   const secondId = `ext-pixel-second-${integration.id}`;
 
   return (
-    <Card>
-      <CardContent className="py-6">
-        <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-          <p className="text-sm text-muted-foreground">{t("pixels.dialog.description")}</p>
-
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor={firstId} className="text-sm font-medium">
-              {isGa4 ? t("pixels.dialog.measurementIdLabel") : t("pixels.dialog.pixelIdLabel")}
-            </label>
-            <Input
-              id={firstId}
-              type="text"
-              placeholder={isGa4 ? t("pixels.dialog.measurementIdPlaceholder") : t("pixels.dialog.pixelIdPlaceholder")}
-              value={isGa4 ? measurementId : pixelId}
-              onChange={(e) => (isGa4 ? setMeasurementId(e.target.value) : setPixelId(e.target.value))}
-              aria-invalid={errors.a === true}
-            />
-            {errors.a && (
-              <p className="text-sm text-destructive" role="alert">
-                {t("pixels.dialog.requiredField")}
+    <div className="flex flex-col gap-3">
+      {existingPixel && (
+        <Card>
+          <CardContent className="flex flex-col gap-1 py-6">
+            {forwardHealth === "ok" && existingPixel.last_forward_at && (
+              <p className="text-xs text-muted-foreground">
+                {t("extensions.pixelLastForward", { time: formatDateTime(existingPixel.last_forward_at) })}
               </p>
             )}
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor={secondId} className="text-sm font-medium">
-              {isGa4 ? t("pixels.dialog.apiSecretLabel") : t("pixels.dialog.accessTokenLabel")}
-            </label>
-            <Input
-              id={secondId}
-              type="password"
-              placeholder={isGa4 ? t("pixels.dialog.apiSecretPlaceholder") : t("pixels.dialog.accessTokenPlaceholder")}
-              value={isGa4 ? apiSecret : accessToken}
-              onChange={(e) => (isGa4 ? setApiSecret(e.target.value) : setAccessToken(e.target.value))}
-              aria-invalid={errors.b === true}
-            />
-            {errors.b && (
+            {forwardError && <p className="text-xs text-destructive">{t("extensions.pixelForwardError", { detail: forwardError })}</p>}
+          </CardContent>
+        </Card>
+      )}
+      <Card>
+        <CardContent className="py-6">
+          <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+            <p className="text-sm text-muted-foreground">{t("pixels.dialog.description")}</p>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={firstId} className="text-sm font-medium">
+                {isGa4 ? t("pixels.dialog.measurementIdLabel") : t("pixels.dialog.pixelIdLabel")}
+              </label>
+              <Input
+                id={firstId}
+                type="text"
+                placeholder={isGa4 ? t("pixels.dialog.measurementIdPlaceholder") : t("pixels.dialog.pixelIdPlaceholder")}
+                value={isGa4 ? measurementId : pixelId}
+                onChange={(e) => (isGa4 ? setMeasurementId(e.target.value) : setPixelId(e.target.value))}
+                aria-invalid={errors.a === true}
+              />
+              {errors.a && (
+                <p className="text-sm text-destructive" role="alert">
+                  {t("pixels.dialog.requiredField")}
+                </p>
+              )}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={secondId} className="text-sm font-medium">
+                {isGa4 ? t("pixels.dialog.apiSecretLabel") : t("pixels.dialog.accessTokenLabel")}
+              </label>
+              <Input
+                id={secondId}
+                type="password"
+                placeholder={isGa4 ? t("pixels.dialog.apiSecretPlaceholder") : t("pixels.dialog.accessTokenPlaceholder")}
+                value={isGa4 ? apiSecret : accessToken}
+                onChange={(e) => (isGa4 ? setApiSecret(e.target.value) : setAccessToken(e.target.value))}
+                aria-invalid={errors.b === true}
+              />
+              {errors.b && (
+                <p className="text-sm text-destructive" role="alert">
+                  {t("pixels.dialog.requiredField")}
+                </p>
+              )}
+            </div>
+
+            {errors.form && (
               <p className="text-sm text-destructive" role="alert">
-                {t("pixels.dialog.requiredField")}
+                {errors.form}
               </p>
             )}
-          </div>
 
-          {errors.form && (
-            <p className="text-sm text-destructive" role="alert">
-              {errors.form}
-            </p>
-          )}
-
-          <div className="flex items-center gap-3">
-            <Button type="submit" disabled={createPixel.isPending}>
-              {createPixel.isPending ? t("pixels.dialog.submitting") : t("extensions.activate")}
-            </Button>
-            <button
-              type="button"
-              className="text-xs text-muted-foreground underline-offset-4 hover:underline"
-              onClick={() => navigate("/pixels")}
-            >
-              {t("extensions.manageInPixels")}
-            </button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
+            <div className="flex items-center gap-3">
+              <Button type="submit" disabled={createPixel.isPending}>
+                {createPixel.isPending ? t("pixels.dialog.submitting") : t("extensions.activate")}
+              </Button>
+              <button
+                type="button"
+                className="text-xs text-muted-foreground underline-offset-4 hover:underline"
+                onClick={() => navigate("/pixels")}
+              >
+                {t("extensions.manageInPixels")}
+              </button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

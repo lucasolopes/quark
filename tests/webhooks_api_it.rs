@@ -219,6 +219,200 @@ async fn webhooks_crud_and_secret_masking() {
 }
 
 #[tokio::test]
+async fn create_and_list_webhook_exposes_connector_id_and_health() {
+    let app = app_admin("secret").await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/webhooks")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(
+                    r#"{"url":"https://example.com/hook","events":["link.created"],"kind":"generic","connector_id":"zapier"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let id = created["id"].as_u64().unwrap();
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/webhooks")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let row = &list["webhooks"][0];
+    assert_eq!(row["id"], id);
+    assert_eq!(row["connector_id"], "zapier");
+    assert_eq!(
+        row["last_delivery_status"],
+        serde_json::json!({"state": "never"})
+    );
+    assert!(row.get("last_delivery_at").is_none() || row["last_delivery_at"].is_null());
+}
+
+/// LUC-87 fase 3: `POST /admin/webhooks/:id/test` must record passive
+/// delivery health for the tested subscription, the same as a real delivery
+/// would (`webhooks::delivery::deliver_one`) — this is the only health
+/// signal a `link.clicked`-only subscription can ever get, since that event
+/// deliberately never touches the store on the redirect hot path. The
+/// destination host is a non-resolvable, non-loopback name: it passes both
+/// `validate_webhook_url` (creation) and the test endpoint's own
+/// `is_internal_host` SSRF guard (which only catches literal loopback/private
+/// addresses and `localhost`, never resolves DNS), so the request reaches
+/// `reqwest::Client::send` and fails there with a transport error, a clean,
+/// deterministic error-path proof that recording happened without needing a
+/// real reachable destination.
+#[tokio::test]
+async fn test_endpoint_records_passive_health_on_delivery_failure() {
+    let app = app_admin("secret").await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/webhooks")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(
+                    r#"{"url":"http://this-host-does-not-exist.invalid/hook","events":["link.clicked"]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let id = created["id"].as_u64().unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/admin/webhooks/{id}/test"))
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let test_result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(test_result["delivered"], false);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/webhooks")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let row = &list["webhooks"][0];
+    assert_eq!(row["id"], id);
+    assert_eq!(row["last_delivery_status"]["state"], "error");
+    assert!(row["last_delivery_at"].is_number());
+
+    // LUC-87 fase 3: the transport-error detail must never leak the
+    // destination URL — reqwest::Error's Display includes the request URL
+    // by default, and for channel webhooks (Slack/Discord/Telegram/...) the
+    // secret token lives IN the URL. Create a second subscription whose URL
+    // carries a recognizable "secret" and drive the same transport-error
+    // path through `/test`, then assert the persisted `detail` contains
+    // neither the host nor the token.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/webhooks")
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(
+                    r#"{"url":"http://this-host-does-not-exist.invalid/services/T/B/SUPERSECRET123","events":["link.clicked"]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created2: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let id2 = created2["id"].as_u64().unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/admin/webhooks/{id2}/test"))
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/webhooks")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let row2 = list["webhooks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == id2)
+        .expect("second webhook present");
+    assert_eq!(row2["last_delivery_status"]["state"], "error");
+    let detail2 = row2["last_delivery_status"]["detail"]
+        .as_str()
+        .expect("error detail is a string");
+    assert!(
+        !detail2.contains("SUPERSECRET123"),
+        "detail leaked the webhook secret: {detail2}"
+    );
+    assert!(
+        !detail2.contains("this-host-does-not-exist.invalid"),
+        "detail leaked the destination host: {detail2}"
+    );
+}
+
+#[tokio::test]
 async fn creating_a_link_emits_link_created() {
     let (app, mut wh_rx) = app_admin_with_dispatcher("secret").await;
 

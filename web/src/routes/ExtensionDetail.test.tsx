@@ -27,7 +27,7 @@ function renderDetail(id: string) {
 }
 
 /** Base status mock: Sheets off (404), no webhooks, no pixels. Extra handlers can be layered by the caller's own spy. */
-function mockBase(opts: { sheetsStatus?: number; sheetsBody?: SheetsStatus; slackConnect?: boolean; webhooks?: { id: number; kind: string; url: string; label?: string }[] } = {}) {
+function mockBase(opts: { sheetsStatus?: number; sheetsBody?: SheetsStatus; slackConnect?: boolean; webhooks?: { id: number; kind: string; url: string; label?: string; connector_id?: string | null; last_delivery_at?: number | null; last_delivery_status?: { state: string; detail?: string } }[]; pixels?: { id: number; provider: string; credentials?: Record<string, unknown>; active?: boolean; created?: number; last_forward_at?: number | null; last_forward_status?: { state: string; detail?: string } }[] } = {}) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(typeof input === "string" ? input : (input as Request).url ?? input);
     const method = (init as RequestInit | undefined)?.method ?? "GET";
@@ -46,7 +46,7 @@ function mockBase(opts: { sheetsStatus?: number; sheetsBody?: SheetsStatus; slac
     }
     if (url.includes("/admin/webhooks/") && method === "DELETE") return new Response("", { status: 204 });
     if (url.includes("/admin/webhooks") && method === "GET") return new Response(JSON.stringify({ webhooks: opts.webhooks ?? [] }), { status: 200 });
-    if (url.includes("/admin/pixels") && method === "GET") return new Response(JSON.stringify({ pixels: [] }), { status: 200 });
+    if (url.includes("/admin/pixels") && method === "GET") return new Response(JSON.stringify({ pixels: opts.pixels ?? [] }), { status: 200 });
     if (url.includes("/admin/webhooks") && method === "POST") return new Response(JSON.stringify({ id: 1, secret: "" }), { status: 201 });
     if (url.includes("/admin/pixels") && method === "POST") return new Response(JSON.stringify({ id: 1 }), { status: 201 });
     return new Response("", { status: 404, statusText: `unexpected ${url} ${method}` });
@@ -152,7 +152,7 @@ describe("ExtensionDetail", () => {
   it("shows the connected channel with a disconnect action when a Slack subscription exists", async () => {
     const fetchMock = mockBase({
       slackConnect: true,
-      webhooks: [{ id: 7, kind: "slack", url: "https://hooks.slack.com/services/T/B/secret", label: "#general" }],
+      webhooks: [{ id: 7, kind: "slack", url: "https://hooks.slack.com/services/T/B/secret", label: "#general", last_delivery_status: { state: "never" } }],
     });
     renderDetail("slack");
 
@@ -171,6 +171,70 @@ describe("ExtensionDetail", () => {
       );
       if (!c) throw new Error("DELETE /admin/webhooks/7 not called yet");
     });
+  });
+
+  it("shows the last delivery time when a connected webhook's health is ok", async () => {
+    mockBase({
+      slackConnect: false,
+      webhooks: [
+        {
+          id: 8,
+          kind: "slack",
+          url: "https://hooks.slack.com/services/T/B/secret",
+          label: "#general",
+          last_delivery_at: 1700000000,
+          last_delivery_status: { state: "ok" },
+        },
+      ],
+    });
+    renderDetail("slack");
+    expect(await screen.findByText(/last delivery:/i)).toBeInTheDocument();
+  });
+
+  it("shows the delivery error detail when a connected webhook's health is error", async () => {
+    mockBase({
+      slackConnect: false,
+      webhooks: [
+        {
+          id: 9,
+          kind: "slack",
+          url: "https://hooks.slack.com/services/T/B/secret",
+          label: "#general",
+          last_delivery_status: { state: "error", detail: "connection refused" },
+        },
+      ],
+    });
+    renderDetail("slack");
+    expect(await screen.findByText(/last delivery failed: connection refused/i)).toBeInTheDocument();
+  });
+
+  it("shows the last forward time when a connected pixel's health is ok", async () => {
+    mockBase({
+      pixels: [
+        {
+          id: 5,
+          provider: "ga4",
+          last_forward_at: 1700000000,
+          last_forward_status: { state: "ok" },
+        },
+      ],
+    });
+    renderDetail("ga4");
+    expect(await screen.findByText(/last forward:/i)).toBeInTheDocument();
+  });
+
+  it("shows the forward error detail when a connected pixel's health is error", async () => {
+    mockBase({
+      pixels: [
+        {
+          id: 6,
+          provider: "ga4",
+          last_forward_status: { state: "error", detail: "invalid measurement id" },
+        },
+      ],
+    });
+    renderDetail("ga4");
+    expect(await screen.findByText(/last forward failed: invalid measurement id/i)).toBeInTheDocument();
   });
 
   it("shows an unavailable notice for Sheets when the connector is off (no Webhooks fallback)", async () => {

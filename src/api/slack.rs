@@ -23,9 +23,14 @@ pub(crate) async fn slack_connect(State(st): State<Arc<AppState>>, headers: Head
     let signed =
         crate::oidc::sign_login_state(&st.signing_key, &state, &p.tenant.0.to_string(), "", None);
     let url = crate::slack::connect_url(cfg, &state);
-    let secure = if request_is_https(&headers) { "; Secure" } else { "" };
-    let cookie =
-        format!("{SLACK_STATE_COOKIE}={signed}; Max-Age=600; Path=/; HttpOnly; SameSite=Lax{secure}");
+    let secure = if request_is_https(&headers) {
+        "; Secure"
+    } else {
+        ""
+    };
+    let cookie = format!(
+        "{SLACK_STATE_COOKIE}={signed}; Max-Age=600; Path=/; HttpOnly; SameSite=Lax{secure}"
+    );
     (
         StatusCode::OK,
         [
@@ -106,16 +111,27 @@ pub(crate) async fn slack_callback(
         return (StatusCode::BAD_GATEWAY, "slack rejected the install").into_response();
     }
     let Some(webhook) = access.incoming_webhook else {
-        return (StatusCode::BAD_GATEWAY, "no incoming webhook in slack response").into_response();
+        return (
+            StatusCode::BAD_GATEWAY,
+            "no incoming webhook in slack response",
+        )
+            .into_response();
     };
     let url = webhook.url;
     // The channel the operator picked (e.g. "#general"), shown in the panel so
     // multiple Slack connections can be told apart.
     let label = webhook.channel.filter(|c| !c.is_empty());
+    // The channel's stable Slack id (e.g. "C012AB3CD"), unaffected by the
+    // channel being renamed later; the rename-proof dedup key below.
+    let channel_id = webhook.channel_id.filter(|c| !c.is_empty());
     // The URL comes from Slack (`hooks.slack.com`), but still run it through the
     // same guard every stored webhook destination passes (defense in depth).
     if validate_webhook_url(&url).is_err() {
-        return (StatusCode::BAD_GATEWAY, "slack returned an unusable webhook url").into_response();
+        return (
+            StatusCode::BAD_GATEWAY,
+            "slack returned an unusable webhook url",
+        )
+            .into_response();
     }
     let existing = match st.store.list_webhooks(tenant).await {
         Ok(subs) => subs,
@@ -124,18 +140,19 @@ pub(crate) async fn slack_callback(
     // Idempotent: re-installing a channel that is already connected must not
     // create a duplicate. Slack mints a BRAND-NEW incoming webhook URL on every
     // install, so the URL cannot identify a re-install — the stable identity is
-    // the channel itself. Match on the channel name (falling back to an exact
-    // URL match for the legacy/no-channel case) and, when found, refresh that
-    // subscription in place (new URL + label) instead of inserting a new row.
+    // the channel itself, keyed by `channel_id` (rename-proof), falling back to
+    // the channel name (only when there's no id) and then an exact URL match
+    // for the legacy/no-channel case. When found, refresh that subscription in
+    // place (new URL + label + external_id) instead of inserting a new row.
     let label_ref = label.as_deref();
-    let dup = existing.iter().find(|s| {
-        s.kind == SubscriptionKind::Slack
-            && ((label_ref.is_some() && s.label.as_deref() == label_ref) || s.url == url)
-    });
+    let dup = slack_dup_index(&existing, channel_id.as_deref(), label_ref, &url)
+        .map(|idx| &existing[idx]);
     if let Some(dup) = dup {
         let updated = WebhookSubscription {
             url: url.clone(),
             label: label.clone().or_else(|| dup.label.clone()),
+            external_id: channel_id.clone().or_else(|| dup.external_id.clone()),
+            connector_id: Some("slack".to_string()),
             ..dup.clone()
         };
         let _ = st.store.put_webhook(tenant, &updated).await;
@@ -167,6 +184,10 @@ pub(crate) async fn slack_callback(
         created: now(),
         kind: SubscriptionKind::Slack,
         label,
+        connector_id: Some("slack".to_string()),
+        external_id: channel_id,
+        last_delivery_at: None,
+        last_delivery_status: Default::default(),
     };
     if st.store.put_webhook(tenant, &sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -183,6 +204,28 @@ pub(crate) async fn slack_callback(
         .into_response()
 }
 
+/// Finds the index of the existing Slack subscription (if any) that a fresh
+/// install should be treated as a re-install of, so the callback updates it in
+/// place instead of inserting a duplicate. Pure and unit-testable in
+/// isolation from the store/HTTP plumbing above.
+///
+/// Priority: `channel_id` (rename-proof, Slack's stable channel id) first;
+/// only when there is no `channel_id` does it fall back to the channel name
+/// (`label`); finally an exact URL match for the legacy/no-channel case.
+fn slack_dup_index(
+    existing: &[WebhookSubscription],
+    channel_id: Option<&str>,
+    label: Option<&str>,
+    url: &str,
+) -> Option<usize> {
+    existing.iter().position(|s| {
+        s.kind == SubscriptionKind::Slack
+            && ((channel_id.is_some() && s.external_id.as_deref() == channel_id)
+                || (channel_id.is_none() && label.is_some() && s.label.as_deref() == label)
+                || s.url == url)
+    })
+}
+
 /// Where to send the browser after a Slack install: the panel's dedicated Slack
 /// view. On a split-domain deploy the backend root is POST-only, so use the
 /// global OIDC post-login URL (the panel base); falls back to "/" for OSS.
@@ -193,4 +236,120 @@ fn slack_return_url(st: &AppState) -> String {
         .filter(|u| !u.is_empty() && u != "/")
         .map(|u| format!("{u}/extensions/slack"))
         .unwrap_or_else(|| "/".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slack_sub(
+        id: u64,
+        external_id: Option<&str>,
+        label: Option<&str>,
+        url: &str,
+    ) -> WebhookSubscription {
+        WebhookSubscription {
+            id,
+            url: url.to_string(),
+            events: vec![],
+            secret: String::new(),
+            active: true,
+            created: 0,
+            kind: SubscriptionKind::Slack,
+            label: label.map(str::to_string),
+            connector_id: Some("slack".to_string()),
+            external_id: external_id.map(str::to_string),
+            last_delivery_at: None,
+            last_delivery_status: Default::default(),
+        }
+    }
+
+    #[test]
+    fn dedup_matches_by_channel_id_even_when_label_renamed() {
+        let existing = vec![slack_sub(
+            1,
+            Some("C012"),
+            Some("#general"),
+            "https://hooks.slack.com/services/T/B/old",
+        )];
+        // Re-install of the SAME channel, renamed to "#renamed" and Slack
+        // minted a brand-new webhook URL: must still match by channel_id.
+        let idx = slack_dup_index(
+            &existing,
+            Some("C012"),
+            Some("#renamed"),
+            "https://hooks.slack.com/services/T/B/new",
+        );
+        assert_eq!(idx, Some(0));
+    }
+
+    #[test]
+    fn dedup_falls_back_to_label_when_no_channel_id() {
+        let existing = vec![slack_sub(
+            1,
+            None,
+            Some("#general"),
+            "https://hooks.slack.com/services/T/B/old",
+        )];
+        let idx = slack_dup_index(
+            &existing,
+            None,
+            Some("#general"),
+            "https://hooks.slack.com/services/T/B/new",
+        );
+        assert_eq!(idx, Some(0));
+    }
+
+    #[test]
+    fn dedup_falls_back_to_url_when_no_channel_id_or_label_match() {
+        let existing = vec![slack_sub(
+            1,
+            None,
+            None,
+            "https://hooks.slack.com/services/T/B/x",
+        )];
+        let idx = slack_dup_index(
+            &existing,
+            None,
+            None,
+            "https://hooks.slack.com/services/T/B/x",
+        );
+        assert_eq!(idx, Some(0));
+    }
+
+    #[test]
+    fn dedup_does_not_match_different_channel_id() {
+        let existing = vec![slack_sub(
+            1,
+            Some("C012"),
+            Some("#general"),
+            "https://hooks.slack.com/services/T/B/old",
+        )];
+        let idx = slack_dup_index(
+            &existing,
+            Some("C999"),
+            Some("#general"),
+            "https://hooks.slack.com/services/T/B/new",
+        );
+        assert_eq!(idx, None);
+    }
+
+    #[test]
+    fn dedup_ignores_label_fallback_when_channel_id_present() {
+        let existing = vec![slack_sub(
+            1,
+            None,
+            Some("#general"),
+            "https://hooks.slack.com/services/T/B/old",
+        )];
+        // When a channel_id is provided, the label fallback must NOT be used
+        // even if the existing row has the same label but no external_id.
+        let idx = slack_dup_index(
+            &existing,
+            Some("C999"),
+            Some("#general"),
+            "https://hooks.slack.com/services/T/B/new",
+        );
+        assert_eq!(idx, None);
+    }
 }

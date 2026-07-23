@@ -299,6 +299,15 @@ mod tests {
         async fn next_webhook_id(&self, _tenant: TenantId) -> Result<u64, StoreError> {
             unimplemented!()
         }
+        async fn record_webhook_health(
+            &self,
+            _tenant: TenantId,
+            _id: u64,
+            _at: u64,
+            _status: crate::health::HealthStatus,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
         async fn put_alert_rule(
             &self,
             _tenant: TenantId,
@@ -478,6 +487,15 @@ mod tests {
         ) -> Result<Vec<crate::pixel::PixelConfig>, StoreError> {
             unimplemented!()
         }
+        async fn record_pixel_health(
+            &self,
+            _tenant: TenantId,
+            _id: u64,
+            _at: u64,
+            _status: crate::health::HealthStatus,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
         async fn get_wellknown(
             &self,
             _tenant: TenantId,
@@ -581,7 +599,10 @@ mod tests {
         ) -> Result<(), StoreError> {
             unimplemented!()
         }
-        async fn get_primary_domain_id(&self, _tenant: TenantId) -> Result<Option<u64>, StoreError> {
+        async fn get_primary_domain_id(
+            &self,
+            _tenant: TenantId,
+        ) -> Result<Option<u64>, StoreError> {
             Ok(None)
         }
         async fn next_sso_domain_id(&self) -> Result<u64, StoreError> {

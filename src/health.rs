@@ -5,6 +5,9 @@
 //! Opt-in (only spawned when `QUARK_HEALTH_CHECK_SECS` is set) and, in a
 //! multi-node deployment, run only on the designated node (see `main.rs`). The
 //! redirect hot path is never touched by this module.
+//!
+//! This module also hosts the shared `HealthStatus` enum, reused by webhook
+//! and pixel delivery health tracking.
 
 use crate::abuse::{extract_host, is_internal_host};
 use crate::store::{LinkHealth, Record, Store};
@@ -12,6 +15,7 @@ use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{EventType, WebhookEvent};
 use crate::{codec, permute};
 use futures_util::stream::{self, StreamExt};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -500,5 +504,56 @@ mod tests {
         assert_eq!(kinds.len(), 2);
         assert!(kinds.contains(&EventType::LinkBroken));
         assert!(kinds.contains(&EventType::LinkRecovered));
+    }
+}
+
+/// Resultado da ultima entrega/forward de uma integracao. `Never` = conectado
+/// mas sem entrega ainda; `Ok` = ultima entrega teve sucesso; `Error` carrega
+/// um motivo curto (nunca um segredo/token).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", content = "detail", rename_all = "lowercase")]
+pub enum HealthStatus {
+    #[default]
+    Never,
+    Ok,
+    Error(String),
+}
+
+#[cfg(test)]
+mod health_status_tests {
+    use super::*;
+
+    #[test]
+    fn default_is_never() {
+        assert_eq!(HealthStatus::default(), HealthStatus::Never);
+    }
+
+    #[test]
+    fn serializes_with_state_tag_and_detail_content() {
+        assert_eq!(
+            serde_json::to_string(&HealthStatus::Never).unwrap(),
+            r#"{"state":"never"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&HealthStatus::Ok).unwrap(),
+            r#"{"state":"ok"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&HealthStatus::Error("boom".into())).unwrap(),
+            r#"{"state":"error","detail":"boom"}"#
+        );
+    }
+
+    #[test]
+    fn round_trips() {
+        for s in [
+            HealthStatus::Never,
+            HealthStatus::Ok,
+            HealthStatus::Error("timeout".into()),
+        ] {
+            let j = serde_json::to_string(&s).unwrap();
+            let back: HealthStatus = serde_json::from_str(&j).unwrap();
+            assert_eq!(s, back);
+        }
     }
 }

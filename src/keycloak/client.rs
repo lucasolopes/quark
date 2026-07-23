@@ -557,8 +557,14 @@ mod tests {
             { "id": "id-readers", "name": "quark-readers" },
             { "id": "id-admins", "name": "quark-admins" },
         ]);
-        assert_eq!(pick_group_id(&groups, "quark-admins").as_deref(), Some("id-admins"));
-        assert_eq!(pick_group_id(&groups, "quark-readers").as_deref(), Some("id-readers"));
+        assert_eq!(
+            pick_group_id(&groups, "quark-admins").as_deref(),
+            Some("id-admins")
+        );
+        assert_eq!(
+            pick_group_id(&groups, "quark-readers").as_deref(),
+            Some("id-readers")
+        );
         assert_eq!(pick_group_id(&groups, "quark-writers"), None);
         assert_eq!(pick_group_id(&json!([]), "quark-admins"), None);
     }

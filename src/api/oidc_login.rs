@@ -407,7 +407,9 @@ pub(crate) async fn oidc_logout(State(st): State<Arc<AppState>>, headers: Header
                 .as_ref()
                 .is_some_and(|rt| Some(rt.config.issuer.as_str()) == iss.as_deref());
             if is_global {
-                st.oidc.as_ref().and_then(|rt| rt.logout_url(tok, &redirect))
+                st.oidc
+                    .as_ref()
+                    .and_then(|rt| rt.logout_url(tok, &redirect))
             } else if sess_tenant != crate::tenant::DEFAULT_TENANT {
                 // Per-tenant sign-in: the tenant's own realm issued the token.
                 match st.store.get_oidc_config_bare(sess_tenant).await {

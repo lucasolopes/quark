@@ -655,7 +655,11 @@ impl OidcRuntime {
     /// `/`-defaulting) values.
     pub fn logout_url(&self, id_token: &str, post_logout_redirect_uri: &str) -> Option<String> {
         let endpoint = self.discovery.end_session_endpoint.as_deref()?;
-        Some(build_logout_url(endpoint, id_token, post_logout_redirect_uri))
+        Some(build_logout_url(
+            endpoint,
+            id_token,
+            post_logout_redirect_uri,
+        ))
     }
 
     /// Exchanges a callback code for the id_token.
@@ -1312,8 +1316,7 @@ mod tests {
         assert_eq!(claim_role(&reader, &cfg), Role::Viewer);
 
         // Member (write) outranks Viewer (read-only) when a user is in both.
-        let member_and_reader =
-            serde_json::json!({ "groups": ["quark-readers", "quark-members"] });
+        let member_and_reader = serde_json::json!({ "groups": ["quark-readers", "quark-members"] });
         assert_eq!(claim_role(&member_and_reader, &cfg), Role::Member);
 
         for claims in [&admin, &member, &reader] {

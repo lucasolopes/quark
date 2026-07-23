@@ -373,6 +373,13 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
     let kind: String = r.try_get("kind").map_err(StoreError::backend)?;
     let label: Option<String> = r.try_get("label").map_err(StoreError::backend)?;
+    let connector_id: Option<String> = r.try_get("connector_id").map_err(StoreError::backend)?;
+    let external_id: Option<String> = r.try_get("external_id").map_err(StoreError::backend)?;
+    let last_delivery_at: Option<i64> =
+        r.try_get("last_delivery_at").map_err(StoreError::backend)?;
+    let last_delivery_status: Option<serde_json::Value> = r
+        .try_get("last_delivery_status")
+        .map_err(StoreError::backend)?;
     Ok(WebhookSubscription {
         id: id as u64,
         url,
@@ -382,6 +389,13 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
         created: created as u64,
         kind: SubscriptionKind::from_str_or_generic(&kind),
         label,
+        connector_id,
+        external_id,
+        last_delivery_at: last_delivery_at.map(|v| v as u64),
+        last_delivery_status: match last_delivery_status {
+            Some(v) => serde_json::from_value(v)?,
+            None => crate::health::HealthStatus::Never,
+        },
     })
 }
 
@@ -488,12 +502,21 @@ fn row_to_pixel(r: &PgRow) -> Result<PixelConfig, StoreError> {
     let credentials: serde_json::Value = r.try_get("credentials").map_err(StoreError::backend)?;
     let active: bool = r.try_get("active").map_err(StoreError::backend)?;
     let created: i64 = r.try_get("created").map_err(StoreError::backend)?;
+    let last_forward_at: Option<i64> = r.try_get("last_forward_at").map_err(StoreError::backend)?;
+    let last_forward_status: Option<serde_json::Value> = r
+        .try_get("last_forward_status")
+        .map_err(StoreError::backend)?;
     Ok(PixelConfig {
         id: id as u64,
         provider: provider_from_str(&provider)?,
         credentials: serde_json::from_value::<PixelCredentials>(credentials)?,
         active,
         created: created as u64,
+        last_forward_at: last_forward_at.map(|v| v as u64),
+        last_forward_status: match last_forward_status {
+            Some(v) => serde_json::from_value(v)?,
+            None => crate::health::HealthStatus::Never,
+        },
     })
 }
 
@@ -692,17 +715,23 @@ impl PostgresStore {
                 // install captures the chosen channel name here so the panel can
                 // tell channels apart. Nullable; pre-existing rows stay NULL.
                 "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS label TEXT",
+                // Health passivo por webhook (LUC-87 fase 3): connector_id
+                // desambigua os genericos; external_id casa o destino do lado
+                // do provedor; last_delivery_* guardam a ultima entrega.
+                "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS connector_id TEXT",
+                "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS external_id TEXT",
+                "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS last_delivery_at BIGINT",
+                "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS last_delivery_status JSONB",
                 "CREATE TABLE IF NOT EXISTS api_tokens (id BIGINT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, scopes JSONB NOT NULL, rate_limit_per_min BIGINT, created BIGINT NOT NULL)",
                 "CREATE INDEX IF NOT EXISTS api_tokens_token_hash_idx ON api_tokens (token_hash)",
-                // Primary link domain per tenant (LUC-86): the domain the copy
-                // button and new links default to. NULL = fall back to the auto
-                // subdomain, then the shared host.
-                "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS primary_domain_id BIGINT",
                 // Idempotent migrations for pre-existing `links` tables (max-visits feature).
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS max_visits BIGINT",
                 "ALTER TABLE links ADD COLUMN IF NOT EXISTS visits BIGINT NOT NULL DEFAULT 0",
                 "CREATE SEQUENCE IF NOT EXISTS quark_pixel_id_seq",
                 "CREATE TABLE IF NOT EXISTS pixels (id BIGINT PRIMARY KEY, provider TEXT NOT NULL, credentials JSONB NOT NULL, active BOOLEAN NOT NULL, created BIGINT NOT NULL)",
+                // Health passivo por pixel (LUC-87 fase 3).
+                "ALTER TABLE pixels ADD COLUMN IF NOT EXISTS last_forward_at BIGINT",
+                "ALTER TABLE pixels ADD COLUMN IF NOT EXISTS last_forward_status JSONB",
                 // Per-link click-threshold alert rules (LUC-38). Tenant-owned,
                 // keyed by `(tenant_id, link_id)`.
                 "CREATE TABLE IF NOT EXISTS alert_rules (tenant_id BIGINT NOT NULL DEFAULT 0, link_id BIGINT NOT NULL, threshold BIGINT NOT NULL, window_secs BIGINT NOT NULL, PRIMARY KEY (tenant_id, link_id))",
@@ -736,6 +765,12 @@ impl PostgresStore {
                 // --- Multi-tenancy (P1a): identity tables + seeded default tenant ---
                 "CREATE TABLE IF NOT EXISTS tenants (id BIGINT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, created BIGINT NOT NULL)",
                 "INSERT INTO tenants (id, name, slug, created) VALUES (0, 'default', 'default', 0) ON CONFLICT (id) DO NOTHING",
+                // Primary link domain per tenant (LUC-86): the domain the copy
+                // button and new links default to. NULL = fall back to the auto
+                // subdomain, then the shared host. Must run AFTER `tenants` is
+                // created above, or a fresh DB fails with "relation tenants does
+                // not exist" on first boot.
+                "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS primary_domain_id BIGINT",
                 "CREATE TABLE IF NOT EXISTS users (id BIGINT PRIMARY KEY, subject TEXT NOT NULL UNIQUE, email TEXT NOT NULL, display TEXT NOT NULL, created BIGINT NOT NULL)",
                 "CREATE SEQUENCE IF NOT EXISTS quark_user_id_seq",
                 // Starts at 1 so it never collides with the seeded default tenant (id 0).
@@ -1399,7 +1434,7 @@ impl Store for PostgresStore {
     ) -> Result<Vec<WebhookSubscription>, StoreError> {
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, url, events, secret, active, created, kind, label FROM webhooks WHERE tenant_id = $1 ORDER BY id",
+                "SELECT id, url, events, secret, active, created, kind, label, connector_id, external_id, last_delivery_at, last_delivery_status FROM webhooks WHERE tenant_id = $1 ORDER BY id",
             )
             .bind(tenant.0 as i64)
             .fetch_all(&mut *c)
@@ -1415,7 +1450,7 @@ impl Store for PostgresStore {
     ) -> Result<Option<WebhookSubscription>, StoreError> {
         let row = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, url, events, secret, active, created, kind, label FROM webhooks WHERE tenant_id = $1 AND id = $2",
+                "SELECT id, url, events, secret, active, created, kind, label, connector_id, external_id, last_delivery_at, last_delivery_status FROM webhooks WHERE tenant_id = $1 AND id = $2",
             )
             .bind(tenant.0 as i64)
             .bind(id as i64)
@@ -1434,10 +1469,12 @@ impl Store for PostgresStore {
         sub: &WebhookSubscription,
     ) -> Result<(), StoreError> {
         let events = serde_json::to_value(&sub.events)?;
+        let last_delivery_status = serde_json::to_value(&sub.last_delivery_status)?;
         with_write!(self, tenant, |c| {
             sqlx::query(
-                "INSERT INTO webhooks (id, url, events, secret, active, created, kind, tenant_id, label) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) \
-                 ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6, kind=$7, tenant_id=$8, label=$9",
+                "INSERT INTO webhooks (id, url, events, secret, active, created, kind, tenant_id, label, connector_id, external_id, last_delivery_at, last_delivery_status) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) \
+                 ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6, kind=$7, tenant_id=$8, label=$9, connector_id=$10, external_id=$11, last_delivery_at=$12, last_delivery_status=$13",
             )
             .bind(sub.id as i64)
             .bind(&sub.url)
@@ -1448,6 +1485,10 @@ impl Store for PostgresStore {
             .bind(sub.kind.as_str())
             .bind(tenant.0 as i64)
             .bind(&sub.label)
+            .bind(&sub.connector_id)
+            .bind(&sub.external_id)
+            .bind(sub.last_delivery_at.map(|v| v as i64))
+            .bind(&last_delivery_status)
             .execute(&mut *c)
             .await
         });
@@ -1473,6 +1514,28 @@ impl Store for PostgresStore {
             .map_err(StoreError::backend)?;
         let id: i64 = row.try_get("id").map_err(StoreError::backend)?;
         Ok(id as u64)
+    }
+
+    async fn record_webhook_health(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        at: u64,
+        status: crate::health::HealthStatus,
+    ) -> Result<(), StoreError> {
+        let status = serde_json::to_value(&status)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "UPDATE webhooks SET last_delivery_at=$1, last_delivery_status=$2 WHERE tenant_id=$3 AND id=$4",
+            )
+            .bind(at as i64)
+            .bind(&status)
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .execute(&mut *c)
+            .await
+        });
+        Ok(())
     }
 
     async fn list_tags(&self, tenant: TenantId) -> Result<Vec<(String, u64)>, StoreError> {
@@ -2018,7 +2081,7 @@ impl Store for PostgresStore {
     ) -> Result<Option<PixelConfig>, StoreError> {
         let row = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, provider, credentials, active, created FROM pixels WHERE tenant_id = $1 AND id = $2",
+                "SELECT id, provider, credentials, active, created, last_forward_at, last_forward_status FROM pixels WHERE tenant_id = $1 AND id = $2",
             )
             .bind(tenant.0 as i64)
             .bind(id as i64)
@@ -2033,10 +2096,11 @@ impl Store for PostgresStore {
 
     async fn put_pixel(&self, tenant: TenantId, config: &PixelConfig) -> Result<(), StoreError> {
         let credentials = serde_json::to_value(&config.credentials)?;
+        let last_forward_status = serde_json::to_value(&config.last_forward_status)?;
         with_write!(self, tenant, |c| {
             sqlx::query(
-                "INSERT INTO pixels (id, provider, credentials, active, created, tenant_id) VALUES ($1,$2,$3,$4,$5,$6) \
-                 ON CONFLICT (id) DO UPDATE SET provider=$2, credentials=$3, active=$4, created=$5, tenant_id=$6",
+                "INSERT INTO pixels (id, provider, credentials, active, created, tenant_id, last_forward_at, last_forward_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) \
+                 ON CONFLICT (id) DO UPDATE SET provider=$2, credentials=$3, active=$4, created=$5, tenant_id=$6, last_forward_at=$7, last_forward_status=$8",
             )
             .bind(config.id as i64)
             .bind(provider_to_str(config.provider))
@@ -2044,6 +2108,30 @@ impl Store for PostgresStore {
             .bind(config.active)
             .bind(config.created as i64)
             .bind(tenant.0 as i64)
+            .bind(config.last_forward_at.map(|v| v as i64))
+            .bind(&last_forward_status)
+            .execute(&mut *c)
+            .await
+        });
+        Ok(())
+    }
+
+    async fn record_pixel_health(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        at: u64,
+        status: crate::health::HealthStatus,
+    ) -> Result<(), StoreError> {
+        let status = serde_json::to_value(&status)?;
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "UPDATE pixels SET last_forward_at=$1, last_forward_status=$2 WHERE tenant_id=$3 AND id=$4",
+            )
+            .bind(at as i64)
+            .bind(&status)
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
             .execute(&mut *c)
             .await
         });
@@ -2064,7 +2152,7 @@ impl Store for PostgresStore {
     async fn list_pixels(&self, tenant: TenantId) -> Result<Vec<PixelConfig>, StoreError> {
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, provider, credentials, active, created FROM pixels WHERE tenant_id = $1 ORDER BY id",
+                "SELECT id, provider, credentials, active, created, last_forward_at, last_forward_status FROM pixels WHERE tenant_id = $1 ORDER BY id",
             )
             .bind(tenant.0 as i64)
             .fetch_all(&mut *c)
@@ -2658,7 +2746,9 @@ impl Store for PostgresStore {
             .map_err(StoreError::backend)?;
         match row {
             Some(r) => {
-                let id: Option<i64> = r.try_get("primary_domain_id").map_err(StoreError::backend)?;
+                let id: Option<i64> = r
+                    .try_get("primary_domain_id")
+                    .map_err(StoreError::backend)?;
                 Ok(id.map(|v| v as u64))
             }
             None => Ok(None),

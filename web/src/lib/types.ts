@@ -163,6 +163,9 @@ export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
 export const WEBHOOK_KINDS = ["generic", "slack", "discord", "telegram"] as const;
 export type SubscriptionKind = (typeof WEBHOOK_KINDS)[number];
 
+/** Status of the last delivery/forward attempt of a webhook or pixel (mirrors the backend). */
+export interface HealthStatus { state: "never" | "ok" | "error"; detail?: string; }
+
 export interface Webhook {
   id: number;
   url: string;
@@ -174,9 +177,14 @@ export interface Webhook {
   secret_masked: string;
   /** Optional human label for the destination (e.g. the Slack channel `#general` from the OAuth install), used to tell connections apart. Null for manual webhooks. */
   label?: string | null;
+  /** Which Extensions catalog id created this webhook (e.g. `"zapier"`, `"make"`), when set at creation. Null/absent for older webhooks (legacy, matched by `kind` instead) or ones created outside the Extensions flow. */
+  connector_id?: string | null;
+  /** Unix timestamp of the last delivery attempt; null/absent when never attempted. */
+  last_delivery_at?: number | null;
+  last_delivery_status?: HealthStatus;
 }
 export interface ListWebhooksResponse { webhooks: Webhook[]; }
-export interface CreateWebhookRequest { url: string; events: WebhookEvent[]; active?: boolean; kind: SubscriptionKind; }
+export interface CreateWebhookRequest { url: string; events: WebhookEvent[]; active?: boolean; kind: SubscriptionKind; connector_id?: string; }
 export interface CreateWebhookResponse { id: number; secret: string; }
 export interface PatchWebhookRequest { url?: string; events?: WebhookEvent[]; active?: boolean; }
 export interface TestWebhookResponse { delivered: boolean; status: number; }
@@ -215,6 +223,9 @@ export interface Pixel {
   credentials: PixelCredentials;
   active: boolean;
   created: number;
+  /** Unix timestamp of the last forward attempt; null/absent when never attempted. */
+  last_forward_at?: number | null;
+  last_forward_status?: HealthStatus;
 }
 export interface ListPixelsResponse { pixels: Pixel[]; }
 export interface CreatePixelRequest {
