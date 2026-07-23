@@ -498,6 +498,9 @@ fn row_to_pixel(r: &PgRow) -> Result<PixelConfig, StoreError> {
         credentials: serde_json::from_value::<PixelCredentials>(credentials)?,
         active,
         created: created as u64,
+        // DB columns for pixel health land in a later task; default until then.
+        last_forward_at: None,
+        last_forward_status: Default::default(),
     })
 }
 

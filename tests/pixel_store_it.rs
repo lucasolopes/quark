@@ -45,6 +45,8 @@ async fn pixel_round_trip_pg() {
         },
         active: true,
         created: 42,
+        last_forward_at: None,
+        last_forward_status: Default::default(),
     };
     s.put_pixel(quark::tenant::DEFAULT_TENANT, &config)
         .await
@@ -107,6 +109,8 @@ async fn pixel_put_upserts_pg() {
         },
         active: true,
         created: 1,
+        last_forward_at: None,
+        last_forward_status: Default::default(),
     };
     s.put_pixel(quark::tenant::DEFAULT_TENANT, &config)
         .await

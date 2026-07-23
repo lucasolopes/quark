@@ -2086,6 +2086,8 @@ mod tests {
             },
             active: true,
             created: 42,
+            last_forward_at: None,
+            last_forward_status: Default::default(),
         };
         s.put_pixel(crate::tenant::DEFAULT_TENANT, &config)
             .await

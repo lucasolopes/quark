@@ -500,6 +500,8 @@ pub(crate) async fn admin_pixels_create(
         credentials: req.credentials,
         active: req.active.unwrap_or(true),
         created: now(),
+        last_forward_at: None,
+        last_forward_status: Default::default(),
     };
     if st.store.put_pixel(p.tenant, &config).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

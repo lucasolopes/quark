@@ -51,6 +51,12 @@ pub struct PixelConfig {
     pub credentials: PixelCredentials,
     pub active: bool,
     pub created: u64,
+    /// Timestamp (epoch secs) do ultimo forward registrado (health passivo).
+    #[serde(default)]
+    pub last_forward_at: Option<u64>,
+    /// Resultado do ultimo forward registrado.
+    #[serde(default)]
+    pub last_forward_status: crate::health::HealthStatus,
 }
 
 /// Error forwarding a batch to a provider. The caller (the analytics
@@ -353,6 +359,8 @@ mod tests {
             },
             active: true,
             created: 0,
+            last_forward_at: None,
+            last_forward_status: Default::default(),
         }
     }
 
@@ -368,7 +376,19 @@ mod tests {
             },
             active: true,
             created: 0,
+            last_forward_at: None,
+            last_forward_status: Default::default(),
         }
+    }
+
+    #[test]
+    fn legacy_pixel_json_without_health_deserializes_with_defaults() {
+        let legacy = r#"{"id":1,"provider":"ga4",
+            "credentials":{"measurement_id":"G-X","api_secret":"s"},
+            "active":true,"created":10}"#;
+        let cfg: PixelConfig = serde_json::from_str(legacy).unwrap();
+        assert_eq!(cfg.last_forward_at, None);
+        assert_eq!(cfg.last_forward_status, crate::health::HealthStatus::Never);
     }
 
     #[test]

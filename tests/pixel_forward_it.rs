@@ -67,6 +67,8 @@ fn ga4_config(id: u64) -> PixelConfig {
         },
         active: true,
         created: 0,
+        last_forward_at: None,
+        last_forward_status: Default::default(),
     }
 }
 

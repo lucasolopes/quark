@@ -282,6 +282,8 @@ async fn assert_full_isolation(store: Arc<dyn Store>) {
         credentials: quark::pixel::PixelCredentials::default(),
         active: true,
         created: 0,
+        last_forward_at: None,
+        last_forward_status: Default::default(),
     };
     a.put_pixel(&pixel).await.unwrap();
     assert!(
