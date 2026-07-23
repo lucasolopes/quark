@@ -2964,7 +2964,11 @@ async fn logout_requires_csrf_header_and_revokes_session() {
         .unwrap()
         .is_some());
 
-    // With the header (the panel's request) -> 204, session revoked.
+    // With the header (the panel's request) -> 200 with a JSON body, session
+    // revoked. Logout is RP-initiated (LUC-79): it returns `{ logout_url }` for
+    // the panel to navigate to the IdP's end-session endpoint, so it is 200 +
+    // body, never a bodiless 204. This session has no `id_token`, so there is
+    // no IdP to end and `logout_url` is null.
     let resp = app
         .oneshot(
             Request::post("/admin/logout")
@@ -2975,7 +2979,12 @@ async fn logout_requires_csrf_header_and_revokes_session() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(v["logout_url"].is_null());
     assert!(store
         .get_session_by_hash(&hash_token("sess"), 2)
         .await
