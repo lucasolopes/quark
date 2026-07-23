@@ -12,6 +12,7 @@ use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{EventType, WebhookEvent};
 use crate::{codec, permute};
 use futures_util::stream::{self, StreamExt};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -28,6 +29,57 @@ const LIST_PAGE: usize = 500;
 /// takes (~one probe timeout) so the lease can be renewed between chunks well
 /// inside its TTL, even when many destinations time out.
 const PROBE_CONCURRENCY: usize = 16;
+
+/// Resultado da ultima entrega/forward de uma integracao. `Never` = conectado
+/// mas sem entrega ainda; `Ok` = ultima entrega teve sucesso; `Error` carrega
+/// um motivo curto (nunca um segredo/token).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", content = "detail", rename_all = "lowercase")]
+pub enum HealthStatus {
+    #[default]
+    Never,
+    Ok,
+    Error(String),
+}
+
+#[cfg(test)]
+mod health_status_tests {
+    use super::*;
+
+    #[test]
+    fn default_is_never() {
+        assert_eq!(HealthStatus::default(), HealthStatus::Never);
+    }
+
+    #[test]
+    fn serializes_with_state_tag_and_detail_content() {
+        assert_eq!(
+            serde_json::to_string(&HealthStatus::Never).unwrap(),
+            r#"{"state":"never"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&HealthStatus::Ok).unwrap(),
+            r#"{"state":"ok"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&HealthStatus::Error("boom".into())).unwrap(),
+            r#"{"state":"error","detail":"boom"}"#
+        );
+    }
+
+    #[test]
+    fn round_trips() {
+        for s in [
+            HealthStatus::Never,
+            HealthStatus::Ok,
+            HealthStatus::Error("timeout".into()),
+        ] {
+            let j = serde_json::to_string(&s).unwrap();
+            let back: HealthStatus = serde_json::from_str(&j).unwrap();
+            assert_eq!(s, back);
+        }
+    }
+}
 
 /// Whether an observed HTTP status counts as healthy: `2xx`/`3xx` (a live server,
 /// even one that redirects) is healthy; everything else (and no status at all,
