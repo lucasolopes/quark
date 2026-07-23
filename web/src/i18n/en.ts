@@ -679,8 +679,12 @@ export const en = {
     webhookUrlPlaceholderChannel: "https://hooks.example.com/services/…",
     webhookUrlPlaceholderEndpoint: "https://example.com/webhooks/quark",
     webhookChannelSuccessToast: "{name} connected.",
+    webhookLastDelivery: "Last delivery: {time}",
+    webhookDeliveryError: "Last delivery failed: {detail}",
     manageInWebhooks: "Manage in Webhooks",
     manageInPixels: "Manage in Pixels",
+    pixelLastForward: "Last forward: {time}",
+    pixelForwardError: "Last forward failed: {detail}",
   },
   invites: {
     title: "Members",

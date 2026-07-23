@@ -681,8 +681,12 @@ export const ptBR: Messages = {
     webhookUrlPlaceholderChannel: "https://hooks.example.com/services/…",
     webhookUrlPlaceholderEndpoint: "https://example.com/webhooks/quark",
     webhookChannelSuccessToast: "{name} conectado.",
+    webhookLastDelivery: "Última entrega: {time}",
+    webhookDeliveryError: "A última entrega falhou: {detail}",
     manageInWebhooks: "Gerenciar em Webhooks",
     manageInPixels: "Gerenciar em Pixels",
+    pixelLastForward: "Último envio: {time}",
+    pixelForwardError: "O último envio falhou: {detail}",
   },
   invites: {
     title: "Membros",

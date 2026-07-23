@@ -95,21 +95,27 @@ export function getIntegration(id: string | undefined): Integration | undefined 
 
 /**
  * Per-connector connection status derived from the existing feature APIs
- * (LUC-87 fase 1): a connector is "connected" when its backing resource
- * exists. Limitation: the generic-webhook connectors (Zapier/Make/n8n) share
- * `kind: "generic"`, so they cannot be told apart until the connection model
- * stores a connector id (fase 3) — they light up together once any generic
- * webhook exists.
+ * (LUC-87 fase 1). A connector is "connected" when its backing resource
+ * exists. When a webhook carries `connector_id` (fase 3), it is matched to
+ * its exact integration, which resolves the ambiguity between the
+ * generic-webhook connectors (Zapier/Make/n8n, all `kind: "generic"`).
+ * Legacy webhooks without `connector_id` (created before fase 3, or outside
+ * the Extensions flow) fall back to matching by `kind`, so they still light
+ * up the connectors that share that kind together.
  */
 export function useConnectedIds(): Set<string> {
   const webhooks = useWebhooks();
   const pixels = usePixels();
   const sheets = useSheetsStatus();
   const connected = new Set<string>();
-  const webhookKinds = new Set((webhooks.data?.webhooks ?? []).map((w) => w.kind));
+  const allWebhooks = webhooks.data?.webhooks ?? [];
+  const connectorIds = new Set(allWebhooks.filter((w) => w.connector_id != null).map((w) => w.connector_id as string));
+  const legacyKinds = new Set(allWebhooks.filter((w) => w.connector_id == null).map((w) => w.kind));
   const pixelProviders = new Set((pixels.data?.pixels ?? []).map((p) => p.provider));
   for (const it of INTEGRATIONS) {
-    if (it.poweredBy === "webhooks" && webhookKinds.has(WEBHOOK_KIND_BY_ID[it.id])) connected.add(it.id);
+    if (it.poweredBy === "webhooks") {
+      if (connectorIds.has(it.id) || legacyKinds.has(WEBHOOK_KIND_BY_ID[it.id])) connected.add(it.id);
+    }
     if (it.poweredBy === "pixels" && pixelProviders.has(PIXEL_PROVIDER_BY_ID[it.id])) connected.add(it.id);
   }
   if (sheets.data?.connected) connected.add("sheets");
