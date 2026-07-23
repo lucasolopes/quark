@@ -29,7 +29,7 @@ import {
 } from "@/lib/connectors";
 import { formatDateTime } from "@/lib/format";
 import { isUnauthorized, mutationErrorToast } from "@/lib/mutation-error";
-import { useCreatePixel, useCreateWebhook, useSheetsStatus, useSheetsSync, useSheetsDisconnect } from "@/lib/queries";
+import { useCreatePixel, useCreateWebhook, useMe, useSheetsStatus, useSheetsSync, useSheetsDisconnect } from "@/lib/queries";
 import { WEBHOOK_EVENTS, type WebhookEvent } from "@/lib/types";
 
 /**
@@ -239,8 +239,25 @@ function SheetsPanel() {
 function WebhookPanel({ integration }: { integration: Integration }) {
   const t = useT();
   const navigate = useNavigate();
+  const me = useMe();
   const kind = WEBHOOK_KIND_BY_ID[integration.id] ?? "generic";
   const isChannel = kind !== "generic";
+  // Slack "Add to Slack": when the OAuth connector is configured on the server,
+  // lead with a one-click install (Slack returns the webhook URL — zero fields).
+  // The manual URL form stays below as a fallback for any channel.
+  const slackOauth = integration.id === "slack" && me.data?.slack_connect === true;
+  const [connectingSlack, setConnectingSlack] = useState(false);
+
+  async function handleAddToSlack() {
+    setConnectingSlack(true);
+    try {
+      const { url } = await api.slackConnect();
+      window.location.href = url;
+    } catch (err) {
+      setConnectingSlack(false);
+      mutationErrorToast(err, () => t("extensions.slackConnectError"));
+    }
+  }
 
   const [url, setUrl] = useState("");
   const [events, setEvents] = useState<WebhookEvent[]>([...WEBHOOK_EVENTS]);
@@ -298,9 +315,21 @@ function WebhookPanel({ integration }: { integration: Integration }) {
 
   return (
     <div className="flex flex-col gap-3">
+      {slackOauth && (
+        <Card>
+          <CardContent className="flex flex-col items-start gap-3 py-6">
+            <p className="text-sm text-muted-foreground">{t("extensions.slackConnectPrompt")}</p>
+            <Button disabled={connectingSlack} onClick={handleAddToSlack}>
+              {connectingSlack && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+              {t("extensions.slackAddToSlack")}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardContent className="py-6">
           <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+            {slackOauth && <p className="text-sm font-medium">{t("extensions.orManual")}</p>}
             <p className="text-sm text-muted-foreground">{t("extensions.webhookModalDescription")}</p>
 
             <div className="flex flex-col gap-1.5">

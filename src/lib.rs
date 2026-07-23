@@ -19,6 +19,7 @@ pub mod permute;
 pub mod pixel;
 pub mod secretbox;
 pub mod sheets;
+pub mod slack;
 pub mod sso;
 pub mod store;
 pub mod tenant;

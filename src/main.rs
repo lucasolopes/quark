@@ -382,6 +382,18 @@ async fn main() {
     }
     let sheets = sheets_config.map(Arc::new);
 
+    // Slack "Add to Slack" connector (opt-in via QUARK_SLACK_CLIENT_ID/_SECRET/
+    // _REDIRECT_URL). The OAuth install persists a `kind: Slack` webhook
+    // subscription; no bespoke storage or HTTP seam is needed.
+    let slack = quark::slack::SlackConfig::from_env();
+    match &slack {
+        Some(_) => eprintln!("slack connect: enabled (Add to Slack OAuth)"),
+        None => eprintln!(
+            "slack connect: disabled (set QUARK_SLACK_CLIENT_ID/_SECRET/_REDIRECT_URL to enable)"
+        ),
+    }
+    let slack = slack.map(Arc::new);
+
     // Custom-domain host routing (multi-tenancy P3). Meaningful only in cloud
     // (`multi_tenant`); in OSS every host still resolves through `public_host`
     // to the shared route, since no domain is ever `Verified` there.
@@ -453,6 +465,7 @@ async fn main() {
         oidc_configured,
         sheets,
         sheets_api: Some(sheets_api),
+        slack,
         multi_tenant,
         host_router,
         dns,

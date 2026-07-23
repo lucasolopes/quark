@@ -459,6 +459,7 @@ pub(crate) async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap
                 "sso_provisioning": st.keycloak.is_some(),
                 "tenant_domain_suffix": st.tenant_domain_suffix,
                 "public_host": st.public_host,
+                "slack_connect": st.slack.is_some(),
             });
             // Cloud (multi-tenant) only: the panel gates workspace onboarding on
             // the PRESENCE of `memberships`, so OSS/single-tenant MUST omit both
@@ -517,6 +518,7 @@ pub(crate) async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap
         "sso_provisioning": st.keycloak.is_some(),
         "tenant_domain_suffix": st.tenant_domain_suffix,
         "public_host": st.public_host,
+        "slack_connect": st.slack.is_some(),
     }))
     .into_response()
 }

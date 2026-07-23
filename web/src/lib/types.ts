@@ -114,6 +114,11 @@ export interface MeResponse {
    * custom domain → subdomain → shared host. Present once a workspace is
    * selected (cloud); absent in OSS. */
   primary_link_host?: string | null;
+  /** True when the Slack "Add to Slack" OAuth connector is configured on the
+   * server (`QUARK_SLACK_CLIENT_ID`/`_SECRET`/`_REDIRECT_URL`). Gates whether the
+   * Slack integration view offers one-click install; absent/false falls back to
+   * the manual webhook-URL form. */
+  slack_connect?: boolean;
 }
 /** A pending or accepted team invite (cloud only), for the Members screen. */
 export interface InviteView {

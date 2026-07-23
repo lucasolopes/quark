@@ -92,6 +92,7 @@ async fn build_state(
         oidc: None,
         sheets: None,
         sheets_api: None,
+        slack: None,
         oidc_configured,
         cache,
         store,

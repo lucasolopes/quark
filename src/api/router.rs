@@ -168,6 +168,8 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             "/admin/integrations/sheets",
             axum::routing::delete(sheets_disconnect),
         )
+        .route("/admin/integrations/slack/connect", get(slack_connect))
+        .route("/admin/integrations/slack/callback", get(slack_callback))
         .route("/admin/tags", get(admin_tags_list))
         .route("/admin/folders", get(admin_folders_list))
         .route(

@@ -3224,6 +3224,111 @@ async fn sheets_callback_requires_the_state_cookie() {
         .is_none());
 }
 
+// Slack "Add to Slack" (LUC-87 fase 2): /connect returns the authorize URL and
+// sets the signed state cookie; the callback refuses a state with no matching
+// cookie (same anti login-CSRF binding as Sheets) and creates no subscription.
+#[tokio::test]
+async fn slack_connect_sets_state_cookie_and_callback_requires_it() {
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let cfg = quark::slack::SlackConfig::from_parts(
+        "cid",
+        "sec",
+        "https://h/admin/integrations/slack/callback",
+    )
+    .unwrap();
+    let state = common::TestState::new(store.clone(), sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(Some("secret".to_string()))
+        .oidc_configured(true)
+        .slack(Some(Arc::new(cfg)))
+        .build();
+    let app = router(state);
+
+    // Connect (admin-authed) returns the authorize URL and sets the state cookie.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/integrations/slack/connect")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let set_cookie = resp
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .expect("connect sets a state cookie")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(set_cookie.contains("qk_slack_state="));
+
+    // A callback with a forged/echoed state but NO matching cookie is refused
+    // (400), so it never reaches the token exchange and creates no subscription.
+    let resp = app
+        .oneshot(
+            Request::get("/admin/integrations/slack/callback?code=x&state=anything")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(store
+        .list_webhooks(quark::tenant::DEFAULT_TENANT)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+// When the Slack connector is not configured, /connect reports the admin-surface
+// not-found status (401 here, since an admin credential exists) rather than
+// starting an install.
+#[tokio::test]
+async fn slack_connect_off_when_unconfigured() {
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let state = common::TestState::new(store.clone(), sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(test_webhook_dispatcher())
+        .admin_token(Some("secret".to_string()))
+        .oidc_configured(true)
+        .build();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::get("/admin/integrations/slack/connect")
+                .header("x-admin-token", "secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
 /// P2a Task 3: `/connect` must bind the state cookie to the CALLING
 /// principal's tenant (not always `DEFAULT_TENANT`), so `sheets_callback` can
 /// later persist the connection under the right tenant even though the

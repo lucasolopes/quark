@@ -59,6 +59,11 @@ pub struct AppState {
     /// The Sheets HTTP seam (real `GoogleSheetsApi` in `main`, absent in tests
     /// that never drive a real sync). `None` is treated as "connector off".
     pub sheets_api: Option<Arc<dyn crate::sheets::client::SheetsApi>>,
+    /// Slack "Add to Slack" connector config, present only when the connector is
+    /// opted in (`QUARK_SLACK_CLIENT_ID`/`_SECRET`/`_REDIRECT_URL` all set). The
+    /// install persists a `kind: Slack` webhook subscription; there is no
+    /// bespoke Slack storage.
+    pub slack: Option<Arc<crate::slack::SlackConfig>>,
     /// Multi-tenant (cloud) mode, from `QUARK_MULTI_TENANT`. Gates FORCE RLS,
     /// per-tenant tx, and (P3 Task 4) whether `redirect`/`unlock` resolve the
     /// `Host` header at all: off, they skip straight to the shared route.
@@ -117,6 +122,7 @@ mod links_admin;
 mod oidc_login;
 mod router;
 mod sheets;
+mod slack;
 mod sso_domains;
 mod tenants;
 mod webhooks_api;
@@ -129,6 +135,7 @@ pub(crate) use links_admin::*;
 pub(crate) use oidc_login::*;
 pub use router::*;
 pub(crate) use sheets::*;
+pub(crate) use slack::*;
 pub(crate) use sso_domains::*;
 pub use tenants::*;
 pub(crate) use webhooks_api::*;
