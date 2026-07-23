@@ -3364,6 +3364,34 @@ impl AnalyticsSink for PostgresStore {
         }))
     }
 
+    async fn click_totals(
+        &self,
+        ids: &[u64],
+    ) -> Result<std::collections::HashMap<u64, u64>, StoreError> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        // One batched read of the `total` counter per link. The analytics tables
+        // are not RLS'd (bare `self.read`), and link ids are globally unique, so
+        // filtering by id alone is safe as long as the caller only passes its own
+        // tenant's ids (same contract as `stats`).
+        let id_list: Vec<i64> = ids.iter().map(|&i| i as i64).collect();
+        let rows = sqlx::query(
+            "SELECT id, count FROM click_counters WHERE dimension = 'total' AND id = ANY($1)",
+        )
+        .bind(&id_list)
+        .fetch_all(&self.read)
+        .await
+        .map_err(StoreError::backend)?;
+        let mut out = std::collections::HashMap::with_capacity(rows.len());
+        for r in &rows {
+            let id: i64 = r.try_get("id").map_err(StoreError::backend)?;
+            let count: i64 = r.try_get("count").map_err(StoreError::backend)?;
+            out.insert(id as u64, count as u64);
+        }
+        Ok(out)
+    }
+
     /// Same shape as `stats`, but summed across every link owned by
     /// `tenant` instead of keyed by one `id`: `SUM(count) GROUP BY
     /// dimension, bucket` over `click_counters` and `MIN(first_ts)`/

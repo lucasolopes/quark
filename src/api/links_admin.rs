@@ -155,9 +155,12 @@ pub(crate) async fn admin_links_list(
             Ok(v) => v.into_iter().collect(),
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };
-    // Fetch visit counts for just this page's ids in one round trip.
+    // Real click totals for this page's ids in one round trip (LUC-89): the
+    // "Visitas" column shows actual clicks (analytics), matching the Analytics
+    // view, not the `max_visits` enforcement counter (0 for links with no
+    // limit). `max_visits` stays as the denominator when a limit is set.
     let visits_map: std::collections::HashMap<u64, u64> =
-        match st.store.visits_for(prin.tenant, &page_ids).await {
+        match st.sink.click_totals(&page_ids).await {
             Ok(v) => v,
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         };

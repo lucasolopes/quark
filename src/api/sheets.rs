@@ -263,6 +263,7 @@ pub(crate) async fn sheets_sync(State(st): State<Arc<AppState>>, headers: Header
                 crate::sheets::sync(
                     &st.store,
                     api.as_ref(),
+                    st.sink.as_ref(),
                     st.key,
                     &base_url,
                     &mut conn,
