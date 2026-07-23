@@ -11,6 +11,7 @@ const AcceptInvite = lazy(() => import("@/routes/AcceptInvite").then((m) => ({ d
 const Analytics = lazy(() => import("@/routes/Analytics").then((m) => ({ default: m.Analytics })));
 const AppLinks = lazy(() => import("@/routes/AppLinks").then((m) => ({ default: m.AppLinks })));
 const Extensions = lazy(() => import("@/routes/Extensions").then((m) => ({ default: m.Extensions })));
+const ExtensionDetail = lazy(() => import("@/routes/ExtensionDetail").then((m) => ({ default: m.ExtensionDetail })));
 const Import = lazy(() => import("@/routes/Import").then((m) => ({ default: m.Import })));
 const LinkStats = lazy(() => import("@/routes/LinkStats").then((m) => ({ default: m.LinkStats })));
 const Links = lazy(() => import("@/routes/Links").then((m) => ({ default: m.Links })));
@@ -55,6 +56,7 @@ export const router = createBrowserRouter([
       { path: "links/:code", element: suspended(<LinkStats />) },
       { path: "webhooks", element: suspended(<Webhooks />) },
       { path: "extensions", element: suspended(<Extensions />) },
+      { path: "extensions/:id", element: suspended(<ExtensionDetail />) },
       { path: "import", element: suspended(<Import />) },
       { path: "tokens", element: suspended(<Tokens />) },
       { path: "pixels", element: suspended(<Pixels />) },
