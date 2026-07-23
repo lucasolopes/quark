@@ -11,8 +11,8 @@ body {
 /*
  * quark design system — three type families with clear roles:
  *  Space Grotesk (display/headings/numbers), Hanken Grotesk (body/UI),
- *  JetBrains Mono (codes, data, eyebrows). Loaded via <link> in index.html
- *  (Google Fonts). Falls back to system-ui if offline.
+ *  JetBrains Mono (codes, data, eyebrows). Self-hosted via
+ *  @fontsource-variable imports in main.tsx (bundled, no external requests).
  */
 @theme inline {
   --font-sans: 'Hanken Grotesk Variable', 'Hanken Grotesk', system-ui, sans-serif;
