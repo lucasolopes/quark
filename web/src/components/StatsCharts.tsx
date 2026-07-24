@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useT } from "@/i18n";
+import { cn } from "@/lib/utils";
 import { toBreakdownData, type BreakdownDatum } from "@/lib/breakdown";
 import type { Aggregates } from "@/lib/types";
 
@@ -66,9 +67,9 @@ interface ChartCardProps {
 
 function ChartCard({ title, empty, emptyLabel, children, className }: ChartCardProps) {
   return (
-    <Card className={className}>
+    <Card className={cn("rounded-[12px] [--card-spacing:--spacing(5)]", className)}>
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
+        <CardTitle className="font-sans text-[13.5px] font-semibold">{title}</CardTitle>
       </CardHeader>
       <CardContent>
         {empty ? (

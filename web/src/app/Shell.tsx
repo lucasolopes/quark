@@ -131,11 +131,11 @@ export function Shell() {
   // pending debounced push first, so a URL-driven change is never echoed
   // straight back with whatever stale term the box happened to hold.
   useEffect(() => {
-    if (!onLinksScreen) return;
     if (pushTimerRef.current) {
       clearTimeout(pushTimerRef.current);
       pushTimerRef.current = null;
     }
+    if (!onLinksScreen) return;
     setSearchValue(qParam);
   }, [onLinksScreen, qParam]);
 
