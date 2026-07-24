@@ -121,9 +121,26 @@ export function Links() {
   // extra API call): the list has no server-provided grand total, so this
   // reflects the currently loaded/filtered set, not every link in the account.
   const totalClicks = useMemo(() => filtered.reduce((sum, l) => sum + (l.visits ?? 0), 0), [filtered]);
-  const tagChips = tagsQuery.data?.tags ?? [];
-  const hiddenTagCount = tagChips.length - TAG_CHIPS_VISIBLE_CAP;
-  const visibleTagChips = showAllTags ? tagChips : tagChips.slice(0, TAG_CHIPS_VISIBLE_CAP);
+  const tagChips = useMemo(() => tagsQuery.data?.tags ?? [], [tagsQuery.data?.tags]);
+
+  // When collapsed, pin the active tag in the visible set if it's beyond the cap,
+  // so a user who expands → selects a tag → collapses still sees the selection.
+  const visibleTagChips = useMemo(() => {
+    if (showAllTags) {
+      return tagChips;
+    }
+    const sliced = tagChips.slice(0, TAG_CHIPS_VISIBLE_CAP);
+    if (tag && !sliced.some((tagItem) => tagItem.name === tag)) {
+      const activeTag = tagChips.find((tagItem) => tagItem.name === tag);
+      if (activeTag) {
+        return [...sliced, activeTag];
+      }
+    }
+    return sliced;
+  }, [tagChips, tag, showAllTags]);
+
+  // Count reflects the actual hidden tags; button shows if any tags are beyond the cap.
+  const hiddenTagCount = Math.max(0, tagChips.length - visibleTagChips.length);
 
   const activeQuery = usingServerSearch ? serverSearch : query;
   const serverSearchFailed =
@@ -218,7 +235,7 @@ export function Links() {
               <span className="font-mono text-[11px] opacity-70">{tagOption.count}</span>
             </button>
           ))}
-          {hiddenTagCount > 0 && (
+          {tagChips.length > TAG_CHIPS_VISIBLE_CAP && (
             <button
               type="button"
               onClick={() => setShowAllTags((prev) => !prev)}

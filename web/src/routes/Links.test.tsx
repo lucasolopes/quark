@@ -261,6 +261,81 @@ describe("Links", () => {
     });
   });
 
+  it("round-trip: expand tag chips, then collapse back to the capped view (+N button returns)", async () => {
+    const tagNames = [
+      "alfa", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+      "india", "juliet", "kilo", "lima", "mike", "november",
+    ];
+    const base = {
+      links: [{ id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1, tags: [], rules: [], variants: [] }],
+      next_after: null,
+    };
+    mockFetchByUrl((url) => {
+      if (url.includes("/admin/tags"))
+        return jsonResponse({ tags: tagNames.map((name, i) => ({ name, count: i + 1 })) });
+      return jsonResponse(base);
+    });
+
+    render(withProviders(<Links />));
+    const group = await screen.findByRole("group", { name: /filter by tag/i });
+
+    // Start collapsed: only the first 10, plus "+4" button.
+    expect(within(group).getByRole("button", { name: "+4" })).toBeInTheDocument();
+    expect(within(group).queryByRole("button", { name: /show less/i })).not.toBeInTheDocument();
+
+    // Expand.
+    await userEvent.click(within(group).getByRole("button", { name: "+4" }));
+    expect(within(group).getByRole("button", { name: /show less/i })).toBeInTheDocument();
+    expect(within(group).queryByRole("button", { name: "+4" })).not.toBeInTheDocument();
+
+    // Collapse.
+    await userEvent.click(within(group).getByRole("button", { name: /show less/i }));
+    expect(within(group).getByRole("button", { name: "+4" })).toBeInTheDocument();
+    expect(within(group).queryByRole("button", { name: /show less/i })).not.toBeInTheDocument();
+  });
+
+  it("pins the active tag when collapsed if it's beyond the first 10, so the selection stays visible", async () => {
+    const tagNames = [
+      "alfa", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+      "india", "juliet", "kilo", "lima", "mike", "november",
+    ];
+    const base = {
+      links: [
+        { id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1, tags: ["november"], rules: [], variants: [] },
+        { id: 2, code: "BBB1111", url: "https://dog.com", expiry: null, created: 2, tags: ["alfa"], rules: [], variants: [] },
+      ],
+      next_after: null,
+    };
+    mockFetchByUrl((url) => {
+      if (url.includes("/admin/tags"))
+        return jsonResponse({ tags: tagNames.map((name, i) => ({ name, count: i + 1 })) });
+      if (url.includes("tag=november"))
+        return jsonResponse({ links: base.links.filter((l) => l.tags.includes("november")), next_after: null });
+      return jsonResponse(base);
+    });
+
+    render(withProviders(<Links />));
+    const group = await screen.findByRole("group", { name: /filter by tag/i });
+
+    // Start collapsed: "november" (14th) is hidden behind "+4".
+    expect(within(group).queryByRole("button", { name: /^november/i })).not.toBeInTheDocument();
+
+    // Expand and select "november" (beyond the 10-chip cap).
+    await userEvent.click(within(group).getByRole("button", { name: "+4" }));
+    const novemberChip = within(group).getByRole("button", { name: /^november/i });
+    await userEvent.click(novemberChip);
+
+    // Filter is now active; collapse via the "Show less" button.
+    await userEvent.click(within(group).getByRole("button", { name: /show less/i }));
+
+    // The "november" chip is pinned in the visible set, marked as pressed, and
+    // the "+N" count reflects one fewer hidden (13 instead of 14).
+    const novemberChipAfterCollapse = within(group).getByRole("button", { name: /^november/i });
+    expect(novemberChipAfterCollapse).toHaveAttribute("aria-pressed", "true");
+    expect(within(group).getByRole("button", { name: "+3" })).toBeInTheDocument();
+  });
+
+
   it("pre-fills the search from ?q= on mount and runs the server search", async () => {
     const base = {
       links: [
