@@ -5,9 +5,7 @@ import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { useCreateWorkspace } from "@/lib/queries";
-
-/** Field-caption style for this form's labels (13px muted, matches CreateTokenDialog/Tokens v2). */
-const FIELD_LABEL_CLASS = "text-[13px] font-normal text-muted-foreground";
+import { FIELD_LABEL_CLASS } from "@/lib/utils";
 
 /** Lowercases, strips accents, and turns runs of non-alphanumerics into single dashes. */
 function slugify(input: string): string {

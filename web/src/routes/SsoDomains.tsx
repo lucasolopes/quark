@@ -31,11 +31,9 @@ import { formatDateTime } from "@/lib/format";
 import { isUnauthorized, mutationErrorToast } from "@/lib/mutation-error";
 import { useCreateSsoDomain, useDeleteSsoDomain, useMe, useOidcConfigured, useSsoDomains, useVerifySsoDomain } from "@/lib/queries";
 import type { SsoDomainView } from "@/lib/types";
+import { FIELD_LABEL_CLASS } from "@/lib/utils";
 
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
-
-/** Field-caption style for this file's dialog labels (13px muted, matches CreateTokenDialog/Tokens v2). */
-const FIELD_LABEL_CLASS = "text-[13px] font-normal text-muted-foreground";
 
 /**
  * Admin UI for the SSO email-domain discovery feature (LUC-57 Task 5):
