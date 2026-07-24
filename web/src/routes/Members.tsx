@@ -49,11 +49,12 @@ function roleLabel(t: ReturnType<typeof useT>, role: string): string {
 }
 
 /**
- * Avatar hues for member rows, drawn from the DS chart tokens (`--chart-2`..`--chart-5`).
+ * Avatar hues for member rows, drawn from the DS chart tokens (`--chart-2`..`--chart-4`).
  * `--chart-1` is skipped on purpose: it doubles as `--primary`, the brand action color, which
  * `tag-color.ts` also keeps scarce rather than spending it on a round-robin of decorative swatches.
+ * `--chart-5` is skipped: it lacks sufficient contrast (3.3:1) in light theme vs. dark text (#0a0b0f), failing WCAG AA (4.5:1).
  */
-const AVATAR_HUES = ["var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"] as const;
+const AVATAR_HUES = ["var(--chart-2)", "var(--chart-3)", "var(--chart-4)"] as const;
 
 /**
  * Small stable string hash (no crypto needed): the same email always lands on the same hue, with
@@ -184,7 +185,7 @@ export function Members() {
       )}
 
       {!query.isPending && !query.isError && invites.length > 0 && (
-        <ul className="overflow-hidden rounded-lg border border-border bg-card">
+        <ul className="overflow-hidden rounded-lg border border-border bg-card" aria-label={t("invites.title")}>
           {invites.map((invite) => (
             <li
               key={invite.id}

@@ -46,8 +46,8 @@ describe("Members", () => {
     expect(avatars[0]).toHaveTextContent("A");
     expect(avatars[1]).toHaveTextContent("B");
     // Tokens only (no hex): each swatch is one of the DS chart CSS variables.
-    expect(avatars[0].style.backgroundColor).toMatch(/^var\(--chart-[2-5]\)$/);
-    expect(avatars[1].style.backgroundColor).toMatch(/^var\(--chart-[2-5]\)$/);
+    expect(avatars[0].style.backgroundColor).toMatch(/^var\(--chart-[2-4]\)$/);
+    expect(avatars[1].style.backgroundColor).toMatch(/^var\(--chart-[2-4]\)$/);
     // Distinct people get distinct swatches (not every row painted the same color).
     expect(avatars[0].style.backgroundColor).not.toBe(avatars[1].style.backgroundColor);
     const [anaColor, bobColor] = [avatars[0].style.backgroundColor, avatars[1].style.backgroundColor];
