@@ -128,7 +128,7 @@ export function Members() {
   }
 
   return (
-    <div className="flex flex-col gap-4 animate-rise">
+    <div className="flex flex-col gap-4 animate-rise max-w-[860px]">
       <PageHeader
         title={t("invites.title")}
         subtitle={t("invites.subtitle")}
@@ -187,7 +187,7 @@ export function Members() {
       )}
 
       {!query.isPending && !query.isError && invites.length > 0 && (
-        <ul className="overflow-hidden rounded-lg border border-border bg-card" aria-label={t("invites.title")}>
+        <ul className="overflow-hidden rounded-lg border border-border bg-card shadow-card" aria-label={t("invites.title")}>
           {invites.map((invite) => (
             <li
               key={invite.id}

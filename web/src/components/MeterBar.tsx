@@ -25,9 +25,9 @@ export function MeterBar({ label, value, pct, tone = "accent", className }: Mete
         <span className="text-foreground">{label}</span>
         {value != null && <span className="font-mono text-xs text-muted-foreground">{value}</span>}
       </div>
-      <div className="h-[7px] overflow-hidden rounded-sm bg-secondary">
+      <div className="h-[7px] overflow-hidden rounded-[4px] bg-secondary">
         <div
-          className={cn("h-full origin-left rounded-sm transition-transform duration-500 ease-out", TONES[tone])}
+          className={cn("h-full origin-left rounded-[4px] transition-transform duration-500 ease-out", TONES[tone])}
           style={{ transform: `scaleX(${clamped})` }}
         />
       </div>

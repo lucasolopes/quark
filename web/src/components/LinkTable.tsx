@@ -270,7 +270,11 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
                   >
                     {link.code}
                   </RouterLink>
-                  {link.alias && <Badge variant="secondary">{link.alias}</Badge>}
+                  {link.alias && (
+                    <Badge variant="secondary" className="font-mono text-[10px] tracking-[0.06em] px-1.5 py-px">
+                      {link.alias}
+                    </Badge>
+                  )}
                   {link.folder && (
                     <Badge variant="outline" className="gap-1 font-normal">
                       <Folder className="size-3" aria-hidden="true" />
@@ -319,14 +323,9 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
                         <Badge
                           key={tag}
                           variant="secondary"
-                          className="gap-1.5 border-transparent"
+                          className="border-transparent px-[7px] py-[2px] font-sans text-[11px] font-semibold"
                           style={{ backgroundColor: color.bg, color: color.text }}
                         >
-                          <span
-                            aria-hidden="true"
-                            className="size-1.5 shrink-0 rounded-full"
-                            style={{ backgroundColor: color.dot }}
-                          />
                           {tag}
                         </Badge>
                       );
@@ -347,18 +346,20 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
                 <Button
                   variant="outline"
                   size="icon"
+                  className="rounded-[8px] border-border"
                   aria-label={t("linkTable.copyAria", { code: link.code })}
                   onClick={() => handleCopy(link)}
                 >
-                  {justCopied ? <Check className="size-3.5 text-brand-ink" /> : <Copy className="size-3.5" />}
+                  {justCopied ? <Check className="size-[15px] text-brand-ink" /> : <Copy className="size-[15px]" />}
                 </Button>
                 <Button
                   variant="outline"
                   size="icon"
+                  className="rounded-[8px] border-border"
                   aria-label={t("linkTable.viewStatsAria", { code: link.code })}
                   onClick={() => navigate(`/links/${link.code}`)}
                 >
-                  <BarChart3 className="size-3.5" />
+                  <BarChart3 className="size-[15px]" />
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger
@@ -366,11 +367,12 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
                       <Button
                         variant="outline"
                         size="icon"
+                        className="rounded-[8px] border-border"
                         aria-label={t("linkTable.moreActionsAria", { code: link.code })}
                       />
                     }
                   >
-                    <MoreHorizontal className="size-3.5" />
+                    <MoreHorizontal className="size-[15px]" />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem onClick={() => setQrLink(link)}>

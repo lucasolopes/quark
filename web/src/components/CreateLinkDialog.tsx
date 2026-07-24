@@ -34,7 +34,7 @@ import { CollapsibleSection } from "@/components/CollapsibleSection";
 import { DEFAULT_DURATION_UNIT, durationToSeconds } from "@/lib/duration";
 import { validateLinkForm } from "@/lib/link-form";
 import { useShortHost } from "@/lib/short-url";
-import { cn } from "@/lib/utils";
+import { cn, FIELD_LABEL_CLASS } from "@/lib/utils";
 import type { Folder } from "@/lib/types";
 
 interface FormErrors {
@@ -226,7 +226,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
 
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto py-3">
             <div className="flex flex-col gap-1.5">
-              <label htmlFor="create-link-url" className="text-sm font-medium">
+              <label htmlFor="create-link-url" className={FIELD_LABEL_CLASS}>
                 {t("dialogs.create.urlLabel")}
               </label>
               <Input
@@ -247,7 +247,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="create-link-alias" className="text-sm font-medium">
+                <label htmlFor="create-link-alias" className={FIELD_LABEL_CLASS}>
                   {t("dialogs.create.aliasLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
                 </label>
                 <div
@@ -276,7 +276,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="create-link-folder" className="text-sm font-medium">
+                <label htmlFor="create-link-folder" className={FIELD_LABEL_CLASS}>
                   {t("dialogs.create.folderLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
                 </label>
                 <Combobox
@@ -292,7 +292,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label htmlFor="create-link-tags" className="text-sm font-medium">
+              <label htmlFor="create-link-tags" className={FIELD_LABEL_CLASS}>
                 {t("dialogs.create.tagsLabel")} <span className="text-muted-foreground">({t("dialogs.create.tagsHint")})</span>
               </label>
               <Combobox
@@ -331,7 +331,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
 
             <CollapsibleSection title={t("dialogs.sections.scheduling")}>
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="create-link-max-visits" className="text-sm font-medium">
+                <label htmlFor="create-link-max-visits" className={FIELD_LABEL_CLASS}>
                   {t("dialogs.create.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.create.maxVisitsOptional")}</span>
                 </label>
                 <Input
@@ -352,7 +352,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="create-link-fallback-url" className="text-sm font-medium">
+                <label htmlFor="create-link-fallback-url" className={FIELD_LABEL_CLASS}>
                   {t("dialogs.create.fallbackUrlLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
                 </label>
                 <p className="text-sm text-muted-foreground">{t("dialogs.create.fallbackUrlNote")}</p>
@@ -376,7 +376,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
               <p className="text-sm text-muted-foreground">{t("dialogs.create.appDestNote")}</p>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="flex flex-col gap-1.5">
-                  <label htmlFor="create-link-app-ios" className="text-sm font-medium">
+                  <label htmlFor="create-link-app-ios" className={FIELD_LABEL_CLASS}>
                     {t("dialogs.create.appIosLabel")}
                   </label>
                   <Input
@@ -394,7 +394,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
                   )}
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <label htmlFor="create-link-app-android" className="text-sm font-medium">
+                  <label htmlFor="create-link-app-android" className={FIELD_LABEL_CLASS}>
                     {t("dialogs.create.appAndroidLabel")}
                   </label>
                   <Input
@@ -416,7 +416,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
 
             <CollapsibleSection title={t("dialogs.sections.password")}>
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="create-link-password" className="text-sm font-medium">
+                <label htmlFor="create-link-password" className={FIELD_LABEL_CLASS}>
                   {t("dialogs.create.passwordLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
                 </label>
                 <p className="text-sm text-muted-foreground">{t("dialogs.create.passwordNote")}</p>
@@ -475,7 +475,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div className="flex flex-col gap-1.5">
-                  <label htmlFor="utm-source" className="text-sm font-medium">
+                  <label htmlFor="utm-source" className={FIELD_LABEL_CLASS}>
                     {t("utm.sourceLabel")}
                   </label>
                   <Input
@@ -488,7 +488,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label htmlFor="utm-medium" className="text-sm font-medium">
+                  <label htmlFor="utm-medium" className={FIELD_LABEL_CLASS}>
                     {t("utm.mediumLabel")}
                   </label>
                   <Input
@@ -501,7 +501,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label htmlFor="utm-campaign" className="text-sm font-medium">
+                  <label htmlFor="utm-campaign" className={FIELD_LABEL_CLASS}>
                     {t("utm.campaignLabel")}
                   </label>
                   <Input
@@ -514,7 +514,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label htmlFor="utm-term" className="text-sm font-medium">
+                  <label htmlFor="utm-term" className={FIELD_LABEL_CLASS}>
                     {t("utm.termLabel")}
                   </label>
                   <Input
@@ -527,7 +527,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label htmlFor="utm-content" className="text-sm font-medium">
+                  <label htmlFor="utm-content" className={FIELD_LABEL_CLASS}>
                     {t("utm.contentLabel")}
                   </label>
                   <Input
@@ -541,7 +541,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="utm-template-name" className="text-sm font-medium">
+                <label htmlFor="utm-template-name" className={FIELD_LABEL_CLASS}>
                   {t("utm.templateNameLabel")}
                 </label>
                 <div className="flex items-center gap-2">

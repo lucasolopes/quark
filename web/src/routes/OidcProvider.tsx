@@ -41,7 +41,7 @@ export function OidcProvider() {
 
   if (query.isPending) {
     return (
-      <div className="flex flex-col gap-2" aria-hidden="true">
+      <div className="flex flex-col gap-2 max-w-[860px]" aria-hidden="true">
         <Skeleton className="h-10 w-full" />
         <Skeleton className="h-40 w-full" />
       </div>
@@ -52,7 +52,7 @@ export function OidcProvider() {
 
   if (query.isError && !notConfigured) {
     return (
-      <div className="flex flex-col gap-4 animate-rise">
+      <div className="flex flex-col gap-4 animate-rise max-w-[860px]">
         <Header />
         <Card className="border-destructive/30">
           <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
@@ -171,7 +171,7 @@ function OidcProviderForm({ config }: { config: OidcConfigView | null }) {
   }
 
   return (
-    <div className="flex flex-col gap-4 animate-rise">
+    <div className="flex flex-col gap-4 animate-rise max-w-[860px]">
       <Header />
 
       {managed && (

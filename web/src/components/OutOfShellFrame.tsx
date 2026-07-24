@@ -54,7 +54,7 @@ export function OutOfShellFrame({ title, subtitle, topRight, children }: OutOfSh
           <h1 className="font-heading text-[26px] font-bold tracking-display text-strong">{title}</h1>
           {subtitle && <p className="mt-2 text-[14.5px] text-muted-foreground">{subtitle}</p>}
         </div>
-        <div className="w-full rounded-2xl border border-input bg-card p-6 shadow-modal">{children}</div>
+        <div className="w-full rounded-[16px] border border-input bg-card p-6 shadow-modal">{children}</div>
       </div>
     </OutOfShellBackdrop>
   );

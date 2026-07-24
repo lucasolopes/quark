@@ -168,9 +168,9 @@ export function StatsView({ code }: { code: string }) {
           </Suspense>
 
           <div className="grid gap-4 md:grid-cols-2">
-            <Card>
+            <Card className="rounded-[12px] [--card-spacing:--spacing(5)]">
               <CardHeader>
-                <CardTitle>{t("charts.perCountryTitle")}</CardTitle>
+                <CardTitle className="font-sans text-[13.5px] font-semibold">{t("charts.perCountryTitle")}</CardTitle>
               </CardHeader>
               <CardContent>
                 <MeterList
@@ -181,9 +181,9 @@ export function StatsView({ code }: { code: string }) {
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="rounded-[12px] [--card-spacing:--spacing(5)]">
               <CardHeader>
-                <CardTitle>{t("charts.perDeviceTitle")}</CardTitle>
+                <CardTitle className="font-sans text-[13.5px] font-semibold">{t("charts.perDeviceTitle")}</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-4">
                 <MeterList
@@ -192,7 +192,7 @@ export function StatsView({ code }: { code: string }) {
                   emptyLabel={t("charts.perDeviceEmpty")}
                 />
                 <div>
-                  <CardTitle className="mb-3">{t("charts.perBrowserTitle")}</CardTitle>
+                  <CardTitle className="mb-3 font-sans text-[13.5px] font-semibold">{t("charts.perBrowserTitle")}</CardTitle>
                   <MeterList
                     rows={toMeterRows(query.data.aggregates.per_browser, t("charts.unknown"))}
                     tone="accent"
@@ -203,9 +203,9 @@ export function StatsView({ code }: { code: string }) {
             </Card>
           </div>
 
-          <Card className="py-0">
-            <CardHeader className="pt-4">
-              <CardTitle>{t("stats.recentEvents")}</CardTitle>
+          <Card className="py-0 rounded-[12px] [--card-spacing:--spacing(5)]">
+            <CardHeader className="pt-5">
+              <CardTitle className="font-sans text-[13.5px] font-semibold">{t("stats.recentEvents")}</CardTitle>
               <CardAction className="font-mono text-xs text-muted-foreground">
                 {t("events.botsCount", { count: formatNumber(query.data.aggregates.bots) })}
               </CardAction>

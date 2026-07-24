@@ -1,6 +1,7 @@
 import { BarChart3, Blocks, Fingerprint, Globe, KeyRound, Link2, LogOut, Moon, Plus, Radio, Search, ShieldCheck, Smartphone, Sun, Upload, Users, Webhook } from "lucide-react";
 import { useTheme } from "next-themes";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { QuarkMark } from "@/components/brand/QuarkMark";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,8 @@ function initialsFrom(display: string | undefined): string {
 export function Shell() {
   const t = useT();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { resolvedTheme, setTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const toggle = () => setTheme(isDark ? "light" : "dark");
@@ -106,9 +109,67 @@ export function Shell() {
     .replace(/^https?:\/\//, "")
     .replace(/\/+$/, "");
 
-  /** Global link search (topbar): Enter hands the term to the Links screen via `?q=`. */
+  // The topbar is the app's ONE search input (mock: appShell.html; the Links
+  // screen itself has none — mock: isTabLinks.html). `q` is shared with the
+  // Links screen via the URL, so this box behaves differently depending on
+  // where the user already is:
+  //  - on /links: every keystroke drives the filter live (debounced below).
+  //  - elsewhere: typing just fills the box; Enter is what navigates there.
+  const onLinksScreen = location.pathname === "/links";
+  const qParam = searchParams.get("q") ?? "";
+  const [searchValue, setSearchValue] = useState(qParam);
+  // Holds the in-flight debounce timer for a live `q` push, and the latest
+  // `searchParams` so the timer's callback can merge into the current
+  // querystring instead of a stale one captured 300ms earlier.
+  const pushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchParamsRef = useRef(searchParams);
+  searchParamsRef.current = searchParams;
+
+  // Reflect `?q=` into the box whenever it changes for a reason other than
+  // typing here: mount, browser back/forward, or landing on /links via a
+  // sidebar click or an Enter-navigation from another screen. Cancels any
+  // pending debounced push first, so a URL-driven change is never echoed
+  // straight back with whatever stale term the box happened to hold.
+  useEffect(() => {
+    if (pushTimerRef.current) {
+      clearTimeout(pushTimerRef.current);
+      pushTimerRef.current = null;
+    }
+    if (!onLinksScreen) return;
+    setSearchValue(qParam);
+  }, [onLinksScreen, qParam]);
+
+  // Belt-and-suspenders: drop a pending push if Shell itself ever unmounts
+  // mid-debounce (it doesn't in the real router — it's the top-level layout —
+  // but test trees remount routinely).
+  useEffect(() => {
+    return () => {
+      if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
+    };
+  }, []);
+
+  function handleSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const value = e.target.value;
+    setSearchValue(value);
+    if (!onLinksScreen) return;
+    if (pushTimerRef.current) clearTimeout(pushTimerRef.current);
+    pushTimerRef.current = setTimeout(() => {
+      pushTimerRef.current = null;
+      const next = new URLSearchParams(searchParamsRef.current);
+      if (value) next.set("q", value);
+      else next.delete("q");
+      setSearchParams(next, { replace: true });
+    }, 300);
+  }
+
+  /**
+   * On any screen other than Links, Enter hands the term over via `?q=` (a
+   * normal push navigation, so back returns to where the user was). While
+   * already on Links, live typing above already keeps `?q=` in sync, so
+   * Enter there has nothing left to do.
+   */
   function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key !== "Enter") return;
+    if (e.key !== "Enter" || onLinksScreen) return;
     const term = e.currentTarget.value.trim();
     if (term) navigate(`/links?q=${encodeURIComponent(term)}`);
   }
@@ -117,8 +178,8 @@ export function Shell() {
     <div className="flex min-h-svh">
       <aside className="flex w-16 shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 sm:w-[250px]">
         <div className="flex items-center justify-center gap-2.5 pb-4 sm:justify-start">
-          <QuarkMark className="size-[26px] text-primary drop-shadow-[0_0_8px_rgba(198,249,78,0.55)]" />
-          <span className="hidden font-heading text-lg font-bold tracking-tight text-sidebar-foreground sm:inline">
+          <QuarkMark className="size-[26px] text-primary drop-shadow-[0_0_8px_rgba(198,249,78,0.3)]" />
+          <span className="hidden font-heading text-lg font-bold tracking-[-0.04em] text-strong sm:inline">
             quark
           </span>
         </div>
@@ -133,7 +194,7 @@ export function Shell() {
         <nav className="flex flex-col gap-4">
           {navGroups.map((group) => (
             <div key={group.label} className="flex flex-col gap-1">
-              <div className="hidden px-3 pb-1 font-mono text-[10px] font-medium tracking-[0.14em] text-sidebar-foreground/45 uppercase sm:block">
+              <div className="hidden px-3 pb-2 font-mono text-[10px] font-medium tracking-[0.12em] text-sidebar-foreground/45 uppercase sm:block">
                 {group.label}
               </div>
               {group.items.map(({ to, label, icon: Icon }) => (
@@ -143,7 +204,7 @@ export function Shell() {
                   title={label}
                   className={({ isActive }) =>
                     cn(
-                      "flex items-center justify-center gap-3 rounded-[9px] px-3 py-2 text-[14.5px] font-medium transition-colors sm:justify-start",
+                      "flex items-center justify-center gap-3 rounded-[9px] px-[11px] py-[9px] text-[14.5px] font-medium transition-colors sm:justify-start",
                       isActive
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-sidebar-foreground/70 hover:bg-surface-hover",
@@ -193,6 +254,8 @@ export function Shell() {
               type="text"
               placeholder={t("shell.searchPlaceholder")}
               aria-label={t("shell.searchPlaceholder")}
+              value={searchValue}
+              onChange={handleSearchChange}
               onKeyDown={handleSearchKeyDown}
               className="w-full min-w-0 flex-1 bg-transparent py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground"
             />
@@ -200,8 +263,9 @@ export function Shell() {
           <div className="flex items-center gap-2.5">
             <LanguageSwitcher className="font-mono" />
             <Button
-              variant="ghost"
+              variant="outline"
               size="icon"
+              className="size-[34px]"
               aria-label={isDark ? t("shell.themeToLight") : t("shell.themeToDark")}
               onClick={toggle}
             >
@@ -213,7 +277,7 @@ export function Shell() {
             </Button>
           </div>
         </header>
-        <main className="min-w-0 flex-1 overflow-auto p-6 sm:p-[26px_30px]">
+        <main className="min-w-0 flex-1 overflow-auto p-6 sm:p-[26px_30px] sm:pb-[60px]">
           <Outlet />
         </main>
       </div>

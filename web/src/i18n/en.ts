@@ -77,8 +77,6 @@ export const en = {
     clicks: "clicks",
     countSubtitle: "{count} links · {clicks} clicks",
     createButton: "Create link",
-    searchPlaceholder: "Search by code, URL or alias…",
-    searchAriaLabel: "Search links",
     tagFilterLabel: "Filter by tag",
     tagFilterAllOption: "All tags",
     tagFilterOption: "{name} ({count})",

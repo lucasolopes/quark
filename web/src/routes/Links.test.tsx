@@ -20,6 +20,21 @@ function SearchParamsProbe() {
   return <div data-testid="probe">{params.toString()}</div>;
 }
 
+/**
+ * Stands in for the topbar (Shell.tsx), which is the screen's only search
+ * input now — a button so a test can drive `?q=` at a chosen moment, the same
+ * way the live topbar search would, and still exercise Links' own debounce
+ * before the server search fires.
+ */
+function SetQParam({ value }: { value: string }) {
+  const [, setSearchParams] = useSearchParams();
+  return (
+    <button type="button" onClick={() => setSearchParams(value ? { q: value } : {})}>
+      simulate topbar search
+    </button>
+  );
+}
+
 describe("Links", () => {
   beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
 
@@ -31,6 +46,17 @@ describe("Links", () => {
     render(withProviders(<Links />));
     expect(await screen.findByText("6lB362J")).toBeInTheDocument();
     expect(screen.getByText(/example\.com\/a/)).toBeInTheDocument();
+  });
+
+  it("has no local search input of its own — the topbar's ?q= is the app's only search (mock isTabLinks.html)", async () => {
+    mockFetchByUrl(() => jsonResponse({
+      links: [{ id: 1, code: "6lB362J", url: "https://example.com/a", expiry: null, created: 1700000000, rules: [], variants: [] }],
+      next_after: null,
+    }));
+    render(withProviders(<Links />));
+    await screen.findByText("6lB362J");
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/search by code, url or alias/i)).not.toBeInTheDocument();
   });
 
   it("hides write actions for a Viewer (no links_write scope)", async () => {
@@ -75,9 +101,9 @@ describe("Links", () => {
         ? jsonResponse({ links: base.links.filter((l) => l.url.includes("dog")), next_after: null })
         : jsonResponse(base),
     );
-    render(withProviders(<Links />));
+    render(withProviders(<><Links /><SetQParam value="dog" /></>));
     await screen.findByText("AAA0000");
-    await userEvent.type(screen.getByRole("searchbox"), "dog");
+    await userEvent.click(screen.getByRole("button", { name: "simulate topbar search" }));
     await waitFor(() => {
       expect(screen.getByText("BBB1111")).toBeInTheDocument();
       expect(screen.queryByText("AAA0000")).not.toBeInTheDocument();
@@ -93,9 +119,9 @@ describe("Links", () => {
       next_after: null,
     };
     mockFetchByUrl((url) => (url.includes("q=") ? new Response("{}", { status: 501 }) : jsonResponse(base)));
-    render(withProviders(<Links />));
+    render(withProviders(<><Links /><SetQParam value="github" /></>));
     await screen.findByText("AAA0000");
-    await userEvent.type(screen.getByRole("searchbox"), "github");
+    await userEvent.click(screen.getByRole("button", { name: "simulate topbar search" }));
     await waitFor(() => {
       expect(screen.getByText("AAA0000")).toBeInTheDocument();
       expect(screen.queryByText("BBB1111")).not.toBeInTheDocument();
@@ -107,18 +133,18 @@ describe("Links", () => {
     mockFetchByUrl((url) =>
       url.includes("q=") ? jsonResponse({ links: [], next_after: null }) : jsonResponse(base),
     );
-    render(withProviders(<Links />));
+    render(withProviders(<><Links /><SetQParam value="zzz" /></>));
     await screen.findByText("AAA0000");
-    await userEvent.type(screen.getByRole("searchbox"), "zzz");
+    await userEvent.click(screen.getByRole("button", { name: "simulate topbar search" }));
     expect(await screen.findByText(/no links found for "zzz"/i)).toBeInTheDocument();
   });
 
   it("search error (non-501, 500) shows the error state, not the 'no results' one", async () => {
     const base = { links: [{ id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1, rules: [], variants: [] }], next_after: null };
     mockFetchByUrl((url) => (url.includes("q=") ? new Response("{}", { status: 500 }) : jsonResponse(base)));
-    render(withProviders(<Links />));
+    render(withProviders(<><Links /><SetQParam value="zzz" /></>));
     await screen.findByText("AAA0000");
-    await userEvent.type(screen.getByRole("searchbox"), "zzz");
+    await userEvent.click(screen.getByRole("button", { name: "simulate topbar search" }));
     expect(await screen.findByText(/could not search/i)).toBeInTheDocument();
     expect(screen.queryByText(/no links found for "zzz"/i)).not.toBeInTheDocument();
   });
@@ -351,7 +377,6 @@ describe("Links", () => {
     );
     render(withProviders(<Links />, { initialEntries: ["/links?q=dog"] }));
 
-    expect(screen.getByRole("searchbox")).toHaveValue("dog");
     await waitFor(() => {
       expect(screen.getByText("BBB1111")).toBeInTheDocument();
       expect(screen.queryByText("AAA0000")).not.toBeInTheDocument();

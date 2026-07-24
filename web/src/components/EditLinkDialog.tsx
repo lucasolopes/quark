@@ -24,6 +24,7 @@ import { CollapsibleSection } from "@/components/CollapsibleSection";
 import { DEFAULT_DURATION_UNIT, durationToSeconds } from "@/lib/duration";
 import { validateLinkForm } from "@/lib/link-form";
 import { useShortHost } from "@/lib/short-url";
+import { FIELD_LABEL_CLASS } from "@/lib/utils";
 import type { Folder, Link, Variant } from "@/lib/types";
 import { RulesEditor } from "@/components/RulesEditor";
 import { VariantsEditor } from "@/components/VariantsEditor";
@@ -237,7 +238,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
 
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto py-3">
             <div className="flex flex-col gap-1.5">
-              <label htmlFor="edit-link-url" className="text-sm font-medium">
+              <label htmlFor="edit-link-url" className={FIELD_LABEL_CLASS}>
                 {t("dialogs.edit.urlLabel")}
               </label>
               <Input
@@ -257,7 +258,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="edit-link-tags" className="text-sm font-medium">
+                <label htmlFor="edit-link-tags" className={FIELD_LABEL_CLASS}>
                   {t("dialogs.edit.tagsLabel")} <span className="text-muted-foreground">({t("dialogs.edit.tagsHint")})</span>
                 </label>
                 <Combobox
@@ -273,7 +274,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="edit-link-folder" className="text-sm font-medium">
+                <label htmlFor="edit-link-folder" className={FIELD_LABEL_CLASS}>
                   {t("dialogs.edit.folderLabel")} <span className="text-muted-foreground">{t("dialogs.edit.folderOptional")}</span>
                 </label>
                 <Combobox
@@ -326,7 +327,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
 
             <CollapsibleSection title={t("dialogs.sections.scheduling")}>
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="edit-link-max-visits" className="text-sm font-medium">
+                <label htmlFor="edit-link-max-visits" className={FIELD_LABEL_CLASS}>
                   {t("dialogs.edit.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.edit.maxVisitsOptional")}</span>
                 </label>
                 <Input
@@ -347,7 +348,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="edit-link-fallback-url" className="text-sm font-medium">
+                <label htmlFor="edit-link-fallback-url" className={FIELD_LABEL_CLASS}>
                   {t("dialogs.edit.fallbackUrlLabel")} <span className="text-muted-foreground">{t("dialogs.edit.fallbackUrlOptional")}</span>
                 </label>
                 <p className="text-sm text-muted-foreground">{t("dialogs.edit.fallbackUrlNote")}</p>
@@ -371,7 +372,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
               <p className="text-sm text-muted-foreground">{t("dialogs.edit.appDestNote")}</p>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="flex flex-col gap-1.5">
-                  <label htmlFor="edit-link-app-ios" className="text-sm font-medium">
+                  <label htmlFor="edit-link-app-ios" className={FIELD_LABEL_CLASS}>
                     {t("dialogs.edit.appIosLabel")}
                   </label>
                   <Input
@@ -389,7 +390,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
                   )}
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <label htmlFor="edit-link-app-android" className="text-sm font-medium">
+                  <label htmlFor="edit-link-app-android" className={FIELD_LABEL_CLASS}>
                     {t("dialogs.edit.appAndroidLabel")}
                   </label>
                   <Input
@@ -411,7 +412,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
 
             <CollapsibleSection title={t("dialogs.sections.password")}>
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="edit-link-password" className="text-sm font-medium">
+                <label htmlFor="edit-link-password" className={FIELD_LABEL_CLASS}>
                   {t("dialogs.edit.passwordLabel")}
                 </label>
                 <p className="text-sm text-muted-foreground">
@@ -499,7 +500,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
 
                   <div className="flex items-end gap-2">
                     <div className="flex flex-1 flex-col gap-1.5">
-                      <label htmlFor="edit-link-alert-threshold" className="text-sm font-medium">
+                      <label htmlFor="edit-link-alert-threshold" className={FIELD_LABEL_CLASS}>
                         {t("dialogs.edit.alertThresholdLabel")}
                       </label>
                       <Input
@@ -513,7 +514,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
                       />
                     </div>
                     <div className="flex flex-1 flex-col gap-1.5">
-                      <label htmlFor="edit-link-alert-window" className="text-sm font-medium">
+                      <label htmlFor="edit-link-alert-window" className={FIELD_LABEL_CLASS}>
                         {t("dialogs.edit.alertWindowLabel")}
                       </label>
                       <Input
