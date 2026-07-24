@@ -169,5 +169,21 @@ pt-BR on the twin.
   `tempfile::tempdir()`.
 - LMDB's `lock.mdb` is held by a live process on Windows: a forgotten `cargo run`
   blocks the next `open()`.
+- **The LMDB tests exhaust the Windows pagefile (LUC-137).** `MAP_SIZE_BYTES` is
+  64 GiB, and on Windows an mmap counts against the commit charge the moment the
+  env opens, unlike Linux where the reservation is lazy. `cargo test` runs 30
+  test binaries in parallel, several of which open LMDB envs, so the commit
+  charge runs out and `store::lmdb::tests::*` fail with OS error 1455
+  (`ERROR_COMMITMENT_LIMIT`, "the paging file is too small").
+  The failure does not stay inside the tests: allocation also fails inside
+  `rustc`, which surfaces as `E0786 found invalid metadata files` and
+  `crate X required to be available in rlib format`, and as builds dying with no
+  message at all. Do not chase those as a corrupt `target/` - check for 1455
+  first. Workaround until LUC-137 lands: `cargo test -j 4 -- --test-threads=1`,
+  and rely on CI (Linux) for the LMDB tests.
+- Never run two cargo commands against the same `target/` at once. Give clippy
+  its own: `CARGO_TARGET_DIR=target-clippy cargo clippy --all-targets -- -D warnings`.
+  Mixing check artifacts (rmeta) with build artifacts (rlib) breaks the test
+  build with the same misleading rlib errors.
 - `rust-toolchain.toml` says only `channel = "stable"`, so a stale local rustup
   can produce clippy results that differ from CI.

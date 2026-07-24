@@ -104,9 +104,10 @@ Full rules and the module-at-a-time conversion procedure:
   followed by hand but written nowhere. See dependencies.md for the proposal.
 - **`deploy-backend` only `needs: check`**, not `[check, web]`, so a push to
   `main` with a broken frontend still deploys the backend to Fly.
-- **Five env vars are undocumented**: `QUARK_SLACK_CLIENT_ID`,
+- **Four env vars are undocumented**: `QUARK_SLACK_CLIENT_ID`,
   `QUARK_SLACK_CLIENT_SECRET`, `QUARK_SLACK_REDIRECT_URL`,
-  `QUARK_KEYCLOAK_PANEL_URL`, `QUARK_SCHEMA_LOCK_ID`.
+  `QUARK_KEYCLOAK_PANEL_URL`. (`QUARK_SCHEMA_LOCK_ID` is a Rust const in
+  `src/store/postgres.rs:103`, not an env var, despite the name.)
 - **Magic values that survived**: `3600` twice in `main.rs` (session GC at :617,
   retention purge at :655), the 5s analytics flush timer at
   `analytics/mod.rs:619`, and the sheets lease cap `secs.min(300)` at
