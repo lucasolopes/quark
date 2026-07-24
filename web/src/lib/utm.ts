@@ -13,7 +13,7 @@ export interface UtmTemplate {
   params: UtmParams;
 }
 
-const UTM_KEYS: readonly (keyof UtmParams)[] = ["source", "medium", "campaign", "term", "content"];
+const UTM_KEYS: ReadonlyArray<keyof UtmParams> = ["source", "medium", "campaign", "term", "content"];
 
 const TEMPLATES_STORAGE_KEY = "quark.utmTemplates";
 

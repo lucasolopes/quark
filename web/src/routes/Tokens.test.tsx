@@ -32,6 +32,28 @@ describe("Tokens", () => {
     expect(screen.queryByText(/deadbeef/i)).not.toBeInTheDocument();
   });
 
+  it("renders one revoke button per row when multiple tokens exist", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        tokens: [
+          { id: 1, name: "CI pipeline", scopes: ["links_read"], rate_limit_per_min: 60, created: 1720000000 },
+          {
+            id: 2,
+            name: "Analytics export",
+            scopes: ["analytics", "webhooks"],
+            rate_limit_per_min: null,
+            created: 1720000000,
+          },
+        ],
+      }),
+    );
+    render(withProviders(<Tokens />, { withRouter: false }));
+    expect(await screen.findByText("CI pipeline")).toBeInTheDocument();
+    expect(screen.getByText("Analytics export")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /revoke token ci pipeline/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /revoke token analytics export/i })).toBeInTheDocument();
+  });
+
   it("empty state", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ tokens: [] }));
     render(withProviders(<Tokens />, { withRouter: false }));

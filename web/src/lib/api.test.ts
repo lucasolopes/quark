@@ -13,7 +13,7 @@ describe("api client", () => {
     const r = await api.listLinks({ limit: 10 });
     expect(r.links).toEqual([]);
     const [, init] = fetchMock.mock.calls[0];
-    expect(new Headers(init!.headers).get("x-admin-token")).toBe("secret");
+    expect(new Headers(init?.headers).get("x-admin-token")).toBe("secret");
   });
 
   it("401 triggers onUnauthorized and throws ApiError", async () => {

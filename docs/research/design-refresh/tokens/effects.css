@@ -1,0 +1,27 @@
+:root {
+  /* corner radii */
+  --radius-xs: 5px;
+  --radius-sm: 8px;
+  --radius-md: 11px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  /* shadows */
+  --shadow-card: 0 1px 2px rgba(0,0,0,.4), 0 12px 40px rgba(0,0,0,.35);
+  --shadow-modal: 0 30px 80px rgba(0,0,0,.5);
+  --shadow-card-light: 0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.05);
+
+  /* accent glow — used on the brand dot and active accents */
+  --glow-accent: 0 0 18px rgba(198,249,78,.6);
+  --glow-accent-sm: 0 0 8px rgba(198,249,78,.9);
+
+  /* motion */
+  --ease: cubic-bezier(.4,0,.2,1);
+  --dur-fast: .15s;
+  --dur: .3s;
+  --dur-slow: .5s;
+
+  /* backdrop */
+  --blur-nav: blur(14px);
+}

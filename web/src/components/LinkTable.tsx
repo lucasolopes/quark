@@ -1,5 +1,5 @@
-import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { BarChart3, Check, Copy, Folder, Lock, MoreHorizontal, Pencil, QrCode, Trash2, X } from "lucide-react";
+import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import { BarChart3, Check, Copy, Folder, Link2, Lock, MoreHorizontal, Pencil, QrCode, Trash2, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -23,9 +23,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useT } from "@/i18n";
-import { formatDate } from "@/lib/format";
 import { useBulkLinks, useMe } from "@/lib/queries";
 import { tagColor } from "@/lib/tag-color";
 import type { BulkOp, Link } from "@/lib/types";
@@ -68,7 +66,7 @@ function buildShortUrl(code: string, { primaryHost, slug, suffix, publicHost }: 
   return `${PUBLIC_BASE}/${code}`;
 }
 
-/** Max tag badges shown per row before collapsing the rest into a "+k" badge. */
+/** Max tag badges shown per card before collapsing the rest into a "+k" badge. */
 const MAX_VISIBLE_TAGS = 3;
 
 interface LinkTableProps {
@@ -77,7 +75,7 @@ interface LinkTableProps {
   onDelete: (link: Link) => void;
   /** When false (a Viewer), write affordances are hidden: bulk selection, and
    * the Edit/Delete row actions. Defaults to true so read-only callers and
-   * existing tests keep the full table. The backend enforces this regardless. */
+   * existing tests keep the full card. The backend enforces this regardless. */
   canWrite?: boolean;
 }
 
@@ -172,304 +170,238 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
     }
   }
 
-  const columns: ColumnDef<Link>[] = [
-    // Bulk selection is a write affordance (bulk edit/delete), so a Viewer
-    // never gets the select column.
-    ...(canWrite
-      ? [
-          {
-            id: "select",
-            header: () => (
-              <Checkbox
-                checked={allSelected}
-                indeterminate={someSelected}
-                onCheckedChange={(checked) => toggleAll(checked === true)}
-                aria-label={t("linkTable.selectAllAria")}
-              />
-            ),
-            cell: ({ row }) => (
-              <Checkbox
-                checked={selected.has(row.original.code)}
-                onCheckedChange={(checked) => toggleRow(row.original.code, checked === true)}
-                aria-label={t("linkTable.selectRowAria", { code: row.original.code })}
-              />
-            ),
-          } satisfies ColumnDef<Link>,
-        ]
-      : []),
-    {
-      accessorKey: "code",
-      header: t("linkTable.columnCode"),
-      cell: ({ row }) => (
-        <RouterLink
-          to={`/links/${row.original.code}`}
-          className="font-mono text-sm font-medium text-brand-ink hover:underline"
-          aria-label={t("linkTable.viewStatsAria", { code: row.original.code })}
-        >
-          {row.original.code}
-        </RouterLink>
-      ),
-    },
-    {
-      accessorKey: "url",
-      header: t("linkTable.columnDestination"),
-      cell: ({ row }) => (
-        <div className="flex max-w-64 items-center gap-1.5">
-          <span className="truncate text-muted-foreground" title={row.original.url}>
-            {row.original.url}
-          </span>
-          {row.original.rules.length > 0 && (
-            <Badge variant="secondary" className="shrink-0">
-              {t("linkTable.rulesBadge", { count: row.original.rules.length })}
-            </Badge>
-          )}
-          {row.original.variants.length > 0 && (
-            <Badge variant="secondary" className="shrink-0">
-              {t("linkTable.variantsBadge", { count: row.original.variants.length })}
-            </Badge>
-          )}
-          {row.original.has_password && (
-            <Lock
-              className="size-3.5 shrink-0 text-muted-foreground"
-              aria-label={t("linkTable.protectedAria")}
-            />
-          )}
-          {row.original.health && (
-            <span
-              role="img"
-              aria-label={
-                row.original.health.healthy
-                  ? t("linkTable.healthOk")
-                  : t("linkTable.healthBroken", { status: row.original.health.status ?? "—" })
-              }
-              title={
-                row.original.health.healthy
-                  ? t("linkTable.healthOk")
-                  : t("linkTable.healthBroken", { status: row.original.health.status ?? "—" })
-              }
-              className={`size-2 shrink-0 rounded-full ${
-                row.original.health.healthy ? "bg-emerald-500" : "bg-red-500"
-              }`}
-            />
-          )}
-        </div>
-      ),
-    },
-    {
-      accessorKey: "alias",
-      header: t("linkTable.columnAlias"),
-      cell: ({ row }) => row.original.alias || <span className="text-muted-foreground">—</span>,
-    },
-    {
-      id: "folder",
-      header: t("linkTable.columnFolder"),
-      cell: ({ row }) => {
-        const folder = row.original.folder;
-        if (!folder) return <span className="text-muted-foreground">—</span>;
-        return (
-          <Badge variant="outline" className="gap-1 font-normal">
-            <Folder className="size-3" aria-hidden="true" />
-            {folder}
-          </Badge>
-        );
-      },
-    },
-    {
-      id: "tags",
-      header: t("linkTable.columnTags"),
-      cell: ({ row }) => {
-        const tags = row.original.tags ?? [];
-        if (tags.length === 0) return <span className="text-muted-foreground">—</span>;
-        const visible = tags.slice(0, MAX_VISIBLE_TAGS);
-        const hiddenCount = tags.length - visible.length;
-        return (
-          <div className="flex flex-wrap gap-1">
-            {visible.map((tag) => {
-              const color = tagColor(tag);
-              return (
-                <Badge
-                  key={tag}
-                  variant="secondary"
-                  className="gap-1.5 border-transparent"
-                  style={{ backgroundColor: color.bg, color: color.text }}
-                >
-                  <span
-                    aria-hidden="true"
-                    className="size-1.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: color.dot }}
-                  />
-                  {tag}
-                </Badge>
-              );
-            })}
-            {hiddenCount > 0 && <Badge variant="outline">{t("linkTable.moreTags", { count: hiddenCount })}</Badge>}
-          </div>
-        );
-      },
-    },
-    {
-      accessorKey: "created",
-      header: t("linkTable.columnCreated"),
-      cell: ({ row }) => formatDate(row.original.created),
-    },
-    {
-      accessorKey: "expiry",
-      header: t("linkTable.columnExpires"),
-      cell: ({ row }) =>
-        row.original.expiry == null ? (
-          <span className="text-muted-foreground">{t("linkTable.never")}</span>
-        ) : (
-          formatDate(row.original.expiry)
-        ),
-    },
-    {
-      accessorKey: "visits",
-      header: t("linkTable.columnVisits"),
-      cell: ({ row }) =>
-        row.original.max_visits ? (
-          <span>{`${row.original.visits} / ${row.original.max_visits}`}</span>
-        ) : (
-          <span className="text-muted-foreground">{row.original.visits}</span>
-        ),
-    },
-    {
-      id: "actions",
-      header: () => <span className="sr-only">{t("linkTable.actionsSr")}</span>,
-      cell: ({ row }) => {
-        const link = row.original;
-        const justCopied = justCopiedId === link.id;
-        return (
-          <div className="flex items-center justify-end gap-1">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={t("linkTable.copyAria", { code: link.code })}
-              onClick={() => handleCopy(link)}
-            >
-              {justCopied ? <Check className="size-3.5 text-brand-ink" /> : <Copy className="size-3.5" />}
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={t("linkTable.moreActionsAria", { code: link.code })}
-                  />
-                }
-              >
-                <MoreHorizontal className="size-3.5" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => navigate(`/links/${link.code}`)}>
-                  <BarChart3 className="size-3.5" />
-                  {t("linkTable.statsMenuItem")}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setQrLink(link)}>
-                  <QrCode className="size-3.5" />
-                  {t("linkTable.qrMenuItem")}
-                </DropdownMenuItem>
-                {canWrite && (
-                  <>
-                    <DropdownMenuItem onClick={() => onEdit(link)}>
-                      <Pencil className="size-3.5" />
-                      {t("linkTable.editMenuItem")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem variant="destructive" onClick={() => onDelete(link)}>
-                      <Trash2 className="size-3.5" />
-                      {t("linkTable.deleteMenuItem")}
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        );
-      },
-    },
+  // TanStack Table still owns the row model (and can drive headless sorting or
+  // filtering later); the screen just renders each row as a card instead of a
+  // table row. These accessor columns keep the model addressable by field.
+  const columns: Array<ColumnDef<Link>> = [
+    { accessorKey: "code" },
+    { accessorKey: "url" },
+    { accessorKey: "alias" },
+    { id: "folder", accessorFn: (l) => l.folder ?? "" },
+    { accessorKey: "visits" },
+    { accessorKey: "created" },
+    { accessorKey: "expiry" },
   ];
 
   const table = useReactTable({ data: links, columns, getCoreRowModel: getCoreRowModel() });
 
   return (
     <>
-      {selected.size > 0 && (
-        <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
-          <span className="text-sm font-medium">
-            {t("linkTable.selected", { count: selected.size })}
-          </span>
-          <Button variant="ghost" size="sm" onClick={clearSelection}>
-            <X className="size-3.5" />
-            {t("linkTable.clearSelection")}
-          </Button>
-          <div className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-          <Input
-            value={bulkValue}
-            onChange={(e) => setBulkValue(e.target.value)}
-            placeholder={t("linkTable.bulkValuePlaceholder")}
-            aria-label={t("linkTable.bulkValuePlaceholder")}
-            className="h-8 w-48"
-            disabled={bulkLinks.isPending}
+      {canWrite && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Checkbox
+            checked={allSelected}
+            indeterminate={someSelected}
+            onCheckedChange={(checked) => toggleAll(checked === true)}
+            aria-label={t("linkTable.selectAllAria")}
           />
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={bulkLinks.isPending}
-            onClick={() => runTagOp("add_tag")}
-          >
-            {t("linkTable.bulkAddTag")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={bulkLinks.isPending}
-            onClick={() => runTagOp("remove_tag")}
-          >
-            {t("linkTable.bulkRemoveTag")}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={bulkLinks.isPending}
-            onClick={runSetFolder}
-          >
-            {t("linkTable.bulkSetFolder")}
-          </Button>
-          <Button
-            variant="destructive"
-            size="sm"
-            disabled={bulkLinks.isPending}
-            onClick={() => setConfirmingBulkDelete(true)}
-          >
-            <Trash2 className="size-3.5" />
-            {t("linkTable.bulkDelete")}
-          </Button>
+          {selected.size > 0 ? (
+            <>
+              <span className="text-sm font-medium">{t("linkTable.selected", { count: selected.size })}</span>
+              <Button variant="ghost" size="sm" onClick={clearSelection}>
+                <X className="size-3.5" />
+                {t("linkTable.clearSelection")}
+              </Button>
+              <div className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+              <Input
+                value={bulkValue}
+                onChange={(e) => setBulkValue(e.target.value)}
+                placeholder={t("linkTable.bulkValuePlaceholder")}
+                aria-label={t("linkTable.bulkValuePlaceholder")}
+                className="h-8 w-48"
+                disabled={bulkLinks.isPending}
+              />
+              <Button variant="outline" size="sm" disabled={bulkLinks.isPending} onClick={() => runTagOp("add_tag")}>
+                {t("linkTable.bulkAddTag")}
+              </Button>
+              <Button variant="outline" size="sm" disabled={bulkLinks.isPending} onClick={() => runTagOp("remove_tag")}>
+                {t("linkTable.bulkRemoveTag")}
+              </Button>
+              <Button variant="outline" size="sm" disabled={bulkLinks.isPending} onClick={runSetFolder}>
+                {t("linkTable.bulkSetFolder")}
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={bulkLinks.isPending}
+                onClick={() => setConfirmingBulkDelete(true)}
+              >
+                <Trash2 className="size-3.5" />
+                {t("linkTable.bulkDelete")}
+              </Button>
+            </>
+          ) : (
+            <span className="text-sm text-muted-foreground">{t("linkTable.selectAllAria")}</span>
+          )}
         </div>
       )}
 
-      <Table>
-        <caption className="sr-only">{t("linkTable.caption")}</caption>
-        <TableHeader>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow key={headerGroup.id}>
-              {headerGroup.headers.map((header) => (
-                <TableHead key={header.id}>
-                  {flexRender(header.column.columnDef.header, header.getContext())}
-                </TableHead>
-              ))}
-            </TableRow>
-          ))}
-        </TableHeader>
-        <TableBody>
-          {table.getRowModel().rows.map((row) => (
-            <TableRow key={row.id}>
-              {row.getVisibleCells().map((cell) => (
-                <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-              ))}
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+      <ul className="flex flex-col gap-2.5">
+        {table.getRowModel().rows.map((row) => {
+          const link = row.original;
+          const justCopied = justCopiedId === link.id;
+          const tags = link.tags ?? [];
+          const visibleTags = tags.slice(0, MAX_VISIBLE_TAGS);
+          const hiddenTags = tags.length - visibleTags.length;
+          const clicks = link.visits ?? 0;
+          const healthLabel = link.health
+            ? link.health.healthy
+              ? t("linkTable.healthOk")
+              : t("linkTable.healthBroken", { status: link.health.status ?? "—" })
+            : "";
+          return (
+            <li
+              key={link.code}
+              data-testid="link-card"
+              className="card-hover flex items-center gap-4 rounded-lg border border-border bg-card p-4 shadow-card"
+            >
+              {canWrite && (
+                <Checkbox
+                  checked={selected.has(link.code)}
+                  onCheckedChange={(checked) => toggleRow(link.code, checked === true)}
+                  aria-label={t("linkTable.selectRowAria", { code: link.code })}
+                />
+              )}
+
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-[9px] border border-accent-line bg-accent-wash">
+                <Link2 className="size-[18px] text-brand-ink" aria-hidden="true" />
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <RouterLink
+                    to={`/links/${link.code}`}
+                    className="font-mono text-[14.5px] font-medium text-brand-ink hover:underline"
+                    aria-label={t("linkTable.viewStatsAria", { code: link.code })}
+                  >
+                    {link.code}
+                  </RouterLink>
+                  {link.alias && <Badge variant="secondary">{link.alias}</Badge>}
+                  {link.folder && (
+                    <Badge variant="outline" className="gap-1 font-normal">
+                      <Folder className="size-3" aria-hidden="true" />
+                      {link.folder}
+                    </Badge>
+                  )}
+                </div>
+
+                <div className="mt-1 flex items-center gap-1.5">
+                  <span className="max-w-[440px] truncate text-[13px] text-muted-foreground" title={link.url}>
+                    {link.url}
+                  </span>
+                  {link.rules.length > 0 && (
+                    <Badge variant="secondary" className="shrink-0">
+                      {t("linkTable.rulesBadge", { count: link.rules.length })}
+                    </Badge>
+                  )}
+                  {link.variants.length > 0 && (
+                    <Badge variant="secondary" className="shrink-0">
+                      {t("linkTable.variantsBadge", { count: link.variants.length })}
+                    </Badge>
+                  )}
+                  {link.has_password && (
+                    <Lock
+                      className="size-3.5 shrink-0 text-muted-foreground"
+                      aria-label={t("linkTable.protectedAria")}
+                    />
+                  )}
+                  {link.health && (
+                    <span
+                      role="img"
+                      aria-label={healthLabel}
+                      title={healthLabel}
+                      className={`size-2 shrink-0 rounded-full ${
+                        link.health.healthy ? "bg-primary" : "bg-destructive"
+                      }`}
+                    />
+                  )}
+                </div>
+
+                {tags.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {visibleTags.map((tag) => {
+                      const color = tagColor(tag);
+                      return (
+                        <Badge
+                          key={tag}
+                          variant="secondary"
+                          className="gap-1.5 border-transparent"
+                          style={{ backgroundColor: color.bg, color: color.text }}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className="size-1.5 shrink-0 rounded-full"
+                            style={{ backgroundColor: color.dot }}
+                          />
+                          {tag}
+                        </Badge>
+                      );
+                    })}
+                    {hiddenTags > 0 && <Badge variant="outline">{t("linkTable.moreTags", { count: hiddenTags })}</Badge>}
+                  </div>
+                )}
+              </div>
+
+              <div className="shrink-0 text-right">
+                <div className="font-heading text-lg font-bold tabular-nums text-strong">
+                  {link.max_visits ? `${clicks} / ${link.max_visits}` : clicks}
+                </div>
+                <div className="text-[11px] text-muted-foreground">{t("links.clicks")}</div>
+              </div>
+
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  aria-label={t("linkTable.copyAria", { code: link.code })}
+                  onClick={() => handleCopy(link)}
+                >
+                  {justCopied ? <Check className="size-3.5 text-brand-ink" /> : <Copy className="size-3.5" />}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  aria-label={t("linkTable.viewStatsAria", { code: link.code })}
+                  onClick={() => navigate(`/links/${link.code}`)}
+                >
+                  <BarChart3 className="size-3.5" />
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        aria-label={t("linkTable.moreActionsAria", { code: link.code })}
+                      />
+                    }
+                  >
+                    <MoreHorizontal className="size-3.5" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => setQrLink(link)}>
+                      <QrCode className="size-3.5" />
+                      {t("linkTable.qrMenuItem")}
+                    </DropdownMenuItem>
+                    {canWrite && (
+                      <>
+                        <DropdownMenuItem onClick={() => onEdit(link)}>
+                          <Pencil className="size-3.5" />
+                          {t("linkTable.editMenuItem")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem variant="destructive" onClick={() => onDelete(link)}>
+                          <Trash2 className="size-3.5" />
+                          {t("linkTable.deleteMenuItem")}
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
 
       {qrLink && (
         <Suspense fallback={null}>

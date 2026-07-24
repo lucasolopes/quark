@@ -25,6 +25,12 @@ function mockFetchByUrl(meBody: unknown, discoverBody: unknown = {}) {
 describe("Login", () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
+  it("renders the v2 heading", async () => {
+    mockFetchByUrl({ authenticated: false, oidc_enabled: false });
+    render(withProviders(<Login />, { initialEntries: ["/login"] }));
+    expect(await screen.findByRole("heading", { level: 1, name: /sign in to quark/i })).toBeInTheDocument();
+  });
+
   it("valid token is stored and the probe request is made", async () => {
     // Fresh Response per call: the Login mount also probes GET /admin/me, and a
     // single Response instance's body can only be read once.
@@ -59,6 +65,15 @@ describe("Login", () => {
     mockFetchByUrl({ authenticated: false, oidc_enabled: true, multi_tenant: true, admin_login_enabled: true });
     render(withProviders(<Login />, { initialEntries: ["/login"] }));
     expect(await screen.findByLabelText(/token/i)).toBeInTheDocument();
+  });
+
+  it("with oidc_enabled and admin_login_enabled both true, renders the provider button and the token field together", async () => {
+    // Single-tenant (multi_tenant: false) so the shared provider button shows
+    // directly instead of the email-first discovery stage (LUC-53).
+    mockFetchByUrl({ authenticated: false, oidc_enabled: true, multi_tenant: false, admin_login_enabled: true });
+    render(withProviders(<Login />, { initialEntries: ["/login"] }));
+    expect(await screen.findByRole("button", { name: /provider/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/token/i)).toBeInTheDocument();
   });
 
   it("hides the email step on OSS even when a shared OIDC provider is configured", async () => {

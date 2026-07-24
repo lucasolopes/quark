@@ -74,4 +74,18 @@ describe("OidcProvider", () => {
 
     expect(await screen.findByText(/no sso provider configured/i)).toBeInTheDocument();
   });
+
+  it("warns when the issuer looks like a managed Keycloak realm", async () => {
+    const managedConfig = { ...CONFIG, issuer: "https://sso.quark.example/realms/acme" };
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes("/admin/me")) return Promise.resolve(jsonResponse(ME));
+      if (url.includes("/admin/oidc-config")) return Promise.resolve(jsonResponse(managedConfig));
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    render(withProviders(<OidcProvider />, { withRouter: false }));
+
+    expect(await screen.findByText(/already uses a managed provider/i)).toBeInTheDocument();
+  });
 });

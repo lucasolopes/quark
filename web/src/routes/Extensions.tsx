@@ -2,6 +2,7 @@ import { ArrowRight, CheckCircle2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/i18n";
 import { CATEGORY_ORDER, INTEGRATIONS, useConnectedIds, type Integration } from "@/lib/connectors";
 
@@ -17,11 +18,8 @@ export function Extensions() {
   const connected = useConnectedIds();
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold">{t("extensions.heading")}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{t("extensions.subtitle")}</p>
-      </div>
+    <div className="flex flex-col gap-4 animate-rise">
+      <PageHeader title={t("extensions.heading")} subtitle={t("extensions.subtitle")} />
 
       {CATEGORY_ORDER.map(({ category, labelKey }) => {
         const items = INTEGRATIONS.filter((i) => i.category === category);
@@ -34,7 +32,7 @@ export function Extensions() {
             >
               {t(labelKey)}
             </h2>
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-3">
               {items.map((integration) => (
                 <IntegrationCard
                   key={integration.id}
@@ -50,7 +48,12 @@ export function Extensions() {
   );
 }
 
-/** Shared card face (mono badge, name, description, status). */
+/**
+ * Shared card face: an icon well (wash when connected, neutral otherwise —
+ * mirrors Domains' neutral-well precedent), the integration name, its
+ * description, and a status badge (connected = default wash+lime; anything
+ * else, including coming-soon, = secondary).
+ */
 function CardFace({ integration, connected }: { integration: Integration; connected: boolean }) {
   const t = useT();
   const isSoon = integration.poweredBy === "soon";
@@ -59,8 +62,9 @@ function CardFace({ integration, connected }: { integration: Integration; connec
       <div className="flex items-start justify-between gap-2">
         <span
           aria-hidden="true"
-          style={{ backgroundColor: integration.color }}
-          className="flex size-10 shrink-0 items-center justify-center rounded-lg font-heading text-sm font-semibold text-white"
+          className={`flex size-10 shrink-0 items-center justify-center rounded-[9px] font-heading text-sm font-semibold ${
+            connected ? "bg-accent-wash border border-accent-line text-brand-ink" : "bg-secondary text-muted-foreground"
+          }`}
         >
           {integration.mono}
         </span>
@@ -69,12 +73,14 @@ function CardFace({ integration, connected }: { integration: Integration; connec
             <CheckCircle2 className="size-3" aria-hidden="true" />
             {t("extensions.connected")}
           </Badge>
+        ) : isSoon ? (
+          <Badge variant="secondary">{t("extensions.comingSoon")}</Badge>
         ) : (
-          isSoon && <Badge variant="secondary">{t("extensions.comingSoon")}</Badge>
+          <Badge variant="secondary">{t("extensions.notConnected")}</Badge>
         )}
       </div>
-      <div className="font-heading text-base font-medium">{integration.name}</div>
-      <p className="text-sm text-muted-foreground">{t(integration.descKey)}</p>
+      <div className="font-heading text-base font-medium text-strong">{integration.name}</div>
+      <p className="text-[13px] text-muted-foreground">{t(integration.descKey)}</p>
     </CardContent>
   );
 }
@@ -98,9 +104,9 @@ function IntegrationCard({ integration, connected }: { integration: Integration;
       to={`/extensions/${integration.id}`}
       className="group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <Card className="flex h-full flex-col transition-[transform,border-color] duration-200 group-hover:-translate-y-[3px] group-hover:border-primary/30 motion-reduce:transition-none motion-reduce:group-hover:translate-y-0">
+      <Card className="card-hover flex h-full flex-col">
         <CardFace integration={integration} connected={connected} />
-        <CardContent className="flex items-center gap-1.5 pt-0 text-sm font-medium text-primary">
+        <CardContent className="flex items-center gap-1.5 pt-0 text-sm font-medium text-brand-ink">
           {connected ? t("extensions.manage") : t("extensions.setUp")}
           <ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5 motion-reduce:transition-none" />
         </CardContent>

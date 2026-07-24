@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Domains } from "./Domains";
 import { withProviders } from "@/test-utils";
@@ -48,6 +48,36 @@ describe("Domains", () => {
     expect(screen.getByText(/go\.quarkus\.com\.br/)).toBeInTheDocument();
     expect(screen.getByText(/tok123/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /verify go\.acme\.com/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /remove go\.acme\.com/i })).toBeInTheDocument();
+  });
+
+  it("renders each domain as a card with a status dot colored per verification state", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes("/admin/me")) return Promise.resolve(jsonResponse(ME));
+      if (url.includes("/admin/domains")) return Promise.resolve(jsonResponse(DOMAINS));
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    render(withProviders(<Domains />, { withRouter: false }));
+
+    const cards = await screen.findAllByTestId("domain-card");
+    expect(cards).toHaveLength(2);
+    // Semantic list: each card is a real <li> so the stack reads as a list.
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+
+    // `queryAllByText` (not `queryByText`): the pending card repeats its own
+    // host inside the DNS instructions text, so a single-match query would
+    // throw "multiple elements found" for that card.
+    const verifiedCard = cards.find((c) => within(c).queryAllByText("w.quarkus.com.br").length > 0);
+    const pendingCard = cards.find((c) => within(c).queryAllByText("go.acme.com").length > 0);
+    if (!verifiedCard || !pendingCard) throw new Error("expected a verified card and a pending card");
+
+    // verified = bg-primary, pending = bg-muted-foreground (LUC-82 v2 status semantics).
+    expect(within(verifiedCard).getByTestId("domain-status-dot")).toHaveClass("bg-primary");
+    expect(within(verifiedCard).getByText(/^verified$/i)).toBeInTheDocument();
+    expect(within(pendingCard).getByTestId("domain-status-dot")).toHaveClass("bg-muted-foreground");
+    expect(within(pendingCard).getByText(/^pending$/i)).toBeInTheDocument();
   });
 
   it("sets a verified custom domain as primary", async () => {
@@ -69,12 +99,43 @@ describe("Domains", () => {
 
     // The subdomain is primary; the verified custom offers "Set as primary".
     expect(await screen.findByText(/^primary$/i)).toBeInTheDocument();
+
+    // The badge is scoped to the primary domain's own card, not the other one.
+    const cards = screen.getAllByTestId("domain-card");
+    const nonPrimaryCard = cards.find((c) => within(c).queryAllByText("go.acme.com").length > 0);
+    if (!nonPrimaryCard) throw new Error("expected go.acme.com's card");
+    expect(within(nonPrimaryCard).queryByText(/^primary$/i)).not.toBeInTheDocument();
+
     const setPrimaryBtn = screen.getByRole("button", { name: /set go\.acme\.com as the primary domain/i });
     await userEvent.click(setPrimaryBtn);
 
     await waitFor(() => {
       const post = fetchMock.mock.calls.find(([u, i]) => String(u).includes("/admin/domains/2/primary") && i?.method === "POST");
       expect(post).toBeDefined();
+    });
+  });
+
+  it("removes a custom domain after confirming", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes("/admin/me")) return Promise.resolve(jsonResponse(ME));
+      if (url.includes("/admin/domains/2") && init?.method === "DELETE") {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      if (url.includes("/admin/domains")) return Promise.resolve(jsonResponse(DOMAINS));
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    render(withProviders(<Domains />, { withRouter: false }));
+    const removeBtn = await screen.findByRole("button", { name: /remove go\.acme\.com/i });
+
+    await userEvent.click(removeBtn);
+    const dialog = await screen.findByRole("alertdialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: /^remove$/i }));
+
+    await waitFor(() => {
+      const del = fetchMock.mock.calls.find(([u, i]) => String(u).includes("/admin/domains/2") && i?.method === "DELETE");
+      expect(del).toBeDefined();
     });
   });
 

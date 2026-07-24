@@ -38,6 +38,21 @@ describe("LinkStats", () => {
     expect(await screen.findByText("42")).toBeInTheDocument();
   });
 
+  it("shows the short code as the page title (mono) with a back link to /links (v2 PageHeader)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      aggregates: {
+        total: 0, first_ts: 0, last_ts: 0, bots: 0,
+        per_day: {}, per_country: {}, per_device: {}, per_os: {}, per_browser: {}, per_referer: {}, per_city: {},
+        per_variant: {},
+      },
+      recent: [],
+    }), { status: 200 }));
+    render(wrap("6lB362J"));
+    expect(await screen.findByRole("heading", { name: "6lB362J" })).toBeInTheDocument();
+    const back = screen.getByRole("link", { name: /back to links/i });
+    expect(back).toHaveAttribute("href", "/links");
+  });
+
   it("shows the bots-excluded count as a separate stat card", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       aggregates: {
@@ -114,10 +129,13 @@ describe("LinkStats", () => {
     expect(await screen.findByText("Clicks per city")).toBeInTheDocument();
   });
 
-  it("keeps its own back-to-links button even when the stats fetch errors (LUC-61)", async () => {
+  it("keeps its own back-to-links link even when the stats fetch errors (LUC-61)", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("boom", { status: 500 }));
     render(wrap("6lB362J"));
     expect(await screen.findByText(/could not load stats/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /back to links/i })).toBeInTheDocument();
+    // v2: the back affordance is `PageHeader`'s `back` link (a real <a>, not
+    // a Button) — rendered unconditionally by `LinkStats`, so it survives
+    // regardless of `StatsView`'s own query state.
+    expect(screen.getByRole("link", { name: /back to links/i })).toBeInTheDocument();
   });
 });

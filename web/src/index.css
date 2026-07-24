@@ -11,13 +11,13 @@ body {
 /*
  * quark design system — three type families with clear roles:
  *  Space Grotesk (display/headings/numbers), Hanken Grotesk (body/UI),
- *  JetBrains Mono (codes, data, eyebrows). Loaded via <link> in index.html
- *  (Google Fonts). Falls back to system-ui if offline.
+ *  JetBrains Mono (codes, data, eyebrows). Self-hosted via
+ *  @fontsource-variable imports in main.tsx (bundled, no external requests).
  */
 @theme inline {
-  --font-sans: 'Hanken Grotesk', system-ui, sans-serif;
-  --font-heading: 'Space Grotesk', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-sans: 'Hanken Grotesk Variable', 'Hanken Grotesk', system-ui, sans-serif;
+  --font-heading: 'Space Grotesk Variable', 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -57,6 +57,21 @@ body {
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  --color-strong: var(--text-strong);
+  --color-accent-wash: var(--accent-wash);
+  --color-accent-line: var(--accent-line);
+  --color-accent-chip: var(--accent-chip);
+  --color-surface-input: var(--surface-input);
+  --color-surface-hover: var(--surface-hover);
+  --shadow-card: var(--shadow-card);
+  --shadow-modal: var(--shadow-modal);
+  --text-page-title: 27px;
+  --text-page-title--line-height: 1.15;
+  --text-stat: 30px;
+  --text-stat--line-height: 1.1;
+  --text-subtitle: 13.5px;
+  --text-subtitle--line-height: 1.5;
+  --tracking-display: -0.03em;
 }
 
 /*
@@ -69,7 +84,7 @@ body {
      the theme. Without this, the dark theme's white text lands on the browser's
      default light popup, so <select> options read white-on-white. */
   color-scheme: light;
-  --radius: 0.875rem; /* 14px — cards 14, md ≈ 11, sm ≈ 8 (Quark scale) */
+  --radius: 0.75rem; /* 12px — cards 12, xl(modal) ≈ 17, md(botões/inputs) ≈ 10, sm(chips) ≈ 7 (escala do mock v2) */
 
   --background: #eef0f4;
   --foreground: #12141c;
@@ -100,7 +115,7 @@ body {
   --chart-4: #e5484d;
   --chart-5: #5e6472;
 
-  --sidebar: #ffffff;
+  --sidebar: #e7eaf0; /* substitui o #ffffff atual: ink2 light do mock */
   --sidebar-foreground: #12141c;
   --sidebar-primary: #8fd12e;
   --sidebar-primary-foreground: #0a0b0f;
@@ -108,6 +123,14 @@ body {
   --sidebar-accent-foreground: #12141c;
   --sidebar-border: rgba(0, 0, 0, 0.1);
   --sidebar-ring: #8fd12e;
+  --text-strong: #12141c;
+  --accent-wash: rgba(143, 209, 46, 0.14);
+  --accent-line: rgba(143, 209, 46, 0.28);
+  --accent-chip: rgba(143, 209, 46, 0.4);
+  --surface-input: #ffffff;
+  --surface-hover: rgba(0, 0, 0, 0.04);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-modal: 0 40px 90px -30px rgba(0, 0, 0, 0.35);
 }
 
 /*
@@ -151,6 +174,14 @@ body {
   --sidebar-accent-foreground: #c6f94e;
   --sidebar-border: rgba(255, 255, 255, 0.09);
   --sidebar-ring: #c6f94e;
+  --text-strong: #f3f5fa;
+  --accent-wash: rgba(198, 249, 78, 0.12);
+  --accent-line: rgba(198, 249, 78, 0.28);
+  --accent-chip: rgba(198, 249, 78, 0.4);
+  --surface-input: #0f1119;
+  --surface-hover: rgba(255, 255, 255, 0.04);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-modal: 0 40px 90px -30px rgba(0, 0, 0, 0.7);
 }
 
 @layer base {
@@ -179,7 +210,45 @@ body {
   }
 }
 
-/* Lime glow — reserved for the brand and active accents (don't decorate freely). */
-@utility glow-accent {
-  box-shadow: 0 0 18px rgba(198, 249, 78, 0.6);
+/* Glow do glifo QuarkMark nas telas fora do Shell (Login/Onboarding/AcceptInvite). */
+@utility glow-glyph {
+  filter: drop-shadow(0 0 14px rgba(198, 249, 78, 0.4));
+}
+
+/* Entrada padrão de página/modal do DS (qrise do mock). */
+@utility animate-rise {
+  animation: rise 0.5s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Hover lift de card interativo (qcard-hov do mock). */
+@utility card-hover {
+  transition:
+    transform 0.18s cubic-bezier(0.23, 1, 0.32, 1),
+    border-color 0.18s ease;
+  &:hover {
+    transform: translateY(-3px);
+    border-color: var(--accent-line);
+  }
+}
+
+/* Fundo de páginas fora do Shell (login, onboarding, convite) — motifs do DS. */
+@utility bg-hero-glow {
+  background: radial-gradient(680px 460px at 50% -6%, rgba(198, 249, 78, 0.1), transparent 62%);
+}
+@utility bg-dot-grid {
+  opacity: 0.45;
+  mask-image: radial-gradient(700px 500px at 50% 24%, #000, transparent 76%);
+  background-image: linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 46px 46px;
 }

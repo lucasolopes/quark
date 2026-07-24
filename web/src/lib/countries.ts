@@ -51,5 +51,5 @@ export function countryOptions(locale: string): CountryOption[] {
     }
     return { value: code, label: name && name !== code ? `${name} (${code})` : code };
   });
-  return options.sort((a, b) => a.label.localeCompare(b.label, locale));
+  return options.toSorted((a, b) => a.label.localeCompare(b.label, locale));
 }

@@ -1,0 +1,45 @@
+<sc-if value="{{ isTabLinks }}" hint-placeholder-val="{{ true }}">
+      <div style="max-width: 1000px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div>
+            <h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.links.title }}</h1>
+            <div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ linkCount }} links · {{ totalClicksF }} {{ P.links.clicks }}</div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 18px; flex-wrap: wrap;">
+          <sc-for list="{{ folderChips }}" as="fc" hint-placeholder-count="3">
+            <button class="qbtn" style="display: flex; align-items: center; gap: 7px; background: {{ fc.chipBg }}; border: 1px solid {{ fc.chipBorder }}; border-radius: 999px; padding: 6px 13px; color: {{ fc.chipColor }}; font-size: 13px; font-weight: 500; cursor: pointer;">{{ fc.name }}<span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; opacity: .7;">{{ fc.count }}</span></button>
+          </sc-for>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{ linksView }}" as="l" hint-placeholder-count="6">
+            <div class="qcard-hov" style="display: flex; align-items: center; gap: 15px; background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 14px 16px; box-shadow: {{ pal.shadow }};">
+              <div style="width: 40px; height: 40px; flex-shrink: 0; border-radius: 9px; background: {{ pal.wash }}; border: 1px solid rgba(198,249,78,.2); display: flex; align-items: center; justify-content: center;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ pal.brand }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5"></path></svg>
+              </div>
+              <div style="flex: 1; min-width: 0;">
+                <div style="display: flex; align-items: center; gap: 9px;">
+                  <span style="font-family: 'JetBrains Mono', monospace; font-size: 14.5px; font-weight: 500; color: {{ pal.brand }};">{{ l.short }}</span>
+                  <sc-if value="{{ l.alias }}" hint-placeholder-val="{{ false }}"><span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .06em; color: {{ pal.muted }}; border: 1px solid {{ pal.border }}; border-radius: 5px; padding: 1px 6px;">alias</span></sc-if>
+                </div>
+                <div style="font-size: 13px; color: {{ pal.muted }}; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 440px;">{{ l.dest }}</div>
+                <div style="display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap;">
+                  <sc-for list="{{ l.tagObjs }}" as="tg" hint-placeholder-count="2">
+                    <span style="font-size: 11px; font-weight: 600; color: {{ tg.color }}; background: {{ tg.bg }}; border-radius: 5px; padding: 2px 7px;">{{ tg.name }}</span>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="text-align: right; flex-shrink: 0;">
+                <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 18px; color: {{ pal.strong }}; font-feature-settings: 'tnum';">{{ l.clicksF }}</div>
+                <div style="font-size: 11px; color: {{ pal.muted }};">{{ P.links.clicks }}</div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+                <button class="qbtn" onClick="{{ l.onCopy }}" title="{{ l.copyLabel }}" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; cursor: pointer;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{ l.copyColor }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+                <button class="qbtn" onClick="{{ l.onStats }}" title="{{ P.links.stats }}" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; cursor: pointer;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"></line><line x1="18" y1="20" x2="18" y2="4"></line><line x1="6" y1="20" x2="6" y2="15"></line></svg></button>
+                <button class="qbtn" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; cursor: pointer;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg></button>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>

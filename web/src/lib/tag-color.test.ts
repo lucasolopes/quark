@@ -14,7 +14,7 @@ describe("tagColor", () => {
 
   it("returns dot/text/bg as non-empty CSS strings", () => {
     const c = tagColor("promo");
-    expect(c.dot).toMatch(/^#/);
+    expect(c.dot).toMatch(/^(#|var\()/);
     expect(c.text).toContain("color-mix");
     expect(c.bg).toContain("transparent");
   });

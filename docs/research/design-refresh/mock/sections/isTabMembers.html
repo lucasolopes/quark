@@ -1,0 +1,17 @@
+<sc-if value="{{ isTabMembers }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 860px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div><h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.mem.title }}</h1><div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ P.mem.sub }}</div></div>
+          <button class="qbtn" onClick="{{ openCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 9px 15px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;">{{ P.mem.invite }}</button>
+        </div>
+        <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; overflow: hidden; box-shadow: {{ pal.shadow }};">
+          <sc-for list="{{ membersView }}" as="m" hint-placeholder-count="4">
+            <div style="display: flex; align-items: center; gap: 14px; padding: 15px 18px; border-bottom: 1px solid {{ pal.border }};">
+              <div style="width: 36px; height: 36px; border-radius: 50%; background: {{ m.color }}; display: flex; align-items: center; justify-content: center; font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 13px; color: #0A0B0F; flex-shrink: 0;">{{ m.initials }}</div>
+              <div style="flex: 1; min-width: 0;"><div style="font-size: 14.5px; font-weight: 600; color: {{ pal.strong }};">{{ m.name }}</div><div style="font-size: 12.5px; color: {{ pal.muted }};">{{ m.subline }}</div></div>
+              <span style="font-size: 12.5px; color: {{ pal.muted }}; border: 1px solid {{ pal.border }}; border-radius: 999px; padding: 4px 12px;">{{ m.roleLabel }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>

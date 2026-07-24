@@ -4,8 +4,6 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  Line,
-  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -15,6 +13,7 @@ import {
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useT } from "@/i18n";
+import { toBreakdownData, type BreakdownDatum } from "@/lib/breakdown";
 import type { Aggregates } from "@/lib/types";
 
 /**
@@ -30,9 +29,26 @@ const CHART_COLORS = [
   "var(--color-chart-5)",
 ];
 
-const TOP_N_COUNTRIES = 8;
 const TOP_N_REFERERS = 8;
 const TOP_N_CITIES = 8;
+
+/**
+ * Shared recharts tooltip chrome (Quark DS v2): the same popover surface
+ * menus/dialogs use, instead of recharts' unstyled default.
+ */
+const TOOLTIP_STYLE = {
+  contentStyle: {
+    background: "var(--color-popover)",
+    border: "1px solid var(--color-border)",
+    borderRadius: 10,
+    fontSize: 12,
+  },
+  labelStyle: { color: "var(--color-popover-foreground)" },
+  itemStyle: { color: "var(--color-popover-foreground)" },
+} as const;
+
+/** Shared axis tick chrome (Quark DS v2): muted mono 11px, matching table headers/eyebrows. */
+const TICK_STYLE = { fontSize: 11, fill: "var(--color-muted-foreground)", fontFamily: "var(--font-mono)" };
 
 function formatDay(day: string): string {
   const [, month, date] = day.split("-");
@@ -44,11 +60,13 @@ interface ChartCardProps {
   empty: boolean;
   emptyLabel: string;
   children: ReactNode;
+  /** Lets the per-day chart span the full grid width (it's the panel's hero chart). */
+  className?: string;
 }
 
-function ChartCard({ title, empty, emptyLabel, children }: ChartCardProps) {
+function ChartCard({ title, empty, emptyLabel, children, className }: ChartCardProps) {
   return (
-    <Card>
+    <Card className={className}>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
@@ -65,54 +83,45 @@ function ChartCard({ title, empty, emptyLabel, children }: ChartCardProps) {
   );
 }
 
-/** Clicks per day (`per_day`), in chronological order. */
+/**
+ * Clicks per day (`per_day`), in chronological order — the panel's hero
+ * chart (mock isTabAnalytics.html): lime-gradient bars, rounded top corners.
+ */
 function PerDayChart({ perDay }: { perDay: Record<string, number> }) {
   const t = useT();
   const data = Object.entries(perDay)
-    .sort(([a], [b]) => a.localeCompare(b))
+    .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([day, count]) => ({ day, count, label: formatDay(day) }));
 
   return (
-    <ChartCard title={t("charts.perDayTitle")} empty={data.length === 0} emptyLabel={t("charts.perDayEmpty")}>
+    <ChartCard
+      title={t("charts.perDayTitle")}
+      empty={data.length === 0}
+      emptyLabel={t("charts.perDayEmpty")}
+      className="md:col-span-2 xl:col-span-3"
+    >
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+        <BarChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+          <defs>
+            {/* Sanctioned literal rgba (SVG gradient defs only) — plasma-lime fading to transparent, per the mock. */}
+            <linearGradient id="perDayFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--color-chart-1)" />
+              <stop offset="100%" stopColor="rgba(198,249,78,.35)" />
+            </linearGradient>
+          </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
-          <XAxis dataKey="label" tick={{ fontSize: 12 }} stroke="var(--color-muted-foreground)" />
-          <YAxis allowDecimals={false} tick={{ fontSize: 12 }} stroke="var(--color-muted-foreground)" width={32} />
+          <XAxis dataKey="label" tick={TICK_STYLE} stroke="var(--color-muted-foreground)" />
+          <YAxis allowDecimals={false} tick={TICK_STYLE} stroke="var(--color-muted-foreground)" width={32} />
           <Tooltip
+            {...TOOLTIP_STYLE}
             formatter={(value) => [`${value}`, t("charts.clicks")]}
             labelFormatter={(label) => t("charts.dayLabel", { label })}
           />
-          <Line
-            type="monotone"
-            dataKey="count"
-            name={t("charts.clicks")}
-            stroke="var(--color-chart-2)"
-            strokeWidth={2}
-            dot={{ r: 3 }}
-          />
-        </LineChart>
+          <Bar dataKey="count" name={t("charts.clicks")} fill="url(#perDayFill)" radius={[4, 4, 0, 0]} />
+        </BarChart>
       </ResponsiveContainer>
     </ChartCard>
   );
-}
-
-interface BreakdownDatum {
-  label: string;
-  count: number;
-}
-
-/** `per_*` map turned into sorted, top-N chart data with the unknown-key fallback applied. */
-function toBreakdownData(
-  map: Record<string, number>,
-  unknownLabel: string,
-  topN?: number,
-  relabel?: (label: string) => string,
-): BreakdownDatum[] {
-  const sorted = Object.entries(map)
-    .sort(([, a], [, b]) => b - a)
-    .map(([label, count]) => ({ label: label ? (relabel ? relabel(label) : label) : unknownLabel, count }));
-  return topN === undefined ? sorted : sorted.slice(0, topN);
 }
 
 interface TopNBarChartProps {
@@ -121,7 +130,7 @@ interface TopNBarChartProps {
   data: BreakdownDatum[];
 }
 
-/** Horizontal top-N bar chart, shared shape for country/referrer/city breakdowns. */
+/** Horizontal top-N bar chart, shared shape for referrer/city breakdowns. */
 function TopNBarChart({ title, emptyLabel, data }: TopNBarChartProps) {
   const t = useT();
   return (
@@ -129,15 +138,9 @@ function TopNBarChart({ title, emptyLabel, data }: TopNBarChartProps) {
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} layout="vertical" margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" horizontal={false} />
-          <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12 }} stroke="var(--color-muted-foreground)" />
-          <YAxis
-            type="category"
-            dataKey="label"
-            width={96}
-            tick={{ fontSize: 12 }}
-            stroke="var(--color-muted-foreground)"
-          />
-          <Tooltip formatter={(value) => [`${value}`, t("charts.clicks")]} />
+          <XAxis type="number" allowDecimals={false} tick={TICK_STYLE} stroke="var(--color-muted-foreground)" />
+          <YAxis type="category" dataKey="label" width={96} tick={TICK_STYLE} stroke="var(--color-muted-foreground)" />
+          <Tooltip {...TOOLTIP_STYLE} formatter={(value) => [`${value}`, t("charts.clicks")]} />
           <Bar dataKey="count" name={t("charts.clicks")} fill="var(--color-chart-2)" radius={[0, 4, 4, 0]} />
         </BarChart>
       </ResponsiveContainer>
@@ -159,7 +162,7 @@ interface DonutChartProps {
 function PerVariantChart({ perVariant }: { perVariant: Record<string, number> }) {
   const t = useT();
   const data = Object.entries(perVariant)
-    .sort(([a], [b]) => Number(a) - Number(b))
+    .toSorted(([a], [b]) => Number(a) - Number(b))
     .map(([index, count]) => ({ index, count, label: t("charts.variantLabel", { n: index }) }));
 
   return (
@@ -171,9 +174,9 @@ function PerVariantChart({ perVariant }: { perVariant: Record<string, number> })
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
-          <XAxis dataKey="label" tick={{ fontSize: 12 }} stroke="var(--color-muted-foreground)" />
-          <YAxis allowDecimals={false} tick={{ fontSize: 12 }} stroke="var(--color-muted-foreground)" width={32} />
-          <Tooltip formatter={(value) => [`${value}`, t("charts.clicks")]} />
+          <XAxis dataKey="label" tick={TICK_STYLE} stroke="var(--color-muted-foreground)" />
+          <YAxis allowDecimals={false} tick={TICK_STYLE} stroke="var(--color-muted-foreground)" width={32} />
+          <Tooltip {...TOOLTIP_STYLE} formatter={(value) => [`${value}`, t("charts.clicks")]} />
           <Bar dataKey="count" name={t("charts.clicks")} fill="var(--color-chart-3)" radius={[4, 4, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
@@ -185,11 +188,11 @@ const DONUT_SIZE = 168;
 const DONUT_CENTER = DONUT_SIZE / 2;
 
 /**
- * Donut chart, shared shape for device/OS/browser breakdowns. The pie renders
- * at a fixed pixel size instead of through ResponsiveContainer: recharts 3's
- * polar charts draw zero sectors when they read the container's first (empty)
- * measurement, while cartesian charts recover. The breakdown legend sits beside
- * the ring (own list, not recharts' overlapping outer labels) so short category
+ * Donut chart, used for the OS breakdown. The pie renders at a fixed pixel
+ * size instead of through ResponsiveContainer: recharts 3's polar charts draw
+ * zero sectors when they read the container's first (empty) measurement,
+ * while cartesian charts recover. The breakdown legend sits beside the ring
+ * (own list, not recharts' overlapping outer labels) so short category
  * counts read cleanly and never clip.
  */
 function DonutChart({ title, emptyLabel, data }: DonutChartProps) {
@@ -214,7 +217,7 @@ function DonutChart({ title, emptyLabel, data }: DonutChartProps) {
               <Cell key={entry.label} fill={CHART_COLORS[i % CHART_COLORS.length]} />
             ))}
           </Pie>
-          <Tooltip formatter={(value, name) => [`${value}`, `${name}`]} />
+          <Tooltip {...TOOLTIP_STYLE} formatter={(value, name) => [`${value}`, `${name}`]} />
         </PieChart>
         <ul className="flex min-w-0 flex-1 flex-col gap-2 text-sm">
           {data.map((entry, i) => (
@@ -252,11 +255,13 @@ function relabelReferer(t: ReturnType<typeof useT>, label: string): string {
 }
 
 /**
- * Every chart on the stats screen: clicks per day, then top-N and distribution
- * breakdowns for country, device, OS, browser, referrer, (when present) city,
- * and (when the link has variants with recorded clicks) per A/B variant.
- * `per_city` is usually empty (most deploys don't send `cf-ipcity`), so its
- * card is omitted entirely rather than shown empty.
+ * The recharts half of the stats screen: clicks per day (hero, full width),
+ * then OS, referrer, (when present) city, and (when the link has variants
+ * with recorded clicks) per-variant breakdowns. Country, device and browser
+ * are NOT here — `StatsView` renders those as MeterBar rows (v2: the mock's
+ * two side-by-side distribution cards), not recharts. `per_city` is usually
+ * empty (most deploys don't send `cf-ipcity`), so its card is omitted
+ * entirely rather than shown empty.
  */
 export function StatsCharts({ aggregates }: StatsChartsProps) {
   const t = useT();
@@ -267,25 +272,10 @@ export function StatsCharts({ aggregates }: StatsChartsProps) {
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       <PerDayChart perDay={aggregates.per_day} />
-      <TopNBarChart
-        title={t("charts.perCountryTitle")}
-        emptyLabel={t("charts.perCountryEmpty")}
-        data={toBreakdownData(aggregates.per_country, t("charts.unknown"), TOP_N_COUNTRIES)}
-      />
-      <DonutChart
-        title={t("charts.perDeviceTitle")}
-        emptyLabel={t("charts.perDeviceEmpty")}
-        data={toBreakdownData(aggregates.per_device, t("charts.unknown"))}
-      />
       <DonutChart
         title={t("charts.perOsTitle")}
         emptyLabel={t("charts.perOsEmpty")}
         data={toBreakdownData(aggregates.per_os, t("charts.unknown"))}
-      />
-      <DonutChart
-        title={t("charts.perBrowserTitle")}
-        emptyLabel={t("charts.perBrowserEmpty")}
-        data={toBreakdownData(aggregates.per_browser, t("charts.unknown"))}
       />
       <TopNBarChart
         title={t("charts.perRefererTitle")}

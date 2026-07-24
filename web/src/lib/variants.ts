@@ -38,7 +38,7 @@ export function normalizeToPercent(weights: number[]): number[] {
   let leftover = 100 - floors.reduce((s, f) => s + f, 0);
   const order = raw
     .map((r, i) => ({ i, frac: r - Math.floor(r) }))
-    .sort((a, b) => b.frac - a.frac);
+    .toSorted((a, b) => b.frac - a.frac);
   const result = [...floors];
   for (let k = 0; k < order.length && leftover > 0; k++, leftover--) {
     result[order[k].i] += 1;

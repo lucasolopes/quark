@@ -1,0 +1,1029 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: 'Hanken Grotesk', system-ui, sans-serif; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  a { color: #C6F94E; text-decoration: none; }
+  a:hover { color: #D8FF70; }
+  ::selection { background: rgba(198,249,78,.28); color: #F3F5FA; }
+  input, button, select, textarea { font-family: inherit; }
+  input::placeholder { color: #5b6072; }
+  @keyframes qrise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes qpulse { 0%,100% { opacity: 1; box-shadow: 0 0 14px rgba(198,249,78,.7); } 50% { opacity: .55; box-shadow: 0 0 4px rgba(198,249,78,.3); } }
+  @keyframes qspin { to { transform: rotate(360deg); } }
+  .qcard-hov { transition: transform .18s cubic-bezier(.23,1,.32,1), border-color .18s ease; }
+  .qcard-hov:hover { transform: translateY(-3px); border-color: rgba(198,249,78,.3) !important; }
+  .qbtn { transition: transform .12s cubic-bezier(.23,1,.32,1), background .15s ease, border-color .15s ease, color .15s ease; }
+  .qbtn:active { transform: scale(.98); }
+  .qlift { transition: color .15s ease, background .15s ease; }
+</style>
+</helmet>
+
+<sc-if value="{{ isLanding }}" hint-placeholder-val="{{ true }}">
+<div style="min-height: 100vh; background: #0A0B0F; color: #E8EAF2; font-size: 16px; line-height: 1.5;">
+
+  <!-- ============ NAV ============ -->
+  <nav style="position: sticky; top: 0; z-index: 50; display: flex; align-items: center; justify-content: space-between; padding: 15px 40px; background: rgba(10,11,15,.72); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid rgba(255,255,255,.06);">
+    <div style="display: flex; align-items: center; gap: 34px;">
+      <div style="display: flex; align-items: center; gap: 11px; cursor: pointer;" onClick="{{ goLanding }}">
+        <svg width="30" height="30" viewBox="0 0 48 48" fill="none" style="filter: drop-shadow(0 0 10px rgba(198,249,78,.35));"><g stroke="#C6F94E" stroke-width="4" stroke-linecap="round" fill="none"><path d="M14 14 L34 34"></path><path d="M34 14 L14 34"></path></g><circle cx="24" cy="24" r="7" fill="none" stroke="#C6F94E" stroke-width="4"></circle><g fill="#C6F94E"><circle cx="14" cy="14" r="2.6"></circle><circle cx="34" cy="14" r="2.6"></circle><circle cx="14" cy="34" r="2.6"></circle><circle cx="34" cy="34" r="2.6"></circle></g></svg>
+        <span style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 21px; letter-spacing: -.04em; color: #F3F5FA;">quark</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 26px; font-size: 14.5px; color: #A6ABBb; white-space: nowrap;">
+        <a href="#features" style="color: #A6ABBB;" class="qlift">{{ t.nav.features }}</a>
+        <a href="#pricing" style="color: #A6ABBB;" class="qlift">{{ t.nav.pricing }}</a>
+        <a href="#how" style="color: #A6ABBB;" class="qlift">{{ t.nav.how }}</a>
+        <a href="https://github.com/lucasolopes/quark" target="_blank" style="color: #A6ABBB;" class="qlift">Docs</a>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 14px;">
+      <button class="qbtn" onClick="{{ toggleLang }}" style="display: flex; align-items: center; gap: 6px; background: transparent; border: 1px solid rgba(255,255,255,.14); border-radius: 8px; padding: 7px 11px; color: #C4C8D4; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; letter-spacing: .04em; cursor: pointer; white-space: nowrap;">{{ t.nav.langLabel }}</button>
+      <button class="qbtn" onClick="{{ goLogin }}" style="background: transparent; border: none; color: #E8EAF2; font-size: 14.5px; font-weight: 500; cursor: pointer; padding: 8px 6px;">{{ t.nav.signin }}</button>
+      <button class="qbtn" onClick="{{ goApp }}" style="background: #C6F94E; border: none; border-radius: 9px; padding: 9px 17px; color: #0A0B0F; font-size: 14.5px; font-weight: 700; cursor: pointer;">{{ t.nav.cta }}</button>
+    </div>
+  </nav>
+
+  <!-- ============ HERO + GENERATOR ============ -->
+  <section style="position: relative; overflow: hidden; padding: 84px 40px 76px;">
+    <div style="position: absolute; inset: 0; pointer-events: none; background: radial-gradient(720px 480px at 74% 4%, rgba(198,249,78,.11), transparent 64%), radial-gradient(600px 520px at 4% 96%, rgba(74,222,222,.06), transparent 62%);"></div>
+    <div style="position: absolute; inset: 0; pointer-events: none; opacity: .5; -webkit-mask-image: radial-gradient(900px 600px at 50% 22%, #000, transparent 78%); mask-image: radial-gradient(900px 600px at 50% 22%, #000, transparent 78%); background-image: linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px); background-size: 46px 46px;"></div>
+    <div style="position: relative; max-width: 940px; margin: 0 auto; text-align: center; animation: qrise .6s cubic-bezier(.23,1,.32,1) both;">
+      <div style="display: inline-flex; align-items: center; gap: 9px; padding: 6px 13px; border: 1px solid rgba(255,255,255,.1); border-radius: 999px; background: rgba(255,255,255,.02); font-family: 'JetBrains Mono', monospace; font-size: 11.5px; letter-spacing: .12em; color: #C6F94E; margin-bottom: 26px; white-space: nowrap;">
+        <span style="width: 6px; height: 6px; border-radius: 50%; background: #C6F94E; animation: qpulse 2.4s ease-in-out infinite;"></span>{{ t.hero.eyebrow }}
+      </div>
+      <h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 58px; line-height: 1.04; letter-spacing: -.038em; color: #F5F7FC; margin: 0; text-wrap: balance;">{{ t.hero.title1 }}<span style="color: #C6F94E;">{{ t.hero.title2 }}</span>{{ t.hero.title3 }}</h1>
+      <p style="max-width: 620px; margin: 22px auto 0; font-size: 18.5px; line-height: 1.55; color: #A6ABBB; text-wrap: pretty;">{{ t.hero.sub }}</p>
+
+      <!-- GENERATOR -->
+      <div class="qcard-hov" style="max-width: 680px; margin: 40px auto 0; text-align: left; background: #131521; border: 1px solid rgba(255,255,255,.1); border-radius: 16px; padding: 20px; box-shadow: 0 24px 60px -30px rgba(0,0,0,.8);">
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+          <div style="flex: 1; min-width: 240px; display: flex; align-items: center; gap: 10px; background: #0F1119; border: 1px solid rgba(255,255,255,.12); border-radius: 11px; padding: 0 14px;">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#6B7180" stroke-width="1.9" stroke-linecap="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5"></path></svg>
+            <input value="{{ genInput }}" onInput="{{ onGenInput }}" placeholder="{{ t.hero.genPlaceholder }}" style="flex: 1; background: transparent; border: none; outline: none; color: #E8EAF2; font-size: 15px; padding: 13px 0;">
+          </div>
+          <button class="qbtn" onClick="{{ onShorten }}" style="background: #C6F94E; border: none; border-radius: 11px; padding: 0 22px; height: 48px; color: #0A0B0F; font-weight: 700; font-size: 15px; cursor: pointer; white-space: nowrap; display: flex; align-items: center; gap: 8px;">
+            <sc-if value="{{ genBusy }}" hint-placeholder-val="{{ false }}"><span style="width: 15px; height: 15px; border: 2px solid rgba(10,11,15,.35); border-top-color: #0A0B0F; border-radius: 50%; animation: qspin .6s linear infinite; display: inline-block;"></span></sc-if>
+            {{ t.hero.genBtn }}
+          </button>
+        </div>
+        <sc-if value="{{ genDone }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top: 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: rgba(198,249,78,.07); border: 1px solid rgba(198,249,78,.28); border-radius: 11px; padding: 13px 15px; animation: qrise .35s ease both;">
+            <div style="display: flex; align-items: center; gap: 12px; min-width: 0;">
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 16.5px; font-weight: 500; color: #C6F94E; white-space: nowrap;">{{ genShort }}</span>
+              <span style="font-size: 13px; color: #6B7180; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ genTarget }}</span>
+            </div>
+            <button class="qbtn" onClick="{{ onCopyGen }}" style="display: flex; align-items: center; gap: 7px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.14); border-radius: 8px; padding: 7px 13px; color: {{ genCopyColor }}; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;">{{ genCopyLabel }}</button>
+          </div>
+        </sc-if>
+        <div style="margin-top: 13px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #5b6072; line-height: 1.5;">{{ t.hero.genNote }}</div>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 14px 26px; margin-top: 32px;">
+        <sc-for list="{{ heroStats }}" as="s" hint-placeholder-count="3">
+          <div style="display: flex; align-items: center; gap: 9px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C6F94E" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            <span style="font-size: 15px; font-weight: 600; color: #E8EAF2;">{{ s.value }}</span>
+            <span style="font-size: 14px; color: #8A90A2;">{{ s.label }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FEATURES ============ -->
+  <section id="features" style="padding: 78px 40px; border-top: 1px solid rgba(255,255,255,.06);">
+    <div style="max-width: 1120px; margin: 0 auto;">
+      <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: .18em; color: #C6F94E; margin-bottom: 14px;">{{ t.features.label }}</div>
+      <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 38px; letter-spacing: -.035em; color: #F3F5FA; margin: 0; text-wrap: balance;">{{ t.features.title }}</h2>
+      <p style="margin: 14px 0 0; font-size: 16px; color: #A6ABBB; max-width: 620px;">{{ t.features.sub }}</p>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 40px;">
+        <sc-for list="{{ features }}" as="f" hint-placeholder-count="6">
+          <div class="qcard-hov" style="background: #131521; border: 1px solid rgba(255,255,255,.09); border-radius: 14px; padding: 24px;">
+            <div style="width: 38px; height: 38px; border-radius: 10px; background: rgba(198,249,78,.1); border: 1px solid rgba(198,249,78,.24); display: flex; align-items: center; justify-content: center; margin-bottom: 16px;">
+              <span style="width: 7px; height: 7px; border-radius: 50%; background: #C6F94E; box-shadow: 0 0 10px rgba(198,249,78,.7);"></span>
+            </div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 17px; color: #F3F5FA;">{{ f.t }}</div>
+            <div style="font-size: 14.5px; color: #8A90A2; margin-top: 8px; line-height: 1.55;">{{ f.d }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ AUDIENCE ============ -->
+  <section style="padding: 78px 40px; border-top: 1px solid rgba(255,255,255,.06); background: #0C0D13;">
+    <div style="max-width: 1120px; margin: 0 auto;">
+      <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: .18em; color: #C6F94E; margin-bottom: 14px;">{{ t.audience.label }}</div>
+      <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 38px; letter-spacing: -.035em; color: #F3F5FA; margin: 0 0 36px; text-wrap: balance;">{{ t.audience.title }}</h2>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 18px;">
+        <div class="qcard-hov" style="background: #131521; border: 1px solid rgba(255,255,255,.09); border-radius: 16px; padding: 28px;">
+          <div style="display: flex; align-items: center; gap: 11px; margin-bottom: 20px;">
+            <div style="width: 38px; height: 38px; border-radius: 10px; background: rgba(198,249,78,.1); border: 1px solid rgba(198,249,78,.24); display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#C6F94E" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"></line><line x1="18" y1="20" x2="18" y2="4"></line><line x1="6" y1="20" x2="6" y2="15"></line></svg></div>
+            <div><div style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 18px; color: #F3F5FA;">{{ t.audience.growth.tag }}</div><div style="font-size: 13px; color: #8A90A2;">{{ t.audience.growth.desc }}</div></div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <sc-for list="{{ growthFeats }}" as="ft" hint-placeholder-count="6"><div style="position: relative; padding-left: 26px; font-size: 14.5px; color: #C4C8D4; line-height: 1.45;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C6F94E" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 0; top: 3px;"><polyline points="20 6 9 17 4 12"></polyline></svg>{{ ft }}</div></sc-for>
+          </div>
+        </div>
+        <div class="qcard-hov" style="background: #131521; border: 1px solid rgba(255,255,255,.09); border-radius: 16px; padding: 28px;">
+          <div style="display: flex; align-items: center; gap: 11px; margin-bottom: 20px;">
+            <div style="width: 38px; height: 38px; border-radius: 10px; background: rgba(74,222,222,.1); border: 1px solid rgba(74,222,222,.24); display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#4ADEDE" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg></div>
+            <div><div style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 18px; color: #F3F5FA;">{{ t.audience.dev.tag }}</div><div style="font-size: 13px; color: #8A90A2;">{{ t.audience.dev.desc }}</div></div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <sc-for list="{{ devFeats }}" as="ft" hint-placeholder-count="5"><div style="position: relative; padding-left: 26px; font-size: 14.5px; color: #C4C8D4; line-height: 1.45;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ADEDE" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 0; top: 3px;"><polyline points="20 6 9 17 4 12"></polyline></svg>{{ ft }}</div></sc-for>
+          </div>
+          <div style="margin-top: 18px; display: flex; align-items: center; gap: 10px; background: #0F1119; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; padding: 11px 14px; font-family: 'JetBrains Mono', monospace; font-size: 13px;"><span style="color: #4ADEDE;">$</span><span style="color: #E8EAF2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">docker run -p 8080:8080 quark</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ENGINE ============ -->
+  <section id="how" style="padding: 74px 40px; border-top: 1px solid rgba(255,255,255,.06);">
+    <div style="max-width: 1120px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center;">
+      <div>
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: .18em; color: #C6F94E; margin-bottom: 14px;">{{ t.engine.label }}</div>
+        <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 34px; letter-spacing: -.035em; color: #F3F5FA; margin: 0; text-wrap: balance;">{{ t.engine.title }}</h2>
+        <p style="margin: 16px 0 20px; font-size: 15.5px; line-height: 1.6; color: #A6ABBB; text-wrap: pretty;">{{ t.engine.lead }}</p>
+        <a href="https://github.com/lucasolopes/quark" target="_blank" style="font-size: 14px; font-weight: 600;">{{ t.engine.link }}</a>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+        <sc-for list="{{ engineStats }}" as="e" hint-placeholder-count="4"><div style="background: #131521; border: 1px solid rgba(255,255,255,.09); border-radius: 14px; padding: 22px;"><div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 30px; letter-spacing: -.03em; color: #F3F5FA; font-feature-settings: 'tnum';">{{ e.n }}</div><div style="font-size: 13px; color: #8A90A2; margin-top: 5px; line-height: 1.4;">{{ e.l }}</div></div></sc-for>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PRICING ============ -->
+  <section id="pricing" style="padding: 78px 40px; border-top: 1px solid rgba(255,255,255,.06);">
+    <div style="max-width: 1120px; margin: 0 auto;">
+      <div style="text-align: center;">
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: .18em; color: #C6F94E; margin-bottom: 14px;">{{ t.pricing.label }}</div>
+        <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 40px; letter-spacing: -.035em; color: #F3F5FA; margin: 0; text-wrap: balance;">{{ t.pricing.title }}</h2>
+        <p style="margin: 14px auto 0; font-size: 16px; color: #A6ABBB; max-width: 560px;">{{ t.pricing.sub }}</p>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 44px; align-items: start;">
+        <sc-for list="{{ plans }}" as="p" hint-placeholder-count="3">
+          <div style="position: relative; background: {{ p.cardBg }}; border: 1px solid {{ p.cardBorder }}; border-radius: 16px; padding: 28px; box-shadow: {{ p.cardShadow }};">
+            <sc-if value="{{ p.hot }}" hint-placeholder-val="{{ false }}">
+              <div style="position: absolute; top: -11px; left: 28px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: .12em; color: #0A0B0F; background: #C6F94E; padding: 4px 10px; border-radius: 999px; font-weight: 700;">POPULAR</div>
+            </sc-if>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 18px; color: #F3F5FA;">{{ p.name }}</div>
+            <div style="font-size: 14px; color: #8A90A2; margin-top: 4px;">{{ p.desc }}</div>
+            <div style="display: flex; align-items: baseline; gap: 7px; margin: 20px 0 4px;">
+              <span style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 38px; letter-spacing: -.03em; color: #F5F7FC;">{{ p.price }}</span>
+              <span style="font-size: 13.5px; color: #6B7180;">{{ p.unit }}</span>
+            </div>
+            <button class="qbtn" onClick="{{ goApp }}" style="width: 100%; margin: 20px 0 22px; border-radius: 10px; padding: 11px; font-size: 14.5px; font-weight: 700; cursor: pointer; background: {{ p.btnBg }}; color: {{ p.btnColor }}; border: 1px solid {{ p.btnBorder }};">{{ p.cta }}</button>
+            <div style="display: flex; flex-direction: column; gap: 11px;">
+              <sc-for list="{{ p.feats }}" as="ft" hint-placeholder-count="5">
+                <div style="position: relative; padding-left: 26px; font-size: 14px; color: #C4C8D4; line-height: 1.45;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C6F94E" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 0; top: 3px;"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                  {{ ft }}
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="text-align: center; margin-top: 24px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: #6B7180;">{{ t.pricing.free }}</div>
+    </div>
+  </section>
+
+  <!-- ============ CTA ============ -->
+  <section style="padding: 92px 40px; border-top: 1px solid rgba(255,255,255,.06); background: #0C0D13; text-align: center; position: relative; overflow: hidden;">
+    <div style="position: absolute; inset: 0; pointer-events: none; background: radial-gradient(600px 300px at 50% 0%, rgba(198,249,78,.09), transparent 68%);"></div>
+    <div style="position: relative; max-width: 660px; margin: 0 auto;">
+      <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 44px; letter-spacing: -.035em; color: #F5F7FC; margin: 0; text-wrap: balance;">{{ t.cta.title }}</h2>
+      <p style="margin: 16px 0 28px; font-size: 17px; color: #A6ABBB;">{{ t.cta.sub }}</p>
+      <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+        <button class="qbtn" onClick="{{ goApp }}" style="background: #C6F94E; border: none; border-radius: 10px; padding: 13px 26px; color: #0A0B0F; font-size: 15px; font-weight: 700; cursor: pointer;">{{ t.cta.btn }}</button>
+        <a href="https://github.com/lucasolopes/quark" target="_blank" class="qbtn" style="display: inline-flex; align-items: center; background: transparent; border: 1px solid rgba(255,255,255,.16); border-radius: 10px; padding: 13px 26px; color: #E8EAF2; font-size: 15px; font-weight: 600;">{{ t.cta.btn2 }}</a>
+      </div>
+      <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 34px; flex-wrap: wrap;">
+        <span style="font-size: 13.5px; color: #6B7180;">{{ t.cta.devNote }}</span>
+        <div style="display: inline-flex; align-items: center; gap: 10px; background: #0A0B0F; border: 1px solid rgba(255,255,255,.12); border-radius: 10px; padding: 8px 12px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
+          <span style="color: #C6F94E;">$</span><span style="color: #C4C8D4; white-space: nowrap;">docker run -p 8080:8080 quark</span>
+          <button class="qbtn" onClick="{{ onCopyCmd }}" style="margin-left: 4px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14); border-radius: 6px; padding: 4px 9px; color: {{ cmdCopyColor }}; font-size: 11.5px; font-weight: 600; cursor: pointer;">{{ cmdCopyLabel }}</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer style="padding: 30px 40px; border-top: 1px solid rgba(255,255,255,.06); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <svg width="22" height="22" viewBox="0 0 48 48" fill="none"><g stroke="#C6F94E" stroke-width="4" stroke-linecap="round" fill="none"><path d="M14 14 L34 34"></path><path d="M34 14 L14 34"></path></g><circle cx="24" cy="24" r="7" fill="none" stroke="#C6F94E" stroke-width="4"></circle></svg>
+      <span style="font-size: 13.5px; color: #8A90A2;">{{ t.footer.tag }}</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 18px; font-size: 13px; color: #6B7180;">
+      <span>🦀 {{ t.footer.made }}</span>
+      <span style="font-family: 'JetBrains Mono', monospace;">{{ t.footer.license }}</span>
+    </div>
+  </footer>
+
+</div>
+</sc-if>
+
+<!-- ============================= LOGIN ============================= -->
+<sc-if value="{{ isLogin }}" hint-placeholder-val="{{ false }}">
+<div style="min-height: 100vh; background: #0A0B0F; color: #E8EAF2; display: flex; flex-direction: column; position: relative; overflow: hidden;">
+  <div style="position: absolute; inset: 0; pointer-events: none; background: radial-gradient(680px 460px at 50% -6%, rgba(198,249,78,.1), transparent 62%);"></div>
+  <div style="position: absolute; inset: 0; pointer-events: none; opacity: .45; -webkit-mask-image: radial-gradient(700px 500px at 50% 24%, #000, transparent 76%); mask-image: radial-gradient(700px 500px at 50% 24%, #000, transparent 76%); background-image: linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px); background-size: 46px 46px;"></div>
+  <div style="position: relative; padding: 22px 40px;">
+    <button class="qbtn" onClick="{{ goLanding }}" style="display: inline-flex; align-items: center; gap: 8px; background: transparent; border: none; color: #8A90A2; font-size: 14px; cursor: pointer;">{{ t.login.back }}</button>
+  </div>
+  <div style="position: relative; flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px 40px 60px;">
+    <div style="width: 100%; max-width: 400px; animation: qrise .5s cubic-bezier(.23,1,.32,1) both;">
+      <div style="display: flex; flex-direction: column; align-items: center; text-align: center; margin-bottom: 30px;">
+        <svg width="42" height="42" viewBox="0 0 48 48" fill="none" style="filter: drop-shadow(0 0 14px rgba(198,249,78,.4)); margin-bottom: 18px;"><g stroke="#C6F94E" stroke-width="4" stroke-linecap="round" fill="none"><path d="M14 14 L34 34"></path><path d="M34 14 L14 34"></path></g><circle cx="24" cy="24" r="7" fill="none" stroke="#C6F94E" stroke-width="4"></circle><g fill="#C6F94E"><circle cx="14" cy="14" r="2.6"></circle><circle cx="34" cy="14" r="2.6"></circle><circle cx="14" cy="34" r="2.6"></circle><circle cx="34" cy="34" r="2.6"></circle></g></svg>
+        <h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 26px; letter-spacing: -.03em; color: #F5F7FC; margin: 0;">{{ t.login.title }}</h1>
+        <p style="margin: 8px 0 0; font-size: 14.5px; color: #8A90A2;">{{ t.login.sub }}</p>
+      </div>
+      <div style="background: #131521; border: 1px solid rgba(255,255,255,.1); border-radius: 16px; padding: 26px; box-shadow: 0 30px 70px -36px rgba(0,0,0,.9);">
+        <button class="qbtn" onClick="{{ goApp }}" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; background: #FFFFFF; border: none; border-radius: 10px; padding: 11px; font-size: 14.5px; font-weight: 600; color: #1a1a1a; cursor: pointer;">
+          <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"></path><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"></path><path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84z"></path><path fill="#EA4335" d="M12 4.75c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 1.44 14.97.5 12 .5A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.3 9.14 4.75 12 4.75z"></path></svg>
+          {{ t.login.google }}
+        </button>
+        <div style="display: flex; align-items: center; gap: 12px; margin: 20px 0;">
+          <div style="flex: 1; height: 1px; background: rgba(255,255,255,.09);"></div>
+          <span style="font-size: 12px; color: #6B7180;">{{ t.login.or }}</span>
+          <div style="flex: 1; height: 1px; background: rgba(255,255,255,.09);"></div>
+        </div>
+        <label style="display: block; font-size: 13px; color: #A6ABBB; margin-bottom: 7px;">{{ t.login.email }}</label>
+        <input placeholder="{{ t.login.emailPh }}" style="width: 100%; background: #0F1119; border: 1px solid rgba(255,255,255,.14); border-radius: 10px; padding: 11px 13px; color: #E8EAF2; font-size: 14.5px; outline: none; margin-bottom: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px;">
+          <label style="font-size: 13px; color: #A6ABBB;">{{ t.login.password }}</label>
+          <a href="#" style="font-size: 12.5px;">{{ t.login.forgot }}</a>
+        </div>
+        <input type="password" placeholder="{{ t.login.passwordPh }}" style="width: 100%; background: #0F1119; border: 1px solid rgba(255,255,255,.14); border-radius: 10px; padding: 11px 13px; color: #E8EAF2; font-size: 14.5px; outline: none; margin-bottom: 20px;">
+        <button class="qbtn" onClick="{{ goApp }}" style="width: 100%; background: #C6F94E; border: none; border-radius: 10px; padding: 12px; color: #0A0B0F; font-size: 15px; font-weight: 700; cursor: pointer;">{{ t.login.submit }}</button>
+        <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.07);">
+          <button class="qbtn" onClick="{{ goApp }}" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; background: transparent; border: 1px solid rgba(255,255,255,.14); border-radius: 10px; padding: 10px; color: #C4C8D4; font-family: 'JetBrains Mono', monospace; font-size: 13px; cursor: pointer;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A90A2" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            {{ t.login.token }}
+          </button>
+        </div>
+      </div>
+      <div style="text-align: center; margin-top: 20px; font-size: 14px; color: #8A90A2;">{{ t.login.noAccount }} <a href="#" onClick="{{ goApp }}" style="font-weight: 600;">{{ t.login.signup }}</a></div>
+      <div style="text-align: center; margin-top: 16px; font-size: 12px; color: #5b6072; line-height: 1.5;">{{ t.login.terms }}</div>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<!-- ============================= APP PANEL ============================= -->
+<sc-if value="{{ isApp }}" hint-placeholder-val="{{ false }}">
+<div style="min-height: 100vh; height: 100vh; display: flex; background: {{ pal.bg }}; color: {{ pal.text }}; font-size: 15px; overflow: hidden;">
+
+  <!-- SIDEBAR -->
+  <aside style="width: 250px; flex-shrink: 0; background: {{ pal.ink2 }}; border-right: 1px solid {{ pal.border }}; display: flex; flex-direction: column; padding: 16px 14px;">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 16px;">
+      <svg width="26" height="26" viewBox="0 0 48 48" fill="none" style="filter: drop-shadow(0 0 8px rgba(198,249,78,.3));"><g stroke="#C6F94E" stroke-width="4" stroke-linecap="round" fill="none"><path d="M14 14 L34 34"></path><path d="M34 14 L14 34"></path></g><circle cx="24" cy="24" r="7" fill="none" stroke="#C6F94E" stroke-width="4"></circle><g fill="#C6F94E"><circle cx="14" cy="14" r="2.6"></circle><circle cx="34" cy="14" r="2.6"></circle><circle cx="14" cy="34" r="2.6"></circle><circle cx="34" cy="34" r="2.6"></circle></g></svg>
+      <span style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 18px; letter-spacing: -.04em; color: {{ pal.strong }};">quark</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid {{ pal.border }}; border-radius: 10px; margin-bottom: 18px; cursor: pointer;" class="qlift">
+      <div style="width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg, #C6F94E, #4ADEDE); display: flex; align-items: center; justify-content: center; font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 12px; color: #0A0B0F; flex-shrink: 0;">A</div>
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Acme Inc</div>
+        <div style="font-size: 11px; color: {{ pal.muted }};">{{ P.plan }}</div>
+      </div>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </div>
+
+    <div style="font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .12em; color: {{ pal.muted }}; padding: 0 10px 8px;">{{ P.groupMain }}</div>
+    <div style="display: flex; flex-direction: column; gap: 3px;">
+      <button class="qbtn qlift" onClick="{{ navLinks }}" style="display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: {{ ns.links.bg }}; border: none; border-radius: 9px; padding: 9px 11px; color: {{ ns.links.c }}; font-size: 14.5px; font-weight: 500; cursor: pointer; white-space: nowrap;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ ns.links.c }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5"></path></svg>{{ P.nav.links }}
+      </button>
+      <button class="qbtn qlift" onClick="{{ navAnalytics }}" style="display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: {{ ns.analytics.bg }}; border: none; border-radius: 9px; padding: 9px 11px; color: {{ ns.analytics.c }}; font-size: 14.5px; font-weight: 500; cursor: pointer; white-space: nowrap;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ ns.analytics.c }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"></line><line x1="18" y1="20" x2="18" y2="4"></line><line x1="6" y1="20" x2="6" y2="15"></line></svg>{{ P.nav.analytics }}
+      </button>
+    </div>
+
+    <div style="font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .12em; color: {{ pal.muted }}; padding: 20px 10px 8px;">{{ P.groupSettings }}</div>
+    <div style="display: flex; flex-direction: column; gap: 3px;">
+      <button class="qbtn qlift" onClick="{{ navDomains }}" style="display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: {{ ns.domains.bg }}; border: none; border-radius: 9px; padding: 9px 11px; color: {{ ns.domains.c }}; font-size: 14.5px; font-weight: 500; cursor: pointer; white-space: nowrap;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ ns.domains.c }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18"></path></svg>{{ P.nav.domains }}
+      </button>
+      <button class="qbtn qlift" onClick="{{ navMembers }}" style="display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: {{ ns.members.bg }}; border: none; border-radius: 9px; padding: 9px 11px; color: {{ ns.members.c }}; font-size: 14.5px; font-weight: 500; cursor: pointer; white-space: nowrap;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ ns.members.c }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"></path><circle cx="10" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path></svg>{{ P.nav.members }}
+      </button>
+      <button class="qbtn qlift" onClick="{{ navTokens }}" style="display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: {{ ns.tokens.bg }}; border: none; border-radius: 9px; padding: 9px 11px; color: {{ ns.tokens.c }}; font-size: 14.5px; font-weight: 500; cursor: pointer; white-space: nowrap;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ ns.tokens.c }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="3.5"></circle><path d="M10 13l9-9"></path><path d="M16 6l3 3"></path></svg>{{ P.nav.tokens }}
+      </button>
+      <button class="qbtn qlift" onClick="{{ navWebhooks }}" style="display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; background: {{ ns.webhooks.bg }}; border: none; border-radius: 9px; padding: 9px 11px; color: {{ ns.webhooks.c }}; font-size: 14.5px; font-weight: 500; cursor: pointer; white-space: nowrap;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ ns.webhooks.c }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"></path></svg>{{ P.nav.webhooks }}
+      </button>
+    </div>
+
+    <div style="flex: 1;"></div>
+    <div style="background: {{ pal.wash }}; border: 1px solid rgba(198,249,78,.24); border-radius: 11px; padding: 13px; margin-bottom: 12px;">
+      <div style="font-size: 12.5px; font-weight: 600; color: {{ pal.strong }};">{{ P.plan }}</div>
+      <div style="font-size: 11.5px; color: {{ pal.muted }}; margin: 3px 0 9px;">{{ seatsUsed }} · {{ P.mem.seats }}</div>
+      <button class="qbtn" onClick="{{ goLanding }}" style="width: 100%; background: {{ pal.fill }}; border: none; border-radius: 8px; padding: 7px; color: #0A0B0F; font-size: 12.5px; font-weight: 700; cursor: pointer;">{{ P.upgrade }}</button>
+    </div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-top: 1px solid {{ pal.border }}; padding-top: 12px;">
+      <div style="width: 30px; height: 30px; border-radius: 50%; background: #C6F94E; display: flex; align-items: center; justify-content: center; font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 12px; color: #0A0B0F;">LO</div>
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-size: 13px; font-weight: 600; color: {{ pal.strong }};">Lucas Olopes</div>
+        <div style="font-size: 11px; color: {{ pal.muted }};">lucas@acme.com</div>
+      </div>
+      <button class="qbtn" onClick="{{ goLanding }}" style="background: transparent; border: none; cursor: pointer; padding: 4px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></button>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div style="flex: 1; display: flex; flex-direction: column; min-width: 0;">
+    <!-- TOPBAR -->
+    <header style="height: 62px; flex-shrink: 0; border-bottom: 1px solid {{ pal.border }}; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 26px; background: {{ pal.bg }};">
+      <div style="flex: 1; max-width: 440px; display: flex; align-items: center; gap: 10px; background: {{ pal.card2 }}; border: 1px solid {{ pal.border }}; border-radius: 10px; padding: 0 13px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input placeholder="{{ P.search }}" style="flex: 1; background: transparent; border: none; outline: none; color: {{ pal.text }}; font-size: 14px; padding: 9px 0;">
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <button class="qbtn" onClick="{{ toggleLang }}" style="background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; padding: 7px 10px; color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 11px; cursor: pointer; white-space: nowrap;">{{ t.nav.langLabel }}</button>
+        <button class="qbtn" onClick="{{ toggleTheme }}" style="background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; color: {{ pal.muted }}; cursor: pointer;">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"></path></svg>
+        </button>
+        <button class="qbtn" onClick="{{ openCreate }}" style="display: flex; align-items: center; gap: 7px; background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 9px 15px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0A0B0F" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>{{ P.newLink }}
+        </button>
+      </div>
+    </header>
+
+    <!-- CONTENT -->
+    <main style="flex: 1; overflow: auto; padding: 26px 30px 60px;">
+
+      <!-- ===== LINKS TAB ===== -->
+      <sc-if value="{{ isTabLinks }}" hint-placeholder-val="{{ true }}">
+      <div style="max-width: 1000px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div>
+            <h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.links.title }}</h1>
+            <div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ linkCount }} links · {{ totalClicksF }} {{ P.links.clicks }}</div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 18px; flex-wrap: wrap;">
+          <sc-for list="{{ folderChips }}" as="fc" hint-placeholder-count="3">
+            <button class="qbtn" style="display: flex; align-items: center; gap: 7px; background: {{ fc.chipBg }}; border: 1px solid {{ fc.chipBorder }}; border-radius: 999px; padding: 6px 13px; color: {{ fc.chipColor }}; font-size: 13px; font-weight: 500; cursor: pointer;">{{ fc.name }}<span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; opacity: .7;">{{ fc.count }}</span></button>
+          </sc-for>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{ linksView }}" as="l" hint-placeholder-count="6">
+            <div class="qcard-hov" style="display: flex; align-items: center; gap: 15px; background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 14px 16px; box-shadow: {{ pal.shadow }};">
+              <div style="width: 40px; height: 40px; flex-shrink: 0; border-radius: 9px; background: {{ pal.wash }}; border: 1px solid rgba(198,249,78,.2); display: flex; align-items: center; justify-content: center;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ pal.brand }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5"></path></svg>
+              </div>
+              <div style="flex: 1; min-width: 0;">
+                <div style="display: flex; align-items: center; gap: 9px;">
+                  <span style="font-family: 'JetBrains Mono', monospace; font-size: 14.5px; font-weight: 500; color: {{ pal.brand }};">{{ l.short }}</span>
+                  <sc-if value="{{ l.alias }}" hint-placeholder-val="{{ false }}"><span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .06em; color: {{ pal.muted }}; border: 1px solid {{ pal.border }}; border-radius: 5px; padding: 1px 6px;">alias</span></sc-if>
+                </div>
+                <div style="font-size: 13px; color: {{ pal.muted }}; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 440px;">{{ l.dest }}</div>
+                <div style="display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap;">
+                  <sc-for list="{{ l.tagObjs }}" as="tg" hint-placeholder-count="2">
+                    <span style="font-size: 11px; font-weight: 600; color: {{ tg.color }}; background: {{ tg.bg }}; border-radius: 5px; padding: 2px 7px;">{{ tg.name }}</span>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="text-align: right; flex-shrink: 0;">
+                <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 18px; color: {{ pal.strong }}; font-feature-settings: 'tnum';">{{ l.clicksF }}</div>
+                <div style="font-size: 11px; color: {{ pal.muted }};">{{ P.links.clicks }}</div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
+                <button class="qbtn" onClick="{{ l.onCopy }}" title="{{ l.copyLabel }}" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; cursor: pointer;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{ l.copyColor }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+                <button class="qbtn" onClick="{{ l.onStats }}" title="{{ P.links.stats }}" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; cursor: pointer;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"></line><line x1="18" y1="20" x2="18" y2="4"></line><line x1="6" y1="20" x2="6" y2="15"></line></svg></button>
+                <button class="qbtn" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; cursor: pointer;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg></button>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== ANALYTICS TAB ===== -->
+      <sc-if value="{{ isTabAnalytics }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 1000px;">
+        <button class="qbtn qlift" onClick="{{ navLinks }}" style="background: transparent; border: none; color: {{ pal.muted }}; font-size: 13.5px; cursor: pointer; padding: 0; margin-bottom: 14px;">{{ P.an.back }}</button>
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px; flex-wrap: wrap; gap: 12px;">
+          <div>
+            <h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ statShort }}</h1>
+            <div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 520px;">{{ statDest }}</div>
+          </div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: {{ pal.muted }}; border: 1px solid {{ pal.border }}; border-radius: 8px; padding: 7px 12px;">{{ P.an.range }}</div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px;">
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 18px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 12.5px; color: {{ pal.muted }};">{{ P.an.total }}</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 30px; color: {{ pal.brand }}; margin-top: 6px; font-feature-settings: 'tnum';">{{ an.total }}</div>
+          </div>
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 18px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 12.5px; color: {{ pal.muted }};">{{ P.an.unique }}</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 30px; color: {{ pal.strong }}; margin-top: 6px; font-feature-settings: 'tnum';">{{ an.unique }}</div>
+          </div>
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 18px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 12.5px; color: {{ pal.muted }};">{{ P.an.topGeo }}</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px; color: {{ pal.strong }}; margin-top: 8px;">{{ an.topGeo }} <span style="font-size: 14px; color: {{ pal.muted }};">{{ an.topGeoPct }}</span></div>
+          </div>
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 18px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 12.5px; color: {{ pal.muted }};">{{ P.an.topDev }}</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px; color: {{ pal.strong }}; margin-top: 8px;">{{ an.topDev }} <span style="font-size: 14px; color: {{ pal.muted }};">{{ an.topDevPct }}</span></div>
+          </div>
+        </div>
+        <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: {{ pal.shadow }};">
+          <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; margin-bottom: 18px;">{{ P.an.perDay }}</div>
+          <div style="display: flex; align-items: flex-end; gap: 6px; height: 150px;">
+            <sc-for list="{{ anBars }}" as="b" hint-placeholder-count="14">
+              <div style="flex: 1; height: {{ b.h }}; background: linear-gradient(180deg, #C6F94E, rgba(198,249,78,.35)); border-radius: 4px 4px 0 0; min-height: 4px;"></div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 16px;">
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 20px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; margin-bottom: 16px;">{{ P.an.byCountry }}</div>
+            <sc-for list="{{ anCountry }}" as="x" hint-placeholder-count="5">
+              <div style="margin-bottom: 12px;"><div style="display: flex; justify-content: space-between; font-size: 13px; color: {{ pal.text }}; margin-bottom: 5px;"><span>{{ x.name }}</span><span style="color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 12px;">{{ x.pct }}%</span></div><div style="height: 7px; background: {{ pal.card2 }}; border-radius: 4px; overflow: hidden;"><div style="height: 100%; width: {{ x.w }}; background: {{ x.c }}; border-radius: 4px;"></div></div></div>
+            </sc-for>
+          </div>
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 20px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; margin-bottom: 16px;">{{ P.an.byDevice }}</div>
+            <sc-for list="{{ anDevice }}" as="x" hint-placeholder-count="3">
+              <div style="margin-bottom: 12px;"><div style="display: flex; justify-content: space-between; font-size: 13px; color: {{ pal.text }}; margin-bottom: 5px;"><span>{{ x.name }}</span><span style="color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 12px;">{{ x.pct }}%</span></div><div style="height: 7px; background: {{ pal.card2 }}; border-radius: 4px; overflow: hidden;"><div style="height: 100%; width: {{ x.w }}; background: {{ x.c }}; border-radius: 4px;"></div></div></div>
+            </sc-for>
+            <div style="height: 12px;"></div>
+            <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; margin-bottom: 16px;">{{ P.an.byBrowser }}</div>
+            <sc-for list="{{ anBrowser }}" as="x" hint-placeholder-count="4">
+              <div style="margin-bottom: 12px;"><div style="display: flex; justify-content: space-between; font-size: 13px; color: {{ pal.text }}; margin-bottom: 5px;"><span>{{ x.name }}</span><span style="color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 12px;">{{ x.pct }}%</span></div><div style="height: 7px; background: {{ pal.card2 }}; border-radius: 4px; overflow: hidden;"><div style="height: 100%; width: {{ x.w }}; background: {{ x.c }}; border-radius: 4px;"></div></div></div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 20px; box-shadow: {{ pal.shadow }};">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;"><div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }};">{{ P.an.recent }}</div><div style="font-size: 12px; color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace;">{{ an.bots }} {{ P.an.bots }}</div></div>
+          <div style="display: grid; grid-template-columns: 1fr 1.4fr 1.4fr 1fr; gap: 8px; padding: 0 4px 8px; border-bottom: 1px solid {{ pal.border }}; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: {{ pal.muted }};">
+            <div>{{ P.an.colWhen }}</div><div>{{ P.an.colGeo }}</div><div>{{ P.an.colDev }}</div><div>{{ P.an.colRef }}</div>
+          </div>
+          <sc-for list="{{ anRecent }}" as="r" hint-placeholder-count="5">
+            <div style="display: grid; grid-template-columns: 1fr 1.4fr 1.4fr 1fr; gap: 8px; padding: 11px 4px; border-bottom: 1px solid {{ pal.border }}; font-size: 13px; color: {{ pal.text }};"><div style="color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 12px;">{{ r.when }}</div><div>{{ r.geo }}</div><div style="color: {{ pal.muted }};">{{ r.dev }}</div><div>{{ r.ref }}</div></div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== DOMAINS TAB ===== -->
+      <sc-if value="{{ isTabDomains }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 860px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div><h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.dom.title }}</h1><div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ P.dom.sub }}</div></div>
+          <button class="qbtn" onClick="{{ openCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 9px 15px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;">{{ P.dom.add }}</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{ domainsView }}" as="dm" hint-placeholder-count="3">
+            <div class="qcard-hov" style="display: flex; align-items: center; gap: 14px; background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 16px 18px; box-shadow: {{ pal.shadow }};">
+              <div style="width: 38px; height: 38px; border-radius: 9px; background: {{ pal.card2 }}; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18"></path></svg></div>
+              <div style="flex: 1;">
+                <div style="display: flex; align-items: center; gap: 9px;"><span style="font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 500; color: {{ pal.strong }};">{{ dm.host }}</span><sc-if value="{{ dm.primary }}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; letter-spacing: .06em; color: {{ pal.brand }}; background: {{ pal.wash }}; border-radius: 5px; padding: 2px 7px;">{{ P.dom.primary }}</span></sc-if></div>
+                <div style="font-size: 12.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ dm.links }} {{ P.dom.links }}</div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: {{ dm.sc }};"></span><span style="font-size: 13px; color: {{ pal.text }};">{{ dm.slabel }}</span></div>
+              <sc-if value="{{ dm.primary }}" hint-placeholder-val="{{ false }}"></sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== MEMBERS TAB ===== -->
+      <sc-if value="{{ isTabMembers }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 860px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div><h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.mem.title }}</h1><div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ P.mem.sub }}</div></div>
+          <button class="qbtn" onClick="{{ openCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 9px 15px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;">{{ P.mem.invite }}</button>
+        </div>
+        <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; overflow: hidden; box-shadow: {{ pal.shadow }};">
+          <sc-for list="{{ membersView }}" as="m" hint-placeholder-count="4">
+            <div style="display: flex; align-items: center; gap: 14px; padding: 15px 18px; border-bottom: 1px solid {{ pal.border }};">
+              <div style="width: 36px; height: 36px; border-radius: 50%; background: {{ m.color }}; display: flex; align-items: center; justify-content: center; font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 13px; color: #0A0B0F; flex-shrink: 0;">{{ m.initials }}</div>
+              <div style="flex: 1; min-width: 0;"><div style="font-size: 14.5px; font-weight: 600; color: {{ pal.strong }};">{{ m.name }}</div><div style="font-size: 12.5px; color: {{ pal.muted }};">{{ m.subline }}</div></div>
+              <span style="font-size: 12.5px; color: {{ pal.muted }}; border: 1px solid {{ pal.border }}; border-radius: 999px; padding: 4px 12px;">{{ m.roleLabel }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== TOKENS TAB ===== -->
+      <sc-if value="{{ isTabTokens }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 860px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div><h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.tok.title }}</h1><div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ P.tok.sub }}</div></div>
+          <button class="qbtn" onClick="{{ openCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 9px 15px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;">{{ P.tok.create }}</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{ tokensView }}" as="tk" hint-placeholder-count="3">
+            <div class="qcard-hov" style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 16px 18px; box-shadow: {{ pal.shadow }};">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                <div style="min-width: 0;"><div style="font-size: 14.5px; font-weight: 600; color: {{ pal.strong }};">{{ tk.name }}</div><div style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ tk.prefix }}••••••••</div></div>
+                <button class="qbtn" style="background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; padding: 6px 12px; color: #FF6B6B; font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap;">{{ P.tok.revoke }}</button>
+              </div>
+              <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center;">
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: {{ pal.text }}; background: {{ pal.card2 }}; border-radius: 6px; padding: 3px 9px;">{{ tk.scopeStr }}</span>
+                <span style="font-size: 12px; color: {{ pal.muted }};">· {{ tk.rate }}</span>
+                <span style="font-size: 12px; color: {{ pal.muted }};">· {{ P.tok.lastUsed }}: {{ tk.lastUsedF }}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== WEBHOOKS TAB ===== -->
+      <sc-if value="{{ isTabWebhooks }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 860px;">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px;">
+          <div><h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ P.wh.title }}</h1><div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px;">{{ P.wh.sub }}</div></div>
+          <button class="qbtn" onClick="{{ openCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 9px 15px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap;">{{ P.wh.add }}</button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <sc-for list="{{ webhooksView }}" as="w" hint-placeholder-count="3">
+            <div class="qcard-hov" style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 16px 18px; box-shadow: {{ pal.shadow }};">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px; min-width: 0;"><span style="width: 8px; height: 8px; border-radius: 50%; background: {{ w.sc }}; flex-shrink: 0;"></span><span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: {{ pal.strong }}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ w.urlShort }}</span></div>
+                <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;"><span style="font-size: 11px; color: {{ pal.muted }}; border: 1px solid {{ pal.border }}; border-radius: 5px; padding: 2px 7px;">{{ w.kind }}</span><button class="qbtn" style="background: transparent; border: 1px solid {{ pal.border }}; border-radius: 8px; padding: 5px 11px; color: {{ pal.muted }}; font-size: 12px; font-weight: 600; cursor: pointer;">{{ P.wh.test }}</button></div>
+              </div>
+              <div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center;"><span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: {{ pal.text }}; background: {{ pal.card2 }}; border-radius: 6px; padding: 3px 9px;">{{ w.evStr }}</span><span style="font-size: 12px; color: {{ pal.muted }};">· {{ w.del }} {{ P.wh.delivered }}</span></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+    </main>
+  </div>
+
+  <!-- ===== CREATE DIALOG ===== -->
+  <sc-if value="{{ createOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeCreate }}" style="position: fixed; inset: 0; z-index: 100; background: rgba(6,7,10,.6); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 24px;">
+    <div onClick="{{ stop }}" style="width: 100%; max-width: 540px; max-height: 90vh; overflow-y: auto; overflow-x: hidden; background: {{ pal.card }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 16px; padding: 24px; box-shadow: 0 40px 90px -30px rgba(0,0,0,.7); animation: qrise .3s cubic-bezier(.23,1,.32,1) both;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+        <h2 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 20px; letter-spacing: -.02em; color: {{ pal.strong }}; margin: 0;">{{ P.create.title }}</h2>
+        <button class="qbtn" onClick="{{ closeCreate }}" style="background: transparent; border: none; cursor: pointer; color: {{ pal.muted }}; padding: 4px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+      </div>
+      <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.dest }}</label>
+      <input placeholder="{{ P.create.destPh }}" style="width: 100%; background: {{ pal.input }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 10px; padding: 11px 13px; color: {{ pal.text }}; font-size: 14.5px; outline: none; margin-bottom: 16px;">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+        <div>
+          <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.alias }}</label>
+          <div style="display: flex; align-items: center; background: {{ pal.input }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 10px; padding: 0 12px;"><span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: {{ pal.muted }};">q.rk/</span><input placeholder="{{ P.create.aliasPh }}" style="flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: {{ pal.text }}; font-size: 14px; padding: 11px 2px;"></div>
+        </div>
+        <div>
+          <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.folder }}</label>
+          <div style="display: flex; align-items: center; justify-content: space-between; background: {{ pal.input }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 10px; padding: 11px 13px; cursor: pointer;"><span style="font-size: 14px; color: {{ pal.text }};">Marketing</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ pal.muted }}" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"></polyline></svg></div>
+        </div>
+      </div>
+      <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.tags }}</label>
+      <div style="display: flex; align-items: center; gap: 7px; background: {{ pal.input }}; border: 1px solid {{ pal.borderStrong }}; border-radius: 10px; padding: 8px 12px; margin-bottom: 16px; flex-wrap: wrap;">
+        <span style="font-size: 11px; font-weight: 600; color: #C6F94E; background: rgba(198,249,78,.14); border-radius: 5px; padding: 3px 8px;">campanha ×</span>
+        <input placeholder="{{ P.create.tagsPh }}" style="flex: 1; min-width: 100px; background: transparent; border: none; outline: none; color: {{ pal.text }}; font-size: 14px; padding: 3px 0;">
+      </div>
+      <label style="display: block; font-size: 13px; color: {{ pal.muted }}; margin-bottom: 7px;">{{ P.create.ttl }}</label>
+      <div style="display: flex; gap: 7px; margin-bottom: 18px; flex-wrap: wrap;">
+        <sc-for list="{{ ttlChips }}" as="tc" hint-placeholder-count="5">
+          <button class="qbtn" style="background: {{ tc.bg }}; border: 1px solid {{ tc.border }}; border-radius: 8px; padding: 7px 13px; color: {{ tc.color }}; font-size: 13px; font-weight: 500; cursor: pointer;">{{ tc.label }}</button>
+        </sc-for>
+      </div>
+      <div style="border-top: 1px solid {{ pal.border }}; padding-top: 16px; margin-bottom: 16px;">
+        <div style="font-size: 13px; font-weight: 600; color: {{ pal.text }}; margin-bottom: 12px;">{{ P.create.utmToggle }}</div>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+          <input placeholder="{{ P.create.src }}" value="instagram" style="background: {{ pal.input }}; border: 1px solid {{ pal.border }}; border-radius: 9px; padding: 9px 11px; color: {{ pal.text }}; font-size: 13px; outline: none;">
+          <input placeholder="{{ P.create.med }}" value="social" style="background: {{ pal.input }}; border: 1px solid {{ pal.border }}; border-radius: 9px; padding: 9px 11px; color: {{ pal.text }}; font-size: 13px; outline: none;">
+          <input placeholder="{{ P.create.camp }}" value="verao26" style="background: {{ pal.input }}; border: 1px solid {{ pal.border }}; border-radius: 9px; padding: 9px 11px; color: {{ pal.text }}; font-size: 13px; outline: none;">
+        </div>
+      </div>
+      <div style="background: {{ pal.card2 }}; border: 1px dashed {{ pal.borderStrong }}; border-radius: 10px; padding: 13px 15px; margin-bottom: 20px;">
+        <div style="font-size: 11px; color: {{ pal.muted }}; margin-bottom: 5px;">{{ P.create.preview }}</div>
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 500; color: {{ pal.brand }};">q.rk/verao-promo</div>
+      </div>
+      <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <button class="qbtn" onClick="{{ closeCreate }}" style="background: transparent; border: 1px solid {{ pal.borderStrong }}; border-radius: 9px; padding: 10px 18px; color: {{ pal.text }}; font-size: 14px; font-weight: 600; cursor: pointer;">{{ P.create.cancel }}</button>
+        <button class="qbtn" onClick="{{ closeCreate }}" style="background: {{ pal.fill }}; border: none; border-radius: 9px; padding: 10px 20px; color: #0A0B0F; font-size: 14px; font-weight: 700; cursor: pointer;">{{ P.create.submit }}</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+</div>
+</sc-if></x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:&quot;100%&quot;},&quot;startView&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;landing&quot;,&quot;login&quot;,&quot;app&quot;],&quot;default&quot;:&quot;landing&quot;,&quot;tsType&quot;:&quot;'landing'|'login'|'app'&quot;,&quot;section&quot;:&quot;Preview&quot;},&quot;defaultLang&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;pt&quot;,&quot;en&quot;],&quot;default&quot;:&quot;pt&quot;,&quot;tsType&quot;:&quot;'pt'|'en'&quot;,&quot;section&quot;:&quot;Preview&quot;},&quot;panelTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark'|'light'&quot;,&quot;section&quot;:&quot;Preview&quot;}}">
+class Component extends DCLogic {
+  state = {
+    lang: this.props.defaultLang || 'pt', theme: this.props.panelTheme || 'dark', view: this.props.startView || 'landing', tab: 'links',
+    createOpen: false, copied: '', genInput: '', genCode: '', genBusy: false, genDone: false, genTargetShown: '', statLink: 'summer24'
+  };
+
+  strings() {
+    const pt = {
+      nav: { features: 'Recursos', pricing: 'Preços', how: 'Como funciona', langLabel: 'PT / EN', signin: 'Entrar', cta: 'Começar' },
+      hero: {
+        eyebrow: 'ENCURTADOR DE LINKS',
+        title1: 'Links curtos com a sua ', title2: 'marca', title3: ', e métricas de verdade.',
+        sub: 'Crie links curtos, use seu próprio domínio, gere QR codes e acompanhe cada clique em tempo real. Grátis para hospedar você mesmo, ou use a nuvem pronta com planos.',
+        genPlaceholder: 'Cole um link longo…',
+        genBtn: 'Encurtar',
+        genNote: 'Demo. O código é uma bijeção com chave (Feistel/ARX). Crie uma conta para salvar e medir cliques.',
+      },
+      heroStats: [
+        { value: 'Seu domínio', label: 'no lugar de q.rk' },
+        { value: 'Cada clique', label: 'medido em tempo real' },
+        { value: 'Open-source', label: 'ou nuvem pronta' },
+      ],
+      how: {
+        label: 'COMO FUNCIONA',
+        title: 'O código é a permutação do id.',
+        lead: 'Sem tabela de string para id, sem checagem de colisão. Uma bijeção com chave transforma o id inteiro em um código de 7 caracteres, e de volta, em pura aritmética.',
+        steps: [
+          { k: '01', t: 'Cole o link', d: 'Um POST e o quark aloca o próximo id interno.' },
+          { k: '02', t: 'Calcula, não guarda', d: 'O id vira código por uma permutação Feistel/ARX reversível.' },
+          { k: '03', t: 'Redireciona em ~2 ms', d: 'Decodifica o código, checa o cache, responde 302.' },
+        ],
+        termTitle: 'criar-link.sh',
+        termOut: 'code gerado por aritmética, sem lookup',
+      },
+      features: {
+        label: 'RECURSOS',
+        title: 'Tudo que o seu marketing precisa de um link.',
+        sub: 'De QR codes a analytics em tempo real. Fácil no dia a dia, poderoso quando você precisa.',
+        items: [
+          { t: 'Analytics de cliques', d: 'Cliques por dia, país, dispositivo, referer e navegador. Bots filtrados, sem cookies invasivos.' },
+          { t: 'QR codes, tags e pastas', d: 'QR para cada link, organização por tags e pastas, busca instantânea server-side.' },
+          { t: 'Regras geo & dispositivo', d: 'Mande iOS pra App Store, Android pro Google Play e o resto pro site.' },
+          { t: 'Testes A/B', d: 'Variantes com peso e estatística por variante, direto no link.' },
+          { t: 'Senha & expiração', d: 'Proteja com senha (argon2), expire por data ou por número de visitas.' },
+          { t: 'Webhooks & API tokens', d: 'Eventos assinados pra Zapier, Make e Slack; tokens com escopo por permissão.' },
+        ],
+      },
+      audience: {
+        label: 'PARA QUEM É',
+        title: 'Feito para os dois lados.',
+        growth: { tag: 'Times de growth', desc: 'Marketing, social e vendas.', feats: ['Domínio próprio com SSL', 'Modelos de UTM salvos', 'QR code em cada link', 'Testes A/B com estatística', 'Cliques por país e dispositivo', 'Sem cookies invasivos'] },
+        dev: { tag: 'Desenvolvedores', desc: 'Para hospedar e integrar.', feats: ['Open-source (AGPL-3.0)', 'Binário único de ~1 MB, sem dependências', 'API HTTP com tokens por escopo', 'Webhooks assinados', 'Suba com um comando'] },
+      },
+      engine: {
+        label: 'POR BAIXO DO CAPÔ',
+        title: 'Rápido porque é simples.',
+        lead: 'O código curto é calculado, não guardado num banco: uma função com chave gera o código e o resolve de volta. Na prática, isso vira redirecionamentos em poucos milissegundos, sem banco no caminho.',
+        link: 'Ver os benchmarks no GitHub',
+        stats: [
+          { n: '~2 ms', l: 'no redirecionamento' },
+          { n: '~1 MB', l: 'binário único' },
+          { n: '0', l: 'dependências' },
+          { n: '0', l: 'erros em 225k requisições' },
+        ],
+      },
+      bench: {
+        label: 'BENCHMARKS',
+        title: 'Rápido o bastante pra nunca ser o gargalo.',
+        cards: [
+          { n: '~22M/s', l: 'códigos por segundo', c: '#C6F94E' },
+          { n: '18×', l: 'mais rápido que Feistel+HMAC', c: '#4ADEDE' },
+          { n: '4', l: 'rounds: difusão medida, não chutada', c: '#8B7CF6' },
+          { n: '0', l: 'erros em ~225k requisições', c: '#C6F94E' },
+        ],
+        note: 'A não-enumerabilidade é uma propriedade estatística medida (avalanche/SAC), não garantia criptográfica. Números medidos com criterion e k6. Reproduza com cargo bench.',
+      },
+      pricing: {
+        label: 'PREÇOS',
+        title: 'Comece de graça. Escale quando quiser.',
+        sub: 'Self-hosted é livre e sem limites. A nuvem cuida da infra por você.',
+        per: '/ mês',
+        plans: [
+          { name: 'Self-hosted', price: 'Grátis', unit: 'para sempre', desc: 'Um binário. Você hospeda.', cta: 'Ver no GitHub', hot: false, feats: ['Código AGPL-3.0 aberto', 'Binário único, zero dependências', 'Links, analytics e QR ilimitados', 'Postgres / Valkey / ClickHouse opcionais', 'Suporte da comunidade'] },
+          { name: 'Cloud Pro', price: 'R$ 39', unit: '/ mês', desc: 'Pra criadores e times pequenos.', cta: 'Começar', hot: true, feats: ['Tudo do self-hosted, gerenciado', 'Domínio próprio + SSL', '5 membros na workspace', 'Analytics com retenção de 1 ano', 'Webhooks e API tokens'] },
+          { name: 'Cloud Business', price: 'R$ 149', unit: '/ mês', desc: 'Pra empresas e escala.', cta: 'Falar com vendas', hot: false, feats: ['Membros ilimitados + SSO/OIDC', 'Múltiplos domínios e workspaces', 'Retenção estendida + exportação', 'SLA e suporte prioritário', 'Isolamento por tenant'] },
+        ],
+        free: 'Também há um Cloud Free pra testar sem cartão.',
+      },
+      cta: {
+        title: 'Comece de graça hoje.',
+        sub: 'Crie sua conta na nuvem em segundos. Sem cartão.',
+        btn: 'Criar conta grátis',
+        btn2: 'Ver no GitHub',
+        devNote: 'Prefere hospedar você mesmo?',
+      },
+      footer: { tag: 'O código é matemática, não uma linha no banco.', made: 'Feito com Rust', links: ['Recursos', 'Preços', 'Docs', 'GitHub'], license: 'AGPL-3.0 · © 2026 Lucas Olopes' },
+      login: { eyebrow: 'PAINEL', title: 'Entre na sua workspace', sub: 'Acesse seus links, analytics e configurações.', email: 'E-mail', emailPh: 'voce@empresa.com', password: 'Senha', passwordPh: '••••••••', forgot: 'Esqueceu?', submit: 'Continuar', or: 'ou', google: 'Entrar com Google', token: 'Usar token de admin (self-hosted)', tokenPh: 'QUARK_ADMIN_TOKEN', back: '← Voltar ao site', noAccount: 'Não tem conta?', signup: 'Criar grátis', terms: 'Ao continuar, você concorda com os Termos e a Privacidade.' },
+      panel: {
+        nav: { links: 'Links', analytics: 'Analytics', domains: 'Domínios', members: 'Membros', tokens: 'API Tokens', webhooks: 'Webhooks' },
+        groupMain: 'Workspace', groupSettings: 'Configurações',
+        search: 'Buscar links…', newLink: 'Novo link', plan: 'Cloud Pro', upgrade: 'Fazer upgrade',
+        links: { title: 'Links', allFolders: 'Todos', clicks: 'cliques', copy: 'Copiar', copied: 'Copiado', created: 'criado', qr: 'QR code', stats: 'Analytics', edit: 'Editar', del: 'Excluir', tagFilter: 'Tags' },
+        create: { title: 'Criar link curto', dest: 'URL de destino', destPh: 'https://exemplo.com/pagina', alias: 'Alias personalizado', aliasPh: 'promo-verao', folder: 'Pasta', noFolder: 'Sem pasta', tags: 'Tags', tagsPh: 'adicionar tag e Enter', ttl: 'Expira em', utmToggle: 'Parâmetros UTM', src: 'utm_source', med: 'utm_medium', camp: 'utm_campaign', preview: 'Seu link ficará assim', cancel: 'Cancelar', submit: 'Criar link' },
+        an: { title: 'Analytics do link', back: '← Voltar aos links', range: 'Últimos 30 dias', total: 'Cliques totais', unique: 'Únicos', topGeo: 'Top país', topDev: 'Top dispositivo', perDay: 'Cliques por dia', byCountry: 'Por país', byDevice: 'Por dispositivo', byBrowser: 'Por navegador', byRef: 'Por origem', recent: 'Cliques recentes', colWhen: 'Quando', colGeo: 'Local', colDev: 'Dispositivo', colRef: 'Origem', bots: 'bots filtrados' },
+        dom: { title: 'Domínios', sub: 'Use seu próprio domínio nos links curtos.', add: 'Adicionar domínio', active: 'Ativo', pending: 'DNS pendente', verify: 'Verificar', links: 'links', primary: 'Primário' },
+        mem: { title: 'Membros', sub: 'Quem tem acesso a esta workspace.', invite: 'Convidar membro', owner: 'Dono', admin: 'Admin', member: 'Membro', pending: 'Convite pendente', seats: 'assentos usados' },
+        tok: { title: 'API Tokens', sub: 'Tokens com escopo por permissão para a API HTTP.', create: 'Criar token', scopes: 'Escopos', rate: 'Limite', lastUsed: 'Último uso', revoke: 'Revogar', never: 'nunca' },
+        wh: { title: 'Webhooks', sub: 'Eventos assinados enviados para seus endpoints.', add: 'Adicionar webhook', active: 'Ativo', paused: 'Pausado', test: 'Testar', events: 'eventos', delivered: 'entregue' },
+      },
+    };
+    const en = {
+      nav: { features: 'Features', pricing: 'Pricing', how: 'How it works', langLabel: 'EN / PT', signin: 'Sign in', cta: 'Get started' },
+      hero: {
+        eyebrow: 'URL SHORTENER',
+        title1: 'Short links with your ', title2: 'brand', title3: ', and analytics you can trust.',
+        sub: 'Create short links, use your own domain, generate QR codes and track every click in real time. Free to self-host, or use the hosted cloud with plans.',
+        genPlaceholder: 'Paste a long link…',
+        genBtn: 'Shorten',
+        genNote: 'Demo. The code is a keyed bijection (Feistel/ARX). Create an account to save links and measure clicks.',
+      },
+      heroStats: [
+        { value: 'Your domain', label: 'instead of q.rk' },
+        { value: 'Every click', label: 'measured in real time' },
+        { value: 'Open-source', label: 'or hosted cloud' },
+      ],
+      how: {
+        label: 'HOW IT WORKS',
+        title: 'The code is the permutation of the id.',
+        lead: 'No string-to-id table, no collision checks. A keyed bijection turns the integer id into a 7-character code, and back, in pure arithmetic.',
+        steps: [
+          { k: '01', t: 'Paste the link', d: 'One POST and quark allocates the next internal id.' },
+          { k: '02', t: 'Compute, don\u2019t store', d: 'The id becomes a code via a reversible Feistel/ARX permutation.' },
+          { k: '03', t: 'Redirect in ~2 ms', d: 'Decode the code, check the cache, answer 302.' },
+        ],
+        termTitle: 'create-link.sh',
+        termOut: 'code produced by arithmetic, no lookup',
+      },
+      features: {
+        label: 'FEATURES',
+        title: 'Everything your marketing needs from a link.',
+        sub: 'From QR codes to real-time analytics. Easy day to day, powerful when you need it.',
+        items: [
+          { t: 'Click analytics', d: 'Clicks by day, country, device, referer and browser. Bots filtered, no invasive cookies.' },
+          { t: 'QR codes, tags & folders', d: 'A QR per link, organize with tags and folders, instant server-side search.' },
+          { t: 'Geo & device rules', d: 'Send iOS to the App Store, Android to Google Play, everyone else to the site.' },
+          { t: 'A/B testing', d: 'Weighted variants with per-variant stats, right on the link.' },
+          { t: 'Password & expiry', d: 'Protect with a password (argon2), expire by date or by number of visits.' },
+          { t: 'Webhooks & API tokens', d: 'Signed events to Zapier, Make and Slack; tokens scoped per permission.' },
+        ],
+      },
+      audience: {
+        label: 'WHO IT IS FOR',
+        title: 'Built for both sides.',
+        growth: { tag: 'Growth teams', desc: 'Marketing, social and sales.', feats: ['Custom domain with SSL', 'Saved UTM templates', 'A QR code on every link', 'A/B tests with stats', 'Clicks by country and device', 'No invasive cookies'] },
+        dev: { tag: 'Developers', desc: 'To self-host and integrate.', feats: ['Open-source (AGPL-3.0)', 'Single ~1 MB binary, no dependencies', 'HTTP API with scoped tokens', 'Signed webhooks', 'Ship it in one command'] },
+      },
+      engine: {
+        label: 'UNDER THE HOOD',
+        title: 'Fast because it is simple.',
+        lead: 'The short code is computed, not stored in a database: a keyed function generates the code and resolves it back. In practice that means redirects in a few milliseconds, with no database in the path.',
+        link: 'See the benchmarks on GitHub',
+        stats: [
+          { n: '~2 ms', l: 'per redirect' },
+          { n: '~1 MB', l: 'single binary' },
+          { n: '0', l: 'dependencies' },
+          { n: '0', l: 'errors across 225k requests' },
+        ],
+      },
+      bench: {
+        label: 'BENCHMARKS',
+        title: 'Fast enough to never be the bottleneck.',
+        cards: [
+          { n: '~22M/s', l: 'codes per second', c: '#C6F94E' },
+          { n: '18\u00d7', l: 'faster than Feistel+HMAC', c: '#4ADEDE' },
+          { n: '4', l: 'rounds: diffusion measured, not guessed', c: '#8B7CF6' },
+          { n: '0', l: 'errors across ~225k requests', c: '#C6F94E' },
+        ],
+        note: 'Non-enumerability is a measured statistical property (avalanche/SAC), not a cryptographic guarantee. Numbers measured with criterion and k6. Reproduce with cargo bench.',
+      },
+      pricing: {
+        label: 'PRICING',
+        title: 'Start free. Scale when you want.',
+        sub: 'Self-hosted is free and unlimited. The cloud handles the infra for you.',
+        per: '/ mo',
+        plans: [
+          { name: 'Self-hosted', price: 'Free', unit: 'forever', desc: 'One binary. You host it.', cta: 'View on GitHub', hot: false, feats: ['Open AGPL-3.0 source', 'Single binary, zero dependencies', 'Unlimited links, analytics and QR', 'Optional Postgres / Valkey / ClickHouse', 'Community support'] },
+          { name: 'Cloud Pro', price: '$9', unit: '/ mo', desc: 'For creators and small teams.', cta: 'Get started', hot: true, feats: ['Everything self-hosted, managed', 'Custom domain + SSL', '5 workspace members', 'Analytics with 1-year retention', 'Webhooks and API tokens'] },
+          { name: 'Cloud Business', price: '$29', unit: '/ mo', desc: 'For companies and scale.', cta: 'Talk to sales', hot: false, feats: ['Unlimited members + SSO/OIDC', 'Multiple domains and workspaces', 'Extended retention + export', 'SLA and priority support', 'Per-tenant isolation'] },
+        ],
+        free: 'There is also a Cloud Free to try without a card.',
+      },
+      cta: {
+        title: 'Start free today.',
+        sub: 'Create your cloud account in seconds. No card.',
+        btn: 'Create free account',
+        btn2: 'View on GitHub',
+        devNote: 'Prefer to self-host?',
+      },
+      footer: { tag: 'The code is math, not a row in a database.', made: 'Made with Rust', links: ['Features', 'Pricing', 'Docs', 'GitHub'], license: 'AGPL-3.0 · © 2026 Lucas Olopes' },
+      login: { eyebrow: 'PANEL', title: 'Sign in to your workspace', sub: 'Access your links, analytics and settings.', email: 'Email', emailPh: 'you@company.com', password: 'Password', passwordPh: '••••••••', forgot: 'Forgot?', submit: 'Continue', or: 'or', google: 'Sign in with Google', token: 'Use admin token (self-hosted)', tokenPh: 'QUARK_ADMIN_TOKEN', back: '← Back to site', noAccount: 'No account?', signup: 'Create free', terms: 'By continuing you agree to the Terms and Privacy.' },
+      panel: {
+        nav: { links: 'Links', analytics: 'Analytics', domains: 'Domains', members: 'Members', tokens: 'API Tokens', webhooks: 'Webhooks' },
+        groupMain: 'Workspace', groupSettings: 'Settings',
+        search: 'Search links…', newLink: 'New link', plan: 'Cloud Pro', upgrade: 'Upgrade',
+        links: { title: 'Links', allFolders: 'All', clicks: 'clicks', copy: 'Copy', copied: 'Copied', created: 'created', qr: 'QR code', stats: 'Analytics', edit: 'Edit', del: 'Delete', tagFilter: 'Tags' },
+        create: { title: 'Create short link', dest: 'Destination URL', destPh: 'https://example.com/page', alias: 'Custom alias', aliasPh: 'summer-promo', folder: 'Folder', noFolder: 'No folder', tags: 'Tags', tagsPh: 'add tag and Enter', ttl: 'Expires in', utmToggle: 'UTM parameters', src: 'utm_source', med: 'utm_medium', camp: 'utm_campaign', preview: 'Your link will look like', cancel: 'Cancel', submit: 'Create link' },
+        an: { title: 'Link analytics', back: '← Back to links', range: 'Last 30 days', total: 'Total clicks', unique: 'Unique', topGeo: 'Top country', topDev: 'Top device', perDay: 'Clicks per day', byCountry: 'By country', byDevice: 'By device', byBrowser: 'By browser', byRef: 'By referrer', recent: 'Recent clicks', colWhen: 'When', colGeo: 'Location', colDev: 'Device', colRef: 'Referrer', bots: 'bots filtered' },
+        dom: { title: 'Domains', sub: 'Use your own domain on short links.', add: 'Add domain', active: 'Active', pending: 'DNS pending', verify: 'Verify', links: 'links', primary: 'Primary' },
+        mem: { title: 'Members', sub: 'Who has access to this workspace.', invite: 'Invite member', owner: 'Owner', admin: 'Admin', member: 'Member', pending: 'Pending invite', seats: 'seats used' },
+        tok: { title: 'API Tokens', sub: 'Permission-scoped tokens for the HTTP API.', create: 'Create token', scopes: 'Scopes', rate: 'Rate', lastUsed: 'Last used', revoke: 'Revoke', never: 'never' },
+        wh: { title: 'Webhooks', sub: 'Signed events delivered to your endpoints.', add: 'Add webhook', active: 'Active', paused: 'Paused', test: 'Test', events: 'events', delivered: 'delivered' },
+      },
+    };
+    return this.state.lang === 'pt' ? pt : en;
+  }
+
+  genCodeStr() {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let s = '';
+    for (let i = 0; i < 7; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    return s;
+  }
+
+  shorten() {
+    const raw = (this.state.genInput || '').trim() || 'https://example.com/uma/url/muito/comprida';
+    const target = /^https?:\/\//.test(raw) ? raw : 'https://' + raw;
+    this.setState({ genBusy: true, genDone: false });
+    setTimeout(() => {
+      this.setState({ genBusy: false, genDone: true, genCode: this.genCodeStr(), genTargetShown: target, copied: '' });
+    }, 520);
+  }
+
+  copy(text, id) {
+    try { navigator.clipboard && navigator.clipboard.writeText(text); } catch (e) {}
+    this.setState({ copied: id });
+    setTimeout(() => { if (this.state.copied === id) this.setState({ copied: '' }); }, 1600);
+  }
+
+  palette() {
+    if (this.state.theme === 'light') {
+      return { bg: '#EEF0F4', ink2: '#E7EAF0', card: '#FFFFFF', card2: '#F4F5F8', text: '#12141C', strong: '#12141C', muted: '#5E6472', border: 'rgba(0,0,0,0.10)', borderStrong: 'rgba(0,0,0,0.16)', hover: 'rgba(0,0,0,0.04)', input: '#FFFFFF', brand: '#4A7A17', fill: '#8FD12E', wash: 'rgba(143,209,46,.14)', shadow: '0 1px 2px rgba(0,0,0,.08)' };
+    }
+    return { bg: '#0A0B0F', ink2: '#0C0D13', card: '#131521', card2: '#1A1D2B', text: '#E8EAF2', strong: '#F3F5FA', muted: '#8A90A2', border: 'rgba(255,255,255,0.09)', borderStrong: 'rgba(255,255,255,0.16)', hover: 'rgba(255,255,255,0.04)', input: '#0F1119', brand: '#C6F94E', fill: '#C6F94E', wash: 'rgba(198,249,78,.12)', shadow: '0 1px 2px rgba(0,0,0,.4)' };
+  }
+
+  fmt(n) { return n.toLocaleString(this.state.lang === 'pt' ? 'pt-BR' : 'en-US'); }
+
+  data() {
+    const links = [
+      { code: 'aZ3k9Qp', alias: false, dest: 'https://acme.com/black-friday-2026/ofertas-especiais', clicks: 48213, tags: ['campanha', 'vendas'], folder: 'Marketing', created: '2d', ttl: '—' },
+      { code: 'summer24', alias: true, dest: 'https://acme.com/verao/landing-page', clicks: 29845, tags: ['campanha'], folder: 'Marketing', created: '5d', ttl: '30d' },
+      { code: 'Kp72mNx', alias: false, dest: 'https://blog.acme.com/encurtar-urls-com-rust', clicks: 12094, tags: ['blog'], folder: 'Conteúdo', created: '1sem', ttl: '—' },
+      { code: 'docs-api', alias: true, dest: 'https://docs.acme.com/api/reference', clicks: 8340, tags: ['docs'], folder: 'Conteúdo', created: '2sem', ttl: '—' },
+      { code: '9wQ2bLz', alias: false, dest: 'https://acme.com/webinar/inscricao', clicks: 5127, tags: ['evento', 'campanha'], folder: 'Marketing', created: '3sem', ttl: '7d' },
+      { code: 'app-ios', alias: true, dest: 'https://apps.apple.com/br/app/acme', clicks: 3908, tags: ['app'], folder: '—', created: '1mês', ttl: '—' },
+      { code: 'Xy4Rt8v', alias: false, dest: 'https://acme.com/newsletter/assinar', clicks: 1622, tags: ['email'], folder: '—', created: '1mês', ttl: '—' },
+    ];
+    const tagColors = { campanha: '#C6F94E', vendas: '#4ADEDE', blog: '#8B7CF6', docs: '#4ADEDE', evento: '#FEBC2E', app: '#8B7CF6', email: '#4ADEDE' };
+    const domains = [
+      { host: 'acme.link', status: 'active', links: 38, primary: true },
+      { host: 'go.acme.com', status: 'active', links: 12, primary: false },
+      { host: 'try.acme.io', status: 'pending', links: 0, primary: false },
+    ];
+    const members = [
+      { name: 'Lucas Olopes', email: 'lucas@acme.com', role: 'owner', initials: 'LO', color: '#C6F94E' },
+      { name: 'Marina Reis', email: 'marina@acme.com', role: 'admin', initials: 'MR', color: '#4ADEDE' },
+      { name: 'Diego Santos', email: 'diego@acme.com', role: 'member', initials: 'DS', color: '#8B7CF6' },
+      { name: 'ana@partner.com', email: '', role: 'pending', initials: 'A', color: '#8A90A2' },
+    ];
+    const tokens = [
+      { name: 'CI de produção', prefix: 'qtok_live_a1e4', scopes: ['links_write', 'analytics'], rate: '600/min', lastUsed: '2h' },
+      { name: 'Zapier', prefix: 'qtok_live_9f0c', scopes: ['links_write'], rate: '120/min', lastUsed: '1d' },
+      { name: 'Dashboard read-only', prefix: 'qtok_live_c7b2', scopes: ['links_read', 'analytics'], rate: '300/min', lastUsed: 'never' },
+    ];
+    const webhooks = [
+      { url: 'https://hooks.zapier.com/hooks/catch/000000/EXEMPLO', kind: 'Zapier', evs: ['link.created', 'link.clicked'], status: 'active', del: '99.8%' },
+      { url: 'https://acme.com/api/quark-events', kind: 'generic', evs: ['link.created', 'link.updated', 'link.deleted'], status: 'active', del: '100%' },
+      { url: 'https://hooks.slack.com/services/T000/B000/EXEMPLO', kind: 'Slack', evs: ['link.threshold_reached'], status: 'paused', del: '—' },
+    ];
+    const perDay = [820, 910, 1180, 1040, 1330, 1610, 1490, 1720, 2010, 1880, 2240, 2680, 2510, 2960];
+    return { links, tagColors, domains, members, tokens, webhooks, perDay };
+  }
+
+  renderVals() {
+    const t = this.strings();
+    const v = this.state.view;
+    const genShort = 'q.rk/' + (this.state.genCode || 'aZ3k9Qp');
+    const target = this.state.genTargetShown;
+    const cp = this.state.lang === 'pt' ? { copy: 'Copiar', copied: 'Copiado!' } : { copy: 'Copy', copied: 'Copied!' };
+    return {
+      lang: this.state.lang,
+      isLanding: v === 'landing', isLogin: v === 'login', isApp: v === 'app',
+      t,
+      heroStats: t.heroStats,
+      howSteps: t.how.steps,
+      features: t.features.items,
+      growthFeats: t.audience.growth.feats,
+      devFeats: t.audience.dev.feats,
+      engineStats: t.engine.stats,
+      benchCards: t.bench.cards,
+      plans: t.pricing.plans.map(p => ({
+        ...p,
+        cardBg: p.hot ? '#141726' : '#131521',
+        cardBorder: p.hot ? 'rgba(198,249,78,.45)' : 'rgba(255,255,255,.09)',
+        cardShadow: p.hot ? '0 24px 60px -34px rgba(198,249,78,.35)' : 'none',
+        btnBg: p.hot ? '#C6F94E' : 'transparent',
+        btnColor: p.hot ? '#0A0B0F' : '#E8EAF2',
+        btnBorder: p.hot ? '#C6F94E' : 'rgba(255,255,255,.18)',
+      })),
+      onCopyCmd: () => this.copy('docker run -p 8080:8080 quark', 'cmd'),
+      cmdCopyLabel: this.state.copied === 'cmd' ? cp.copied : cp.copy,
+      cmdCopyColor: this.state.copied === 'cmd' ? '#C6F94E' : '#C4C8D4',
+      goLanding: () => this.setState({ view: 'landing' }),
+      goLogin: () => this.setState({ view: 'login' }),
+      goApp: () => this.setState({ view: 'app' }),
+      toggleLang: () => this.setState(s => ({ lang: s.lang === 'pt' ? 'en' : 'pt' })),
+      toggleTheme: () => this.setState(s => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
+      genInput: this.state.genInput,
+      onGenInput: (e) => this.setState({ genInput: e.target.value }),
+      onShorten: () => this.shorten(),
+      genBusy: this.state.genBusy,
+      genDone: this.state.genDone,
+      genShort,
+      genTarget: target && target.length > 46 ? target.slice(0, 46) + '…' : target,
+      onCopyGen: () => this.copy('https://' + genShort, 'gen'),
+      genCopyLabel: this.state.copied === 'gen' ? cp.copied : cp.copy,
+      genCopyColor: this.state.copied === 'gen' ? '#C6F94E' : '#E8EAF2',
+      ...this.panelVals(t, cp),
+    };
+  }
+
+  panelVals(t, cp) {
+    const pal = this.palette();
+    const P = t.panel;
+    const tab = this.state.tab;
+    const isPt = this.state.lang === 'pt';
+    const d = this.data();
+    const navSty = (id) => tab === id ? { c: pal.brand, bg: pal.wash } : { c: pal.muted, bg: 'transparent' };
+    const setTab = (id) => this.setState({ tab: id, createOpen: false });
+
+    const mkLink = (l) => ({
+      ...l,
+      short: 'q.rk/' + l.code,
+      clicksF: this.fmt(l.clicks),
+      tagObjs: l.tags.map(nm => ({ name: nm, color: d.tagColors[nm] || pal.muted, bg: (d.tagColors[nm] || pal.muted) + '22' })),
+      copyLabel: this.state.copied === l.code ? P.links.copied : P.links.copy,
+      copyColor: this.state.copied === l.code ? '#33C971' : pal.muted,
+      onCopy: () => this.copy('https://q.rk/' + l.code, l.code),
+      onStats: () => this.setState({ tab: 'analytics', statLink: l.code }),
+    });
+    const linksView = d.links.map(mkLink);
+    const folders = ['Marketing', 'Conteúdo'];
+    const folderChips = [{ name: P.links.allFolders, count: d.links.length, active: true }]
+      .concat(folders.map(f => ({ name: f, count: d.links.filter(l => l.folder === f).length, active: false })))
+      .map(c => ({ ...c, chipBg: c.active ? pal.wash : 'transparent', chipBorder: c.active ? 'rgba(198,249,78,.4)' : pal.border, chipColor: c.active ? pal.brand : pal.muted }));
+    const ttlLabels = isPt ? ['Nunca', '1 hora', '24 horas', '7 dias', '30 dias'] : ['Never', '1 hour', '24 hours', '7 days', '30 days'];
+    const ttlChips = ttlLabels.map((label, i) => ({ label, bg: i === 4 ? pal.wash : 'transparent', border: i === 4 ? 'rgba(198,249,78,.4)' : pal.border, color: i === 4 ? pal.brand : pal.text }));
+    const totalClicks = d.links.reduce((a, l) => a + l.clicks, 0);
+
+    const sel = d.links.find(l => l.code === this.state.statLink) || d.links[0];
+    const maxDay = Math.max.apply(null, d.perDay);
+    const anBars = d.perDay.map(v => ({ h: Math.round(v / maxDay * 100) + '%' }));
+    const bar = (arr, color) => arr.map(x => ({ name: x.name, pct: x.pct, w: x.pct + '%', c: color }));
+    const anCountry = bar([{ name: 'Brasil', pct: 54 }, { name: isPt ? 'Estados Unidos' : 'United States', pct: 18 }, { name: 'Portugal', pct: 11 }, { name: isPt ? 'Alemanha' : 'Germany', pct: 9 }, { name: isPt ? 'Outros' : 'Others', pct: 8 }], '#C6F94E');
+    const anDevice = bar([{ name: 'Mobile', pct: 61 }, { name: 'Desktop', pct: 33 }, { name: 'Tablet', pct: 6 }], '#4ADEDE');
+    const anBrowser = bar([{ name: 'Chrome', pct: 58 }, { name: 'Safari', pct: 24 }, { name: 'Edge', pct: 10 }, { name: 'Firefox', pct: 8 }], '#8B7CF6');
+    const anRef = bar([{ name: 'Instagram', pct: 41 }, { name: isPt ? 'Direto' : 'Direct', pct: 27 }, { name: 'Google', pct: 19 }, { name: 'X / Twitter', pct: 13 }], pal.muted);
+    const anRecent = [
+      { when: isPt ? 'há 2 min' : '2 min ago', geo: 'São Paulo, BR', dev: 'iPhone · Safari', ref: 'Instagram' },
+      { when: isPt ? 'há 8 min' : '8 min ago', geo: 'Lisboa, PT', dev: 'MacBook · Chrome', ref: 'Google' },
+      { when: isPt ? 'há 14 min' : '14 min ago', geo: 'Berlin, DE', dev: 'Pixel · Chrome', ref: isPt ? 'Direto' : 'Direct' },
+      { when: isPt ? 'há 21 min' : '21 min ago', geo: 'New York, US', dev: 'Windows · Edge', ref: 'X / Twitter' },
+      { when: isPt ? 'há 33 min' : '33 min ago', geo: 'Rio de Janeiro, BR', dev: 'iPhone · Instagram', ref: 'Instagram' },
+    ];
+    const an = { total: this.fmt(48213), unique: this.fmt(39120), bots: this.fmt(842), topGeo: 'Brasil', topGeoPct: '54%', topDev: 'Mobile', topDevPct: '61%' };
+
+    const statusDom = (s) => s === 'active' ? { c: '#33C971', label: P.dom.active } : { c: '#FEBC2E', label: P.dom.pending };
+    const domainsView = d.domains.map(dm => ({ ...dm, sc: statusDom(dm.status).c, slabel: statusDom(dm.status).label }));
+    const roleLabel = (r) => ({ owner: P.mem.owner, admin: P.mem.admin, member: P.mem.member, pending: P.mem.pending })[r];
+    const membersView = d.members.map(m => ({ ...m, roleLabel: roleLabel(m.role), isPending: m.role === 'pending', displayName: m.email ? m.name : m.name, subline: m.email || (isPt ? 'Convite pendente' : 'Pending invite') }));
+    const tokensView = d.tokens.map(tk => ({ ...tk, scopeStr: tk.scopes.join(' · '), lastUsedF: tk.lastUsed === 'never' ? P.tok.never : (isPt ? 'há ' : '') + tk.lastUsed }));
+    const whStatus = (s) => s === 'active' ? { c: '#33C971', label: P.wh.active } : { c: pal.muted, label: P.wh.paused };
+    const webhooksView = d.webhooks.map(w => ({ ...w, evStr: w.evs.join(', '), sc: whStatus(w.status).c, slabel: whStatus(w.status).label, urlShort: w.url.length > 46 ? w.url.slice(0, 46) + '…' : w.url }));
+
+    return {
+      pal, P,
+      isTabLinks: tab === 'links', isTabAnalytics: tab === 'analytics', isTabDomains: tab === 'domains', isTabMembers: tab === 'members', isTabTokens: tab === 'tokens', isTabWebhooks: tab === 'webhooks',
+      ns: { links: navSty('links'), analytics: navSty('analytics'), domains: navSty('domains'), members: navSty('members'), tokens: navSty('tokens'), webhooks: navSty('webhooks') },
+      navLinks: () => setTab('links'), navAnalytics: () => setTab('analytics'), navDomains: () => setTab('domains'), navMembers: () => setTab('members'), navTokens: () => setTab('tokens'), navWebhooks: () => setTab('webhooks'),
+      linksView, folderChips, totalClicksF: this.fmt(totalClicks), linkCount: d.links.length,
+      openCreate: () => this.setState({ createOpen: true }), closeCreate: () => this.setState({ createOpen: false }), createOpen: this.state.createOpen,
+      statShort: 'q.rk/' + sel.code, statDest: sel.dest, an, anBars, anCountry, anDevice, anBrowser, anRef, anRecent,
+      domainsView, membersView, tokensView, webhooksView, seatsUsed: '3 / 5',
+      ttlChips, stop: (e) => { if (e && e.stopPropagation) e.stopPropagation(); },
+    };
+  }
+}
+</script>
+</body>
+</html>

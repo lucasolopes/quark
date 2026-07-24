@@ -2,33 +2,34 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 interface CollapsibleSectionProps {
-  /** Section heading shown next to the chevron toggle. */
-  title: string;
+  /** Section heading shown next to the chevron toggle. A plain string for most
+   * sections; a fragment for ones that append a live count (e.g. rules). */
+  title: ReactNode;
   children: ReactNode;
   /** Whether the section starts expanded. Defaults to collapsed. */
   defaultOpen?: boolean;
 }
 
 /**
- * Collapsible bordered section shell shared by the create and edit link
- * dialogs (scheduling, app redirect, password, UTM, ...). Manages its own
- * open state locally; the dialogs mount it fresh on each open, so it always
- * starts from `defaultOpen`.
+ * Collapsible hairline section shell shared by the create and edit link
+ * dialogs (scheduling, app redirect, password, UTM, rules, variants, ...).
+ * Manages its own open state locally; the dialogs mount it fresh on each
+ * open, so it always starts from `defaultOpen`.
  */
 export function CollapsibleSection({ title, children, defaultOpen = false }: CollapsibleSectionProps) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-input p-2.5">
+    <div className="flex flex-col gap-2 rounded-lg border border-border p-2.5">
       <button
         type="button"
-        className="flex items-center gap-1.5 text-sm font-medium"
+        className="flex items-center gap-1.5 font-mono text-xs font-medium tracking-wide text-muted-foreground uppercase"
         aria-expanded={open}
-        onClick={() => setOpen((open) => !open)}
+        onClick={() => setOpen((prev) => !prev)}
       >
         {open ? (
-          <ChevronDown className="size-4 text-muted-foreground" aria-hidden />
+          <ChevronDown className="size-3.5" aria-hidden />
         ) : (
-          <ChevronRight className="size-4 text-muted-foreground" aria-hidden />
+          <ChevronRight className="size-3.5" aria-hidden />
         )}
         {title}
       </button>

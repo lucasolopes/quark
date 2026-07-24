@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SsoDomains } from "./SsoDomains";
 import { withProviders } from "@/test-utils";
@@ -110,6 +110,25 @@ describe("SsoDomains", () => {
     expect(screen.getByText("_quark-sso.acme.com")).toBeInTheDocument();
     expect(screen.getByText("tok_abc123")).toBeInTheDocument();
     expect(screen.queryByText("_quark-sso.widgets.io")).not.toBeInTheDocument();
+  });
+
+  it("renders each domain as a card with a status dot colored per verification state", async () => {
+    mockFetch({ domains: [PENDING_DOMAIN, VERIFIED_DOMAIN] });
+    render(withProviders(<SsoDomains />, { withRouter: false }));
+
+    const cards = await screen.findAllByTestId("sso-domain-card");
+    expect(cards).toHaveLength(2);
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+
+    const pendingCard = cards.find((c) => within(c).queryAllByText("acme.com").length > 0);
+    const verifiedCard = cards.find((c) => within(c).queryAllByText("widgets.io").length > 0);
+    if (!pendingCard || !verifiedCard) throw new Error("expected a pending card and a verified card");
+
+    // pending = bg-muted-foreground, verified = bg-primary (matches Domains' v2 status semantics).
+    expect(within(pendingCard).getByTestId("sso-domain-status-dot")).toHaveClass("bg-muted-foreground");
+    expect(within(pendingCard).getByText(/^pending$/i)).toBeInTheDocument();
+    expect(within(verifiedCard).getByTestId("sso-domain-status-dot")).toHaveClass("bg-primary");
+    expect(within(verifiedCard).getByText(/^verified$/i)).toBeInTheDocument();
   });
 
   it("empty state when there are no domains yet", async () => {

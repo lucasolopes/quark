@@ -1,10 +1,13 @@
-import { Loader2 } from "lucide-react";
+import { Loader2, Plus } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { useCreateWorkspace } from "@/lib/queries";
+
+/** Field-caption style for this form's labels (13px muted, matches CreateTokenDialog/Tokens v2). */
+const FIELD_LABEL_CLASS = "text-[13px] font-normal text-muted-foreground";
 
 /** Lowercases, strips accents, and turns runs of non-alphanumerics into single dashes. */
 function slugify(input: string): string {
@@ -47,7 +50,7 @@ export function CreateWorkspaceForm({ onCreated }: { onCreated?: () => void }) {
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3" noValidate>
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="ws-name" className="text-sm font-medium">{t("onboarding.nameLabel")}</label>
+        <label htmlFor="ws-name" className={FIELD_LABEL_CLASS}>{t("onboarding.nameLabel")}</label>
         <Input
           id="ws-name"
           value={name}
@@ -57,7 +60,7 @@ export function CreateWorkspaceForm({ onCreated }: { onCreated?: () => void }) {
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="ws-slug" className="text-sm font-medium">{t("onboarding.slugLabel")}</label>
+        <label htmlFor="ws-slug" className={FIELD_LABEL_CLASS}>{t("onboarding.slugLabel")}</label>
         <Input
           id="ws-slug"
           value={effectiveSlug}
@@ -70,7 +73,11 @@ export function CreateWorkspaceForm({ onCreated }: { onCreated?: () => void }) {
       </div>
       {errorText && <p id="ws-slug-error" role="alert" className="text-sm text-destructive">{errorText}</p>}
       <Button type="submit" disabled={!name.trim() || !effectiveSlug || mutation.isPending} className="mt-1">
-        {mutation.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+        {mutation.isPending ? (
+          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+        ) : (
+          <Plus className="size-4" aria-hidden="true" />
+        )}
         {mutation.isPending ? t("onboarding.creating") : t("onboarding.submit")}
       </Button>
     </form>

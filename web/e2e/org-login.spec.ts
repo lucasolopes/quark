@@ -51,7 +51,7 @@ function newestBinary(): string {
   ]
     .map((p) => resolve(p))
     .filter(existsSync)
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+    .toSorted((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
   if (!bin) throw new Error("quark binary not found — build it: cargo build");
   return bin;
 }

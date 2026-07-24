@@ -26,8 +26,8 @@ export interface TagColor {
  * plus amber, rose and teal to widen the set without touching the lime action.
  */
 const PALETTE = [
-  "#4ADEDE", // cyan
-  "#8B7CF6", // violet
+  "var(--chart-2)", // cyan
+  "var(--chart-3)", // violet
   "#FEBC2E", // amber
   "#FB7185", // rose
   "#2DD4BF", // teal

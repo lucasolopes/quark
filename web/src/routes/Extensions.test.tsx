@@ -32,8 +32,8 @@ function renderCatalog() {
 function mockStatusFetch(opts: {
   sheetsStatus: number;
   sheetsBody?: SheetsStatus;
-  webhooks?: { kind: string }[];
-  pixels?: { provider: string }[];
+  webhooks?: Array<{ kind: string }>;
+  pixels?: Array<{ provider: string }>;
 } = { sheetsStatus: 404 }) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = String(typeof input === "string" ? input : (input as Request).url ?? input);
@@ -90,10 +90,11 @@ describe("Extensions", () => {
     mockStatusFetch({ sheetsStatus: 404, webhooks: [{ kind: "slack" }] });
     renderCatalog();
     const slackCard = screen.getByText("Slack").closest('[data-slot="card"]') as HTMLElement;
-    expect(await within(slackCard).findByText(/connected/i)).toBeInTheDocument();
-    // A card without a backing resource does not show the badge.
+    expect(await within(slackCard).findByText("Connected")).toBeInTheDocument();
+    // A card without a backing resource shows "Not connected" instead of the Connected badge.
     const discordCard = screen.getByText("Discord").closest('[data-slot="card"]') as HTMLElement;
-    expect(within(discordCard).queryByText(/connected/i)).not.toBeInTheDocument();
+    expect(within(discordCard).queryByText("Connected")).not.toBeInTheDocument();
+    expect(within(discordCard).getByText("Not connected")).toBeInTheDocument();
   });
 
   it("shows the Connected badge on the Sheets card when connected", async () => {

@@ -1,0 +1,66 @@
+<sc-if value="{{ isTabAnalytics }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width: 1000px;">
+        <button class="qbtn qlift" onClick="{{ navLinks }}" style="background: transparent; border: none; color: {{ pal.muted }}; font-size: 13.5px; cursor: pointer; padding: 0; margin-bottom: 14px;">{{ P.an.back }}</button>
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px; flex-wrap: wrap; gap: 12px;">
+          <div>
+            <h1 style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 27px; letter-spacing: -.03em; color: {{ pal.strong }}; margin: 0;">{{ statShort }}</h1>
+            <div style="font-size: 13.5px; color: {{ pal.muted }}; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 520px;">{{ statDest }}</div>
+          </div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: {{ pal.muted }}; border: 1px solid {{ pal.border }}; border-radius: 8px; padding: 7px 12px;">{{ P.an.range }}</div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px;">
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 18px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 12.5px; color: {{ pal.muted }};">{{ P.an.total }}</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 30px; color: {{ pal.brand }}; margin-top: 6px; font-feature-settings: 'tnum';">{{ an.total }}</div>
+          </div>
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 18px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 12.5px; color: {{ pal.muted }};">{{ P.an.unique }}</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 30px; color: {{ pal.strong }}; margin-top: 6px; font-feature-settings: 'tnum';">{{ an.unique }}</div>
+          </div>
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 18px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 12.5px; color: {{ pal.muted }};">{{ P.an.topGeo }}</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px; color: {{ pal.strong }}; margin-top: 8px;">{{ an.topGeo }} <span style="font-size: 14px; color: {{ pal.muted }};">{{ an.topGeoPct }}</span></div>
+          </div>
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 18px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 12.5px; color: {{ pal.muted }};">{{ P.an.topDev }}</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 22px; color: {{ pal.strong }}; margin-top: 8px;">{{ an.topDev }} <span style="font-size: 14px; color: {{ pal.muted }};">{{ an.topDevPct }}</span></div>
+          </div>
+        </div>
+        <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: {{ pal.shadow }};">
+          <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; margin-bottom: 18px;">{{ P.an.perDay }}</div>
+          <div style="display: flex; align-items: flex-end; gap: 6px; height: 150px;">
+            <sc-for list="{{ anBars }}" as="b" hint-placeholder-count="14">
+              <div style="flex: 1; height: {{ b.h }}; background: linear-gradient(180deg, #C6F94E, rgba(198,249,78,.35)); border-radius: 4px 4px 0 0; min-height: 4px;"></div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 16px;">
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 20px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; margin-bottom: 16px;">{{ P.an.byCountry }}</div>
+            <sc-for list="{{ anCountry }}" as="x" hint-placeholder-count="5">
+              <div style="margin-bottom: 12px;"><div style="display: flex; justify-content: space-between; font-size: 13px; color: {{ pal.text }}; margin-bottom: 5px;"><span>{{ x.name }}</span><span style="color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 12px;">{{ x.pct }}%</span></div><div style="height: 7px; background: {{ pal.card2 }}; border-radius: 4px; overflow: hidden;"><div style="height: 100%; width: {{ x.w }}; background: {{ x.c }}; border-radius: 4px;"></div></div></div>
+            </sc-for>
+          </div>
+          <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 20px; box-shadow: {{ pal.shadow }};">
+            <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; margin-bottom: 16px;">{{ P.an.byDevice }}</div>
+            <sc-for list="{{ anDevice }}" as="x" hint-placeholder-count="3">
+              <div style="margin-bottom: 12px;"><div style="display: flex; justify-content: space-between; font-size: 13px; color: {{ pal.text }}; margin-bottom: 5px;"><span>{{ x.name }}</span><span style="color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 12px;">{{ x.pct }}%</span></div><div style="height: 7px; background: {{ pal.card2 }}; border-radius: 4px; overflow: hidden;"><div style="height: 100%; width: {{ x.w }}; background: {{ x.c }}; border-radius: 4px;"></div></div></div>
+            </sc-for>
+            <div style="height: 12px;"></div>
+            <div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }}; margin-bottom: 16px;">{{ P.an.byBrowser }}</div>
+            <sc-for list="{{ anBrowser }}" as="x" hint-placeholder-count="4">
+              <div style="margin-bottom: 12px;"><div style="display: flex; justify-content: space-between; font-size: 13px; color: {{ pal.text }}; margin-bottom: 5px;"><span>{{ x.name }}</span><span style="color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 12px;">{{ x.pct }}%</span></div><div style="height: 7px; background: {{ pal.card2 }}; border-radius: 4px; overflow: hidden;"><div style="height: 100%; width: {{ x.w }}; background: {{ x.c }}; border-radius: 4px;"></div></div></div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="background: {{ pal.card }}; border: 1px solid {{ pal.border }}; border-radius: 12px; padding: 20px; box-shadow: {{ pal.shadow }};">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;"><div style="font-size: 13.5px; font-weight: 600; color: {{ pal.strong }};">{{ P.an.recent }}</div><div style="font-size: 12px; color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace;">{{ an.bots }} {{ P.an.bots }}</div></div>
+          <div style="display: grid; grid-template-columns: 1fr 1.4fr 1.4fr 1fr; gap: 8px; padding: 0 4px 8px; border-bottom: 1px solid {{ pal.border }}; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: {{ pal.muted }};">
+            <div>{{ P.an.colWhen }}</div><div>{{ P.an.colGeo }}</div><div>{{ P.an.colDev }}</div><div>{{ P.an.colRef }}</div>
+          </div>
+          <sc-for list="{{ anRecent }}" as="r" hint-placeholder-count="5">
+            <div style="display: grid; grid-template-columns: 1fr 1.4fr 1.4fr 1fr; gap: 8px; padding: 11px 4px; border-bottom: 1px solid {{ pal.border }}; font-size: 13px; color: {{ pal.text }};"><div style="color: {{ pal.muted }}; font-family: 'JetBrains Mono', monospace; font-size: 12px;">{{ r.when }}</div><div>{{ r.geo }}</div><div style="color: {{ pal.muted }};">{{ r.dev }}</div><div>{{ r.ref }}</div></div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
