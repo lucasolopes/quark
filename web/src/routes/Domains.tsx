@@ -1,4 +1,4 @@
-import { AlertTriangle, Globe, Plus, RotateCw, ShieldCheck, Star, Trash2 } from "lucide-react";
+import { AlertTriangle, Globe, Plus, RotateCw, Trash2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import {
@@ -25,6 +25,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -116,17 +117,17 @@ function DomainsPanel() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold">{t("domains.title")}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{t("domains.subtitle")}</p>
-        </div>
-        <Button onClick={() => setAddOpen(true)}>
-          <Plus className="size-4" />
-          {t("domains.addButton")}
-        </Button>
-      </div>
+    <div className="flex flex-col gap-4 animate-rise">
+      <PageHeader
+        title={t("domains.title")}
+        subtitle={t("domains.subtitle")}
+        actions={
+          <Button onClick={() => setAddOpen(true)}>
+            <Plus className="size-4" />
+            {t("domains.addButton")}
+          </Button>
+        }
+      />
 
       {query.isPending && (
         <div className="flex flex-col gap-2" aria-hidden="true">
@@ -157,7 +158,9 @@ function DomainsPanel() {
       {!query.isPending && !query.isError && domains.length === 0 && (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-            <Globe className="size-8 text-muted-foreground" aria-hidden="true" />
+            <div className="flex size-10 items-center justify-center rounded-[9px] bg-secondary">
+              <Globe className="size-[18px] text-muted-foreground" aria-hidden="true" />
+            </div>
             <div>
               <p className="font-medium">{t("domains.empty")}</p>
             </div>
@@ -170,105 +173,120 @@ function DomainsPanel() {
       )}
 
       {!query.isPending && !query.isError && domains.length > 0 && (
-        <div className="flex flex-col gap-3">
+        <ul className="flex flex-col gap-2.5">
           {domains.map((domain) => {
             const isAuto = autoHost != null && domain.host === autoHost;
+            const verified = domain.status === "verified";
+            // Set-primary is offered on any verified domain (including the auto
+            // subdomain) that is not already primary; verify/remove stay
+            // restricted to custom (non-auto) domains, matching the pre-v2 rules.
+            const canSetPrimary = verified && !domain.primary;
+            const canVerify = !isAuto && domain.status === "pending";
+            const canRemove = !isAuto;
+            const hasActions = canSetPrimary || canVerify || canRemove;
             return (
-              <Card key={domain.id}>
-                <CardContent className="flex flex-col gap-3 py-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-sm">{domain.host}</span>
-                      <Badge variant={domain.status === "verified" ? "default" : "outline"}>
-                        {domain.status === "verified" ? (
-                          <>
-                            <ShieldCheck className="size-3" aria-hidden="true" />
-                            {t("domains.statusVerified")}
-                          </>
-                        ) : (
-                          t("domains.statusPending")
-                        )}
-                      </Badge>
-                      {isAuto && <Badge variant="secondary">{t("domains.autoBadge")}</Badge>}
-                      {domain.primary && (
-                        <Badge>
-                          <Star className="size-3" aria-hidden="true" />
-                          {t("domains.primaryBadge")}
-                        </Badge>
-                      )}
-                      <span className="text-xs text-muted-foreground">{formatDateTime(domain.created)}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      {domain.status === "verified" && !domain.primary && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          aria-label={t("domains.setPrimaryAria", { host: domain.host })}
-                          disabled={settingPrimaryId === domain.id}
-                          onClick={() => handleSetPrimary(domain)}
-                        >
-                          {t("domains.setPrimary")}
-                        </Button>
-                      )}
-                      {!isAuto && domain.status === "pending" && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          aria-label={t("domains.verifyAria", { host: domain.host })}
-                          disabled={verifyingId === domain.id}
-                          onClick={() => handleVerify(domain)}
-                        >
-                          {verifyingId === domain.id ? t("domains.verifying") : t("domains.verify")}
-                        </Button>
-                      )}
-                      {!isAuto && (
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={t("domains.removeAria", { host: domain.host })}
-                          onClick={() => setRemovingDomain(domain)}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      )}
-                    </div>
+              <li
+                key={domain.id}
+                data-testid="domain-card"
+                className="card-hover flex flex-col gap-3 rounded-lg border border-border bg-card p-4 shadow-card"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-[9px] bg-secondary">
+                    <Globe className="size-[18px] text-muted-foreground" aria-hidden="true" />
                   </div>
 
-                  {!isAuto && domain.status === "pending" && (
-                    <div className="flex flex-col gap-2 rounded-md border border-border bg-muted/40 p-3 text-sm">
-                      <p className="text-muted-foreground">
-                        {t("domains.verifyInstructions", { host: domain.host })}
-                      </p>
-                      <div className="grid gap-1 font-mono text-xs">
-                        {domain.cname_target && (
-                          <>
-                            <div>
-                              <span className="text-muted-foreground">{t("domains.cnameName")}: </span>
-                              {domain.host}
-                            </div>
-                            <div className="break-all">
-                              <span className="text-muted-foreground">{t("domains.cnameTarget")}: </span>
-                              {domain.cname_target}
-                            </div>
-                          </>
-                        )}
-                        <div className="mt-1">
-                          <span className="text-muted-foreground">{t("domains.txtName")}: </span>
-                          {domain.txt_name}
-                        </div>
-                        <div className="break-all">
-                          <span className="text-muted-foreground">{t("domains.txtValue")}: </span>
-                          {domain.txt_value}
-                        </div>
-                      </div>
-                      <p className="text-xs text-muted-foreground">{t("domains.tlsNote")}</p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-[15px] font-medium text-strong">{domain.host}</span>
+                      {isAuto && <Badge variant="secondary">{t("domains.autoBadge")}</Badge>}
+                      {domain.primary && <Badge>{t("domains.primaryBadge")}</Badge>}
                     </div>
-                  )}
-                </CardContent>
-              </Card>
+                    <div className="mt-1 text-[12.5px] text-muted-foreground">{formatDateTime(domain.created)}</div>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span
+                      aria-hidden="true"
+                      data-testid="domain-status-dot"
+                      className={`size-2 rounded-full ${verified ? "bg-primary" : "bg-muted-foreground"}`}
+                    />
+                    <span className="text-[13px] text-foreground">
+                      {verified ? t("domains.statusVerified") : t("domains.statusPending")}
+                    </span>
+                  </div>
+                </div>
+
+                {hasActions && (
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    {canSetPrimary && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        aria-label={t("domains.setPrimaryAria", { host: domain.host })}
+                        disabled={settingPrimaryId === domain.id}
+                        onClick={() => handleSetPrimary(domain)}
+                      >
+                        {t("domains.setPrimary")}
+                      </Button>
+                    )}
+                    {canVerify && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        aria-label={t("domains.verifyAria", { host: domain.host })}
+                        disabled={verifyingId === domain.id}
+                        onClick={() => handleVerify(domain)}
+                      >
+                        {verifyingId === domain.id ? t("domains.verifying") : t("domains.verify")}
+                      </Button>
+                    )}
+                    {canRemove && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={t("domains.removeAria", { host: domain.host })}
+                        onClick={() => setRemovingDomain(domain)}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                )}
+
+                {canVerify && (
+                  <div className="flex flex-col gap-2 rounded-lg border border-border bg-secondary/60 p-3.5 text-sm">
+                    <p className="text-muted-foreground">
+                      {t("domains.verifyInstructions", { host: domain.host })}
+                    </p>
+                    <div className="grid gap-1 font-mono text-xs">
+                      {domain.cname_target && (
+                        <>
+                          <div>
+                            <span className="text-muted-foreground">{t("domains.cnameName")}: </span>
+                            {domain.host}
+                          </div>
+                          <div className="break-all">
+                            <span className="text-muted-foreground">{t("domains.cnameTarget")}: </span>
+                            {domain.cname_target}
+                          </div>
+                        </>
+                      )}
+                      <div className="mt-1">
+                        <span className="text-muted-foreground">{t("domains.txtName")}: </span>
+                        {domain.txt_name}
+                      </div>
+                      <div className="break-all">
+                        <span className="text-muted-foreground">{t("domains.txtValue")}: </span>
+                        {domain.txt_value}
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{t("domains.tlsNote")}</p>
+                  </div>
+                )}
+              </li>
             );
           })}
-        </div>
+        </ul>
       )}
 
       <AddDomainDialog open={addOpen} onOpenChange={setAddOpen} />
