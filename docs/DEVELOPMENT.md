@@ -87,11 +87,16 @@ export QUARK_TEST_VALKEY_URL=redis://localhost:6379
 export QUARK_TEST_CLICKHOUSE_URL=http://localhost:8123
 ```
 
-These tests share one database and reset it between cases. Within a test binary
-the `#[serial(pg)]` / `#[serial(ch)]` markers (from `serial_test`) already keep
-same-backend tests from overlapping. Across binaries, cargo runs test executables
-in parallel by default, so run the gated suite one binary at a time to keep two
-binaries from truncating the shared database under each other:
+These tests share one database and reset it between cases. Every case that
+touches the shared backend carries `#[file_serial]` (from `serial_test` with the
+`file_locks` feature), which takes a lock in a file rather than in the process.
+That is deliberate: cargo runs the test executables in parallel, and a plain
+`#[serial]` only serializes within one binary, so two binaries would still run
+schema DDL, `FORCE ROW LEVEL SECURITY`, and `TRUNCATE` under each other.
+
+The file lock covers the normal `cargo test` run. To rule out cross-binary
+interference entirely, or when debugging a suspected race, run one binary at a
+time:
 
 ```bash
 cargo test -- --test-threads=1

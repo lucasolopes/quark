@@ -88,11 +88,16 @@ export QUARK_TEST_VALKEY_URL=redis://localhost:6379
 export QUARK_TEST_CLICKHOUSE_URL=http://localhost:8123
 ```
 
-Esses testes compartilham um banco e o resetam entre casos. Dentro de um binário
-de teste os marcadores `#[serial(pg)]` / `#[serial(ch)]` (do `serial_test`) já
-impedem testes do mesmo backend de se sobreporem. Entre binários, o cargo roda
-os executáveis de teste em paralelo por default, então rode a suíte gated um
-binário por vez para dois não truncarem o banco compartilhado um sob o outro:
+Esses testes compartilham um banco e o resetam entre casos. Todo caso que toca o
+backend compartilhado leva `#[file_serial]` (do `serial_test` com a feature
+`file_locks`), que pega um lock em arquivo em vez de dentro do processo. Isso é
+proposital: o cargo roda os executáveis de teste em paralelo, e um `#[serial]`
+simples só serializa dentro de um binário, então dois binários ainda rodariam
+DDL de schema, `FORCE ROW LEVEL SECURITY` e `TRUNCATE` um sob o outro.
+
+O lock em arquivo cobre o `cargo test` normal. Para descartar interferência entre
+binários de vez, ou quando estiver investigando uma corrida, rode um binário por
+vez:
 
 ```bash
 cargo test -- --test-threads=1
