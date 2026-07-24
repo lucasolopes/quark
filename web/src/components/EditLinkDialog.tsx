@@ -19,9 +19,11 @@ import { Combobox } from "@/components/Combobox";
 import { draftsFromRules, parseRuleDrafts, type RuleDraft } from "@/lib/rules";
 import { normalizeToPercent } from "@/lib/variants";
 import { DurationField } from "@/components/DurationField";
+import { TtlChips } from "@/components/TtlChips";
 import { CollapsibleSection } from "@/components/CollapsibleSection";
 import { DEFAULT_DURATION_UNIT, durationToSeconds } from "@/lib/duration";
 import { validateLinkForm } from "@/lib/link-form";
+import { useShortHost } from "@/lib/short-url";
 import type { Folder, Link, Variant } from "@/lib/types";
 import { RulesEditor } from "@/components/RulesEditor";
 import { VariantsEditor } from "@/components/VariantsEditor";
@@ -82,6 +84,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
   const [removePassword, setRemovePassword] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const patchLink = usePatchLink();
+  const shortHost = useShortHost();
 
   // Click-threshold alert (LUC-66): a collapsible section fetching the
   // current rule lazily (only once expanded), so opening the dialog never
@@ -285,55 +288,62 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
               </div>
             </div>
 
-            <CollapsibleSection title={t("dialogs.sections.scheduling")}>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="flex flex-col gap-1.5">
-                  <DurationField
-                    id="edit-link-ttl"
-                    label={t("dialogs.edit.ttlLabel")}
-                    hint={t("dialogs.edit.ttlOptional")}
-                    value={ttl}
-                    unit={ttlUnit}
-                    onValueChange={setTtl}
-                    onUnitChange={setTtlUnit}
-                    placeholder={t("dialogs.edit.ttlPlaceholder", { expiry: formatExpiry(link.expiry) })}
-                    error={errors.ttl}
-                    disabled={removeExpiry}
-                  />
-                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      className="size-4 rounded border-input accent-primary"
-                      checked={removeExpiry}
-                      onChange={(e) => {
-                        setRemoveExpiry(e.target.checked);
-                        if (e.target.checked) setTtl("");
-                      }}
-                    />
-                    {t("dialogs.edit.removeExpiryLabel")}
-                  </label>
-                </div>
+            <div className="flex flex-col gap-1.5">
+              <TtlChips
+                value={ttl}
+                unit={ttlUnit}
+                disabled={removeExpiry}
+                onChange={(v, u) => {
+                  setTtl(v);
+                  setTtlUnit(u);
+                }}
+              />
+              <DurationField
+                id="edit-link-ttl"
+                label={t("dialogs.edit.ttlLabel")}
+                hint={t("dialogs.edit.ttlOptional")}
+                value={ttl}
+                unit={ttlUnit}
+                onValueChange={setTtl}
+                onUnitChange={setTtlUnit}
+                placeholder={t("dialogs.edit.ttlPlaceholder", { expiry: formatExpiry(link.expiry) })}
+                error={errors.ttl}
+                disabled={removeExpiry}
+              />
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="size-4 rounded border-input accent-primary"
+                  checked={removeExpiry}
+                  onChange={(e) => {
+                    setRemoveExpiry(e.target.checked);
+                    if (e.target.checked) setTtl("");
+                  }}
+                />
+                {t("dialogs.edit.removeExpiryLabel")}
+              </label>
+            </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="edit-link-max-visits" className="text-sm font-medium">
-                    {t("dialogs.edit.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.edit.maxVisitsOptional")}</span>
-                  </label>
-                  <Input
-                    id="edit-link-max-visits"
-                    type="number"
-                    min={1}
-                    step={1}
-                    placeholder={t("dialogs.edit.maxVisitsPlaceholder", { current: formatCurrentMaxVisits(link.max_visits) })}
-                    value={maxVisits}
-                    onChange={(e) => setMaxVisits(e.target.value)}
-                    aria-invalid={errors.maxVisits != null}
-                  />
-                  {errors.maxVisits && (
-                    <p className="text-sm text-destructive" role="alert">
-                      {errors.maxVisits}
-                    </p>
-                  )}
-                </div>
+            <CollapsibleSection title={t("dialogs.sections.scheduling")}>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="edit-link-max-visits" className="text-sm font-medium">
+                  {t("dialogs.edit.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.edit.maxVisitsOptional")}</span>
+                </label>
+                <Input
+                  id="edit-link-max-visits"
+                  type="number"
+                  min={1}
+                  step={1}
+                  placeholder={t("dialogs.edit.maxVisitsPlaceholder", { current: formatCurrentMaxVisits(link.max_visits) })}
+                  value={maxVisits}
+                  onChange={(e) => setMaxVisits(e.target.value)}
+                  aria-invalid={errors.maxVisits != null}
+                />
+                {errors.maxVisits && (
+                  <p className="text-sm text-destructive" role="alert">
+                    {errors.maxVisits}
+                  </p>
+                )}
               </div>
 
               <div className="flex flex-col gap-1.5">
@@ -550,6 +560,13 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
                   </div>
                 </div>
               )}
+            </div>
+
+            <div className="rounded-[10px] border border-dashed border-input bg-secondary p-3.5">
+              <div className="mb-1 text-[11px] text-muted-foreground">{t("dialogs.edit.previewLabel")}</div>
+              <div className="font-mono text-[15px] font-medium text-brand-ink">
+                {shortHost}/{link.code}
+              </div>
             </div>
 
             {errors.form && (

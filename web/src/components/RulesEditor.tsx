@@ -3,6 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Combobox, type ComboboxOption } from "@/components/Combobox";
+import { CollapsibleSection } from "@/components/CollapsibleSection";
 import { useT, useLocale } from "@/i18n";
 import { emptyRuleDraft, type RuleDraft } from "@/lib/rules";
 import { countryOptions } from "@/lib/countries";
@@ -30,8 +31,8 @@ interface RulesEditorProps {
  * component never touches it, it only manages the rule list.
  *
  * Starts expanded when there are drafts already (EditLinkDialog on a link
- * that has rules), collapsed otherwise — a plain `<details>` keeps this
- * accessible without extra state plumbing from the parent.
+ * that has rules), collapsed otherwise — `CollapsibleSection` owns the
+ * open/closed state, so this component only needs to pass `defaultOpen`.
  */
 export function RulesEditor({ idPrefix, drafts, onChange }: RulesEditorProps) {
   const t = useT();
@@ -59,14 +60,18 @@ export function RulesEditor({ idPrefix, drafts, onChange }: RulesEditorProps) {
   }
 
   return (
-    <details className="rounded-lg border border-input px-3 py-2" open={drafts.length > 0}>
-      <summary className="cursor-pointer text-sm font-medium">
-        {t("rules.sectionTitle")}
-        {drafts.length > 0 && <span className="text-muted-foreground"> ({drafts.length})</span>}
-      </summary>
-      <p className="mt-2 text-sm text-muted-foreground">{t("rules.sectionDescription")}</p>
+    <CollapsibleSection
+      title={
+        <>
+          {t("rules.sectionTitle")}
+          {drafts.length > 0 && <span className="text-muted-foreground"> ({drafts.length})</span>}
+        </>
+      }
+      defaultOpen={drafts.length > 0}
+    >
+      <p className="text-sm text-muted-foreground">{t("rules.sectionDescription")}</p>
 
-      <div className="mt-3 flex flex-col gap-3">
+      <div className="flex flex-col gap-3">
         {drafts.map((draft, index) => {
           const rowId = `${idPrefix}-rule-${index}`;
           return (
@@ -132,6 +137,6 @@ export function RulesEditor({ idPrefix, drafts, onChange }: RulesEditorProps) {
           {t("rules.addRule")}
         </Button>
       </div>
-    </details>
+    </CollapsibleSection>
   );
 }

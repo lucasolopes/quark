@@ -236,7 +236,6 @@ describe("CreateLinkDialog", () => {
     );
     render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText(/^url$/i), "https://ok.com");
-    await userEvent.click(screen.getByRole("button", { name: /scheduling and limits/i }));
     await userEvent.type(screen.getByLabelText(/expires in/i), "2");
     await userEvent.selectOptions(screen.getByLabelText(/time unit/i), "hours");
 
@@ -246,6 +245,43 @@ describe("CreateLinkDialog", () => {
     const [, init] = fetchMock.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.ttl).toBe(7200);
+  });
+
+  it("clicking a TTL preset chip sets the same expiration the custom field would", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
+    );
+    render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    await userEvent.type(screen.getByLabelText(/^url$/i), "https://ok.com");
+    await userEvent.click(screen.getByRole("button", { name: "24h" }));
+    // The chip writes into the same custom field, so it reflects the preset.
+    expect(screen.getByLabelText(/expires in/i)).toHaveValue(24);
+    expect(screen.getByLabelText(/time unit/i)).toHaveValue("hours");
+
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.ttl).toBe(86400);
+  });
+
+  it("the never (∞) TTL chip clears an expiration set via the custom field", async () => {
+    render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    await userEvent.type(screen.getByLabelText(/expires in/i), "5");
+
+    await userEvent.click(screen.getByRole("button", { name: /no expiration/i }));
+
+    expect(screen.getByLabelText(/expires in/i)).not.toHaveValue();
+  });
+
+  it("shows a short-link preview once an alias is typed", async () => {
+    render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    expect(screen.queryByText(/summer-promo/)).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(/^alias/i), "summer-promo");
+
+    expect(screen.getByText(/\/summer-promo$/)).toBeInTheDocument();
   });
 
   it("renders the app destination inputs and submits the iOS value", async () => {

@@ -340,6 +340,14 @@ export const en = {
       password: "Password",
       appRedirect: "App redirect",
     },
+    ttlChips: {
+      oneHour: "1h",
+      oneDay: "24h",
+      sevenDays: "7d",
+      thirtyDays: "30d",
+      never: "∞",
+      neverAria: "No expiration",
+    },
     duration: {
       unitLabel: "Time unit",
       units: {
@@ -358,6 +366,7 @@ export const en = {
       aliasLabel: "Alias",
       optional: "(optional)",
       aliasPlaceholder: "summer-promo",
+      previewLabel: "Your link will look like",
       ttlLabel: "Expires in",
       ttlOptional: "(optional)",
       ttlPlaceholder: "No expiration",
@@ -414,6 +423,7 @@ export const en = {
       title: "Edit {code}",
       description: "Update the destination and/or the expiration of this link.",
       urlLabel: "URL",
+      previewLabel: "Current short link",
       ttlLabel: "New expiration",
       ttlOptional: "(from now, optional)",
       ttlPlaceholder: "Currently {expiry}",

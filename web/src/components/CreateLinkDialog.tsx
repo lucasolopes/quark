@@ -29,9 +29,12 @@ import { RulesEditor } from "@/components/RulesEditor";
 import { VariantsEditor } from "@/components/VariantsEditor";
 import { useVariantRows } from "@/hooks/useVariantRows";
 import { DurationField } from "@/components/DurationField";
+import { TtlChips } from "@/components/TtlChips";
 import { CollapsibleSection } from "@/components/CollapsibleSection";
 import { DEFAULT_DURATION_UNIT, durationToSeconds } from "@/lib/duration";
 import { validateLinkForm } from "@/lib/link-form";
+import { useShortHost } from "@/lib/short-url";
+import { cn } from "@/lib/utils";
 import type { Folder } from "@/lib/types";
 
 interface FormErrors {
@@ -89,6 +92,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
   const [templateName, setTemplateName] = useState("");
   const [templateNameError, setTemplateNameError] = useState<string | undefined>(undefined);
   const createLink = useCreateLink();
+  const shortHost = useShortHost();
 
   function reset() {
     setUrl("");
@@ -246,14 +250,24 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
                 <label htmlFor="create-link-alias" className="text-sm font-medium">
                   {t("dialogs.create.aliasLabel")} <span className="text-muted-foreground">{t("dialogs.create.optional")}</span>
                 </label>
-                <Input
-                  id="create-link-alias"
-                  type="text"
-                  placeholder={t("dialogs.create.aliasPlaceholder")}
-                  value={alias}
-                  onChange={(e) => setAlias(e.target.value)}
-                  aria-invalid={errors.alias != null}
-                />
+                <div
+                  className={cn(
+                    "flex h-10 items-center rounded-[10px] border border-input bg-surface-input px-3.5 transition-colors",
+                    "focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
+                    errors.alias && "border-destructive",
+                  )}
+                >
+                  <span className="shrink-0 font-mono text-[13px] text-muted-foreground">{shortHost}/</span>
+                  <input
+                    id="create-link-alias"
+                    type="text"
+                    className="min-w-0 flex-1 bg-transparent px-0.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+                    placeholder={t("dialogs.create.aliasPlaceholder")}
+                    value={alias}
+                    onChange={(e) => setAlias(e.target.value)}
+                    aria-invalid={errors.alias != null}
+                  />
+                </div>
                 {errors.alias && (
                   <p className="text-sm text-destructive" role="alert">
                     {errors.alias}
@@ -293,40 +307,48 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
               />
             </div>
 
-            <CollapsibleSection title={t("dialogs.sections.scheduling")}>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <DurationField
-                  id="create-link-ttl"
-                  label={t("dialogs.create.ttlLabel")}
-                  hint={t("dialogs.create.ttlOptional")}
-                  value={ttl}
-                  unit={ttlUnit}
-                  onValueChange={setTtl}
-                  onUnitChange={setTtlUnit}
-                  placeholder={t("dialogs.create.ttlPlaceholder")}
-                  error={errors.ttl}
-                />
+            <div className="flex flex-col gap-1.5">
+              <TtlChips
+                value={ttl}
+                unit={ttlUnit}
+                onChange={(v, u) => {
+                  setTtl(v);
+                  setTtlUnit(u);
+                }}
+              />
+              <DurationField
+                id="create-link-ttl"
+                label={t("dialogs.create.ttlLabel")}
+                hint={t("dialogs.create.ttlOptional")}
+                value={ttl}
+                unit={ttlUnit}
+                onValueChange={setTtl}
+                onUnitChange={setTtlUnit}
+                placeholder={t("dialogs.create.ttlPlaceholder")}
+                error={errors.ttl}
+              />
+            </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="create-link-max-visits" className="text-sm font-medium">
-                    {t("dialogs.create.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.create.maxVisitsOptional")}</span>
-                  </label>
-                  <Input
-                    id="create-link-max-visits"
-                    type="number"
-                    min={1}
-                    step={1}
-                    placeholder={t("dialogs.create.maxVisitsPlaceholder")}
-                    value={maxVisits}
-                    onChange={(e) => setMaxVisits(e.target.value)}
-                    aria-invalid={errors.maxVisits != null}
-                  />
-                  {errors.maxVisits && (
-                    <p className="text-sm text-destructive" role="alert">
-                      {errors.maxVisits}
-                    </p>
-                  )}
-                </div>
+            <CollapsibleSection title={t("dialogs.sections.scheduling")}>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="create-link-max-visits" className="text-sm font-medium">
+                  {t("dialogs.create.maxVisitsLabel")} <span className="text-muted-foreground">{t("dialogs.create.maxVisitsOptional")}</span>
+                </label>
+                <Input
+                  id="create-link-max-visits"
+                  type="number"
+                  min={1}
+                  step={1}
+                  placeholder={t("dialogs.create.maxVisitsPlaceholder")}
+                  value={maxVisits}
+                  onChange={(e) => setMaxVisits(e.target.value)}
+                  aria-invalid={errors.maxVisits != null}
+                />
+                {errors.maxVisits && (
+                  <p className="text-sm text-destructive" role="alert">
+                    {errors.maxVisits}
+                  </p>
+                )}
               </div>
 
               <div className="flex flex-col gap-1.5">
@@ -451,7 +473,7 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
                 </DropdownMenu>
               </div>
 
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor="utm-source" className="text-sm font-medium">
                     {t("utm.sourceLabel")}
@@ -573,6 +595,15 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
               <p className="text-sm text-destructive" role="alert">
                 {errors.rules}
               </p>
+            )}
+
+            {alias.trim() && (
+              <div className="rounded-[10px] border border-dashed border-input bg-secondary p-3.5">
+                <div className="mb-1 text-[11px] text-muted-foreground">{t("dialogs.create.previewLabel")}</div>
+                <div className="font-mono text-[15px] font-medium text-brand-ink">
+                  {shortHost}/{alias.trim()}
+                </div>
+              </div>
             )}
 
             {errors.form && (

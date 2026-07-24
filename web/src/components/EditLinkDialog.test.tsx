@@ -368,3 +368,42 @@ describe("EditLinkDialog — click-threshold alert (LUC-66)", () => {
     expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit)?.method === "PUT")).toBe(false);
   });
 });
+
+describe("EditLinkDialog — TTL chips", () => {
+  beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
+
+  it("clicking a TTL preset chip sets the same expiration the custom field would", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.click(screen.getByRole("button", { name: "7d" }));
+    expect(screen.getByLabelText(/new expiration/i)).toHaveValue(7);
+
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(patchBody(fetchMock)).toHaveProperty("ttl", 604800);
+  });
+
+  it("disables the TTL chips while remove-expiration is checked, same as the custom field", async () => {
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    await userEvent.click(screen.getByLabelText(/remove expiration/i));
+
+    expect(screen.getByRole("button", { name: "7d" })).toBeDisabled();
+    expect(screen.getByLabelText(/new expiration/i)).toBeDisabled();
+  });
+});
+
+describe("EditLinkDialog — short-link preview", () => {
+  beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
+
+  it("shows the link's current short URL", () => {
+    const l = makeLink({ code: "preview-code" });
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+
+    expect(screen.getByText(/\/preview-code$/)).toBeInTheDocument();
+  });
+});

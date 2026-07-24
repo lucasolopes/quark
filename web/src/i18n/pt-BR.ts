@@ -342,6 +342,14 @@ export const ptBR: Messages = {
       password: "Senha",
       appRedirect: "Redirecionamento por app",
     },
+    ttlChips: {
+      oneHour: "1h",
+      oneDay: "24h",
+      sevenDays: "7d",
+      thirtyDays: "30d",
+      never: "∞",
+      neverAria: "Sem expiração",
+    },
     duration: {
       unitLabel: "Unidade de tempo",
       units: {
@@ -360,6 +368,7 @@ export const ptBR: Messages = {
       aliasLabel: "Alias",
       optional: "(opcional)",
       aliasPlaceholder: "promo-verao",
+      previewLabel: "Seu link vai ficar assim",
       ttlLabel: "Expira em",
       ttlOptional: "(opcional)",
       ttlPlaceholder: "Sem prazo",
@@ -416,6 +425,7 @@ export const ptBR: Messages = {
       title: "Editar {code}",
       description: "Atualize o destino e/ou o prazo de validade deste link.",
       urlLabel: "URL",
+      previewLabel: "Link curto atual",
       ttlLabel: "Novo prazo",
       ttlOptional: "(a partir de agora, opcional)",
       ttlPlaceholder: "Atualmente {expiry}",
