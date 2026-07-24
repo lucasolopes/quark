@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeader } from "@/components/PageHeader";
 import { useT, type MessageKey } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { isUnauthorized } from "@/lib/mutation-error";
@@ -66,17 +67,17 @@ export function Pixels() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold">{t("pixels.heading")}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{t("pixels.subtitle")}</p>
-        </div>
-        <Button type="button" onClick={() => setDialogOpen(true)}>
-          <Plus className="size-4" />
-          {t("pixels.addButton")}
-        </Button>
-      </div>
+    <div className="flex flex-col gap-4 animate-rise">
+      <PageHeader
+        title={t("pixels.heading")}
+        subtitle={t("pixels.subtitle")}
+        actions={
+          <Button type="button" onClick={() => setDialogOpen(true)}>
+            <Plus className="size-4" />
+            {t("pixels.addButton")}
+          </Button>
+        }
+      />
 
       {query.isPending && <PixelsSkeleton />}
 
@@ -101,23 +102,27 @@ export function Pixels() {
       {!query.isPending && !query.isError && pixels.length === 0 && (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-            <Radio className="size-8 text-muted-foreground" aria-hidden="true" />
+            <div className="flex size-10 items-center justify-center rounded-[9px] bg-secondary">
+              <Radio className="size-[18px] text-muted-foreground" aria-hidden="true" />
+            </div>
             <div>
               <p className="font-medium">{t("pixels.emptyTitle")}</p>
               <p className="text-sm text-muted-foreground">{t("pixels.emptySubtitle")}</p>
             </div>
+            <Button type="button" onClick={() => setDialogOpen(true)}>
+              <Plus className="size-4" />
+              {t("pixels.addButton")}
+            </Button>
           </CardContent>
         </Card>
       )}
 
       {!query.isPending && !query.isError && pixels.length > 0 && (
-        <Card className="py-0">
-          <ul className="divide-y">
-            {pixels.map((pixel) => (
-              <PixelRow key={pixel.id} pixel={pixel} onRemove={() => setRemovingId(pixel.id)} />
-            ))}
-          </ul>
-        </Card>
+        <ul className="flex flex-col gap-2.5" aria-label={t("pixels.heading")}>
+          {pixels.map((pixel) => (
+            <PixelRow key={pixel.id} pixel={pixel} onRemove={() => setRemovingId(pixel.id)} />
+          ))}
+        </ul>
       )}
 
       <AddPixelDialog open={dialogOpen} onOpenChange={setDialogOpen} />
@@ -144,23 +149,27 @@ export function Pixels() {
   );
 }
 
+/**
+ * A pixel has no user-chosen name, so the identifying credential (GA4's
+ * Measurement ID or Meta's Pixel ID — the value that tells two pixels of the
+ * same provider apart) takes the strong/name slot, mirroring how Domains
+ * shows `host` there. The masked secret (API secret / access token) keeps
+ * its own muted line below; it's still surfaced, just never in the clear.
+ */
 function PixelRow({ pixel, onRemove }: { pixel: Pixel; onRemove: () => void }) {
   const t = useT();
   const isGa4 = pixel.provider === "ga4";
-  const credentialLines = isGa4
-    ? [
-        { label: t("pixels.measurementIdField"), value: pixel.credentials.measurement_id },
-        { label: t("pixels.apiSecretField"), value: pixel.credentials.api_secret },
-      ]
-    : [
-        { label: t("pixels.pixelIdField"), value: pixel.credentials.pixel_id },
-        { label: t("pixels.accessTokenField"), value: pixel.credentials.access_token },
-      ];
+  const idValue = isGa4 ? pixel.credentials.measurement_id : pixel.credentials.pixel_id;
+  const secretLabel = isGa4 ? t("pixels.apiSecretField") : t("pixels.accessTokenField");
+  const secretValue = isGa4 ? pixel.credentials.api_secret : pixel.credentials.access_token;
 
   return (
-    <li className="flex items-center justify-between gap-3 px-4 py-3">
-      <div className="flex min-w-0 flex-col gap-1">
-        <div className="flex items-center gap-2">
+    <li data-testid="pixel-card" className="card-hover flex flex-col gap-3 rounded-lg border border-border bg-card p-4 shadow-card">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 truncate font-mono text-[14.5px] font-semibold text-strong">
+            {idValue ?? "—"}
+          </span>
           <Badge variant="secondary">
             {isGa4 ? t("pixels.providerBadgeGa4") : t("pixels.providerBadgeMeta")}
           </Badge>
@@ -168,27 +177,30 @@ function PixelRow({ pixel, onRemove }: { pixel: Pixel; onRemove: () => void }) {
             {pixel.active ? t("pixels.activeLabel") : t("pixels.inactiveLabel")}
           </Badge>
         </div>
-        <div className="flex flex-wrap gap-x-4 gap-y-0.5 font-mono text-xs text-muted-foreground">
-          {credentialLines.map(({ label, value }) => (
-            <span key={label} className="truncate">
-              {label}: {value ?? "—"}
-            </span>
-          ))}
-        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0 text-destructive hover:text-destructive"
+          aria-label={t("pixels.removeAria")}
+          onClick={onRemove}
+        >
+          <Trash2 className="size-3.5" />
+          {t("pixels.remove")}
+        </Button>
       </div>
-      <Button type="button" variant="ghost" size="sm" aria-label={t("pixels.removeAria")} onClick={onRemove}>
-        <Trash2 className="size-4" />
-        {t("pixels.remove")}
-      </Button>
+      <div className="font-mono text-[12.5px] text-muted-foreground">
+        {secretLabel}: {secretValue ?? "—"}
+      </div>
     </li>
   );
 }
 
 function PixelsSkeleton() {
   return (
-    <div className="flex flex-col gap-2" aria-hidden="true">
+    <div className="flex flex-col gap-2.5" aria-hidden="true">
       {Array.from({ length: 3 }).map((_, i) => (
-        <Skeleton key={i} className="h-14 w-full" />
+        <Skeleton key={i} className="h-[72px] w-full" />
       ))}
     </div>
   );
