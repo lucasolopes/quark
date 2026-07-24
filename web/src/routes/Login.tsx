@@ -122,7 +122,7 @@ export function Login() {
       <div className="flex min-h-svh items-center justify-center p-4">
         <div className="w-full max-w-[400px] animate-rise">
           <div className="mb-[30px] flex flex-col items-center text-center">
-            <QuarkMark className="mb-[18px] size-[42px] text-primary drop-shadow-[0_0_14px_rgba(198,249,78,0.4)]" />
+            <QuarkMark className="mb-[18px] size-[42px] text-primary glow-glyph" />
             <h1 className="font-heading text-[26px] font-bold tracking-display text-strong">{t("login.title")}</h1>
             <p className="mt-2 text-[14.5px] text-muted-foreground">
               {adminLoginEnabled ? t("login.description") : t("login.descriptionSso")}

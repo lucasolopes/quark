@@ -46,7 +46,7 @@ function AcceptInviteFrame({ children }: { children: ReactNode }) {
 function AcceptInviteHeader({ title }: { title: string }) {
   return (
     <div className="mb-[30px] flex flex-col items-center text-center">
-      <QuarkMark className="mb-[18px] size-[42px] text-primary drop-shadow-[0_0_14px_rgba(198,249,78,0.4)]" />
+      <QuarkMark className="mb-[18px] size-[42px] text-primary glow-glyph" />
       <h1 className="font-heading text-[26px] font-bold tracking-display text-strong">{title}</h1>
     </div>
   );

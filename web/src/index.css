@@ -210,9 +210,9 @@ body {
   }
 }
 
-/* Lime glow — reserved for the brand and active accents (don't decorate freely). */
-@utility glow-accent {
-  box-shadow: 0 0 18px rgba(198, 249, 78, 0.6);
+/* Glow do glifo QuarkMark nas telas fora do Shell (Login/Onboarding/AcceptInvite). */
+@utility glow-glyph {
+  filter: drop-shadow(0 0 14px rgba(198, 249, 78, 0.4));
 }
 
 /* Entrada padrão de página/modal do DS (qrise do mock). */
