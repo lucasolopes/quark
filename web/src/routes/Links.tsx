@@ -1,4 +1,4 @@
-import { AlertTriangle, Link2, Loader2, Plus, RotateCw } from "lucide-react";
+import { AlertTriangle, Link2, Plus, RotateCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreateLinkDialog } from "@/components/CreateLinkDialog";
 import { EditLinkDialog } from "@/components/EditLinkDialog";
@@ -85,8 +84,12 @@ export function Links() {
     if (serverSearch.error instanceof ApiError && serverSearch.error.status === 501) setClientMode(true);
   }, [serverSearch.error]);
 
-  // The topbar hands searches to this screen via `?q=` — mirror the param into
-  // the search box, including when we are already mounted on the Links screen.
+  // The topbar (Shell.tsx) is the ONE search entry point for the app (mock:
+  // appShell.html; isTabLinks.html has no local search) — this screen has no
+  // search input of its own. `?q=` is the sole source of truth for the term;
+  // mirror it into local state (including back to "") so it keeps feeding the
+  // debounce/server-search below, whether the param changed via topbar typing,
+  // an Enter-navigation from elsewhere, or the browser's back/forward.
   useEffect(() => {
     setSearch(qParam);
   }, [qParam]);
@@ -167,22 +170,6 @@ export function Links() {
       />
 
       <div className="flex flex-wrap items-center gap-3">
-        <div className="relative max-w-sm grow">
-          <Input
-            type="search"
-            placeholder={t("links.searchPlaceholder")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            aria-label={t("links.searchAriaLabel")}
-          />
-          {usingServerSearch && serverSearch.isFetching && (
-            <Loader2
-              className="absolute right-2 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground"
-              aria-hidden="true"
-            />
-          )}
-        </div>
-
         <select
           value={folder}
           onChange={(e) => setFolder(e.target.value)}

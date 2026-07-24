@@ -16,16 +16,19 @@ function SearchParamsProbe() {
 }
 
 /**
- * Mounts `Shell` as the `/links` layout route with an `index` route that
- * renders `SearchParamsProbe`, so a `navigate("/links?...")` call from
- * inside `Shell` re-renders the same probe with the new query string.
+ * Mounts `Shell` as the layout for `/links` and `/analytics` — mirroring the
+ * real router, where Shell wraps every child route via one layout element —
+ * each child rendering `SearchParamsProbe`, so a `navigate(...)` or
+ * `setSearchParams(...)` call from inside `Shell` is observable via whichever
+ * probe ends up matching after the call.
  */
-function renderShellAtLinks(initialEntries: string[] = ["/links"]) {
+function renderShellWithProbe(initialEntries: string[]) {
   return render(
     withProviders(
       <Routes>
-        <Route path="/links" element={<Shell />}>
-          <Route index element={<SearchParamsProbe />} />
+        <Route path="/" element={<Shell />}>
+          <Route path="links" element={<SearchParamsProbe />} />
+          <Route path="analytics" element={<SearchParamsProbe />} />
         </Route>
       </Routes>,
       { initialEntries },
@@ -144,25 +147,48 @@ describe("Shell v2 — sidebar + topbar", () => {
     expect(screen.getByText("Lucas Olopes")).toBeInTheDocument();
   });
 
-  it("pressing Enter in the search box navigates to /links?q=<term>", async () => {
+  it("on another screen, pressing Enter in the search box navigates to /links?q=<term>", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
-    renderShellAtLinks();
+    renderShellWithProbe(["/analytics"]);
     await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
     await userEvent.type(screen.getByPlaceholderText("Search links…"), "summer promo{enter}");
     await waitFor(() => expect(screen.getByTestId("probe").textContent).toBe("q=summer+promo"));
   });
 
-  it("pressing Enter with an empty search does not navigate", async () => {
+  it("on another screen, pressing Enter with an empty search does not navigate", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
-    renderShellAtLinks();
+    renderShellWithProbe(["/analytics"]);
     await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
     await userEvent.type(screen.getByPlaceholderText("Search links…"), "{enter}");
     expect(screen.getByTestId("probe").textContent).toBe("");
   });
 
+  it("on /links, typing live-updates the q param after a debounce (no Enter needed)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
+    renderShellWithProbe(["/links"]);
+    await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
+    await userEvent.type(screen.getByPlaceholderText("Search links…"), "summer promo");
+    await waitFor(() => expect(screen.getByTestId("probe").textContent).toBe("q=summer+promo"));
+  });
+
+  it("on /links, clearing the box clears the q param", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
+    renderShellWithProbe(["/links?q=promo"]);
+    const input = await screen.findByPlaceholderText("Search links…");
+    expect(input).toHaveValue("promo");
+    await userEvent.clear(input);
+    await waitFor(() => expect(screen.getByTestId("probe").textContent).toBe(""));
+  });
+
+  it("reflects ?q= already in the URL when landing on /links (e.g. via back/forward)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
+    renderShellWithProbe(["/links?q=promo"]);
+    await waitFor(() => expect(screen.getByPlaceholderText("Search links…")).toHaveValue("promo"));
+  });
+
   it("clicking New link navigates to /links?new=1", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
-    renderShellAtLinks();
+    renderShellWithProbe(["/links"]);
     await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: "New link" }));
     await waitFor(() => expect(screen.getByTestId("probe").textContent).toBe("new=1"));

@@ -79,8 +79,6 @@ export const ptBR: Messages = {
     clicks: "cliques",
     countSubtitle: "{count} links · {clicks} cliques",
     createButton: "Criar link",
-    searchPlaceholder: "Buscar por código, URL ou alias…",
-    searchAriaLabel: "Buscar links",
     tagFilterLabel: "Filtrar por tag",
     tagFilterAllOption: "Todas as tags",
     tagFilterOption: "{name} ({count})",
