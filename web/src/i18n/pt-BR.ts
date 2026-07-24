@@ -77,6 +77,8 @@ export const ptBR: Messages = {
   links: {
     heading: "Links",
     subtitle: "Todos os links curtos criados no sistema.",
+    clicks: "cliques",
+    countSubtitle: "{count} links · {clicks} cliques",
     createButton: "Criar link",
     searchPlaceholder: "Buscar por código, URL ou alias…",
     searchAriaLabel: "Buscar links",

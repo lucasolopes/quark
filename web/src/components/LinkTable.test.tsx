@@ -164,9 +164,14 @@ describe("LinkTable — tags", () => {
     expect(screen.getByText("+2")).toBeInTheDocument();
   });
 
-  it("shows a dash when a link has no tags", () => {
+  it("renders a tagless link as a card with no tag chips", () => {
     render(withProviders(<LinkTable links={[link]} onEdit={() => {}} onDelete={() => {}} />));
-    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    const card = screen.getByTestId("link-card");
+    expect(within(card).getByText("6lB362J")).toBeInTheDocument();
+    // The card omits empty fields entirely — no tag overflow badge and none of
+    // the table's old "—" placeholder cells.
+    expect(within(card).queryByText(/^\+\d/)).not.toBeInTheDocument();
+    expect(screen.queryByText("—")).not.toBeInTheDocument();
   });
 });
 
@@ -250,5 +255,35 @@ describe("LinkTable — redirect rules badge", () => {
   it("shows no badge when the link has no rules", () => {
     render(withProviders(<LinkTable links={[link]} onEdit={() => {}} onDelete={() => {}} />));
     expect(screen.queryByText(/rules?$/)).not.toBeInTheDocument();
+  });
+});
+
+describe("LinkTable — card layout", () => {
+  const a: Link = { ...link, id: 1, code: "aaa1111" };
+  const b: Link = { ...link, id: 2, code: "bbb2222" };
+
+  it("renders each link as a card (list item carrying data-testid)", () => {
+    render(withProviders(<LinkTable links={[a, b]} onEdit={() => {}} onDelete={() => {}} />));
+    expect(screen.getAllByTestId("link-card")).toHaveLength(2);
+    // Semantic list: each card is a real <li> so the stack reads as a list.
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("each card exposes the code link, a copy button, a stats button and a more-actions menu", () => {
+    render(withProviders(<LinkTable links={[a]} onEdit={() => {}} onDelete={() => {}} />));
+    const card = screen.getByTestId("link-card");
+    // The code is a link to the stats page…
+    expect(within(card).getByRole("link", { name: /view stats for aaa1111/i })).toBeInTheDocument();
+    // …and the row actions are three square buttons: copy, stats, overflow menu.
+    expect(within(card).getByRole("button", { name: /copy short link for aaa1111/i })).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: /view stats for aaa1111/i })).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: /more actions for aaa1111/i })).toBeInTheDocument();
+  });
+
+  it("shows the alias value as a badge when the link has an alias", () => {
+    const aliased: Link = { ...a, alias: "summer-promo" };
+    render(withProviders(<LinkTable links={[aliased]} onEdit={() => {}} onDelete={() => {}} />));
+    const card = screen.getByTestId("link-card");
+    expect(within(card).getByText("summer-promo")).toBeInTheDocument();
   });
 });

@@ -1,5 +1,6 @@
 import { AlertTriangle, Link2, Loader2, Plus, RotateCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -18,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CreateLinkDialog } from "@/components/CreateLinkDialog";
 import { EditLinkDialog } from "@/components/EditLinkDialog";
 import { LinkTable } from "@/components/LinkTable";
+import { PageHeader } from "@/components/PageHeader";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
@@ -36,9 +38,21 @@ function matches(link: Link, query: string): boolean {
   );
 }
 
+/** Pill-chip classes for the tag filter (mock isTabLinks.html): active = wash+lime, inactive = muted outline. */
+function chipClass(active: boolean): string {
+  const base =
+    "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors";
+  const state = active
+    ? "bg-accent-wash border-accent-chip text-brand-ink"
+    : "border-border text-muted-foreground hover:text-foreground";
+  return `${base} ${state}`;
+}
+
 export function Links() {
   const t = useT();
-  const [search, setSearch] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const qParam = searchParams.get("q") ?? "";
+  const [search, setSearch] = useState(qParam);
   const [tag, setTag] = useState("");
   const [folder, setFolder] = useState("");
   const [brokenOnly, setBrokenOnly] = useState(false);
@@ -67,6 +81,22 @@ export function Links() {
     if (serverSearch.error instanceof ApiError && serverSearch.error.status === 501) setClientMode(true);
   }, [serverSearch.error]);
 
+  // The topbar hands searches to this screen via `?q=` — mirror the param into
+  // the search box, including when we are already mounted on the Links screen.
+  useEffect(() => {
+    setSearch(qParam);
+  }, [qParam]);
+
+  // Arriving via `?new=1` (topbar "New link") opens the create dialog once, then
+  // strips the param so closing the dialog or a refresh does not reopen it.
+  useEffect(() => {
+    if (searchParams.get("new") !== "1") return;
+    setCreateOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("new");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
   const allLinks = useMemo(() => query.data?.pages.flatMap((page) => page.links) ?? [], [query.data]);
   const searchResults = useMemo(
     () => serverSearch.data?.pages.flatMap((page) => page.links) ?? [],
@@ -79,6 +109,12 @@ export function Links() {
     if (clientMode) return allLinks.filter((link) => matches(link, dq));
     return searchResults;
   }, [allLinks, searchResults, clientMode, dq]);
+
+  // Subtitle counts are derived from the links already loaded on screen (no
+  // extra API call): the list has no server-provided grand total, so this
+  // reflects the currently loaded/filtered set, not every link in the account.
+  const totalClicks = useMemo(() => filtered.reduce((sum, l) => sum + (l.visits ?? 0), 0), [filtered]);
+  const tagChips = tagsQuery.data?.tags ?? [];
 
   const activeQuery = usingServerSearch ? serverSearch : query;
   const serverSearchFailed =
@@ -98,19 +134,19 @@ export function Links() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold">{t("links.heading")}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{t("links.subtitle")}</p>
-        </div>
-        {canWrite && (
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" />
-            {t("links.createButton")}
-          </Button>
-        )}
-      </div>
+    <div className="flex flex-col gap-4 animate-rise">
+      <PageHeader
+        title={t("links.heading")}
+        subtitle={t("links.countSubtitle", { count: filtered.length, clicks: totalClicks })}
+        actions={
+          canWrite && (
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" />
+              {t("links.createButton")}
+            </Button>
+          )
+        }
+      />
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative max-w-sm grow">
@@ -128,20 +164,6 @@ export function Links() {
             />
           )}
         </div>
-
-        <select
-          value={tag}
-          onChange={(e) => setTag(e.target.value)}
-          aria-label={t("links.tagFilterLabel")}
-          className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-        >
-          <option value="">{t("links.tagFilterAllOption")}</option>
-          {(tagsQuery.data?.tags ?? []).map((tagOption) => (
-            <option key={tagOption.name} value={tagOption.name}>
-              {t("links.tagFilterOption", { name: tagOption.name, count: tagOption.count })}
-            </option>
-          ))}
-        </select>
 
         <select
           value={folder}
@@ -177,6 +199,26 @@ export function Links() {
           {t("links.brokenFilterLabel")}
         </label>
       </div>
+
+      {tagChips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t("links.tagFilterLabel")}>
+          <button type="button" onClick={() => setTag("")} aria-pressed={tag === ""} className={chipClass(tag === "")}>
+            {t("links.tagFilterAllOption")}
+          </button>
+          {tagChips.map((tagOption) => (
+            <button
+              key={tagOption.name}
+              type="button"
+              onClick={() => setTag(tagOption.name)}
+              aria-pressed={tag === tagOption.name}
+              className={chipClass(tag === tagOption.name)}
+            >
+              {tagOption.name}
+              <span className="font-mono text-[11px] opacity-70">{tagOption.count}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {query.isPending && <LinksSkeleton />}
 
@@ -249,14 +291,12 @@ export function Links() {
         )}
 
       {!query.isPending && !query.isError && !serverSearchFailed && filtered.length > 0 && (
-        <Card className="py-0">
-          <LinkTable
-            links={filtered}
-            canWrite={canWrite}
-            onEdit={(link) => setEditingLink(link)}
-            onDelete={(link) => setDeletingLink(link)}
-          />
-        </Card>
+        <LinkTable
+          links={filtered}
+          canWrite={canWrite}
+          onEdit={(link) => setEditingLink(link)}
+          onDelete={(link) => setDeletingLink(link)}
+        />
       )}
 
       {activeQuery.hasNextPage && (

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useSearchParams } from "react-router-dom";
 import { Links } from "./Links";
 import { withProviders } from "@/test-utils";
 
@@ -11,6 +12,12 @@ function jsonResponse(body: unknown, status = 200): Response {
 /** Mocks `fetch`, responding based on which URL was called (search `q=` vs base list). */
 function mockFetchByUrl(handler: (url: string) => Response) {
   vi.spyOn(globalThis, "fetch").mockImplementation((input) => Promise.resolve(handler(String(input))));
+}
+
+/** Renders the current query string so URL param cleanup (e.g. `?new=1`) is observable. */
+function SearchParamsProbe() {
+  const [params] = useSearchParams();
+  return <div data-testid="probe">{params.toString()}</div>;
 }
 
 describe("Links", () => {
@@ -196,11 +203,52 @@ describe("Links", () => {
     render(withProviders(<Links />));
     await screen.findByText("AAA0000");
 
-    await userEvent.selectOptions(screen.getByRole("combobox", { name: /filter by tag/i }), "promo");
+    // The tag filter is now a row of pill chips (mock isTabLinks.html); click the
+    // "promo" chip instead of selecting a <select> option.
+    await userEvent.click(await screen.findByRole("button", { name: /promo/i }));
 
     await waitFor(() => {
       expect(screen.getByText("BBB1111")).toBeInTheDocument();
       expect(screen.queryByText("AAA0000")).not.toBeInTheDocument();
     });
+  });
+
+  it("pre-fills the search from ?q= on mount and runs the server search", async () => {
+    const base = {
+      links: [
+        { id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1, rules: [], variants: [] },
+        { id: 2, code: "BBB1111", url: "https://dog.com", expiry: null, created: 2, rules: [], variants: [] },
+      ],
+      next_after: null,
+    };
+    mockFetchByUrl((url) =>
+      url.includes("q=")
+        ? jsonResponse({ links: base.links.filter((l) => l.url.includes("dog")), next_after: null })
+        : jsonResponse(base),
+    );
+    render(withProviders(<Links />, { initialEntries: ["/links?q=dog"] }));
+
+    expect(screen.getByRole("searchbox")).toHaveValue("dog");
+    await waitFor(() => {
+      expect(screen.getByText("BBB1111")).toBeInTheDocument();
+      expect(screen.queryByText("AAA0000")).not.toBeInTheDocument();
+    });
+  });
+
+  it("opens the create dialog from ?new=1 and strips the param from the URL", async () => {
+    mockFetchByUrl(() => jsonResponse({ links: [], next_after: null }));
+    render(
+      withProviders(
+        <>
+          <Links />
+          <SearchParamsProbe />
+        </>,
+        { initialEntries: ["/links?new=1"] },
+      ),
+    );
+
+    expect(await screen.findByRole("dialog", { name: /create link/i })).toBeInTheDocument();
+    // The param is consumed on mount (replace), so a refresh / close won't reopen it.
+    await waitFor(() => expect(screen.getByTestId("probe").textContent).toBe(""));
   });
 });

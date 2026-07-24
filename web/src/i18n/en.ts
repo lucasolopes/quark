@@ -75,6 +75,8 @@ export const en = {
   links: {
     heading: "Links",
     subtitle: "All short links created in the system.",
+    clicks: "clicks",
+    countSubtitle: "{count} links · {clicks} clicks",
     createButton: "Create link",
     searchPlaceholder: "Search by code, URL or alias…",
     searchAriaLabel: "Search links",
