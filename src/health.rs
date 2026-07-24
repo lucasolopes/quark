@@ -9,7 +9,7 @@
 //! This module also hosts the shared `HealthStatus` enum, reused by webhook
 //! and pixel delivery health tracking.
 
-use crate::abuse::{extract_host, is_internal_host};
+use crate::abuse::{extract_host, is_internal_host, is_internal_ip};
 use crate::store::{LinkHealth, Record, Store};
 use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{EventType, WebhookEvent};
@@ -45,6 +45,7 @@ pub fn classify(status: Option<u16>) -> bool {
 pub fn build_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(PROBE_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(crate::HTTP_CONNECT_TIMEOUT_SECS))
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("reqwest client builds")
@@ -99,42 +100,6 @@ pub async fn safe_to_probe(url: &str) -> bool {
     }
     // No addresses resolved -> cannot verify -> do not probe.
     any
-}
-
-/// Whether an IP address is in a range the server must never be pointed at by a
-/// stored destination (loopback, private, link-local, unspecified, and IPv6
-/// unique-local `fc00::/7`).
-fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_documentation()
-        }
-        std::net::IpAddr::V6(v6) => {
-            if v6.is_loopback() || v6.is_unspecified() {
-                return true;
-            }
-            // An IPv4-mapped (`::ffff:a.b.c.d`) or deprecated IPv4-compatible
-            // (`::a.b.c.d`) address routes to the embedded v4 target on a
-            // dual-stack host, so classify it by that v4 address.
-            let seg = v6.segments();
-            if seg[..6].iter().all(|&x| x == 0) || v6.to_ipv4_mapped().is_some() {
-                let v4 = std::net::Ipv4Addr::new(
-                    (seg[6] >> 8) as u8,
-                    (seg[6] & 0xff) as u8,
-                    (seg[7] >> 8) as u8,
-                    (seg[7] & 0xff) as u8,
-                );
-                return is_internal_ip(&std::net::IpAddr::V4(v4));
-            }
-            // unique-local fc00::/7 or link-local fe80::/10
-            (seg[0] & 0xfe00) == 0xfc00 || (seg[0] & 0xffc0) == 0xfe80
-        }
-    }
 }
 
 /// Builds the webhook event body for a health transition, matching the envelope
@@ -363,36 +328,6 @@ mod tests {
         assert!(!classify(Some(404)));
         assert!(!classify(Some(500)));
         assert!(!classify(None)); // connection error / timeout
-    }
-
-    #[test]
-    fn internal_ip_classification() {
-        use std::net::IpAddr;
-        for s in [
-            "127.0.0.1",
-            "10.1.2.3",
-            "192.168.0.1",
-            "169.254.169.254", // cloud metadata (link-local)
-            "0.0.0.0",
-            "::1",
-            "fc00::1",                // unique-local
-            "fe80::1",                // link-local
-            "::ffff:127.0.0.1",       // IPv4-mapped loopback
-            "::ffff:169.254.169.254", // IPv4-mapped metadata
-            "::7f00:1",               // IPv4-compatible 127.0.0.1 (deprecated)
-            "::a9fe:a9fe",            // IPv4-compatible 169.254.169.254
-        ] {
-            assert!(
-                super::is_internal_ip(&s.parse::<IpAddr>().unwrap()),
-                "{s} must be internal"
-            );
-        }
-        for s in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
-            assert!(
-                !super::is_internal_ip(&s.parse::<IpAddr>().unwrap()),
-                "{s} must be public"
-            );
-        }
     }
 
     #[tokio::test]
