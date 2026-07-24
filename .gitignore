@@ -17,3 +17,6 @@ modal-*.png
 page-*.png
 web/.env.local
 /*.png
+
+# Artefatos de processo SDD (briefs, reports, diffs de review) — scratch local, fora do repo.
+.superpowers/
