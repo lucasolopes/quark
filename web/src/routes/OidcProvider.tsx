@@ -16,6 +16,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { isUnauthorized, mutationErrorToast } from "@/lib/mutation-error";
@@ -50,7 +51,7 @@ export function OidcProvider() {
 
   if (query.isError && !notConfigured) {
     return (
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4 animate-rise">
         <Header />
         <Card className="border-destructive/30">
           <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
@@ -71,12 +72,7 @@ export function OidcProvider() {
 
 function Header() {
   const t = useT();
-  return (
-    <div>
-      <h1 className="font-heading text-2xl font-semibold">{t("ssoProvider.title")}</h1>
-      <p className="mt-1 text-sm text-muted-foreground">{t("ssoProvider.subtitle")}</p>
-    </div>
-  );
+  return <PageHeader title={t("ssoProvider.title")} subtitle={t("ssoProvider.subtitle")} />;
 }
 
 interface FieldState {
@@ -174,7 +170,7 @@ function OidcProviderForm({ config }: { config: OidcConfigView | null }) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 animate-rise">
       <Header />
 
       {managed && (
@@ -188,9 +184,12 @@ function OidcProviderForm({ config }: { config: OidcConfigView | null }) {
 
       {config == null && (
         <Card>
-          <CardContent className="flex flex-col items-center gap-2 py-6 text-center">
-            <p className="font-medium">{t("ssoProvider.empty")}</p>
-            <p className="text-sm text-muted-foreground">{t("ssoProvider.emptyHint")}</p>
+          <CardContent className="flex items-start gap-3 py-3 text-sm">
+            <ShieldCheck className="mt-0.5 size-4 text-muted-foreground" aria-hidden="true" />
+            <div>
+              <p className="font-medium">{t("ssoProvider.empty")}</p>
+              <p className="text-muted-foreground">{t("ssoProvider.emptyHint")}</p>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -287,6 +286,9 @@ function OidcProviderForm({ config }: { config: OidcConfigView | null }) {
   );
 }
 
+/** Field-caption style for this form's labels (13px muted, matches CreateTokenDialog/Tokens v2). */
+const FIELD_LABEL_CLASS = "text-[13px] font-normal text-muted-foreground";
+
 function Field({
   label,
   hint,
@@ -302,7 +304,9 @@ function Field({
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={htmlFor}>{label}</Label>
+      <Label htmlFor={htmlFor} className={FIELD_LABEL_CLASS}>
+        {label}
+      </Label>
       {children}
       {hint && !error && <p className="text-xs text-muted-foreground">{hint}</p>}
       {error && (
