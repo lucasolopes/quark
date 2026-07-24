@@ -155,6 +155,8 @@ export const WEBHOOK_EVENTS = [
   "link.deleted",
   "link.expired",
   "link.clicked",
+  "link.broken",
+  "link.recovered",
   "link.threshold_reached",
 ] as const;
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];

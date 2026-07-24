@@ -5,7 +5,7 @@ import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@/i18n";
 import { ExtensionDetail } from "./ExtensionDetail";
-import type { SheetsStatus } from "@/lib/types";
+import { WEBHOOK_EVENTS, type SheetsStatus } from "@/lib/types";
 
 /** Renders the detail view for `id`, with marker routes so navigation is observable. */
 function renderDetail(id: string) {
@@ -88,7 +88,10 @@ describe("ExtensionDetail", () => {
     const body = JSON.parse(String((call[1] as RequestInit).body));
     expect(body.kind).toBe("slack");
     expect(body.url).toBe("https://hooks.slack.com/services/x");
-    expect(body.events).toHaveLength(6);
+    // The panel defaults to all known events selected; assert against the
+    // source of truth so this doesn't need updating every time the backend
+    // adds an event (see Webhooks.test.tsx for the per-event label coverage).
+    expect(body.events).toHaveLength(WEBHOOK_EVENTS.length);
   });
 
   it("creates a pixel inline with the integration's fixed provider", async () => {

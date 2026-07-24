@@ -74,6 +74,24 @@ describe("Webhooks", () => {
     expect(screen.getByText(/^slack$/i)).toBeInTheDocument();
   });
 
+  it("renders webhooks whose events aren't all in the label map, without crashing", async () => {
+    const futureWebhook = {
+      ...SAMPLE_WEBHOOK,
+      id: 5,
+      kind: "slack",
+      events: ["link.broken", "link.recovered", "link.future_event"],
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ webhooks: [futureWebhook] }));
+
+    render(withProviders(<Webhooks />, { withRouter: false }));
+
+    expect(await screen.findByText("https://example.com/hooks/quark")).toBeInTheDocument();
+    expect(screen.getByText(/link broken/i)).toBeInTheDocument();
+    expect(screen.getByText(/link recovered/i)).toBeInTheDocument();
+    // Unknown event id (not in EVENT_LABEL_KEY): falls back to the raw id instead of crashing.
+    expect(screen.getByText("link.future_event")).toBeInTheDocument();
+  });
+
   it("renders each webhook as a card with a status dot colored per health state", async () => {
     const active = { ...SAMPLE_WEBHOOK, id: 10, url: "https://active.example.com/hook" };
     const failing = {

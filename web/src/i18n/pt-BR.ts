@@ -558,6 +558,8 @@ export const ptBR: Messages = {
     eventDeleted: "Link excluído",
     eventExpired: "Link expirado",
     eventClicked: "Link clicado",
+    eventBroken: "Link quebrado",
+    eventRecovered: "Link recuperado",
     eventThresholdReached: "Limiar de cliques atingido",
     create: {
       title: "Adicionar webhook",

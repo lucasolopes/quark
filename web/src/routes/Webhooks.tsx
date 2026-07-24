@@ -43,6 +43,8 @@ const EVENT_LABEL_KEY: Record<WebhookEvent, MessageKey> = {
   "link.deleted": "webhooks.eventDeleted",
   "link.expired": "webhooks.eventExpired",
   "link.clicked": "webhooks.eventClicked",
+  "link.broken": "webhooks.eventBroken",
+  "link.recovered": "webhooks.eventRecovered",
   "link.threshold_reached": "webhooks.eventThresholdReached",
 };
 
@@ -214,6 +216,9 @@ export function Webhooks() {
           {webhooks.map((webhook) => {
             const health = webhookHealth(webhook);
             const statusLabel = t(HEALTH_LABEL_KEY[health]);
+            // Defensive: webhook.kind is typed as a closed union, but a value from the
+            // API that predates a known kind (or a future one) can still land here.
+            const kindLabelKey = KIND_LABEL_KEY[webhook.kind ?? "generic"];
             return (
               <li
                 key={webhook.id}
@@ -234,7 +239,7 @@ export function Webhooks() {
                     </span>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <Badge variant="outline">{t(KIND_LABEL_KEY[webhook.kind ?? "generic"])}</Badge>
+                    <Badge variant="outline">{kindLabelKey ? t(kindLabelKey) : webhook.kind}</Badge>
                     <Button
                       variant="outline"
                       size="sm"
@@ -249,14 +254,20 @@ export function Webhooks() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  {webhook.events.map((event) => (
-                    <span
-                      key={event}
-                      className="rounded-md bg-secondary px-2 py-0.5 font-mono text-[11.5px] text-foreground"
-                    >
-                      {t(EVENT_LABEL_KEY[event])}
-                    </span>
-                  ))}
+                  {webhook.events.map((event) => {
+                    // Defensive: event is typed as a closed union, but a backend event
+                    // not yet known to the frontend (e.g. added ahead of a panel release)
+                    // can still land here. Fall back to the raw id instead of crashing.
+                    const labelKey = EVENT_LABEL_KEY[event];
+                    return (
+                      <span
+                        key={event}
+                        className="rounded-md bg-secondary px-2 py-0.5 font-mono text-[11.5px] text-foreground"
+                      >
+                        {labelKey ? t(labelKey) : event}
+                      </span>
+                    );
+                  })}
                   {health === "failing" && (
                     <span className="text-xs text-destructive">
                       · {t("webhooks.deliveryError", { detail: webhook.last_delivery_status?.detail ?? "—" })}

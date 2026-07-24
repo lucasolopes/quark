@@ -62,6 +62,8 @@ export const EVENT_LABEL_KEY: Record<WebhookEvent, MessageKey> = {
   "link.deleted": "webhooks.eventDeleted",
   "link.expired": "webhooks.eventExpired",
   "link.clicked": "webhooks.eventClicked",
+  "link.broken": "webhooks.eventBroken",
+  "link.recovered": "webhooks.eventRecovered",
   "link.threshold_reached": "webhooks.eventThresholdReached",
 };
 

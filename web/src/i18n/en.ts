@@ -556,6 +556,8 @@ export const en = {
     eventDeleted: "Link deleted",
     eventExpired: "Link expired",
     eventClicked: "Link clicked",
+    eventBroken: "Link broken",
+    eventRecovered: "Link recovered",
     eventThresholdReached: "Click threshold reached",
     create: {
       title: "Add webhook",
