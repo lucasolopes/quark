@@ -10,7 +10,6 @@ import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n";
 import { ApiError, api, oidcLoginUrl } from "@/lib/api";
 import { clearToken, setToken } from "@/lib/auth";
-import { cn } from "@/lib/utils";
 
 export function Login() {
   const t = useT();
@@ -192,7 +191,7 @@ export function Login() {
               <form
                 onSubmit={handleSubmit}
                 noValidate
-                className={cn("flex flex-col gap-3", oidcEnabled && "mt-4 border-t border-input pt-4")}
+                className="flex flex-col gap-3"
               >
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor="admin-token" className="text-sm font-medium">
