@@ -174,7 +174,7 @@ flowchart LR
     Worker --> Sink[(Sink: LMDB or ClickHouse)]
 ```
 
-
+## Início rápido
 
 ```bash
 # QUARK_KEY is parsed as a DECIMAL u64 (not hex). Generate one:
@@ -288,7 +288,7 @@ inclui um builder de UTM opcional com templates salvos localmente (`localStorage
 
 ## Contribuindo
 
-Contribuições são bem-vindas, veja [`CONTRIBUTING.PT_BR.md`](CONTRIBUTING.PT_BR.md). PRs exigem um [Contributor License Agreement](CLA.PT_BR.md) único (uma concessão de licença, **você mantém a propriedade das suas contribuições**).
+Contribuições são bem-vindas, veja [`CONTRIBUTING.PT_BR.md`](CONTRIBUTING.PT_BR.md). PRs exigem um [Contributor License Agreement](CLA.PT_BR.md) único (uma concessão de licença, **você mantém a propriedade das suas contribuições**). Ao participar você concorda com o [Código de Conduta](CODE_OF_CONDUCT.PT_BR.md).
 
 ## Licença
 
