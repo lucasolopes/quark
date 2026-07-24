@@ -13,7 +13,13 @@ export function Terminal({ title = "quark — zsh", children, className }: Termi
     <div className={cn("overflow-hidden rounded-lg border border-border bg-surface-input shadow-modal", className)}>
       <div className="flex items-center gap-2 border-b border-border bg-white/[0.02] px-4 py-3">
         {(["#ff5f57", "#febc2e", "#28c840"] as const).map((c) => (
-          <span key={c} data-testid="traffic-light" className="size-[11px] rounded-full" style={{ background: c }} />
+          <span
+            key={c}
+            data-testid="traffic-light"
+            aria-hidden="true"
+            className="size-[11px] rounded-full"
+            style={{ background: c }}
+          />
         ))}
         <span className="ml-2 font-mono text-xs text-muted-foreground">{title}</span>
       </div>

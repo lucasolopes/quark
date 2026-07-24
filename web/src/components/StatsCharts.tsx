@@ -117,7 +117,7 @@ function PerDayChart({ perDay }: { perDay: Record<string, number> }) {
             formatter={(value) => [`${value}`, t("charts.clicks")]}
             labelFormatter={(label) => t("charts.dayLabel", { label })}
           />
-          <Bar dataKey="count" name={t("charts.clicks")} fill="url(#perDayFill)" radius={[4, 4, 0, 0]} />
+          <Bar dataKey="count" name={t("charts.clicks")} fill="url(#perDayFill)" radius={[4, 4, 0, 0]} maxBarSize={48} />
         </BarChart>
       </ResponsiveContainer>
     </ChartCard>

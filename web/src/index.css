@@ -247,6 +247,7 @@ body {
 }
 @utility bg-dot-grid {
   opacity: 0.45;
+  -webkit-mask-image: radial-gradient(700px 500px at 50% 24%, #000, transparent 76%);
   mask-image: radial-gradient(700px 500px at 50% 24%, #000, transparent 76%);
   background-image: linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);

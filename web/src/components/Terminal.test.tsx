@@ -15,10 +15,13 @@ describe("Terminal", () => {
     expect(screen.getByText("quark — zsh")).toBeInTheDocument();
   });
 
-  it("renders three traffic lights", () => {
+  it("renders three traffic lights, hidden from assistive tech (decorative)", () => {
     render(<Terminal>content</Terminal>);
     const trafficLights = screen.getAllByTestId("traffic-light");
     expect(trafficLights).toHaveLength(3);
+    for (const light of trafficLights) {
+      expect(light).toHaveAttribute("aria-hidden", "true");
+    }
   });
 
   it("renders custom title", () => {

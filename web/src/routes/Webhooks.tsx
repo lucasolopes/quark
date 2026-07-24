@@ -303,16 +303,24 @@ export function Webhooks() {
 
                 <div className="flex items-center justify-end gap-3">
                   <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                    {t("webhooks.columnActive")}
+                    {/*
+                      Base UI's Switch auto-wires its own aria-labelledby to this wrapping
+                      <label> (see @base-ui/react's useAriaLabelledBy fallback for <span>
+                      controls labelled by a native <label>), which stacks with — rather
+                      than overrides — an aria-label passed directly to the Switch. So the
+                      accessible name is built from this label's own content instead, in a
+                      single sr-only run (dom-accessibility-api trims each contributing
+                      node's own text before concatenating, with no separator inserted
+                      between nodes, so splitting "Active" and "— {url}" across two nodes
+                      loses the space between them): visible text first ("Active — {url}"),
+                      with the on/off state conveyed separately by aria-checked.
+                    */}
+                    <span aria-hidden="true">{t("webhooks.columnActive")}</span>
+                    <span className="sr-only">{t("webhooks.columnActive")} — {webhook.url}</span>
                     <Switch
                       checked={webhook.active}
                       onCheckedChange={() => handleToggleActive(webhook)}
                       disabled={patchWebhook.isPending}
-                      aria-label={
-                        webhook.active
-                          ? t("webhooks.deactivateAria", { url: webhook.url })
-                          : t("webhooks.activateAria", { url: webhook.url })
-                      }
                     />
                   </label>
                   <Button
