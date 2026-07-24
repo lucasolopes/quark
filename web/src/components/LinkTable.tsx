@@ -311,7 +311,7 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
                       aria-label={healthLabel}
                       title={healthLabel}
                       className={`size-2 shrink-0 rounded-full ${
-                        link.health.healthy ? "bg-emerald-500" : "bg-red-500"
+                        link.health.healthy ? "bg-primary" : "bg-destructive"
                       }`}
                     />
                   )}
