@@ -89,13 +89,16 @@ export function Links() {
 
   // Arriving via `?new=1` (topbar "New link") opens the create dialog once, then
   // strips the param so closing the dialog or a refresh does not reopen it.
+  // If the user is a viewer (no links_write), strip the param without opening.
   useEffect(() => {
     if (searchParams.get("new") !== "1") return;
-    setCreateOpen(true);
+    if (canWrite) {
+      setCreateOpen(true);
+    }
     const next = new URLSearchParams(searchParams);
     next.delete("new");
     setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, canWrite]);
 
   const allLinks = useMemo(() => query.data?.pages.flatMap((page) => page.links) ?? [], [query.data]);
   const searchResults = useMemo(
@@ -242,8 +245,10 @@ export function Links() {
 
       {!query.isPending && !query.isError && allLinks.length === 0 && (
         <Card>
-          <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-            <Link2 className="size-8 text-muted-foreground" aria-hidden="true" />
+          <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
+            <div className="mx-auto flex size-10 items-center justify-center rounded-[9px] bg-accent-wash border border-accent-line">
+              <Link2 className="size-[18px] text-brand-ink" aria-hidden="true" />
+            </div>
             <div>
               <p className="font-medium">{t("links.emptyTitle")}</p>
               {canWrite && <p className="text-sm text-muted-foreground">{t("links.emptySubtitle")}</p>}
