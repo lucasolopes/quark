@@ -15,6 +15,7 @@ export const ptBR: Messages = {
     languageSwitcherLabel: "Idioma",
   },
   login: {
+    title: "Entrar no quark",
     badge: "Painel do operador",
     description: "Entre com o token de administrador para gerenciar os links.",
     descriptionSso: "Entre com seu provedor de identidade para gerenciar os links.",

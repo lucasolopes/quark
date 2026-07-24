@@ -1,4 +1,4 @@
-import { Loader2 } from "lucide-react";
+import { Loader2, Lock } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
@@ -6,11 +6,11 @@ import { toast } from "sonner";
 import { QuarkMark } from "@/components/brand/QuarkMark";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n";
 import { ApiError, api, oidcLoginUrl } from "@/lib/api";
 import { clearToken, setToken } from "@/lib/auth";
+import { cn } from "@/lib/utils";
 
 export function Login() {
   const t = useT();
@@ -110,121 +110,133 @@ export function Login() {
   }
 
   return (
-    <div className="flex min-h-svh items-center justify-center bg-background p-4">
+    <div className="relative min-h-svh overflow-hidden bg-background">
+      {/* Backdrop do DS pra páginas fora do Shell (login, onboarding, convite):
+          glow lime + dot-grid mascarado (utilities .bg-hero-glow/.bg-dot-grid
+          do index.css). z-index negativo: ficam atrás do conteúdo em fluxo
+          normal sem depender da ordem no DOM em relação ao LanguageSwitcher. */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 bg-hero-glow" />
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 bg-dot-grid" />
       <div className="absolute right-4 top-4">
         <LanguageSwitcher />
       </div>
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <div className="mb-1 flex items-center gap-3">
-            <QuarkMark className="size-8 text-primary drop-shadow-[0_0_10px_rgba(198,249,78,0.55)]" />
-            <div className="flex flex-col">
-              <span className="font-mono text-[11px] tracking-[0.18em] text-muted-foreground uppercase">
-                {t("login.badge")}
-              </span>
-              <CardTitle className="font-heading text-2xl font-bold tracking-tight">quark</CardTitle>
-            </div>
+      <div className="flex min-h-svh items-center justify-center p-4">
+        <div className="w-full max-w-[400px] animate-rise">
+          <div className="mb-[30px] flex flex-col items-center text-center">
+            <QuarkMark className="mb-[18px] size-[42px] text-primary drop-shadow-[0_0_14px_rgba(198,249,78,0.4)]" />
+            <h1 className="font-heading text-[26px] font-bold tracking-display text-strong">{t("login.title")}</h1>
+            <p className="mt-2 text-[14.5px] text-muted-foreground">
+              {adminLoginEnabled ? t("login.description") : t("login.descriptionSso")}
+            </p>
           </div>
-          <CardDescription>
-            {adminLoginEnabled ? t("login.description") : t("login.descriptionSso")}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {adminLoginEnabled && (
-            <form onSubmit={handleSubmit} className="flex flex-col gap-3" noValidate>
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="admin-token" className="text-sm font-medium">
-                  {t("login.tokenLabel")}
-                </label>
-                <Input
-                  id="admin-token"
-                  ref={inputRef}
-                  type="password"
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="••••••••"
-                  value={value}
-                  onChange={(e) => setValue(e.target.value)}
-                  aria-invalid={mutation.isError}
-                  aria-describedby={mutation.isError ? "admin-token-error" : undefined}
-                  className="font-mono"
-                />
-                {mutation.isError && (
-                  <p id="admin-token-error" role="alert" className="text-sm text-destructive">
-                    {mutation.error instanceof ApiError && mutation.error.status === 401
-                      ? t("login.invalidToken")
-                      : t("login.connectionError")}
-                  </p>
-                )}
-              </div>
-              <Button type="submit" disabled={!value.trim() || mutation.isPending} className="mt-1">
-                {mutation.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-                {t("login.submit")}
-              </Button>
-            </form>
-          )}
-          {oidcEnabled && (
-            <>
-              {adminLoginEnabled && (
-                <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground">
-                  <span className="h-px flex-1 bg-border" />
-                  {t("login.or")}
-                  <span className="h-px flex-1 bg-border" />
-                </div>
-              )}
-              {org ? (
-                <>
-                  <p className="mb-2 text-center text-sm text-muted-foreground">
-                    {t("login.orgHeader", { org })}
-                  </p>
+          <div className="w-full rounded-2xl border border-input bg-card p-6 shadow-modal">
+            {oidcEnabled && (
+              <>
+                {org ? (
+                  <>
+                    <p className="mb-2 text-center text-sm text-muted-foreground">
+                      {t("login.orgHeader", { org })}
+                    </p>
+                    <Button
+                      type="button"
+                      className="w-full"
+                      onClick={() => {
+                        window.location.href = oidcLoginUrl(org, email);
+                      }}
+                    >
+                      {t("login.orgButton", { org })}
+                    </Button>
+                  </>
+                ) : showEmailStage ? (
+                  <form onSubmit={handleEmailSubmit} className="flex flex-col gap-3" noValidate>
+                    <div className="flex flex-col gap-1.5">
+                      <label htmlFor="sso-email" className="text-sm font-medium">
+                        {t("login.emailLabel")}
+                      </label>
+                      <Input
+                        id="sso-email"
+                        type="email"
+                        autoComplete="email"
+                        placeholder="jane@acme.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                      />
+                      <p className="text-xs text-muted-foreground">{t("login.emailHint")}</p>
+                    </div>
+                    <Button type="submit" variant="outline" disabled={!email.trim() || discoverMutation.isPending}>
+                      {discoverMutation.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+                      {t("login.continue")}
+                    </Button>
+                  </form>
+                ) : (
                   <Button
                     type="button"
-                    variant="outline"
                     className="w-full"
                     onClick={() => {
-                      window.location.href = oidcLoginUrl(org, email);
+                      window.location.href = oidcLoginUrl(undefined, email);
                     }}
                   >
-                    {t("login.orgButton", { org })}
+                    {oidcButtonLabel ?? t("login.oidcButton")}
                   </Button>
-                </>
-              ) : showEmailStage ? (
-                <form onSubmit={handleEmailSubmit} className="flex flex-col gap-3" noValidate>
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="sso-email" className="text-sm font-medium">
-                      {t("login.emailLabel")}
-                    </label>
-                    <Input
-                      id="sso-email"
-                      type="email"
-                      autoComplete="email"
-                      placeholder="jane@acme.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                    />
-                    <p className="text-xs text-muted-foreground">{t("login.emailHint")}</p>
-                  </div>
-                  <Button type="submit" variant="outline" disabled={!email.trim() || discoverMutation.isPending}>
-                    {discoverMutation.isPending && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-                    {t("login.continue")}
-                  </Button>
-                </form>
-              ) : (
+                )}
+              </>
+            )}
+            {oidcEnabled && adminLoginEnabled && (
+              <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="h-px flex-1 bg-border" />
+                {t("login.or")}
+                <span className="h-px flex-1 bg-border" />
+              </div>
+            )}
+            {adminLoginEnabled && (
+              <form
+                onSubmit={handleSubmit}
+                noValidate
+                className={cn("flex flex-col gap-3", oidcEnabled && "mt-4 border-t border-input pt-4")}
+              >
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="admin-token" className="text-sm font-medium">
+                    {t("login.tokenLabel")}
+                  </label>
+                  <Input
+                    id="admin-token"
+                    ref={inputRef}
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="••••••••"
+                    value={value}
+                    onChange={(e) => setValue(e.target.value)}
+                    aria-invalid={mutation.isError}
+                    aria-describedby={mutation.isError ? "admin-token-error" : undefined}
+                    className="font-mono text-[13px]"
+                  />
+                  {mutation.isError && (
+                    <p id="admin-token-error" role="alert" className="text-sm text-destructive">
+                      {mutation.error instanceof ApiError && mutation.error.status === 401
+                        ? t("login.invalidToken")
+                        : t("login.connectionError")}
+                    </p>
+                  )}
+                </div>
                 <Button
-                  type="button"
+                  type="submit"
                   variant="outline"
-                  className="w-full"
-                  onClick={() => {
-                    window.location.href = oidcLoginUrl(undefined, email);
-                  }}
+                  disabled={!value.trim() || mutation.isPending}
+                  className="mt-1 font-mono text-[13px]"
                 >
-                  {oidcButtonLabel ?? t("login.oidcButton")}
+                  {mutation.isPending ? (
+                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Lock className="size-4" aria-hidden="true" />
+                  )}
+                  {t("login.submit")}
                 </Button>
-              )}
-            </>
-          )}
-        </CardContent>
-      </Card>
+              </form>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -240,3 +240,15 @@ body {
     border-color: var(--accent-line);
   }
 }
+
+/* Fundo de páginas fora do Shell (login, onboarding, convite) — motifs do DS. */
+@utility bg-hero-glow {
+  background: radial-gradient(680px 460px at 50% -6%, rgba(198, 249, 78, 0.1), transparent 62%);
+}
+@utility bg-dot-grid {
+  opacity: 0.45;
+  mask-image: radial-gradient(700px 500px at 50% 24%, #000, transparent 76%);
+  background-image: linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 46px 46px;
+}

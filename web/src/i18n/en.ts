@@ -13,6 +13,7 @@ export const en = {
     languageSwitcherLabel: "Language",
   },
   login: {
+    title: "Sign in to quark",
     badge: "Operator panel",
     description: "Sign in with the admin token to manage links.",
     descriptionSso: "Sign in with your identity provider to manage links.",
