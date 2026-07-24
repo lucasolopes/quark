@@ -54,7 +54,7 @@ export function Analytics() {
   const activeQuery = usingServerSearch ? search : base;
 
   return (
-    <div className="flex flex-col gap-4 animate-rise">
+    <div className="flex flex-col gap-4 animate-rise max-w-[1000px]">
       <PageHeader title={t("analytics.heading")} />
 
       <div className="relative max-w-sm">

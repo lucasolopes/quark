@@ -50,7 +50,7 @@ export function ExtensionDetail() {
   const isSoon = integration.poweredBy === "soon";
 
   return (
-    <div className="flex flex-col gap-4 animate-rise">
+    <div className="flex flex-col gap-4 animate-rise max-w-[860px]">
       <PageHeader
         back={{ label: t("extensions.backToExtensions"), to: "/extensions" }}
         title={

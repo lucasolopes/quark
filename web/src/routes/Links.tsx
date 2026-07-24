@@ -163,7 +163,7 @@ export function Links() {
   }
 
   return (
-    <div className="flex flex-col gap-4 animate-rise">
+    <div className="flex flex-col gap-4 animate-rise max-w-[1000px]">
       <PageHeader
         title={t("links.heading")}
         subtitle={t("links.countSubtitle", { count: filtered.length, clicks: totalClicks })}

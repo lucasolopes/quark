@@ -67,7 +67,7 @@ export function Pixels() {
   }
 
   return (
-    <div className="flex flex-col gap-4 animate-rise">
+    <div className="flex flex-col gap-4 animate-rise max-w-[860px]">
       <PageHeader
         title={t("pixels.heading")}
         subtitle={t("pixels.subtitle")}

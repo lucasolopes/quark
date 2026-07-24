@@ -13,7 +13,7 @@ export function AppLinks() {
   const t = useT();
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 max-w-[860px]">
       <div>
         <h1 className="font-heading text-2xl font-semibold">{t("appLinks.heading")}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t("appLinks.subtitle")}</p>

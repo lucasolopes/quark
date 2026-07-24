@@ -53,7 +53,7 @@ export function SsoDomains() {
 
   if (oidcConfigured.isPending) {
     return (
-      <div className="flex flex-col gap-2" aria-hidden="true">
+      <div className="flex flex-col gap-2 max-w-[860px]" aria-hidden="true">
         <Skeleton className="h-10 w-full" />
       </div>
     );
@@ -61,7 +61,7 @@ export function SsoDomains() {
 
   if (!oidcConfigured.data) {
     return (
-      <div className="flex flex-col gap-4 animate-rise">
+      <div className="flex flex-col gap-4 animate-rise max-w-[860px]">
         <PageHeader title={t("ssoDomains.title")} subtitle={t("ssoDomains.notConfigured")} />
       </div>
     );
@@ -113,7 +113,7 @@ function SsoDomainsPanel() {
   }
 
   return (
-    <div className="flex flex-col gap-4 animate-rise">
+    <div className="flex flex-col gap-4 animate-rise max-w-[860px]">
       <PageHeader
         title={t("ssoDomains.title")}
         subtitle={t("ssoDomains.subtitle")}

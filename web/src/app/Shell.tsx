@@ -178,8 +178,8 @@ export function Shell() {
     <div className="flex min-h-svh">
       <aside className="flex w-16 shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 sm:w-[250px]">
         <div className="flex items-center justify-center gap-2.5 pb-4 sm:justify-start">
-          <QuarkMark className="size-[26px] text-primary drop-shadow-[0_0_8px_rgba(198,249,78,0.55)]" />
-          <span className="hidden font-heading text-lg font-bold tracking-tight text-sidebar-foreground sm:inline">
+          <QuarkMark className="size-[26px] text-primary drop-shadow-[0_0_8px_rgba(198,249,78,0.3)]" />
+          <span className="hidden font-heading text-lg font-bold tracking-[-0.04em] text-strong sm:inline">
             quark
           </span>
         </div>
@@ -194,7 +194,7 @@ export function Shell() {
         <nav className="flex flex-col gap-4">
           {navGroups.map((group) => (
             <div key={group.label} className="flex flex-col gap-1">
-              <div className="hidden px-3 pb-1 font-mono text-[10px] font-medium tracking-[0.14em] text-sidebar-foreground/45 uppercase sm:block">
+              <div className="hidden px-3 pb-2 font-mono text-[10px] font-medium tracking-[0.12em] text-sidebar-foreground/45 uppercase sm:block">
                 {group.label}
               </div>
               {group.items.map(({ to, label, icon: Icon }) => (
@@ -204,7 +204,7 @@ export function Shell() {
                   title={label}
                   className={({ isActive }) =>
                     cn(
-                      "flex items-center justify-center gap-3 rounded-[9px] px-3 py-2 text-[14.5px] font-medium transition-colors sm:justify-start",
+                      "flex items-center justify-center gap-3 rounded-[9px] px-[11px] py-[9px] text-[14.5px] font-medium transition-colors sm:justify-start",
                       isActive
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-sidebar-foreground/70 hover:bg-surface-hover",
@@ -263,8 +263,9 @@ export function Shell() {
           <div className="flex items-center gap-2.5">
             <LanguageSwitcher className="font-mono" />
             <Button
-              variant="ghost"
+              variant="outline"
               size="icon"
+              className="size-[34px]"
               aria-label={isDark ? t("shell.themeToLight") : t("shell.themeToDark")}
               onClick={toggle}
             >
@@ -276,7 +277,7 @@ export function Shell() {
             </Button>
           </div>
         </header>
-        <main className="min-w-0 flex-1 overflow-auto p-6 sm:p-[26px_30px]">
+        <main className="min-w-0 flex-1 overflow-auto p-6 sm:p-[26px_30px] sm:pb-[60px]">
           <Outlet />
         </main>
       </div>
