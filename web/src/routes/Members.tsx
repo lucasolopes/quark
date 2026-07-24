@@ -24,7 +24,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { PageHeader } from "@/components/PageHeader";
 import { useT, type MessageKey } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -46,6 +46,37 @@ const ROLE_LABEL_KEY: Record<string, MessageKey> = {
 function roleLabel(t: ReturnType<typeof useT>, role: string): string {
   const key = ROLE_LABEL_KEY[role];
   return key ? t(key) : role;
+}
+
+/**
+ * Avatar hues for member rows, drawn from the DS chart tokens (`--chart-2`..`--chart-5`).
+ * `--chart-1` is skipped on purpose: it doubles as `--primary`, the brand action color, which
+ * `tag-color.ts` also keeps scarce rather than spending it on a round-robin of decorative swatches.
+ */
+const AVATAR_HUES = ["var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"] as const;
+
+/**
+ * Small stable string hash (no crypto needed): the same email always lands on the same hue, with
+ * no randomness, so a pending invite's avatar color never changes between renders or reloads.
+ */
+function hashSeed(seed: string): number {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+/** Deterministic avatar background for a member row, keyed off the invite's email. */
+function avatarHue(email: string): string {
+  return AVATAR_HUES[hashSeed(email.toLowerCase()) % AVATAR_HUES.length];
+}
+
+/**
+ * Avatar initials for a member row. An invite carries no display name (it is only ever a pending
+ * placeholder until accepted), so this takes the email's first character — the same one-token
+ * shape `Shell`'s `initialsFrom` derives for an email `display` elsewhere in the panel.
+ */
+function emailInitials(email: string): string {
+  return email.trim().slice(0, 1).toUpperCase();
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -94,17 +125,17 @@ export function Members() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold">{t("invites.title")}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{t("invites.subtitle")}</p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4" />
-          {t("invites.inviteButton")}
-        </Button>
-      </div>
+    <div className="flex flex-col gap-4 animate-rise">
+      <PageHeader
+        title={t("invites.title")}
+        subtitle={t("invites.subtitle")}
+        actions={
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" />
+            {t("invites.inviteButton")}
+          </Button>
+        }
+      />
 
       {query.isPending && <MembersSkeleton />}
 
@@ -138,7 +169,9 @@ export function Members() {
       {!query.isPending && !query.isError && invites.length === 0 && (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-            <Users className="size-8 text-muted-foreground" aria-hidden="true" />
+            <div className="flex size-10 items-center justify-center rounded-[9px] bg-secondary">
+              <Users className="size-[18px] text-muted-foreground" aria-hidden="true" />
+            </div>
             <div>
               <p className="font-medium">{t("invites.empty")}</p>
             </div>
@@ -151,44 +184,40 @@ export function Members() {
       )}
 
       {!query.isPending && !query.isError && invites.length > 0 && (
-        <Card className="py-0">
-          <Table>
-            <caption className="sr-only">{t("invites.title")}</caption>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("invites.columnEmail")}</TableHead>
-                <TableHead>{t("invites.columnRole")}</TableHead>
-                <TableHead>{t("invites.columnExpires")}</TableHead>
-                <TableHead>{t("invites.columnCreated")}</TableHead>
-                <TableHead>
-                  <span className="sr-only">{t("linkTable.actionsSr")}</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {invites.map((invite) => (
-                <TableRow key={invite.id}>
-                  <TableCell>{invite.email}</TableCell>
-                  <TableCell>{roleLabel(t, invite.role)}</TableCell>
-                  <TableCell className="text-muted-foreground">{formatDateTime(invite.expires)}</TableCell>
-                  <TableCell className="text-muted-foreground">{formatDateTime(invite.created)}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t("invites.revoke") + " " + invite.email}
-                        onClick={() => setRevokingInvite(invite)}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+        <ul className="overflow-hidden rounded-lg border border-border bg-card">
+          {invites.map((invite) => (
+            <li
+              key={invite.id}
+              data-testid="member-row"
+              className="flex items-center gap-3.5 border-b border-border px-4 py-4 last:border-b-0"
+            >
+              <div
+                aria-hidden="true"
+                className="flex size-9 shrink-0 items-center justify-center rounded-full font-heading text-[13px] font-bold text-primary-foreground"
+                style={{ backgroundColor: avatarHue(invite.email) }}
+              >
+                {emailInitials(invite.email)}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[14.5px] font-semibold text-strong">{invite.email}</div>
+                <div className="truncate text-[12.5px] text-muted-foreground">
+                  {t("invites.pending")} · {t("invites.expires", { date: formatDateTime(invite.expires) })}
+                </div>
+              </div>
+              <span className="shrink-0 rounded-full border border-border px-3 py-1 text-[12.5px] text-muted-foreground">
+                {roleLabel(t, invite.role)}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={t("invites.revoke") + " " + invite.email}
+                onClick={() => setRevokingInvite(invite)}
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            </li>
+          ))}
+        </ul>
       )}
 
       <CreateInviteDialog
@@ -272,9 +301,16 @@ export function Members() {
 
 function MembersSkeleton() {
   return (
-    <div className="flex flex-col gap-2" aria-hidden="true">
+    <div className="overflow-hidden rounded-lg border border-border" aria-hidden="true">
       {Array.from({ length: 4 }).map((_, i) => (
-        <Skeleton key={i} className="h-10 w-full" />
+        <div key={i} className="flex items-center gap-3.5 border-b border-border px-4 py-4 last:border-b-0">
+          <Skeleton className="size-9 shrink-0 rounded-full" />
+          <div className="flex-1">
+            <Skeleton className="h-3.5 w-40" />
+            <Skeleton className="mt-2 h-3 w-56" />
+          </div>
+          <Skeleton className="h-6 w-16 shrink-0 rounded-full" />
+        </div>
       ))}
     </div>
   );

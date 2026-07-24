@@ -20,6 +20,45 @@ describe("Members", () => {
     render(withProviders(<Members />, { withRouter: false }));
     expect(await screen.findByText("ana@example.com")).toBeInTheDocument();
     expect(screen.getByText("Admin")).toBeInTheDocument();
+    // Row shape: one member row, with an avatar (initials) and a pending/expiry subline.
+    expect(screen.getAllByTestId("member-row")).toHaveLength(1);
+    expect(screen.getByText("A")).toBeInTheDocument();
+    expect(screen.getByText(/expires/i)).toBeInTheDocument();
+  });
+
+  it("derives a stable, distinct avatar color and initials from each member's email", async () => {
+    // `mockImplementation` (not `mockResolvedValue`) so each of the two renders below gets its own
+    // fresh `Response`: a `Response` body can only be read once, and the second render's own fetch
+    // would otherwise try to re-read the first render's already-consumed body.
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse([
+          { id: 1, email: "ana@example.com", role: "admin", expires: 1720100000, created: 1720000000 },
+          { id: 2, email: "bob@example.com", role: "viewer", expires: 1720100000, created: 1720000000 },
+        ]),
+      ),
+    );
+
+    const first = render(withProviders(<Members />, { withRouter: false }));
+    const rows = await screen.findAllByTestId("member-row");
+    expect(rows).toHaveLength(2);
+    const avatars = rows.map((row) => row.querySelector('[aria-hidden="true"]') as HTMLElement);
+    expect(avatars[0]).toHaveTextContent("A");
+    expect(avatars[1]).toHaveTextContent("B");
+    // Tokens only (no hex): each swatch is one of the DS chart CSS variables.
+    expect(avatars[0].style.backgroundColor).toMatch(/^var\(--chart-[2-5]\)$/);
+    expect(avatars[1].style.backgroundColor).toMatch(/^var\(--chart-[2-5]\)$/);
+    // Distinct people get distinct swatches (not every row painted the same color).
+    expect(avatars[0].style.backgroundColor).not.toBe(avatars[1].style.backgroundColor);
+    const [anaColor, bobColor] = [avatars[0].style.backgroundColor, avatars[1].style.backgroundColor];
+    first.unmount();
+
+    // Remounting against the same data reproduces the same colors every time: deterministic, not random.
+    render(withProviders(<Members />, { withRouter: false }));
+    const rowsAgain = await screen.findAllByTestId("member-row");
+    const avatarsAgain = rowsAgain.map((row) => row.querySelector('[aria-hidden="true"]') as HTMLElement);
+    expect(avatarsAgain[0].style.backgroundColor).toBe(anaColor);
+    expect(avatarsAgain[1].style.backgroundColor).toBe(bobColor);
   });
 
   it("shows a dedicated permission message on 403", async () => {
