@@ -34,6 +34,13 @@ describe("AcceptInvite", () => {
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
   });
 
+  it("unauthenticated: renders the v2 heading and a neutral icon well", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ authenticated: false, oidc_enabled: true }));
+    render(wrap());
+    expect(await screen.findByRole("heading", { level: 1, name: /join workspace/i })).toBeInTheDocument();
+    expect(screen.getByTestId("accept-invite-well")).toHaveClass("bg-secondary");
+  });
+
   it("unauthenticated: the sign-in button navigates to /login", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ authenticated: false, oidc_enabled: true }));
     render(wrap());
@@ -45,6 +52,26 @@ describe("AcceptInvite", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ authenticated: true, oidc_enabled: true }));
     render(wrap());
     expect(await screen.findByRole("button", { name: /accept invite/i })).toBeInTheDocument();
+  });
+
+  it("authenticated, no error yet: renders the v2 heading and an accent icon well", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ authenticated: true, oidc_enabled: true }));
+    render(wrap());
+    expect(await screen.findByRole("heading", { level: 1, name: /join workspace/i })).toBeInTheDocument();
+    expect(screen.getByTestId("accept-invite-well")).toHaveClass("bg-accent-wash");
+  });
+
+  it("the icon well switches to a destructive treatment once accepting fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes("/admin/me")) return Promise.resolve(jsonResponse({ authenticated: true, oidc_enabled: true }));
+      if (init?.method === "POST") return Promise.resolve(new Response("forbidden", { status: 403 }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    render(wrap());
+    expect(await screen.findByTestId("accept-invite-well")).toHaveClass("bg-accent-wash");
+    await userEvent.click(screen.getByRole("button", { name: /accept invite/i }));
+    await waitFor(() => expect(screen.getByTestId("accept-invite-well")).toHaveClass("bg-destructive/10"));
   });
 
   it("accepting posts to /admin/invites/:token/accept and navigates into the app on success", async () => {
