@@ -124,9 +124,11 @@ export function Shell() {
         </div>
 
         {/* WorkspaceSwitcher moved here from the topbar (cloud only — it renders nothing in OSS). */}
-        <div className="hidden pb-4 sm:block">
-          <WorkspaceSwitcher />
-        </div>
+        {me.data?.memberships !== undefined && (
+          <div className="hidden pb-4 sm:block">
+            <WorkspaceSwitcher />
+          </div>
+        )}
 
         <nav className="flex flex-col gap-4">
           {navGroups.map((group) => (
@@ -185,7 +187,7 @@ export function Shell() {
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-[62px] shrink-0 items-center justify-between gap-3 border-b border-border px-6">
-          <div className="flex max-w-[440px] flex-1 items-center gap-2 rounded-[10px] border border-border bg-secondary px-3.5">
+          <div className="flex max-w-[440px] flex-1 items-center gap-2 rounded-[10px] border border-border bg-secondary px-3.5 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
             <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <input
               type="text"
