@@ -309,30 +309,17 @@ export function Shell() {
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="flex h-[62px] shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-11 md:hidden"
-              aria-label={t("shell.openMenu")}
-              onClick={() => setMobileNavOpen(true)}
-            >
-              <Menu className="size-5" aria-hidden="true" />
-            </Button>
+            <div className="flex flex-1 items-center gap-2.5">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-11 md:hidden"
+                aria-label={t("shell.openMenu")}
+                onClick={() => setMobileNavOpen(true)}
+              >
+                <Menu className="size-5" aria-hidden="true" />
+              </Button>
 
-            <div className="hidden max-w-[440px] flex-1 items-center gap-2 rounded-[10px] border border-border bg-secondary px-3.5 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 md:flex">
-              <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <input
-                type="text"
-                placeholder={t("shell.searchPlaceholder")}
-                aria-label={t("shell.searchPlaceholder")}
-                value={searchValue}
-                onChange={handleSearchChange}
-                onKeyDown={handleSearchKeyDown}
-                className="w-full min-w-0 flex-1 bg-transparent py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground"
-              />
-            </div>
-
-            <div className="flex items-center gap-2.5">
               <Button
                 variant="ghost"
                 size="icon"
@@ -343,6 +330,21 @@ export function Shell() {
                 <Search className="size-5" aria-hidden="true" />
               </Button>
 
+              <div className="hidden max-w-[440px] flex-1 items-center gap-2 rounded-[10px] border border-border bg-secondary px-3.5 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 md:flex">
+                <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <input
+                  type="text"
+                  placeholder={t("shell.searchPlaceholder")}
+                  aria-label={t("shell.searchPlaceholder")}
+                  value={searchValue}
+                  onChange={handleSearchChange}
+                  onKeyDown={handleSearchKeyDown}
+                  className="w-full min-w-0 flex-1 bg-transparent py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5">
               <div className="hidden items-center gap-2.5 md:flex">
                 <LanguageSwitcher className="font-mono" />
                 {themeToggle}
