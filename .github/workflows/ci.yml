@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+# Privilegio minimo por padrao. So o job que precisar de mais eleva localmente.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -34,7 +38,7 @@ jobs:
         options: >-
           --health-cmd "wget -q -O - http://localhost:8123/ping || exit 1" --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Rust (stable + rustfmt + clippy)
         run: |
@@ -42,7 +46,7 @@ jobs:
           rustup default stable
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry
@@ -72,8 +76,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
@@ -88,15 +92,18 @@ jobs:
   # testes. O front deploya sozinho pelo Cloudflare Pages (integração Git), então
   # não entra aqui. `concurrency` garante um deploy por vez.
   deploy-backend:
-    needs: check
+    needs: [check, web]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     concurrency:
       group: deploy-backend
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Pinado no SHA do master porque o subpath nao publica tag utilizavel.
+      # O Dependabot nao consegue atualizar esse pin sozinho; revisar a mao,
+      # trimestralmente.
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master@2026-07-24
       - run: flyctl deploy --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

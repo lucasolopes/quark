@@ -50,10 +50,17 @@ permissions:
 jobs:
   cla-assistant:
     runs-on: ubuntu-latest
+    # Em evento disparado pelo Dependabot (inclusive pull_request_target), o
+    # GITHUB_TOKEN vem read-only e os secrets do Actions nao sao expostos ao
+    # job. Este workflow usa secrets.PERSONAL_ACCESS_TOKEN e chama
+    # issues.createComment, o que resultaria em 403. allowlist no
+    # contributor-assistant nao resolve porque o job ainda rodaria e falharia
+    # antes de chegar la; a condicao tem que estar no nivel do job.
+    if: github.actor != 'dependabot[bot]'
     steps:
       - name: Post CLA request
         if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             await github.rest.issues.createComment({
@@ -73,7 +80,7 @@ jobs:
           (github.event.comment.body == 'recheck' ||
            github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') ||
           github.event_name == 'pull_request_target'
-        uses: contributor-assistant/github-action@v2.6.1
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
@@ -97,7 +104,7 @@ jobs:
           github.event.action == 'created' &&
           github.event.issue.pull_request != null &&
           github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const signedAt = new Date(context.payload.comment.created_at).toISOString();
