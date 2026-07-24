@@ -259,7 +259,6 @@ export const en = {
     clearError: "Could not clear the document. Try again.",
   },
   stats: {
-    backAria: "Back to Links",
     heading: "Stats",
     subtitle: "Clicks for link {code}.",
     loadError: "Could not load stats.",
@@ -267,6 +266,8 @@ export const en = {
     emptyTitle: "No clicks yet.",
     emptySubtitle: "Once someone opens this link, clicks will show up here.",
     totalClicks: "Total clicks",
+    topCountry: "Top country",
+    topDevice: "Top device",
     botsExcluded: "Bots (excluded)",
     chartsHumanOnlyHint: "Charts below show human traffic only. Bot and crawler clicks are counted separately and excluded from these breakdowns.",
     firstClick: "First click",

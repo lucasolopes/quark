@@ -261,7 +261,6 @@ export const ptBR: Messages = {
     clearError: "Não foi possível limpar o documento. Tente de novo.",
   },
   stats: {
-    backAria: "Voltar para Links",
     heading: "Estatísticas",
     subtitle: "Cliques do link {code}.",
     loadError: "Não foi possível carregar as estatísticas.",
@@ -269,6 +268,8 @@ export const ptBR: Messages = {
     emptyTitle: "Sem cliques ainda.",
     emptySubtitle: "Quando alguém abrir este link, os cliques aparecem aqui.",
     totalClicks: "Total de cliques",
+    topCountry: "País principal",
+    topDevice: "Dispositivo principal",
     botsExcluded: "Bots (excluídos)",
     chartsHumanOnlyHint: "Os gráficos abaixo mostram só tráfego humano. Cliques de bots e crawlers são contados à parte e excluídos dessas quebras.",
     firstClick: "Primeiro clique",

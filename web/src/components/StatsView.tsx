@@ -20,11 +20,34 @@ interface MeterRow {
   pct: number;
 }
 
-/** `per_*` map turned into MeterBar rows: sorted, top-N, each entry's share of the total. */
+/** Sum of every value in a `per_*` breakdown map — the TRUE total, computed before any top-N slice. */
+function sumValues(map: Record<string, number>): number {
+  return Object.values(map).reduce((sum, n) => sum + n, 0);
+}
+
+/**
+ * `per_*` map turned into MeterBar rows: sorted, top-N, each entry's share of
+ * the FULL total (not just the rendered top-N slice). Country rows are capped
+ * to `TOP_N_COUNTRIES`, so their percentages must still divide by every
+ * country's count, not only the shown top 8, or they'd be inflated.
+ */
 function toMeterRows(map: Record<string, number>, unknownLabel: string, topN?: number): MeterRow[] {
   const data = toBreakdownData(map, unknownLabel, topN);
-  const total = data.reduce((sum, d) => sum + d.count, 0);
+  const total = sumValues(map);
   return data.map((d) => ({ label: d.label, pct: total > 0 ? (d.count / total) * 100 : 0 }));
+}
+
+interface TopEntry {
+  label: string;
+  pct: number;
+}
+
+/** Highest-count entry in a `per_*` map, with its share of the FULL total. `null` when the map has no entries. */
+function topEntry(map: Record<string, number>, unknownLabel: string): TopEntry | null {
+  const sorted = toBreakdownData(map, unknownLabel);
+  if (sorted.length === 0) return null;
+  const total = sumValues(map);
+  return { label: sorted[0].label, pct: total > 0 ? (sorted[0].count / total) * 100 : 0 };
 }
 
 interface MeterListProps {
@@ -50,6 +73,8 @@ function MeterList({ rows, tone, emptyLabel }: MeterListProps) {
 export function StatsView({ code }: { code: string }) {
   const t = useT();
   const query = useStats(code);
+  const topCountry = query.isSuccess ? topEntry(query.data.aggregates.per_country, t("charts.unknown")) : null;
+  const topDevice = query.isSuccess ? topEntry(query.data.aggregates.per_device, t("charts.unknown")) : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -92,18 +117,49 @@ export function StatsView({ code }: { code: string }) {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
             <StatCard label={t("stats.totalClicks")} value={formatNumber(query.data.aggregates.total)} accent />
             <StatCard
+              label={t("stats.topCountry")}
+              value={
+                <span className="text-[22px]">
+                  {topCountry ? (
+                    <>
+                      {topCountry.label}{" "}
+                      <span className="text-sm font-mono text-muted-foreground">
+                        {Math.round(topCountry.pct)}%
+                      </span>
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </span>
+              }
+            />
+            <StatCard
+              label={t("stats.topDevice")}
+              value={
+                <span className="text-[22px]">
+                  {topDevice ? (
+                    <>
+                      {topDevice.label}{" "}
+                      <span className="text-sm font-mono text-muted-foreground">
+                        {Math.round(topDevice.pct)}%
+                      </span>
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </span>
+              }
+            />
+            <StatCard
               label={t("stats.botsExcluded")}
               value={<span className="text-[22px]">{formatNumber(query.data.aggregates.bots)}</span>}
             />
-            <StatCard
-              label={t("stats.firstClick")}
-              value={<span className="text-[22px]">{formatDateTime(query.data.aggregates.first_ts)}</span>}
-            />
-            <StatCard
-              label={t("stats.lastClick")}
-              value={<span className="text-[22px]">{formatDateTime(query.data.aggregates.last_ts)}</span>}
-            />
           </div>
+
+          <p className="text-[12.5px] text-muted-foreground">
+            {t("stats.firstClick")} {formatDateTime(query.data.aggregates.first_ts)} ·{" "}
+            {t("stats.lastClick")} {formatDateTime(query.data.aggregates.last_ts)}
+          </p>
 
           <p className="text-sm text-muted-foreground">{t("stats.chartsHumanOnlyHint")}</p>
 
