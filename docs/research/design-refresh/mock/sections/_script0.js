@@ -274,9 +274,9 @@ class Component extends DCLogic {
       { name: 'Dashboard read-only', prefix: 'qtok_live_c7b2', scopes: ['links_read', 'analytics'], rate: '300/min', lastUsed: 'never' },
     ];
     const webhooks = [
-      { url: 'https://hooks.zapier.com/hooks/catch/8842/a1b2c3', kind: 'Zapier', evs: ['link.created', 'link.clicked'], status: 'active', del: '99.8%' },
+      { url: 'https://hooks.zapier.com/hooks/catch/000000/EXEMPLO', kind: 'Zapier', evs: ['link.created', 'link.clicked'], status: 'active', del: '99.8%' },
       { url: 'https://acme.com/api/quark-events', kind: 'generic', evs: ['link.created', 'link.updated', 'link.deleted'], status: 'active', del: '100%' },
-      { url: 'https://hooks.slack.com/services/T04/B07/xY9', kind: 'Slack', evs: ['link.threshold_reached'], status: 'paused', del: '—' },
+      { url: 'https://hooks.slack.com/services/T000/B000/EXEMPLO', kind: 'Slack', evs: ['link.threshold_reached'], status: 'paused', del: '—' },
     ];
     const perDay = [820, 910, 1180, 1040, 1330, 1610, 1490, 1720, 2010, 1880, 2240, 2680, 2510, 2960];
     return { links, tagColors, domains, members, tokens, webhooks, perDay };
