@@ -1,0 +1,53 @@
+# cargo-deny policy. Run with `cargo deny check`.
+#
+# quark is AGPL-3.0-only, so license compatibility of every transitive
+# dependency is a gate, not a detail. This file also watches RustSec advisories
+# and records the duplicate crypto trees the binary currently carries.
+
+[graph]
+# The optional backends (Postgres, Valkey, ClickHouse) are always compiled -
+# there is no [features] section - so the default graph already covers them.
+all-features = true
+
+[advisories]
+# Fail on any RustSec advisory. Every entry added to `ignore` must carry a date
+# and a linked issue, and must be revisited, not left to rot.
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive licenses only. Anything copyleft or source-available in a
+# dependency would conflict with distributing quark under AGPL-3.0-only.
+#
+# This list is the starting set. The first CI run is what proves it: extend it
+# only with a license that is genuinely compatible, and treat an unexpected
+# entry as a dependency to reconsider rather than a line to add here.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Duplicate versions are a warning, not an error: the crypto tree currently
+# carries two generations because the direct dependencies moved to the new
+# RustCrypto line (sha2 0.11, hmac 0.13, getrandom 0.4) while transitive
+# dependencies still pull the old one. Recorded here so the duplication stays
+# visible and deliberate rather than silently growing in a binary that sells
+# itself as a single binary.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
