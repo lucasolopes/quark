@@ -8,6 +8,9 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
+// Manual webhook: kind "generic" and no connector_id — see isExtensionManaged
+// in Webhooks.tsx. Fixtures below that should stay manual spread this as-is;
+// ones that should count as extension-managed override kind and/or connector_id.
 const SAMPLE_WEBHOOK = {
   id: 1,
   url: "https://example.com/hooks/quark",
@@ -66,19 +69,60 @@ describe("Webhooks", () => {
     expect(screen.getByText(/won't be shown again/i)).toBeInTheDocument();
   });
 
-  it("shows the kind badge for webhooks created via the API with a non-generic kind", async () => {
+  // A webhook with a non-generic kind and no connector_id is a legacy extension webhook
+  // (created before connector_id existed, or by the Extensions flow directly) — it is
+  // extension-managed per isExtensionManaged, so it no longer renders here at all; it's
+  // managed from /extensions instead. This replaces the old "shows the kind badge for a
+  // non-generic kind" expectation, which is exactly the behavior this fix retires.
+  it("hides a legacy non-generic-kind webhook and shows the extensions note (extension-only fixture)", async () => {
     const slackWebhook = { ...SAMPLE_WEBHOOK, id: 4, kind: "slack" };
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ webhooks: [slackWebhook] }));
+    render(withProviders(<Webhooks />));
+
+    expect(await screen.findByText(/no webhooks yet/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("webhook-card")).not.toBeInTheDocument();
+    const extensionsLink = screen.getByRole("link", { name: /extensions/i });
+    expect(extensionsLink).toHaveAttribute("href", "/extensions");
+  });
+
+  it("lists only manual webhooks and notes extension-managed ones with a link to Extensions (mixed fixture)", async () => {
+    const manualA = { ...SAMPLE_WEBHOOK, id: 20, url: "https://manual-a.example.com/hook" };
+    const manualB = { ...SAMPLE_WEBHOOK, id: 21, url: "https://manual-b.example.com/hook" };
+    // Legacy extension webhook: non-generic kind, no connector_id.
+    const slackLegacy = { ...SAMPLE_WEBHOOK, id: 22, url: "https://slack-legacy.example.com/hook", kind: "slack" };
+    // Fase-3 extension webhook: generic kind, but tagged with connector_id.
+    const makeConnector = { ...SAMPLE_WEBHOOK, id: 23, url: "https://make-connector.example.com/hook", connector_id: "make" };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ webhooks: [manualA, manualB, slackLegacy, makeConnector] }),
+    );
+
+    render(withProviders(<Webhooks />));
+
+    const cards = await screen.findAllByTestId("webhook-card");
+    expect(cards).toHaveLength(2);
+    expect(screen.getByText("https://manual-a.example.com/hook")).toBeInTheDocument();
+    expect(screen.getByText("https://manual-b.example.com/hook")).toBeInTheDocument();
+    expect(screen.queryByText("https://slack-legacy.example.com/hook")).not.toBeInTheDocument();
+    expect(screen.queryByText("https://make-connector.example.com/hook")).not.toBeInTheDocument();
+
+    const extensionsLink = screen.getByRole("link", { name: /extensions/i });
+    expect(extensionsLink).toHaveAttribute("href", "/extensions");
+  });
+
+  it("does not show the extensions note when every webhook is manual", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ webhooks: [SAMPLE_WEBHOOK] }));
     render(withProviders(<Webhooks />, { withRouter: false }));
     await screen.findByText("https://example.com/hooks/quark");
-    expect(screen.getByText(/^slack$/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /extensions/i })).not.toBeInTheDocument();
   });
 
   it("renders webhooks whose events aren't all in the label map, without crashing", async () => {
+    // kind stays "generic" (manual) here on purpose: this test is about the event-label
+    // fallback, not about kind — a non-generic kind would now be extension-managed and
+    // filtered out of this list before the event rendering is ever reached.
     const futureWebhook = {
       ...SAMPLE_WEBHOOK,
       id: 5,
-      kind: "slack",
       events: ["link.broken", "link.recovered", "link.future_event"],
     };
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ webhooks: [futureWebhook] }));
