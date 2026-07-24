@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useSearchParams } from "react-router-dom";
 import { Links } from "./Links";
@@ -123,10 +123,14 @@ describe("Links", () => {
     expect(screen.queryByText(/no links found for "zzz"/i)).not.toBeInTheDocument();
   });
 
-  it("empty state", async () => {
+  it("empty state, whose CTA opens the create dialog (the PageHeader's duplicate button was removed)", async () => {
     mockFetchByUrl(() => jsonResponse({ links: [], next_after: null }));
     render(withProviders(<Links />));
     expect(await screen.findByText(/no links yet/i)).toBeInTheDocument();
+
+    // Exactly one "Create link" affordance remains on the page (the empty-state CTA).
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
+    expect(await screen.findByRole("dialog", { name: /create link/i })).toBeInTheDocument();
   });
 
   it("filters by folder via the API (?folder= in the querystring)", async () => {
@@ -210,6 +214,50 @@ describe("Links", () => {
     await waitFor(() => {
       expect(screen.getByText("BBB1111")).toBeInTheDocument();
       expect(screen.queryByText("AAA0000")).not.toBeInTheDocument();
+    });
+  });
+
+  it("caps tag chips at 10 behind a '+N' toggle that expands to reveal every tag (still filterable)", async () => {
+    const tagNames = [
+      "alfa", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+      "india", "juliet", "kilo", "lima", "mike", "november",
+    ];
+    const base = {
+      links: [
+        { id: 1, code: "AAA0000", url: "https://cat.com", expiry: null, created: 1, tags: ["november"], rules: [], variants: [] },
+        { id: 2, code: "BBB1111", url: "https://dog.com", expiry: null, created: 2, tags: ["alfa"], rules: [], variants: [] },
+      ],
+      next_after: null,
+    };
+    mockFetchByUrl((url) => {
+      if (url.includes("/admin/tags"))
+        return jsonResponse({ tags: tagNames.map((name, i) => ({ name, count: i + 1 })) });
+      if (url.includes("tag=november"))
+        return jsonResponse({ links: base.links.filter((l) => l.tags.includes("november")), next_after: null });
+      return jsonResponse(base);
+    });
+
+    render(withProviders(<Links />));
+    const group = await screen.findByRole("group", { name: /filter by tag/i });
+
+    // 10-tag cap: the first 10 alphabetic chips render; "november" (14th) stays behind "+4".
+    expect(within(group).getByRole("button", { name: /^alfa/i })).toBeInTheDocument();
+    expect(within(group).queryByRole("button", { name: /^november/i })).not.toBeInTheDocument();
+    const moreButton = within(group).getByRole("button", { name: "+4" });
+
+    await userEvent.click(moreButton);
+
+    // Expanded: all 14 tags show, including "november" past the original cap, and the
+    // same slot now reads "Show less".
+    const novemberChip = within(group).getByRole("button", { name: /^november/i });
+    expect(within(group).getByRole("button", { name: /show less/i })).toBeInTheDocument();
+    expect(within(group).queryByRole("button", { name: "+4" })).not.toBeInTheDocument();
+
+    // Every tag is still filterable once expanded, including ones beyond the original cap.
+    await userEvent.click(novemberChip);
+    await waitFor(() => {
+      expect(screen.getByText("AAA0000")).toBeInTheDocument();
+      expect(screen.queryByText("BBB1111")).not.toBeInTheDocument();
     });
   });
 

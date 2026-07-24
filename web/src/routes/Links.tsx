@@ -48,6 +48,9 @@ function chipClass(active: boolean): string {
   return `${base} ${state}`;
 }
 
+/** Tag chips beyond this count collapse behind a "+N" toggle so a tag-heavy account doesn't push the filter row into a wall of chips. */
+const TAG_CHIPS_VISIBLE_CAP = 10;
+
 export function Links() {
   const t = useT();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -57,6 +60,7 @@ export function Links() {
   const [folder, setFolder] = useState("");
   const [brokenOnly, setBrokenOnly] = useState(false);
   const [activeOnly, setActiveOnly] = useState(false);
+  const [showAllTags, setShowAllTags] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingLink, setEditingLink] = useState<Link | null>(null);
   const [deletingLink, setDeletingLink] = useState<Link | null>(null);
@@ -118,6 +122,8 @@ export function Links() {
   // reflects the currently loaded/filtered set, not every link in the account.
   const totalClicks = useMemo(() => filtered.reduce((sum, l) => sum + (l.visits ?? 0), 0), [filtered]);
   const tagChips = tagsQuery.data?.tags ?? [];
+  const hiddenTagCount = tagChips.length - TAG_CHIPS_VISIBLE_CAP;
+  const visibleTagChips = showAllTags ? tagChips : tagChips.slice(0, TAG_CHIPS_VISIBLE_CAP);
 
   const activeQuery = usingServerSearch ? serverSearch : query;
   const serverSearchFailed =
@@ -141,14 +147,6 @@ export function Links() {
       <PageHeader
         title={t("links.heading")}
         subtitle={t("links.countSubtitle", { count: filtered.length, clicks: totalClicks })}
-        actions={
-          canWrite && (
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" />
-              {t("links.createButton")}
-            </Button>
-          )
-        }
       />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -208,7 +206,7 @@ export function Links() {
           <button type="button" onClick={() => setTag("")} aria-pressed={tag === ""} className={chipClass(tag === "")}>
             {t("links.tagFilterAllOption")}
           </button>
-          {tagChips.map((tagOption) => (
+          {visibleTagChips.map((tagOption) => (
             <button
               key={tagOption.name}
               type="button"
@@ -220,6 +218,16 @@ export function Links() {
               <span className="font-mono text-[11px] opacity-70">{tagOption.count}</span>
             </button>
           ))}
+          {hiddenTagCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAllTags((prev) => !prev)}
+              aria-expanded={showAllTags}
+              className={chipClass(false)}
+            >
+              {showAllTags ? t("links.lessTags") : t("links.moreTags", { count: hiddenTagCount })}
+            </button>
+          )}
         </div>
       )}
 

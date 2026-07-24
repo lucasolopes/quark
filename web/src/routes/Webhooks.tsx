@@ -240,6 +240,7 @@ export function Webhooks() {
             // Defensive: webhook.kind is typed as a closed union, but a value from the
             // API that predates a known kind (or a future one) can still land here.
             const kindLabelKey = KIND_LABEL_KEY[webhook.kind ?? "generic"];
+            const activeLabel = t("webhooks.columnActive");
             return (
               <li
                 key={webhook.id}
@@ -315,8 +316,8 @@ export function Webhooks() {
                       loses the space between them): visible text first ("Active — {url}"),
                       with the on/off state conveyed separately by aria-checked.
                     */}
-                    <span aria-hidden="true">{t("webhooks.columnActive")}</span>
-                    <span className="sr-only">{t("webhooks.columnActive")} — {webhook.url}</span>
+                    <span aria-hidden="true">{activeLabel}</span>
+                    <span className="sr-only">{activeLabel} — {webhook.url}</span>
                     <Switch
                       checked={webhook.active}
                       onCheckedChange={() => handleToggleActive(webhook)}
