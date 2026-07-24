@@ -27,11 +27,18 @@ pub struct GoogleSheetsApi {
     pub client: reqwest::Client,
 }
 
+/// Request budget for Google Sheets API calls. A sync reads whole ranges, so the
+/// budget is generous; the lease TTL is what bounds a stuck sync overall.
+const SHEETS_HTTP_TIMEOUT_SECS: u64 = 30;
+
 /// Builds the HTTP client for Google API calls with a request timeout, so a
 /// stalled connection cannot hang a sync (and hold the sync lease) forever.
 pub fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(SHEETS_HTTP_TIMEOUT_SECS))
+        .connect_timeout(std::time::Duration::from_secs(
+            crate::HTTP_CONNECT_TIMEOUT_SECS,
+        ))
         .build()
         .expect("reqwest client builds")
 }

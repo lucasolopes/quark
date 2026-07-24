@@ -27,6 +27,16 @@ pub mod webhooks;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// TCP+TLS connect budget for every outbound HTTP client, always smaller than
+/// the client's total request timeout (the smallest total in the crate is 5s).
+///
+/// Without a separate connect timeout, a destination that accepts the TCP
+/// connection and then stalls during the TLS handshake consumes the whole
+/// request budget. That matters most for the webhook and pixel clients, which
+/// fetch user-supplied URLs and share the runtime with the redirect hot path.
+/// Shared here because every module needs the same figure.
+pub const HTTP_CONNECT_TIMEOUT_SECS: u64 = 3;
+
 /// Epoch in seconds (UTC). Saturates to 0 if the clock is before 1970.
 /// Single point used by the request path (`api`) and by the cache (L2 TTL).
 pub fn now() -> u64 {

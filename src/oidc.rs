@@ -15,6 +15,11 @@ use std::sync::Arc;
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Request budget for calls to the IdP (discovery, JWKS, code exchange). A login
+/// waits on these, so the budget is short enough to fail visibly rather than hang
+/// the browser.
+const OIDC_HTTP_TIMEOUT_SECS: u64 = 10;
+
 /// OIDC settings read once from the environment. `from_env` returns `None` when
 /// `QUARK_OIDC_ISSUER` is unset, which keeps OIDC fully off by default.
 #[derive(Debug, Clone)]
@@ -614,7 +619,10 @@ impl OidcRuntime {
 
     async fn build(config: OidcConfig) -> Result<OidcRuntime, String> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(OIDC_HTTP_TIMEOUT_SECS))
+            .connect_timeout(std::time::Duration::from_secs(
+                crate::HTTP_CONNECT_TIMEOUT_SECS,
+            ))
             .build()
             .map_err(|e| e.to_string())?;
         let discovery = discover(&client, &config.issuer).await?;

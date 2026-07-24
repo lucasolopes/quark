@@ -16,6 +16,10 @@ use std::sync::Arc;
 const CACHE_CAPACITY: u64 = 100_000;
 /// Analytics channel capacity (buffered `ClickEvent`s before backpressure).
 const ANALYTICS_CHANNEL_CAPACITY: usize = 10_000;
+/// Request budget for forwarding a conversion to a third-party pixel. Short
+/// because the forwarding worker shares the runtime with the redirect path and
+/// the delivery is best-effort anyway.
+const PIXEL_FORWARD_TIMEOUT_SECS: u64 = 5;
 
 /// Analytics retention window (LUC-65, GDPR), in seconds, from the raw
 /// `QUARK_ANALYTICS_RETENTION_DAYS` env value plus the `multi_tenant` mode.
@@ -246,7 +250,10 @@ async fn main() {
     let (analytics_tx, analytics_rx) = tokio::sync::mpsc::channel(ANALYTICS_CHANNEL_CAPACITY);
     let pixel_client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(PIXEL_FORWARD_TIMEOUT_SECS))
+        .connect_timeout(std::time::Duration::from_secs(
+            quark::HTTP_CONNECT_TIMEOUT_SECS,
+        ))
         .build()
         .expect("build pixel forwarding client");
     let admin_token = std::env::var("QUARK_ADMIN_TOKEN").ok();
@@ -298,6 +305,9 @@ async fn main() {
     let webhooks = if std::env::var("QUARK_DATABASE_URL").is_ok() {
         let relay_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(DELIVERY_TIMEOUT_SECS))
+            .connect_timeout(std::time::Duration::from_secs(
+                quark::HTTP_CONNECT_TIMEOUT_SECS,
+            ))
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("build webhook relay client");

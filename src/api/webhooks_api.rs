@@ -641,6 +641,9 @@ pub(crate) async fn send_test_event_guarded(
     };
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(WEBHOOK_TEST_TIMEOUT_SECS))
+        .connect_timeout(std::time::Duration::from_secs(
+            crate::HTTP_CONNECT_TIMEOUT_SECS,
+        ))
         .redirect(reqwest::redirect::Policy::none())
         .build()
     {

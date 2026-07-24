@@ -354,6 +354,9 @@ pub(crate) fn reqwest_client() -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(HTTP_CLIENT_TIMEOUT_SECS))
+        .connect_timeout(std::time::Duration::from_secs(
+            crate::HTTP_CONNECT_TIMEOUT_SECS,
+        ))
         .build()
         .expect("reqwest client builds")
 }

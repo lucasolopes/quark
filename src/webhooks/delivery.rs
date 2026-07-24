@@ -190,6 +190,7 @@ pub fn spawn_webhook_worker(
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(DELIVERY_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(crate::HTTP_CONNECT_TIMEOUT_SECS))
             .redirect(Policy::none())
             .build()
             .expect("reqwest client must build");

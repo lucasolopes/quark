@@ -13,11 +13,16 @@ use serde_json::json;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+/// Request budget for Keycloak admin calls. Generous because realm creation and
+/// user backfill are legitimately slow, and this never runs on the redirect path.
+const KEYCLOAK_HTTP_TIMEOUT_SECS: u64 = 30;
+
 /// Builds the HTTP client for Keycloak admin calls with a request timeout, so
 /// a stalled connection cannot hang tenant provisioning forever.
 pub fn keycloak_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(KEYCLOAK_HTTP_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(crate::HTTP_CONNECT_TIMEOUT_SECS))
         .build()
         .expect("reqwest client builds")
 }
