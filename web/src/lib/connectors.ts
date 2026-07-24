@@ -16,8 +16,6 @@ export interface Integration {
   name: string;
   /** Short monogram shown inside the brand-colored badge (e.g. "Sl"). */
   mono: string;
-  /** Brand color, used ONLY as the mono badge fill. */
-  color: string;
   descKey: MessageKey;
   category: Category;
   poweredBy: PoweredBy;
@@ -31,22 +29,22 @@ export interface Integration {
  */
 export const INTEGRATIONS: Integration[] = [
   // Notifications — powered by Webhooks.
-  { id: "slack", name: "Slack", mono: "Sl", color: "#4A154B", descKey: "extensions.slackDesc", category: "notifications", poweredBy: "webhooks" },
-  { id: "discord", name: "Discord", mono: "D", color: "#5865F2", descKey: "extensions.discordDesc", category: "notifications", poweredBy: "webhooks" },
-  { id: "telegram", name: "Telegram", mono: "T", color: "#26A5E4", descKey: "extensions.telegramDesc", category: "notifications", poweredBy: "webhooks" },
+  { id: "slack", name: "Slack", mono: "Sl", descKey: "extensions.slackDesc", category: "notifications", poweredBy: "webhooks" },
+  { id: "discord", name: "Discord", mono: "D", descKey: "extensions.discordDesc", category: "notifications", poweredBy: "webhooks" },
+  { id: "telegram", name: "Telegram", mono: "T", descKey: "extensions.telegramDesc", category: "notifications", poweredBy: "webhooks" },
   // Automation — powered by Webhooks.
-  { id: "zapier", name: "Zapier", mono: "Z", color: "#FF4A00", descKey: "extensions.zapierDesc", category: "automation", poweredBy: "webhooks" },
-  { id: "make", name: "Make", mono: "M", color: "#6D00CC", descKey: "extensions.makeDesc", category: "automation", poweredBy: "webhooks" },
-  { id: "n8n", name: "n8n", mono: "n8", color: "#EA4B71", descKey: "extensions.n8nDesc", category: "automation", poweredBy: "webhooks" },
-  { id: "sheets", name: "Google Sheets", mono: "GS", color: "#0F9D58", descKey: "extensions.sheetsDesc", category: "automation", poweredBy: "sheets" },
+  { id: "zapier", name: "Zapier", mono: "Z", descKey: "extensions.zapierDesc", category: "automation", poweredBy: "webhooks" },
+  { id: "make", name: "Make", mono: "M", descKey: "extensions.makeDesc", category: "automation", poweredBy: "webhooks" },
+  { id: "n8n", name: "n8n", mono: "n8", descKey: "extensions.n8nDesc", category: "automation", poweredBy: "webhooks" },
+  { id: "sheets", name: "Google Sheets", mono: "GS", descKey: "extensions.sheetsDesc", category: "automation", poweredBy: "sheets" },
   // Analytics — GA4 and Meta powered by Pixels; the rest not built yet.
-  { id: "ga4", name: "GA4 Measurement", mono: "GA", color: "#E37400", descKey: "extensions.ga4Desc", category: "analytics", poweredBy: "pixels" },
-  { id: "meta", name: "Meta CAPI", mono: "f", color: "#0866FF", descKey: "extensions.metaDesc", category: "analytics", poweredBy: "pixels" },
-  { id: "gtm", name: "Tag Manager", mono: "GTM", color: "#246FDB", descKey: "extensions.gtmDesc", category: "analytics", poweredBy: "soon" },
-  { id: "tiktok", name: "TikTok Events", mono: "TT", color: "#111318", descKey: "extensions.tiktokDesc", category: "analytics", poweredBy: "soon" },
-  { id: "linkedin", name: "LinkedIn CAPI", mono: "in", color: "#0A66C2", descKey: "extensions.linkedinDesc", category: "analytics", poweredBy: "soon" },
+  { id: "ga4", name: "GA4 Measurement", mono: "GA", descKey: "extensions.ga4Desc", category: "analytics", poweredBy: "pixels" },
+  { id: "meta", name: "Meta CAPI", mono: "f", descKey: "extensions.metaDesc", category: "analytics", poweredBy: "pixels" },
+  { id: "gtm", name: "Tag Manager", mono: "GTM", descKey: "extensions.gtmDesc", category: "analytics", poweredBy: "soon" },
+  { id: "tiktok", name: "TikTok Events", mono: "TT", descKey: "extensions.tiktokDesc", category: "analytics", poweredBy: "soon" },
+  { id: "linkedin", name: "LinkedIn CAPI", mono: "in", descKey: "extensions.linkedinDesc", category: "analytics", poweredBy: "soon" },
   // Dev & Data — not built yet.
-  { id: "notion", name: "Notion", mono: "N", color: "#111318", descKey: "extensions.notionDesc", category: "devData", poweredBy: "soon" },
+  { id: "notion", name: "Notion", mono: "N", descKey: "extensions.notionDesc", category: "devData", poweredBy: "soon" },
 ];
 
 /** Render order of the category groups, with their eyebrow label keys. */
