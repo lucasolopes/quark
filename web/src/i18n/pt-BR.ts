@@ -316,6 +316,7 @@ export const ptBR: Messages = {
     empty: "Nenhum clique recente.",
     botBadge: "Bot",
     human: "Humano",
+    botsCount: "{count} bots",
   },
   import: {
     heading: "Importar links",

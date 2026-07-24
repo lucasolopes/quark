@@ -314,6 +314,7 @@ export const en = {
     empty: "No recent clicks.",
     botBadge: "Bot",
     human: "Human",
+    botsCount: "{count} bots",
   },
   import: {
     heading: "Import links",

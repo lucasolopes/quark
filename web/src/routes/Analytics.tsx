@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/PageHeader";
 import { StatsView } from "@/components/StatsView";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useT } from "@/i18n";
@@ -53,10 +54,8 @@ export function Analytics() {
   const activeQuery = usingServerSearch ? search : base;
 
   return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold">{t("analytics.heading")}</h1>
-      </div>
+    <div className="flex flex-col gap-4 animate-rise">
+      <PageHeader title={t("analytics.heading")} />
 
       <div className="relative max-w-sm">
         <Input

@@ -19,7 +19,7 @@ describe("StatsView", () => {
     expect(container.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0);
   });
 
-  it("shows the heading, subtitle and total clicks on success", async () => {
+  it("shows the KPI stat cards and the country/device/browser distributions on success", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -43,9 +43,19 @@ describe("StatsView", () => {
       ),
     );
     render(wrap("6lB362J"));
+    // KPI row (v2: StatCard).
     expect(await screen.findByText("42")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Stats" })).toBeInTheDocument();
-    expect(screen.getByText(/6lB362J/)).toBeInTheDocument();
+    expect(screen.getByText("Total clicks")).toBeInTheDocument();
+    expect(screen.getByText("Bots (excluded)")).toBeInTheDocument();
+    // StatsView itself carries no page-identity heading anymore (LUC-61's
+    // "Stats" h1 moved to `LinkStats`'s `PageHeader`, since `StatsView` is
+    // also embedded standalone in `Analytics` for whichever link is selected).
+    expect(screen.queryByRole("heading", { name: "Stats" })).not.toBeInTheDocument();
+    // Country/device/browser distributions (v2: MeterBar rows, % mono at the right).
+    expect(screen.getByText("BR")).toBeInTheDocument();
+    expect(screen.getByText("95%")).toBeInTheDocument();
+    expect(screen.getByText("Mobile")).toBeInTheDocument();
+    expect(screen.getByText("Chrome")).toBeInTheDocument();
   });
 
   it("error state shows a neutral message and retry, with no navigation link (LUC-61)", async () => {

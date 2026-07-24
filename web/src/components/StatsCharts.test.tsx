@@ -35,3 +35,24 @@ describe("StatsCharts — per-variant chart", () => {
     expect(screen.queryByText("Clicks per variant")).not.toBeInTheDocument();
   });
 });
+
+describe("StatsCharts — country/device/browser moved to MeterBar (v2)", () => {
+  it("does not render the country, device or browser breakdowns even when their data is present", () => {
+    render(
+      withProviders(
+        <StatsCharts aggregates={{ ...baseAggregates, per_browser: { Chrome: 6, Safari: 4 } }} />,
+        { withRouter: false },
+      ),
+    );
+    // `StatsView` renders these three as MeterBar rows in its own distribution
+    // cards, not as recharts here — this component keeps day/OS/referrer/city/variant only.
+    expect(screen.queryByText("Clicks per country")).not.toBeInTheDocument();
+    expect(screen.queryByText("Clicks per device")).not.toBeInTheDocument();
+    expect(screen.queryByText("Clicks per browser")).not.toBeInTheDocument();
+  });
+
+  it("still renders the per-day chart title (now a lime-gradient bar chart)", () => {
+    render(withProviders(<StatsCharts aggregates={baseAggregates} />, { withRouter: false }));
+    expect(screen.getByText("Clicks per day")).toBeInTheDocument();
+  });
+});
