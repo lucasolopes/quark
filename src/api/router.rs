@@ -12,7 +12,7 @@ pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 pub(crate) async fn health() -> impl axum::response::IntoResponse {
-    ([("x-quark-version", env!("CARGO_PKG_VERSION"))], "ok")
+    ([(HEADER_QUARK_VERSION, env!("CARGO_PKG_VERSION"))], "ok")
 }
 
 /// Formats an access log line as JSON. Pure function: no I/O, easy to test.
