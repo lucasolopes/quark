@@ -22,6 +22,7 @@ import { ApiError } from "@/lib/api";
 import { isUnauthorized, mutationErrorToast } from "@/lib/mutation-error";
 import { useDeleteOidcConfig, useMe, useOidcConfig, usePutOidcConfig } from "@/lib/queries";
 import type { OidcConfigView } from "@/lib/types";
+import { FIELD_LABEL_CLASS } from "@/lib/utils";
 
 /**
  * Admin UI for the tenant's own OIDC identity provider (LUC-83). The backend
@@ -285,9 +286,6 @@ function OidcProviderForm({ config }: { config: OidcConfigView | null }) {
     </div>
   );
 }
-
-/** Field-caption style for this form's labels (13px muted, matches CreateTokenDialog/Tokens v2). */
-const FIELD_LABEL_CLASS = "text-[13px] font-normal text-muted-foreground";
 
 function Field({
   label,

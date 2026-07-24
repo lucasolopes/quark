@@ -25,6 +25,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n";
 import { useBulkLinks, useMe } from "@/lib/queries";
+import { resolveShortHost, type TenantDomainHost } from "@/lib/short-url";
 import { tagColor } from "@/lib/tag-color";
 import type { BulkOp, Link } from "@/lib/types";
 
@@ -42,28 +43,21 @@ const PUBLIC_BASE = (
   (import.meta.env.VITE_API_BASE_URL as string | undefined) || window.location.origin
 ).replace(/\/+$/, "");
 
-/** Hosts the cloud may provide for building a short URL. */
-interface TenantDomain {
-  /** The server-resolved primary host (LUC-86): primary custom domain →
-   * subdomain → shared host. When present it wins over everything below. */
-  primaryHost?: string | null;
-  slug?: string | null;
-  suffix?: string | null;
-  /** Shared short-link host (`QUARK_PUBLIC_HOST`), fallback before the API origin. */
-  publicHost?: string | null;
-}
-
 /**
- * Builds the short URL shown/copied for a code. Prefers the tenant's
- * server-resolved primary host (which already prioritizes a verified custom
- * domain over the subdomain). Falls back to `<slug>.<suffix>`, then the shared
- * host, then `PUBLIC_BASE` (the API origin, OSS).
+ * Builds the short URL shown/copied for a code. The host itself — tenant's
+ * server-resolved primary host, else `<slug>.<suffix>`, else the shared
+ * public host, else the panel's own origin — comes from `resolveShortHost`
+ * (`@/lib/short-url`), the single source for that precedence; this only adds
+ * the protocol on top: an explicit tenant host is always `https://`, while
+ * the origin fallback keeps whatever protocol `PUBLIC_BASE` already has (dev
+ * often serves the panel over `http`, and forcing `https://` there would
+ * produce a link that doesn't match how the app itself is being served).
  */
-function buildShortUrl(code: string, { primaryHost, slug, suffix, publicHost }: TenantDomain): string {
-  if (primaryHost) return `https://${primaryHost}/${code}`;
-  if (slug && suffix) return `https://${slug}.${suffix}/${code}`;
-  if (publicHost) return `https://${publicHost}/${code}`;
-  return `${PUBLIC_BASE}/${code}`;
+function buildShortUrl(code: string, domain: TenantDomainHost): string {
+  const { primaryHost, slug, suffix, publicHost } = domain;
+  const host = resolveShortHost(domain);
+  const hasTenantHost = Boolean(primaryHost || (slug && suffix) || publicHost);
+  return hasTenantHost ? `https://${host}/${code}` : `${PUBLIC_BASE}/${code}`;
 }
 
 /** Max tag badges shown per card before collapsing the rest into a "+k" badge. */
@@ -90,7 +84,7 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
   const { data: me } = useMe();
   const bulkLinks = useBulkLinks();
   const currentMembership = me?.memberships?.find((m) => m.tenant_id === me.current_tenant);
-  const tenantDomain: TenantDomain = { primaryHost: me?.primary_link_host, slug: currentMembership?.slug, suffix: me?.tenant_domain_suffix, publicHost: me?.public_host };
+  const tenantDomain: TenantDomainHost = { primaryHost: me?.primary_link_host, slug: currentMembership?.slug, suffix: me?.tenant_domain_suffix, publicHost: me?.public_host };
 
   const pageCodes = links.map((l) => l.code);
   const allSelected = pageCodes.length > 0 && pageCodes.every((c) => selected.has(c));

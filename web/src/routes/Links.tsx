@@ -48,6 +48,9 @@ function chipClass(active: boolean): string {
   return `${base} ${state}`;
 }
 
+/** Tag chips beyond this count collapse behind a "+N" toggle so a tag-heavy account doesn't push the filter row into a wall of chips. */
+const TAG_CHIPS_VISIBLE_CAP = 10;
+
 export function Links() {
   const t = useT();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -57,6 +60,7 @@ export function Links() {
   const [folder, setFolder] = useState("");
   const [brokenOnly, setBrokenOnly] = useState(false);
   const [activeOnly, setActiveOnly] = useState(false);
+  const [showAllTags, setShowAllTags] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingLink, setEditingLink] = useState<Link | null>(null);
   const [deletingLink, setDeletingLink] = useState<Link | null>(null);
@@ -117,7 +121,26 @@ export function Links() {
   // extra API call): the list has no server-provided grand total, so this
   // reflects the currently loaded/filtered set, not every link in the account.
   const totalClicks = useMemo(() => filtered.reduce((sum, l) => sum + (l.visits ?? 0), 0), [filtered]);
-  const tagChips = tagsQuery.data?.tags ?? [];
+  const tagChips = useMemo(() => tagsQuery.data?.tags ?? [], [tagsQuery.data?.tags]);
+
+  // When collapsed, pin the active tag in the visible set if it's beyond the cap,
+  // so a user who expands → selects a tag → collapses still sees the selection.
+  const visibleTagChips = useMemo(() => {
+    if (showAllTags) {
+      return tagChips;
+    }
+    const sliced = tagChips.slice(0, TAG_CHIPS_VISIBLE_CAP);
+    if (tag && !sliced.some((tagItem) => tagItem.name === tag)) {
+      const activeTag = tagChips.find((tagItem) => tagItem.name === tag);
+      if (activeTag) {
+        return [...sliced, activeTag];
+      }
+    }
+    return sliced;
+  }, [tagChips, tag, showAllTags]);
+
+  // Count reflects the actual hidden tags; button shows if any tags are beyond the cap.
+  const hiddenTagCount = Math.max(0, tagChips.length - visibleTagChips.length);
 
   const activeQuery = usingServerSearch ? serverSearch : query;
   const serverSearchFailed =
@@ -141,14 +164,6 @@ export function Links() {
       <PageHeader
         title={t("links.heading")}
         subtitle={t("links.countSubtitle", { count: filtered.length, clicks: totalClicks })}
-        actions={
-          canWrite && (
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" />
-              {t("links.createButton")}
-            </Button>
-          )
-        }
       />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -208,7 +223,7 @@ export function Links() {
           <button type="button" onClick={() => setTag("")} aria-pressed={tag === ""} className={chipClass(tag === "")}>
             {t("links.tagFilterAllOption")}
           </button>
-          {tagChips.map((tagOption) => (
+          {visibleTagChips.map((tagOption) => (
             <button
               key={tagOption.name}
               type="button"
@@ -220,6 +235,16 @@ export function Links() {
               <span className="font-mono text-[11px] opacity-70">{tagOption.count}</span>
             </button>
           ))}
+          {tagChips.length > TAG_CHIPS_VISIBLE_CAP && (
+            <button
+              type="button"
+              onClick={() => setShowAllTags((prev) => !prev)}
+              aria-expanded={showAllTags}
+              className={chipClass(false)}
+            >
+              {showAllTags ? t("links.lessTags") : t("links.moreTags", { count: hiddenTagCount })}
+            </button>
+          )}
         </div>
       )}
 

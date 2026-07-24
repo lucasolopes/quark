@@ -52,7 +52,7 @@ export function ExtensionDetail() {
   return (
     <div className="flex flex-col gap-4 animate-rise">
       <PageHeader
-        back={{ label: t("extensions.backAria"), to: "/extensions" }}
+        back={{ label: t("extensions.backToExtensions"), to: "/extensions" }}
         title={
           <span className="inline-flex items-center gap-3">
             <span

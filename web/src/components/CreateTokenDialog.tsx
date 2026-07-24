@@ -17,6 +17,7 @@ import { useT, type MessageKey } from "@/i18n";
 import { isUnauthorized } from "@/lib/mutation-error";
 import { useCreateToken } from "@/lib/queries";
 import { ALL_SCOPES, type Scope } from "@/lib/types";
+import { FIELD_LABEL_CLASS } from "@/lib/utils";
 
 /** Message key (under `tokens.scope`) for each scope's display label. */
 const SCOPE_LABEL_KEY: Record<Scope, MessageKey> = {
@@ -26,9 +27,6 @@ const SCOPE_LABEL_KEY: Record<Scope, MessageKey> = {
   analytics: "tokens.scope.analytics",
   full: "tokens.scope.full",
 };
-
-/** Field-caption style for this dialog's labels (mock: 13px muted, see `createOpen.html`). */
-const FIELD_LABEL_CLASS = "text-[13px] font-normal text-muted-foreground";
 
 interface FormErrors {
   name?: string;

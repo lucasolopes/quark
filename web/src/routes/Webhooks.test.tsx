@@ -176,7 +176,7 @@ describe("Webhooks", () => {
     render(withProviders(<Webhooks />, { withRouter: false }));
     await screen.findByText("https://example.com/hooks/quark");
 
-    await userEvent.click(screen.getByRole("switch", { name: /deactivate webhook/i }));
+    await userEvent.click(screen.getByRole("switch", { name: `Active — ${SAMPLE_WEBHOOK.url}` }));
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/admin/webhooks/1"),
