@@ -48,6 +48,10 @@ fn retention_secs_from(env_value: Option<&str>, multi_tenant: bool) -> Option<u6
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("quark {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let strict_cluster = std::env::var("QUARK_STRICT_CLUSTER")
         .map(|v| !v.is_empty())
         .unwrap_or(false);
