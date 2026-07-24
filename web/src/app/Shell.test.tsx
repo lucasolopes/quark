@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Route, Routes, useSearchParams } from "react-router-dom";
+import { Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 import { Shell } from "./Shell";
 import { withProviders } from "@/test-utils";
 
@@ -29,6 +29,26 @@ function renderShellWithProbe(initialEntries: string[]) {
         <Route path="/" element={<Shell />}>
           <Route path="links" element={<SearchParamsProbe />} />
           <Route path="analytics" element={<SearchParamsProbe />} />
+        </Route>
+      </Routes>,
+      { initialEntries },
+    ),
+  );
+}
+
+/** Shows the current route's pathname, so a drawer nav-item click is observable. */
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}</div>;
+}
+
+function renderShellWithLocationProbe(initialEntries: string[]) {
+  return render(
+    withProviders(
+      <Routes>
+        <Route path="/" element={<Shell />}>
+          <Route path="links" element={<LocationProbe />} />
+          <Route path="analytics" element={<LocationProbe />} />
         </Route>
       </Routes>,
       { initialEntries },
@@ -192,5 +212,46 @@ describe("Shell v2 — sidebar + topbar", () => {
     await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: "New link" }));
     await waitFor(() => expect(screen.getByTestId("probe").textContent).toBe("new=1"));
+  });
+});
+
+describe("Shell v2 — mobile drawer + expandable search", () => {
+  beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+
+  it("shows a hamburger button that opens the mobile nav drawer", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
+    render(withProviders(<Shell />, { initialEntries: ["/links"] }));
+    await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Open menu" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("clicking a nav item inside the drawer navigates there and closes the drawer", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
+    renderShellWithLocationProbe(["/links"]);
+    await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: "Open menu" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("link", { name: "Analytics" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByTestId("location-probe")).toHaveTextContent("/analytics");
+  });
+
+  it("the lupa expands the mobile search row with an autofocused input, and the X collapses it again", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
+    render(withProviders(<Shell />, { initialEntries: ["/links"] }));
+    await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
+    expect(screen.queryByTestId("mobile-search-input")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+    const mobileInput = await screen.findByTestId("mobile-search-input");
+    expect(mobileInput).toHaveFocus();
+
+    await userEvent.click(screen.getByRole("button", { name: "Close search" }));
+    expect(screen.queryByTestId("mobile-search-input")).not.toBeInTheDocument();
   });
 });

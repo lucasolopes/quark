@@ -57,6 +57,11 @@ export const ptBR: Messages = {
     createWorkspace: "Criar workspace",
     searchPlaceholder: "Buscar links…",
     newLink: "Novo link",
+    openMenu: "Abrir menu",
+    closeMenu: "Fechar menu",
+    mobileNavTitle: "Menu",
+    openSearch: "Buscar",
+    closeSearch: "Fechar busca",
   },
   onboarding: {
     title: "Crie seu workspace",

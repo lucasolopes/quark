@@ -55,6 +55,11 @@ export const en = {
     createWorkspace: "Create workspace",
     searchPlaceholder: "Search links…",
     newLink: "New link",
+    openMenu: "Open menu",
+    closeMenu: "Close menu",
+    mobileNavTitle: "Menu",
+    openSearch: "Search",
+    closeSearch: "Close search",
   },
   onboarding: {
     title: "Create your workspace",
