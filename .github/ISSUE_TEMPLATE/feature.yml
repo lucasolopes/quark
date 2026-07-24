@@ -1,0 +1,72 @@
+name: Feature request
+description: Suggest a capability or a change in behavior
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Pode responder em português, se preferir.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched open and closed issues and this is not a duplicate
+          required: true
+        - label: I checked docs/ROADMAP.md and this is not already planned
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        Describe the problem, not the solution. What are you trying to do, and
+        what makes it hard or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: >
+        Optional. If it adds configuration, say which `QUARK_*` variable and
+        what its default would be. If it adds a dependency, say which and why.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds you tried
+      description: How do you handle this today, outside quark or with a hack?
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area
+      options:
+        - Redirect hot path (/:code)
+        - Admin API
+        - Admin panel (web/)
+        - Auth and multi-tenancy
+        - Analytics
+        - Webhooks and integrations
+        - Deployment, config, or docs
+        - Something else
+    validations:
+      required: true
+
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Would you be up for implementing this
+      description: >
+        No pressure. It just helps a solo maintainer decide what to pick up
+        versus what to leave open for a contributor.
+      options:
+        - "Yes, if the direction is agreed first"
+        - "Maybe, with guidance"
+        - "No, just requesting"
+    validations:
+      required: true

@@ -1,0 +1,8 @@
+# Every change is reviewed by the maintainer. One line today; split by area
+# when there is a second maintainer.
+#
+# Do NOT turn on "Require review from Code Owners" in the ruleset while the
+# project has a single maintainer: combined with require_last_push_approval and
+# the fact that you cannot approve your own PR, it makes every maintainer PR
+# depend on the admin bypass.
+*  @lucasolopes
