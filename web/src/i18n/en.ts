@@ -53,6 +53,8 @@ export const en = {
     workspaceLabel: "Current workspace",
     switchWorkspace: "Switch workspace",
     createWorkspace: "Create workspace",
+    searchPlaceholder: "Search links…",
+    newLink: "New link",
   },
   onboarding: {
     title: "Create your workspace",

@@ -55,6 +55,8 @@ export const ptBR: Messages = {
     workspaceLabel: "Workspace atual",
     switchWorkspace: "Trocar workspace",
     createWorkspace: "Criar workspace",
+    searchPlaceholder: "Buscar links…",
+    newLink: "Novo link",
   },
   onboarding: {
     title: "Crie seu workspace",

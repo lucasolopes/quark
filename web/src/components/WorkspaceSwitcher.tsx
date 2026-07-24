@@ -31,7 +31,15 @@ export function WorkspaceSwitcher() {
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
-            <Button variant="outline" size="sm" className="max-w-[12rem] justify-between gap-2">
+            // Sits in the sidebar's card slot (Shell v2) — full width, taller
+            // padding and a plain `border-border` to read as a card rather
+            // than a compact toolbar button. Only the shape changed here;
+            // selection/creation logic is untouched.
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-auto w-full justify-between gap-2 rounded-[10px] border-border p-2.5 font-semibold"
+            >
               <span className="truncate">{currentName}</span>
               <ChevronsUpDown className="size-3.5 shrink-0 opacity-60" aria-hidden="true" />
             </Button>

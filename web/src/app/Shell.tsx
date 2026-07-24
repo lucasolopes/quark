@@ -1,4 +1,4 @@
-import { BarChart3, Blocks, Fingerprint, Globe, KeyRound, Link2, LogOut, Moon, Radio, ShieldCheck, Smartphone, Sun, Upload, Users, Webhook } from "lucide-react";
+import { BarChart3, Blocks, Fingerprint, Globe, KeyRound, Link2, LogOut, Moon, Plus, Radio, Search, ShieldCheck, Smartphone, Sun, Upload, Users, Webhook } from "lucide-react";
 import { useTheme } from "next-themes";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { QuarkMark } from "@/components/brand/QuarkMark";
@@ -14,6 +14,20 @@ import { cn } from "@/lib/utils";
 
 /** Roles that can manage the workspace's team (create/revoke invites). */
 const MEMBERS_MANAGER_ROLES = new Set(["owner", "admin"]);
+
+/**
+ * Derives 1-2 uppercase initials for the sidebar avatar from the signed-in
+ * principal's display label (`/admin/me`'s `display`: email or name,
+ * whichever the session carries — see `src/auth.rs::Session::display`).
+ * One letter for a single-token label (an email, or a one-word name), two
+ * for a "First Last" display name.
+ */
+function initialsFrom(display: string | undefined): string {
+  const words = (display ?? "").trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "";
+  if (words.length === 1) return words[0].slice(0, 1).toUpperCase();
+  return (words[0].slice(0, 1) + words[1].slice(0, 1)).toUpperCase();
+}
 
 export function Shell() {
   const t = useT();
@@ -92,16 +106,29 @@ export function Shell() {
     .replace(/^https?:\/\//, "")
     .replace(/\/+$/, "");
 
+  /** Global link search (topbar): Enter hands the term to the Links screen via `?q=`. */
+  function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== "Enter") return;
+    const term = e.currentTarget.value.trim();
+    if (term) navigate(`/links?q=${encodeURIComponent(term)}`);
+  }
+
   return (
     <div className="flex min-h-svh">
-      <aside className="flex w-16 shrink-0 flex-col border-r border-sidebar-border bg-sidebar sm:w-56">
-        <div className="flex h-14 items-center justify-center gap-2.5 px-2 sm:justify-start sm:px-4">
-          <QuarkMark className="size-6 text-primary drop-shadow-[0_0_8px_rgba(198,249,78,0.55)]" />
+      <aside className="flex w-16 shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 sm:w-[250px]">
+        <div className="flex items-center justify-center gap-2.5 pb-4 sm:justify-start">
+          <QuarkMark className="size-[26px] text-primary drop-shadow-[0_0_8px_rgba(198,249,78,0.55)]" />
           <span className="hidden font-heading text-lg font-bold tracking-tight text-sidebar-foreground sm:inline">
             quark
           </span>
         </div>
-        <nav className="flex flex-col gap-4 px-2 py-2">
+
+        {/* WorkspaceSwitcher moved here from the topbar (cloud only — it renders nothing in OSS). */}
+        <div className="hidden pb-4 sm:block">
+          <WorkspaceSwitcher />
+        </div>
+
+        <nav className="flex flex-col gap-4">
           {navGroups.map((group) => (
             <div key={group.label} className="flex flex-col gap-1">
               <div className="hidden px-3 pb-1 font-mono text-[10px] font-medium tracking-[0.14em] text-sidebar-foreground/45 uppercase sm:block">
@@ -114,20 +141,25 @@ export function Shell() {
                   title={label}
                   className={({ isActive }) =>
                     cn(
-                      "flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground sm:justify-start",
-                      isActive && "bg-sidebar-accent text-sidebar-accent-foreground",
+                      "flex items-center justify-center gap-3 rounded-[9px] px-3 py-2 text-[14.5px] font-medium transition-colors sm:justify-start",
+                      isActive
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground/70 hover:bg-surface-hover",
                     )
                   }
                 >
-                  <Icon className="size-4 shrink-0" aria-hidden="true" />
+                  <Icon className="size-[18px] shrink-0" aria-hidden="true" />
                   <span className="hidden sm:inline">{label}</span>
                 </NavLink>
               ))}
             </div>
           ))}
         </nav>
+
+        <div className="flex-1" />
+
         <div
-          className="mt-auto hidden items-center gap-2 px-3 py-3 font-mono text-[11px] text-sidebar-foreground/45 sm:flex"
+          className="hidden items-center gap-2 pb-3 font-mono text-[11px] text-sidebar-foreground/45 sm:flex"
           title={apiHost}
         >
           <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden="true" />
@@ -135,26 +167,51 @@ export function Shell() {
             {t("shell.connected")} · {apiHost}
           </span>
         </div>
+
+        {/* User card: avatar + name (from /admin/me's `display`) + logout — moved here from the topbar. */}
+        <div className="flex flex-col items-center gap-2.5 border-t border-sidebar-border pt-3 sm:flex-row">
+          <div className="flex size-[30px] shrink-0 items-center justify-center rounded-full bg-primary font-heading text-xs font-bold text-primary-foreground">
+            {initialsFrom(me.data?.display)}
+          </div>
+          <div className="hidden min-w-0 flex-1 sm:block">
+            <div className="truncate text-[13px] font-semibold text-sidebar-foreground">
+              {me.data?.display}
+            </div>
+          </div>
+          <Button variant="ghost" size="icon" aria-label={t("shell.logout")} onClick={handleLogout}>
+            <LogOut className="size-4" aria-hidden="true" />
+          </Button>
+        </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4">
-          <WorkspaceSwitcher />
-          <div className="flex-1" />
-          <LanguageSwitcher />
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={isDark ? t("shell.themeToLight") : t("shell.themeToDark")}
-            onClick={toggle}
-          >
-            {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleLogout}>
-            <LogOut className="size-4" />
-            {t("shell.logout")}
-          </Button>
+        <header className="flex h-[62px] shrink-0 items-center justify-between gap-3 border-b border-border px-6">
+          <div className="flex max-w-[440px] flex-1 items-center gap-2 rounded-[10px] border border-border bg-secondary px-3.5">
+            <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <input
+              type="text"
+              placeholder={t("shell.searchPlaceholder")}
+              aria-label={t("shell.searchPlaceholder")}
+              onKeyDown={handleSearchKeyDown}
+              className="w-full min-w-0 flex-1 bg-transparent py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+          <div className="flex items-center gap-2.5">
+            <LanguageSwitcher className="font-mono" />
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={isDark ? t("shell.themeToLight") : t("shell.themeToDark")}
+              onClick={toggle}
+            >
+              {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+            </Button>
+            <Button onClick={() => navigate("/links?new=1")}>
+              <Plus className="size-4" aria-hidden="true" />
+              {t("shell.newLink")}
+            </Button>
+          </div>
         </header>
-        <main className="min-w-0 flex-1 overflow-auto p-4 sm:p-6">
+        <main className="min-w-0 flex-1 overflow-auto p-6 sm:p-[26px_30px]">
           <Outlet />
         </main>
       </div>
