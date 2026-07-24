@@ -75,7 +75,7 @@ describe("DialogFooter — sticky full-screen mode", () => {
     expect(screen.getByTestId("footer").className).toBe(DEFAULT_FOOTER_CLASSES);
   });
 
-  it("inside a fullScreenOnMobile DialogContent, becomes a sticky opaque square-cornered bar below sm", () => {
+  it("inside a fullScreenOnMobile DialogContent, becomes an opaque square-cornered bar below sm", () => {
     render(
       <Dialog open onOpenChange={() => {}}>
         <DialogContent fullScreenOnMobile>
@@ -85,7 +85,7 @@ describe("DialogFooter — sticky full-screen mode", () => {
       </Dialog>,
     );
     const className = screen.getByTestId("footer").className;
-    for (const token of ["max-sm:sticky", "max-sm:bottom-0", "max-sm:bg-card", "max-sm:rounded-b-none"]) {
+    for (const token of ["max-sm:bg-card", "max-sm:rounded-b-none"]) {
       expect(className).toContain(token);
     }
   });

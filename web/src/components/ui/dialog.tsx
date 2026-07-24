@@ -142,14 +142,14 @@ function DialogFooter({
       data-slot="dialog-footer"
       className={cn(
         "-mx-6 -mb-6 flex flex-col-reverse gap-2 rounded-b-[16px] border-t bg-muted/50 p-6 sm:flex-row sm:justify-end",
-        // Sticky, opaque, square-cornered only inside a `fullScreenOnMobile`
-        // `DialogContent` (read from context above) — never for the small,
-        // centered dialogs, which must keep today's footer untouched.
-        // `-mx-6 -mb-6` still exactly cancels the `p-6` on `DialogContent`
-        // at every size (that padding value never changes responsively),
-        // so the footer stays flush with the sheet's edges without
-        // bleeding past them, full-screen or not.
-        fullScreenOnMobile && "max-sm:sticky max-sm:bottom-0 max-sm:rounded-b-none max-sm:bg-card",
+        // In full-screen mode the footer is pinned by the flex column (the
+        // body scrolls via overflow-y-auto); these overrides only restore
+        // opacity and square corners at the sheet's edge. Never apply sticky
+        // for the small, centered dialogs, which must keep today's footer
+        // untouched. `-mx-6 -mb-6` still exactly cancels the `p-6` on
+        // `DialogContent` at every size, so the footer stays flush with the
+        // sheet's edges without bleeding past them, full-screen or not.
+        fullScreenOnMobile && "max-sm:rounded-b-none max-sm:bg-card",
         className
       )}
       {...props}

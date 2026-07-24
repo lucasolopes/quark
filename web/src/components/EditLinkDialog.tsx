@@ -230,7 +230,7 @@ export function EditLinkDialog({ link, open, onOpenChange, folders = [], tags: t
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-3xl" fullScreenOnMobile>
-        <form onSubmit={handleSubmit} className="flex max-h-[85vh] flex-col">
+        <form onSubmit={handleSubmit} className="flex max-h-[85vh] max-sm:h-full max-sm:max-h-none flex-col">
           <DialogHeader className="shrink-0">
             <DialogTitle>{t("dialogs.edit.title", { code: link.code })}</DialogTitle>
             <DialogDescription>{t("dialogs.edit.description")}</DialogDescription>
