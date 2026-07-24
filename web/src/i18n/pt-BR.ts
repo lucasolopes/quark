@@ -326,6 +326,8 @@ export const ptBR: Messages = {
     fileAriaLabel: "Escolher um arquivo CSV ou JSON para importar",
     pasteLabel: "Ou cole CSV ou JSON",
     textareaPlaceholder: "url,alias,ttl\nhttps://exemplo.com/pagina,,3600",
+    formatSample:
+      "url,alias,ttl\nhttps://example.com/pagina/de/destino/longa,promo,604800\nhttps://example.com/outra/pagina,,",
     submit: "Importar",
     submitting: "Importando…",
     noInputError: "Escolha um arquivo ou cole os dados primeiro.",

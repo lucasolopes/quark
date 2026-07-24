@@ -1,6 +1,8 @@
 import { Inbox, Upload } from "lucide-react";
 import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { toast } from "sonner";
+import { PageHeader } from "@/components/PageHeader";
+import { Terminal } from "@/components/Terminal";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -75,16 +77,14 @@ export function Import() {
   const hasInput = file != null || text.trim() !== "";
 
   return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold">{t("import.heading")}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{t("import.subtitle")}</p>
-      </div>
+    <div className="flex flex-col gap-4 animate-rise">
+      <PageHeader title={t("import.heading")} subtitle={t("import.subtitle")} />
 
       <Card>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-input bg-surface-input p-10 text-center">
+              <Upload className="size-8 text-muted-foreground" aria-hidden="true" />
               <label htmlFor="import-file" className="text-sm font-medium">
                 {t("import.fileLabel")}
               </label>
@@ -125,10 +125,14 @@ export function Import() {
         </CardContent>
       </Card>
 
+      <Terminal title="import.csv">{t("import.formatSample")}</Terminal>
+
       {!summary && (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-            <Inbox className="size-8 text-muted-foreground" aria-hidden="true" />
+            <div className="flex size-10 items-center justify-center rounded-[9px] bg-secondary">
+              <Inbox className="size-[18px] text-muted-foreground" aria-hidden="true" />
+            </div>
             <div>
               <p className="font-medium">{t("import.emptyTitle")}</p>
               <p className="text-sm text-muted-foreground">{t("import.emptySubtitle")}</p>

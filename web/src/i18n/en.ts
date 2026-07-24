@@ -324,6 +324,8 @@ export const en = {
     fileAriaLabel: "Choose a CSV or JSON file to import",
     pasteLabel: "Or paste CSV or JSON",
     textareaPlaceholder: "url,alias,ttl\nhttps://example.com/page,,3600",
+    formatSample:
+      "url,alias,ttl\nhttps://example.com/some/long/landing/page,promo,604800\nhttps://example.com/another/page,,",
     submit: "Import",
     submitting: "Importing…",
     noInputError: "Choose a file or paste some data first.",
