@@ -74,6 +74,58 @@ describe("Webhooks", () => {
     expect(screen.getByText(/^slack$/i)).toBeInTheDocument();
   });
 
+  it("renders each webhook as a card with a status dot colored per health state", async () => {
+    const active = { ...SAMPLE_WEBHOOK, id: 10, url: "https://active.example.com/hook" };
+    const failing = {
+      ...SAMPLE_WEBHOOK,
+      id: 11,
+      url: "https://failing.example.com/hook",
+      last_delivery_status: { state: "error", detail: "connection refused" },
+    };
+    const paused = { ...SAMPLE_WEBHOOK, id: 12, url: "https://paused.example.com/hook", active: false };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ webhooks: [active, failing, paused] }));
+
+    render(withProviders(<Webhooks />, { withRouter: false }));
+
+    const cards = await screen.findAllByTestId("webhook-card");
+    expect(cards).toHaveLength(3);
+    // Semantic list: each card is a real <li> so the stack reads as a list.
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
+
+    const activeCard = cards.find((c) => within(c).queryByText("https://active.example.com/hook"));
+    const failingCard = cards.find((c) => within(c).queryByText("https://failing.example.com/hook"));
+    const pausedCard = cards.find((c) => within(c).queryByText("https://paused.example.com/hook"));
+    if (!activeCard || !failingCard || !pausedCard) throw new Error("expected one card per webhook");
+
+    // active/healthy = bg-primary, failing = bg-destructive, paused = bg-muted-foreground.
+    expect(within(activeCard).getByTestId("webhook-status-dot")).toHaveClass("bg-primary");
+    expect(within(failingCard).getByTestId("webhook-status-dot")).toHaveClass("bg-destructive");
+    expect(within(failingCard).getByText(/connection refused/i)).toBeInTheDocument();
+    expect(within(pausedCard).getByTestId("webhook-status-dot")).toHaveClass("bg-muted-foreground");
+  });
+
+  it("toggles the active state via the switch and calls the API", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      const method = init?.method ?? "GET";
+      if (method === "PATCH") return Promise.resolve(jsonResponse({ ...SAMPLE_WEBHOOK, active: false }));
+      return Promise.resolve(jsonResponse({ webhooks: [SAMPLE_WEBHOOK] }));
+    });
+
+    render(withProviders(<Webhooks />, { withRouter: false }));
+    await screen.findByText("https://example.com/hooks/quark");
+
+    await userEvent.click(screen.getByRole("switch", { name: /deactivate webhook/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/admin/webhooks/1"),
+      expect.objectContaining({ method: "PATCH" }),
+    );
+    const patchCall = fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH");
+    const requestInit = patchCall?.[1];
+    if (!requestInit) throw new Error("expected a PATCH call with an init");
+    expect(JSON.parse(requestInit.body as string)).toMatchObject({ active: false });
+  });
+
   it("rejects submitting with no event selected", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ webhooks: [] }));
     render(withProviders(<Webhooks />, { withRouter: false }));

@@ -27,7 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { PageHeader } from "@/components/PageHeader";
 import { useT, type MessageKey } from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -57,6 +57,33 @@ const KIND_LABEL_KEY: Record<SubscriptionKind, MessageKey> = {
   discord: "webhooks.kindDiscord",
   telegram: "webhooks.kindTelegram",
 };
+
+/**
+ * Health of a webhook row, for the status dot: `paused` when the user turned
+ * it off (`active: false`), `failing` when it's on but its last delivery
+ * attempt errored, `active` otherwise (last attempt ok, or never attempted
+ * yet — a subscription that only follows `link.clicked` can sit at "never"
+ * indefinitely by design, see docs/WEBHOOKS.md#connection-health).
+ */
+type WebhookHealth = "active" | "failing" | "paused";
+
+const HEALTH_DOT_CLASS: Record<WebhookHealth, string> = {
+  active: "bg-primary",
+  failing: "bg-destructive",
+  paused: "bg-muted-foreground",
+};
+
+const HEALTH_LABEL_KEY: Record<WebhookHealth, MessageKey> = {
+  active: "webhooks.statusActive",
+  failing: "webhooks.statusFailing",
+  paused: "webhooks.statusPaused",
+};
+
+function webhookHealth(webhook: Webhook): WebhookHealth {
+  if (!webhook.active) return "paused";
+  if (webhook.last_delivery_status?.state === "error") return "failing";
+  return "active";
+}
 
 interface FormErrors {
   url?: string;
@@ -132,17 +159,17 @@ export function Webhooks() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold">{t("webhooks.heading")}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{t("webhooks.subtitle")}</p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4" />
-          {t("webhooks.addButton")}
-        </Button>
-      </div>
+    <div className="flex flex-col gap-4 animate-rise">
+      <PageHeader
+        title={t("webhooks.heading")}
+        subtitle={t("webhooks.subtitle")}
+        actions={
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" />
+            {t("webhooks.addButton")}
+          </Button>
+        }
+      />
 
       {query.isPending && <WebhooksSkeleton />}
 
@@ -167,7 +194,9 @@ export function Webhooks() {
       {!query.isPending && !query.isError && webhooks.length === 0 && (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-            <WebhookIcon className="size-8 text-muted-foreground" aria-hidden="true" />
+            <div className="flex size-10 items-center justify-center rounded-[9px] bg-secondary">
+              <WebhookIcon className="size-[18px] text-muted-foreground" aria-hidden="true" />
+            </div>
             <div>
               <p className="font-medium">{t("webhooks.emptyTitle")}</p>
               <p className="text-sm text-muted-foreground">{t("webhooks.emptySubtitle")}</p>
@@ -181,42 +210,68 @@ export function Webhooks() {
       )}
 
       {!query.isPending && !query.isError && webhooks.length > 0 && (
-        <Card className="py-0">
-          <Table>
-            <caption className="sr-only">{t("webhooks.heading")}</caption>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("webhooks.columnUrl")}</TableHead>
-                <TableHead>{t("webhooks.columnType")}</TableHead>
-                <TableHead>{t("webhooks.columnEvents")}</TableHead>
-                <TableHead>{t("webhooks.columnActive")}</TableHead>
-                <TableHead>{t("webhooks.columnCreated")}</TableHead>
-                <TableHead>
-                  <span className="sr-only">{t("webhooks.actionsSr")}</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {webhooks.map((webhook) => (
-                <TableRow key={webhook.id}>
-                  <TableCell>
-                    <span className="block max-w-64 truncate font-mono text-sm" title={webhook.url}>
+        <ul className="flex flex-col gap-2.5" aria-label={t("webhooks.heading")}>
+          {webhooks.map((webhook) => {
+            const health = webhookHealth(webhook);
+            const statusLabel = t(HEALTH_LABEL_KEY[health]);
+            return (
+              <li
+                key={webhook.id}
+                data-testid="webhook-card"
+                className="card-hover flex flex-col gap-3 rounded-lg border border-border bg-card p-4 shadow-card"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <span
+                      role="img"
+                      aria-label={statusLabel}
+                      title={statusLabel}
+                      data-testid="webhook-status-dot"
+                      className={`size-2 shrink-0 rounded-full ${HEALTH_DOT_CLASS[health]}`}
+                    />
+                    <span className="min-w-0 truncate font-mono text-[13px] text-strong" title={webhook.url}>
                       {webhook.url}
                     </span>
-                  </TableCell>
-                  <TableCell>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
                     <Badge variant="outline">{t(KIND_LABEL_KEY[webhook.kind ?? "generic"])}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex max-w-72 flex-wrap gap-1">
-                      {webhook.events.map((event) => (
-                        <Badge key={event} variant="secondary">
-                          {t(EVENT_LABEL_KEY[event])}
-                        </Badge>
-                      ))}
-                    </div>
-                  </TableCell>
-                  <TableCell>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={t("webhooks.testButtonAria", { url: webhook.url })}
+                      disabled={testingId === webhook.id}
+                      onClick={() => handleTest(webhook)}
+                    >
+                      <Send className="size-3.5" />
+                      {testingId === webhook.id ? t("webhooks.testing") : t("webhooks.testButton")}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {webhook.events.map((event) => (
+                    <span
+                      key={event}
+                      className="rounded-md bg-secondary px-2 py-0.5 font-mono text-[11.5px] text-foreground"
+                    >
+                      {t(EVENT_LABEL_KEY[event])}
+                    </span>
+                  ))}
+                  {health === "failing" && (
+                    <span className="text-xs text-destructive">
+                      · {t("webhooks.deliveryError", { detail: webhook.last_delivery_status?.detail ?? "—" })}
+                    </span>
+                  )}
+                  {webhook.last_delivery_status?.state === "ok" && webhook.last_delivery_at != null && (
+                    <span className="text-xs text-muted-foreground">
+                      · {t("webhooks.lastDelivery", { time: formatDateTime(webhook.last_delivery_at) })}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-end gap-3">
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    {t("webhooks.columnActive")}
                     <Switch
                       checked={webhook.active}
                       onCheckedChange={() => handleToggleActive(webhook)}
@@ -227,35 +282,20 @@ export function Webhooks() {
                           : t("webhooks.activateAria", { url: webhook.url })
                       }
                     />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{formatDateTime(webhook.created)}</TableCell>
-                  <TableCell>
-                    <div className="flex items-center justify-end gap-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        aria-label={t("webhooks.testButtonAria", { url: webhook.url })}
-                        disabled={testingId === webhook.id}
-                        onClick={() => handleTest(webhook)}
-                      >
-                        <Send className="size-3.5" />
-                        {testingId === webhook.id ? t("webhooks.testing") : t("webhooks.testButton")}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t("webhooks.deleteAria", { url: webhook.url })}
-                        onClick={() => setDeletingWebhook(webhook)}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+                  </label>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t("webhooks.deleteAria", { url: webhook.url })}
+                    onClick={() => setDeletingWebhook(webhook)}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
 
       <CreateWebhookDialog
@@ -322,9 +362,9 @@ export function Webhooks() {
 
 function WebhooksSkeleton() {
   return (
-    <div className="flex flex-col gap-2" aria-hidden="true">
+    <div className="flex flex-col gap-2.5" aria-hidden="true">
       {Array.from({ length: 4 }).map((_, i) => (
-        <Skeleton key={i} className="h-10 w-full" />
+        <Skeleton key={i} className="h-24 w-full" />
       ))}
     </div>
   );
