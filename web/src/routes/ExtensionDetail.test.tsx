@@ -62,10 +62,13 @@ describe("ExtensionDetail", () => {
     expect(screen.getByText("catalog page")).toBeInTheDocument();
   });
 
-  it("renders the integration header (name + description)", async () => {
+  it("renders the integration header (name + description) with a back link and status badge", async () => {
     mockBase();
     renderDetail("slack");
     expect(screen.getByRole("heading", { level: 1, name: "Slack" })).toBeInTheDocument();
+    expect(screen.getByText(/native channel alerts/i)).toBeInTheDocument();
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /back to extensions/i })).toHaveAttribute("href", "/extensions");
   });
 
   it("creates a webhook inline with the integration's fixed kind", async () => {
@@ -206,6 +209,24 @@ describe("ExtensionDetail", () => {
     });
     renderDetail("slack");
     expect(await screen.findByText(/last delivery failed: connection refused/i)).toBeInTheDocument();
+  });
+
+  it("falls back to the host-derived label when a connected webhook has no custom label", async () => {
+    mockBase({
+      slackConnect: false,
+      webhooks: [
+        {
+          id: 11,
+          kind: "slack",
+          url: "https://hooks.slack.com/services/T/B/secret",
+          last_delivery_status: { state: "never" },
+        },
+      ],
+    });
+    renderDetail("slack");
+    expect(await screen.findByText("hooks.slack.com/…")).toBeInTheDocument();
+    // The raw token is never rendered in full, even in the fallback label.
+    expect(screen.queryByText(/secret/)).not.toBeInTheDocument();
   });
 
   it("shows the last forward time when a connected pixel's health is ok", async () => {

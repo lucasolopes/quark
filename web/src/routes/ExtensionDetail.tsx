@@ -1,10 +1,10 @@
 import { useState, type FormEvent } from "react";
-import { ArrowLeft, Check, CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Check, CheckCircle2, Copy, ExternalLink, Loader2 } from "lucide-react";
+import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/PageHeader";
 import { useT } from "@/i18n";
 import { ApiError, api } from "@/lib/api";
 import { isHttpUrl } from "@/lib/codeguard";
@@ -49,44 +50,36 @@ export function ExtensionDetail() {
   const isSoon = integration.poweredBy === "soon";
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex items-center gap-3">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={t("extensions.backAria")}
-          nativeButton={false}
-          render={<Link to="/extensions" />}
-        >
-          <ArrowLeft className="size-4" />
-        </Button>
-      </div>
-
-      <div className="flex items-start gap-4">
-        <span
-          aria-hidden="true"
-          style={{ backgroundColor: integration.color }}
-          className="flex size-12 shrink-0 items-center justify-center rounded-xl font-heading text-base font-semibold text-white"
-        >
-          {integration.mono}
-        </span>
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <h1 className="font-heading text-2xl font-semibold">{integration.name}</h1>
-            {isConnected ? (
-              <Badge>
-                <CheckCircle2 className="size-3" aria-hidden="true" />
-                {t("extensions.connected")}
-              </Badge>
-            ) : isSoon ? (
-              <Badge variant="secondary">{t("extensions.comingSoon")}</Badge>
-            ) : (
-              <Badge variant="secondary">{t("extensions.notConnected")}</Badge>
-            )}
-          </div>
-          <p className="max-w-prose text-sm text-muted-foreground">{t(integration.descKey)}</p>
-        </div>
-      </div>
+    <div className="flex flex-col gap-4 animate-rise">
+      <PageHeader
+        back={{ label: t("extensions.backAria"), to: "/extensions" }}
+        title={
+          <span className="inline-flex items-center gap-3">
+            <span
+              aria-hidden="true"
+              className={`flex size-12 shrink-0 items-center justify-center rounded-xl font-heading text-base font-semibold ${
+                isConnected ? "bg-accent-wash border border-accent-line text-brand-ink" : "bg-secondary text-muted-foreground"
+              }`}
+            >
+              {integration.mono}
+            </span>
+            {integration.name}
+          </span>
+        }
+        subtitle={t(integration.descKey)}
+        actions={
+          isConnected ? (
+            <Badge>
+              <CheckCircle2 className="size-3" aria-hidden="true" />
+              {t("extensions.connected")}
+            </Badge>
+          ) : isSoon ? (
+            <Badge variant="secondary">{t("extensions.comingSoon")}</Badge>
+          ) : (
+            <Badge variant="secondary">{t("extensions.notConnected")}</Badge>
+          )
+        }
+      />
 
       {integration.poweredBy === "webhooks" && <WebhookPanel integration={integration} />}
       {integration.poweredBy === "pixels" && <PixelPanel integration={integration} />}
@@ -209,7 +202,7 @@ function SheetsPanel() {
             href={data.spreadsheet_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
+            className="inline-flex items-center gap-1.5 text-sm text-brand-ink underline-offset-4 hover:underline"
           >
             {t("extensions.sheetsOpenSheet")}
             <ExternalLink className="size-3.5" />
@@ -344,11 +337,13 @@ function WebhookPanel({ integration }: { integration: Integration }) {
   const urlId = `ext-webhook-url-${integration.id}`;
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       {connected && (
         <Card>
-          <CardContent className="flex flex-col gap-3 py-6">
-            <p className="text-sm font-medium">{t("extensions.channelConnectedTitle", { name: integration.name })}</p>
+          <CardHeader>
+            <CardTitle>{t("extensions.channelConnectedTitle", { name: integration.name })}</CardTitle>
+          </CardHeader>
+          <CardContent>
             <ul className="flex flex-col gap-3">
               {existing.map((w) => {
                 const health = w.last_delivery_status?.state ?? "never";
@@ -356,7 +351,13 @@ function WebhookPanel({ integration }: { integration: Integration }) {
                 return (
                   <li key={w.id} className="flex flex-col gap-1">
                     <div className="flex items-center justify-between gap-3 text-sm">
-                      <span className={w.label ? "font-medium" : "font-mono text-muted-foreground"}>
+                      <span
+                        className={
+                          w.label
+                            ? "font-medium text-strong"
+                            : "rounded-md bg-secondary px-2 py-0.5 font-mono text-[11.5px] text-foreground"
+                        }
+                      >
                         {w.label || webhookLabel(w.url)}
                       </span>
                       <Button
@@ -567,7 +568,7 @@ function PixelPanel({ integration }: { integration: Integration }) {
   const secondId = `ext-pixel-second-${integration.id}`;
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       {existingPixel && (
         <Card>
           <CardContent className="flex flex-col gap-1 py-6">
@@ -586,9 +587,9 @@ function PixelPanel({ integration }: { integration: Integration }) {
             <p className="text-sm text-muted-foreground">{t("pixels.dialog.description")}</p>
 
             <div className="flex flex-col gap-1.5">
-              <label htmlFor={firstId} className="text-sm font-medium">
+              <Label htmlFor={firstId}>
                 {isGa4 ? t("pixels.dialog.measurementIdLabel") : t("pixels.dialog.pixelIdLabel")}
-              </label>
+              </Label>
               <Input
                 id={firstId}
                 type="text"
@@ -604,9 +605,9 @@ function PixelPanel({ integration }: { integration: Integration }) {
               )}
             </div>
             <div className="flex flex-col gap-1.5">
-              <label htmlFor={secondId} className="text-sm font-medium">
+              <Label htmlFor={secondId}>
                 {isGa4 ? t("pixels.dialog.apiSecretLabel") : t("pixels.dialog.accessTokenLabel")}
-              </label>
+              </Label>
               <Input
                 id={secondId}
                 type="password"
