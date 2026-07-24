@@ -1,4 +1,4 @@
-import { AlertTriangle, KeyRound, Plus, RotateCw, Trash2 } from "lucide-react";
+import { AlertTriangle, KeyRound, Plus, RotateCw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import {
@@ -11,11 +11,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreateTokenDialog } from "@/components/CreateTokenDialog";
+import { PageHeader } from "@/components/PageHeader";
 import { useT, type MessageKey } from "@/i18n";
 import { formatDate } from "@/lib/format";
 import { ApiError } from "@/lib/api";
@@ -59,17 +59,17 @@ export function Tokens() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold">{t("tokens.heading")}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{t("tokens.subtitle")}</p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4" />
-          {t("tokens.createButton")}
-        </Button>
-      </div>
+    <div className="flex flex-col gap-4 animate-rise">
+      <PageHeader
+        title={t("tokens.heading")}
+        subtitle={t("tokens.subtitle")}
+        actions={
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" />
+            {t("tokens.createButton")}
+          </Button>
+        }
+      />
 
       {query.isPending && <TokensSkeleton />}
 
@@ -94,7 +94,9 @@ export function Tokens() {
       {!query.isPending && !query.isError && tokens.length === 0 && (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-            <KeyRound className="size-8 text-muted-foreground" aria-hidden="true" />
+            <div className="flex size-10 items-center justify-center rounded-[9px] bg-secondary">
+              <KeyRound className="size-[18px] text-muted-foreground" aria-hidden="true" />
+            </div>
             <div>
               <p className="font-medium">{t("tokens.emptyTitle")}</p>
               <p className="text-sm text-muted-foreground">{t("tokens.emptySubtitle")}</p>
@@ -108,41 +110,46 @@ export function Tokens() {
       )}
 
       {!query.isPending && !query.isError && tokens.length > 0 && (
-        <Card className="py-0">
-          <ul className="divide-y">
-            {tokens.map((token) => (
-              <li key={token.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                <div className="flex min-w-0 flex-col gap-1.5">
-                  <span className="font-medium">{token.name}</span>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {token.scopes.map((scope) => (
-                      <Badge key={scope} variant="secondary">
-                        {t(SCOPE_LABEL_KEY[scope])}
-                      </Badge>
-                    ))}
-                  </div>
-                  <span className="text-xs text-muted-foreground">
-                    {token.rate_limit_per_min == null
-                      ? t("tokens.noRateLimit")
-                      : t("tokens.perMinute", { rate: token.rate_limit_per_min })}
-                    {" · "}
-                    {formatDate(token.created)}
-                  </span>
-                </div>
+        <ul className="flex flex-col gap-2.5">
+          {tokens.map((token) => (
+            <li
+              key={token.id}
+              data-testid="token-card"
+              className="card-hover flex flex-col gap-3 rounded-lg border border-border bg-card p-4 shadow-card"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="min-w-0 truncate text-[14.5px] font-semibold text-strong">{token.name}</span>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
+                  className="shrink-0 text-destructive hover:text-destructive"
                   aria-label={t("tokens.revokeAria", { name: token.name })}
                   onClick={() => setRevokingToken(token)}
                 >
-                  <Trash2 className="size-4" />
                   {t("tokens.revoke")}
                 </Button>
-              </li>
-            ))}
-          </ul>
-        </Card>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {token.scopes.map((scope) => (
+                  <span
+                    key={scope}
+                    className="rounded-md bg-secondary px-2 py-0.5 font-mono text-[11.5px] text-foreground"
+                  >
+                    {t(SCOPE_LABEL_KEY[scope])}
+                  </span>
+                ))}
+                <span className="text-xs text-muted-foreground">
+                  ·{" "}
+                  {token.rate_limit_per_min == null
+                    ? t("tokens.noRateLimit")
+                    : t("tokens.perMinute", { rate: token.rate_limit_per_min })}
+                </span>
+                <span className="text-xs text-muted-foreground">· {formatDate(token.created)}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
 
       <CreateTokenDialog open={createOpen} onOpenChange={setCreateOpen} />
@@ -171,9 +178,9 @@ export function Tokens() {
 
 function TokensSkeleton() {
   return (
-    <div className="flex flex-col gap-2" aria-hidden="true">
+    <div className="flex flex-col gap-2.5" aria-hidden="true">
       {Array.from({ length: 4 }).map((_, i) => (
-        <Skeleton key={i} className="h-14 w-full" />
+        <Skeleton key={i} className="h-[72px] w-full" />
       ))}
     </div>
   );

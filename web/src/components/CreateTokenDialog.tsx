@@ -27,6 +27,9 @@ const SCOPE_LABEL_KEY: Record<Scope, MessageKey> = {
   full: "tokens.scope.full",
 };
 
+/** Field-caption style for this dialog's labels (mock: 13px muted, see `createOpen.html`). */
+const FIELD_LABEL_CLASS = "text-[13px] font-normal text-muted-foreground";
+
 interface FormErrors {
   name?: string;
   scopes?: string;
@@ -130,9 +133,17 @@ export function CreateTokenDialog({ open, onOpenChange }: CreateTokenDialogProps
           </DialogHeader>
 
           <div className="flex flex-col gap-1.5 py-3">
-            <Label htmlFor="created-token-value">{t("tokens.tokenFieldLabel")}</Label>
+            <Label htmlFor="created-token-value" className={FIELD_LABEL_CLASS}>
+              {t("tokens.tokenFieldLabel")}
+            </Label>
             <div className="flex items-center gap-2">
-              <Input id="created-token-value" type="text" readOnly value={createdToken} className="font-mono text-xs" />
+              <Input
+                id="created-token-value"
+                type="text"
+                readOnly
+                value={createdToken}
+                className="p-3 font-mono text-xs"
+              />
               <Button type="button" variant="outline" onClick={handleCopy}>
                 {justCopied ? <Check className="size-4 text-brand-ink" /> : <Copy className="size-4" />}
                 {t("tokens.copyButton")}
@@ -161,7 +172,9 @@ export function CreateTokenDialog({ open, onOpenChange }: CreateTokenDialogProps
 
           <div className="flex flex-col gap-3 py-3">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="create-token-name">{t("tokens.nameLabel")}</Label>
+              <Label htmlFor="create-token-name" className={FIELD_LABEL_CLASS}>
+                {t("tokens.nameLabel")}
+              </Label>
               <Input
                 id="create-token-name"
                 type="text"
@@ -179,7 +192,7 @@ export function CreateTokenDialog({ open, onOpenChange }: CreateTokenDialogProps
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium">{t("tokens.scopesLabel")}</span>
+              <span className={FIELD_LABEL_CLASS}>{t("tokens.scopesLabel")}</span>
               <div className="flex flex-col gap-2">
                 {ALL_SCOPES.map((scope) => (
                   <Label key={scope} htmlFor={`scope-${scope}`} className="font-normal">
@@ -200,8 +213,8 @@ export function CreateTokenDialog({ open, onOpenChange }: CreateTokenDialogProps
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="create-token-rate-limit">
-                {t("tokens.rateLimitLabel")} <span className="text-muted-foreground">{t("tokens.rateLimitOptional")}</span>
+              <Label htmlFor="create-token-rate-limit" className={FIELD_LABEL_CLASS}>
+                {t("tokens.rateLimitLabel")} <span>{t("tokens.rateLimitOptional")}</span>
               </Label>
               <Input
                 id="create-token-rate-limit"
