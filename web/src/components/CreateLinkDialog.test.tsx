@@ -267,12 +267,24 @@ describe("CreateLinkDialog", () => {
   });
 
   it("the never (∞) TTL chip clears an expiration set via the custom field", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),
+    );
     render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
     await userEvent.type(screen.getByLabelText(/expires in/i), "5");
 
     await userEvent.click(screen.getByRole("button", { name: /no expiration/i }));
 
     expect(screen.getByLabelText(/expires in/i)).not.toHaveValue();
+
+    // Verify that submitting with the ∞ chip sends ttl as undefined in the payload
+    await userEvent.type(screen.getByLabelText(/url/i), "https://ok.com");
+    await userEvent.click(screen.getByRole("button", { name: /^create link$/i }));
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.ttl).toBeUndefined();
   });
 
   it("shows a short-link preview once an alias is typed", async () => {
