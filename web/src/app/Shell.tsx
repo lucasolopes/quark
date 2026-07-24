@@ -308,11 +308,11 @@ export function Shell() {
           {userCard}
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex h-[62px] shrink-0 items-center gap-3 border-b border-border px-4 md:px-6">
+          <header className="flex h-[62px] shrink-0 items-center justify-between gap-3 border-b border-border px-4 md:px-6">
             <Button
               variant="ghost"
               size="icon"
-              className="md:hidden"
+              className="size-11 md:hidden"
               aria-label={t("shell.openMenu")}
               onClick={() => setMobileNavOpen(true)}
             >
@@ -332,27 +332,31 @@ export function Shell() {
               />
             </div>
 
-            <Button
-              variant="ghost"
-              size="icon"
-              className="md:hidden"
-              aria-label={t("shell.openSearch")}
-              onClick={() => setSearchExpanded((expanded) => !expanded)}
-            >
-              <Search className="size-5" aria-hidden="true" />
-            </Button>
+            <div className="flex items-center gap-2.5">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-11 md:hidden"
+                aria-label={t("shell.openSearch")}
+                onClick={() => setSearchExpanded((expanded) => !expanded)}
+              >
+                <Search className="size-5" aria-hidden="true" />
+              </Button>
 
-            <div className="flex-1 md:hidden" />
+              <div className="hidden items-center gap-2.5 md:flex">
+                <LanguageSwitcher className="font-mono" />
+                {themeToggle}
+              </div>
 
-            <div className="hidden items-center gap-2.5 md:flex">
-              <LanguageSwitcher className="font-mono" />
-              {themeToggle}
+              <Button
+                onClick={() => navigate("/links?new=1")}
+                aria-label={t("shell.newLink")}
+                className="max-md:min-h-11 max-md:min-w-11"
+              >
+                <Plus className="size-4" aria-hidden="true" />
+                <span className="hidden md:inline">{t("shell.newLink")}</span>
+              </Button>
             </div>
-
-            <Button onClick={() => navigate("/links?new=1")} aria-label={t("shell.newLink")}>
-              <Plus className="size-4" aria-hidden="true" />
-              <span className="hidden md:inline">{t("shell.newLink")}</span>
-            </Button>
           </header>
           {searchExpanded && (
             <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 md:hidden">

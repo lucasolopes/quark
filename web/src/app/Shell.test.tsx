@@ -224,7 +224,12 @@ describe("Shell v2 — mobile drawer + expandable search", () => {
     await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Open menu" }));
+    const hamburger = screen.getByRole("button", { name: "Open menu" });
+    // Regression guard (LUC-96 review finding): mobile primary control must
+    // meet the 44px touch target, not the base `size-icon` 32px.
+    expect(hamburger.className).toMatch(/\bsize-11\b/);
+
+    await userEvent.click(hamburger);
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 
