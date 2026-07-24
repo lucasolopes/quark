@@ -1,5 +1,6 @@
 import { AlertTriangle, Check, Copy, Plus, RotateCw, Send, Trash2, Webhook as WebhookIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -87,6 +88,22 @@ function webhookHealth(webhook: Webhook): WebhookHealth {
   return "active";
 }
 
+/**
+ * True when a webhook is owned and managed by the Extensions center
+ * (Slack/Discord/Make/... — `/extensions/:id`, e.g. Slack channels with their
+ * own Disconnect button there) rather than created manually on this screen.
+ * Mirrors the connected-detection in `@/lib/connectors.ts`'s `useConnectedIds`
+ * (see its comments): a webhook carrying `connector_id` (fase 3+) belongs to
+ * that connector outright; one without it but with a non-"generic" `kind` is
+ * a legacy extension webhook (predates `connector_id`, matched by kind
+ * instead). The manual create dialog below always sends `kind: "generic"`
+ * with no `connector_id` (see `CreateWebhookDialog.handleSubmit`), so every
+ * other combination was created by an extension, not by hand.
+ */
+function isExtensionManaged(webhook: Webhook): boolean {
+  return webhook.connector_id != null || webhook.kind !== "generic";
+}
+
 interface FormErrors {
   url?: string;
   events?: string;
@@ -107,6 +124,10 @@ export function Webhooks() {
   const testWebhook = useTestWebhook();
 
   const webhooks = query.data?.webhooks ?? [];
+  // This screen only manages manual webhooks; extension-managed ones (see
+  // isExtensionManaged above) are shown and controlled from /extensions instead.
+  const manual = webhooks.filter((webhook) => !isExtensionManaged(webhook));
+  const extensionManaged = webhooks.filter(isExtensionManaged);
 
   async function handleToggleActive(webhook: Webhook) {
     try {
@@ -193,7 +214,7 @@ export function Webhooks() {
         </Card>
       )}
 
-      {!query.isPending && !query.isError && webhooks.length === 0 && (
+      {!query.isPending && !query.isError && manual.length === 0 && (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
             <div className="flex size-10 items-center justify-center rounded-[9px] bg-secondary">
@@ -211,9 +232,9 @@ export function Webhooks() {
         </Card>
       )}
 
-      {!query.isPending && !query.isError && webhooks.length > 0 && (
+      {!query.isPending && !query.isError && manual.length > 0 && (
         <ul className="flex flex-col gap-2.5" aria-label={t("webhooks.heading")}>
-          {webhooks.map((webhook) => {
+          {manual.map((webhook) => {
             const health = webhookHealth(webhook);
             const statusLabel = t(HEALTH_LABEL_KEY[health]);
             // Defensive: webhook.kind is typed as a closed union, but a value from the
@@ -307,6 +328,15 @@ export function Webhooks() {
             );
           })}
         </ul>
+      )}
+
+      {!query.isPending && !query.isError && extensionManaged.length > 0 && (
+        <p data-testid="extension-managed-note" className="text-[13px] text-muted-foreground">
+          {t("webhooks.managedByExtensions")}{" "}
+          <Link to="/extensions" className="text-brand-ink hover:underline">
+            {t("extensions.heading")}
+          </Link>
+        </p>
       )}
 
       <CreateWebhookDialog

@@ -527,6 +527,7 @@ export const ptBR: Messages = {
     loadError: "Não foi possível carregar os webhooks.",
     emptyTitle: "Nenhum webhook ainda.",
     emptySubtitle: "Adicione um webhook para ser notificado quando links forem criados, atualizados, excluídos, expirarem ou forem clicados.",
+    managedByExtensions: "Conexões criadas por extensões são gerenciadas em",
     columnActive: "Ativo",
     statusActive: "Ativo",
     statusFailing: "Falhando",

@@ -525,6 +525,7 @@ export const en = {
     loadError: "Could not load webhooks.",
     emptyTitle: "No webhooks yet.",
     emptySubtitle: "Add a webhook to get notified when links are created, updated, deleted, expire, or are clicked.",
+    managedByExtensions: "Connections created by extensions are managed in",
     columnActive: "Active",
     statusActive: "Active",
     statusFailing: "Failing",
