@@ -170,7 +170,13 @@ impl AnalyticsSink for ClickHouseSink {
         if events.is_empty() {
             return Ok(());
         }
-        let mut insert = self.client.insert("clicks").map_err(StoreError::backend)?;
+        // clickhouse 0.15 makes insert() async and no longer infers the row type
+        // from the later write(), so it is named here.
+        let mut insert = self
+            .client
+            .insert::<ClickRow>("clicks")
+            .await
+            .map_err(StoreError::backend)?;
         for e in events {
             let device = device_from_ua(e.user_agent.as_deref());
             let os = os_from_ua(e.user_agent.as_deref());
