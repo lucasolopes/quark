@@ -10,9 +10,10 @@
 // Walks every panel route across 4 breakpoints x 2 themes, screenshots each
 // combination, and fails (non-zero exit + JSON violation list) if the page
 // grew a horizontal scrollbar (`document.documentElement.scrollWidth` wider
-// than `window.innerWidth`). Each route check is isolated: a failure (nav
-// error, or just a flaky screenshot capture) is recorded and the sweep moves
-// on to the next route instead of losing the rest of that combo's coverage.
+// than `window.innerWidth`, with +1px tolerance). Each route check is isolated:
+// a failure (nav error, or just a flaky screenshot capture) is recorded and
+// the sweep moves on to the next route instead of losing the rest of that
+// combo's coverage.
 import { chromium } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -80,15 +81,35 @@ function parseArgs(argv) {
 }
 
 /** First seeded link's `code` (not `alias`), for the `/links/:code` stats
- * screen — the same field the panel uses to build that URL. Returns null
- * (route skipped, not a hard failure) if the admin API is unreachable or
- * there is no seeded data. */
+ * screen — the same field the panel uses to build that URL. Prefers the link
+ * with alias "promo-verao", else the link with the highest click/visit count,
+ * else links[0] (with a warning). Returns null (route skipped, not a hard
+ * failure) if the admin API is unreachable or there is no seeded data. */
 async function resolveStatsCode(apiBase, token) {
   try {
-    const res = await fetch(`${apiBase}/admin/links?limit=1`, { headers: { "x-admin-token": token } });
+    const res = await fetch(`${apiBase}/admin/links?limit=50`, { headers: { "x-admin-token": token } });
     if (!res.ok) return null;
     const data = await res.json();
-    return data.links?.[0]?.code ?? null;
+    if (!data.links || data.links.length === 0) return null;
+
+    // Prefer the link with alias "promo-verao"
+    const promoLink = data.links.find(link => link.alias === "promo-verao");
+    if (promoLink) return promoLink.code;
+
+    // Else use the link with highest click/visit count, if any exist
+    const linksWithStats = data.links.filter(link => link.clicks !== undefined || link.visits !== undefined);
+    if (linksWithStats.length > 0) {
+      const bestLink = linksWithStats.reduce((max, current) => {
+        const currentCount = (current.clicks ?? 0) + (current.visits ?? 0);
+        const maxCount = (max.clicks ?? 0) + (max.visits ?? 0);
+        return currentCount > maxCount ? current : max;
+      });
+      return bestLink.code;
+    }
+
+    // Fall back to links[0] with warning
+    console.warn("resolveStatsCode: no 'promo-verao' alias or stats found, using first link");
+    return data.links[0]?.code ?? null;
   } catch {
     return null;
   }
@@ -202,13 +223,13 @@ async function main() {
   const routeErrors = [];
   const screenshotErrors = [];
   const comboErrors = [];
-  let combos = 0;
+  let attempted = 0;
 
   for (const theme of THEMES) {
     for (const bp of breakpoints) {
       const before = violations.length;
       const result = await runCombo({ browser, bp, theme, authRoutes, includeLogin, args, violations, routeErrors, screenshotErrors });
-      combos += (includeLogin ? 1 : 0) + authRoutes.length;
+      attempted += (includeLogin ? 1 : 0) + authRoutes.length;
       if (!result.ok) comboErrors.push({ bp: bp.id, theme, message: result.message });
       console.error(
         `responsive-qa: ${bp.id} ${theme} — ${violations.length - before} violation(s)${result.ok ? "" : ` (combo error: ${result.message})`}`,
@@ -222,8 +243,10 @@ async function main() {
   // came with, so they're reported but don't fail the sweep on their own;
   // violations, route errors (couldn't measure at all), and combo errors
   // (login itself failed, so a whole combo's authed routes were skipped) do.
+  const ok = violations.length === 0 && routeErrors.length === 0 && comboErrors.length === 0;
   const summary = {
-    combos,
+    ok,
+    attempted,
     violations: violations.length,
     violationDetails: violations,
     routeErrors,
@@ -234,7 +257,7 @@ async function main() {
   await writeFile(path.join(args.out, "summary.json"), json);
   console.log(json);
 
-  process.exitCode = violations.length > 0 || routeErrors.length > 0 || comboErrors.length > 0 ? 1 : 0;
+  process.exitCode = ok ? 0 : 1;
 }
 
 await main();
