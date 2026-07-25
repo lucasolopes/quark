@@ -1,9 +1,14 @@
 [package]
 name = "quark"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "URL shortener whose short code is a calibrated reduced-round ARX permutation"
 license = "AGPL-3.0-only"
+repository = "https://github.com/lucasolopes/quark"
+homepage = "https://github.com/lucasolopes/quark"
+readme = "README.md"
+keywords = ["url-shortener", "shortener", "self-hosted", "axum", "feistel"]
+categories = ["web-programming", "command-line-utilities"]
 
 [lib]
 name = "quark"

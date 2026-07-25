@@ -3,16 +3,51 @@
 # quark
 
 [![CI](https://github.com/lucasolopes/quark/actions/workflows/ci.yml/badge.svg)](https://github.com/lucasolopes/quark/actions/workflows/ci.yml)
-![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue)
-![Rust 2021](https://img.shields.io/badge/rust-2021-orange)
+[![Release](https://img.shields.io/github/v/release/lucasolopes/quark?sort=semver)](https://github.com/lucasolopes/quark/releases)
+[![License](https://img.shields.io/github/license/lucasolopes/quark)](LICENSE)
+[![GHCR](https://img.shields.io/badge/ghcr.io-lucasolopes%2Fquark-blue?logo=docker)](https://github.com/lucasolopes/quark/pkgs/container/quark)
 ![Runtime deps: none](https://img.shields.io/badge/runtime%20deps-none-brightgreen)
-![Self-hosted](https://img.shields.io/badge/self--hosted-single%20binary-informational)
 
-> Short codes are **computed, not stored**: a keyed bijection. One tiny static binary (~1 MB), no Redis, no database, no external services.
+> Short codes are **computed, not stored**: a keyed bijection. One tiny single binary (~1 MB), no Redis, no database, no external services.
 
 **Quick links:** [API](docs/API.md) · [Configuration](docs/CONFIGURATION.md) · [Architecture](docs/ARCHITECTURE.md) · [Deploy](docs/DEPLOY.md) · [Scaling](docs/SCALING.md) · [Development](docs/DEVELOPMENT.md) · [Roadmap](docs/ROADMAP.md)
 
+![quark admin panel, links list](docs/assets/panel-en.png)
+
 A URL shortener whose short code is a **calibrated, reduced-round ARX permutation** of the internal integer id. The code is not looked up in an index. It is **computed**, in both directions, from a tiny bijective function. That one design choice removes an entire class of problems (collisions) and an entire index (string → id) at once.
+
+## Quick start
+
+```bash
+# QUARK_KEY is a secret, decimal u64, with no default in production. Generate one:
+export QUARK_KEY=$(od -An -N8 -tu8 /dev/urandom | tr -d ' ')
+
+docker run -d --name quark \
+  -p 8080:8080 \
+  -v quark-data:/data \
+  -e QUARK_KEY="$QUARK_KEY" \
+  ghcr.io/lucasolopes/quark:0.2.0
+```
+
+That's the zero-dep default: LMDB store, no Postgres, no Redis, no ClickHouse. `-v quark-data:/data` persists the LMDB files across restarts (the image's default `QUARK_DATA` is `/data`). See [Configuration](docs/CONFIGURATION.md) for every other var, and [`docker-compose.yml`](docker-compose.yml) for a full stack with the optional Postgres/Valkey/ClickHouse backends wired in.
+
+```bash
+curl -X POST localhost:8080/ -H 'content-type: application/json' \
+  -d '{"url": "https://example.com/some/very/long/path"}'
+# => {"code":"01aB2Cd","url":"https://example.com/some/very/long/path"}
+```
+
+## quark vs. other self-hosted shorteners
+
+| | Language | Required services | Size | Panel | License |
+|---|---|---|---|---|---|
+| **quark** | Rust | none (embedded LMDB + in-process cache) | ~1 MB single binary | separate React SPA, deployed independently | AGPL-3.0 |
+| [Shlink](https://github.com/shlinkio/shlink) | PHP | a SQL database: MySQL, MariaDB, PostgreSQL or SQL Server (SQLite exists but is explicitly not supported for production) | not a single binary | separate app (`shlink-web-client`) | MIT |
+| [YOURLS](https://github.com/YOURLS/YOURLS) | PHP | MySQL or MariaDB | not a single binary | built-in admin UI | MIT |
+| [Kutt](https://github.com/thedevs-network/kutt) | Node.js | none required by default in the current release (SQLite embedded); Postgres/MySQL and Redis optional. Older major versions required Postgres + Redis. | not a single binary | built-in dashboard | MIT |
+| [Dub](https://github.com/dubinc/dub) | Next.js/TypeScript | a PlanetScale-compatible MySQL database + Upstash Redis + Tinybird (analytics) | not a single binary | full dashboard | AGPL-3.0 core, commercial Enterprise Edition |
+
+quark is the only one in this list with **zero required external services**: the other four need at minimum a SQL database, and Dub needs three separate managed services out of the box. That's the same "scales down to one binary" point made in [Backends & scaling](#backends--scaling) below, just next to the competition.
 
 ## The pitch
 
@@ -79,16 +114,16 @@ The round count for the Feistel/ARX permutation isn't picked by intuition; it's 
 Measured result, sweeping 1 to 12 rounds over 200,000 random samples per round:
 
 ```
-rounds | avalanche_medio | cobertura(/40)
-   1   |     0.1381      |    1
-   2   |     0.3622      |   21
-   3   |     0.4866      |   40
-   4   |     0.5000      |   40   ← ROUNDS escolhido (difusão fecha)
- 5..12  |     0.5000      |   40
+rounds | avg_avalanche | coverage(/40)
+   1   |     0.1381     |    1
+   2   |     0.3622     |   21
+   3   |     0.4866     |   40
+   4   |     0.5000     |   40   ← ROUNDS chosen (diffusion closes)
+ 5..12  |     0.5000     |   40
 ```
 
-- **avalanche_medio**: average fraction of output bits that flip when one input bit flips (target: 0.5 exactly).
-- **cobertura**: the minimum, across all 40 input bits, of how many distinct output bits that single input bit has ever managed to affect. `40/40` means every input bit can influence every output bit: full diffusion, no structural blind spot.
+- **avg_avalanche**: average fraction of output bits that flip when one input bit flips (target: 0.5 exactly).
+- **coverage**: the minimum, across all 40 input bits, of how many distinct output bits that single input bit has ever managed to affect. `40/40` means every input bit can influence every output bit: full diffusion, no structural blind spot.
 
 `ROUNDS = 4` is the smallest round count where avalanche hits `0.5000` exactly *and* coverage is full. Round 3 is close (`0.4866`) but not there yet. Rounds 5 through 12 buy nothing: the diffusion has already closed, so quark uses 4 and stops, keeping every round of runtime that isn't needed for the property it's paying for.
 
@@ -97,6 +132,8 @@ rounds | avalanche_medio | cobertura(/40)
 ```
 cargo bench --bench permute_bench
 ```
+
+The tables below are numbers from one development machine, not a controlled benchmark rig; exact CPU/RAM specs for that run were not recorded, so none are claimed here. Reproduce them on your own hardware with `cargo bench --bench permute_bench` / `--bench compare_bench` (harnesses live in [`benches/`](benches/)) to get numbers for your machine.
 
 Measured on this machine (criterion, `benches/permute_bench.rs`):
 
@@ -158,7 +195,7 @@ Store and AnalyticsSink are selected **independently**: e.g. Postgres store + Cl
 
 - **Webhooks**: signed outgoing HTTP events (`link.created/updated/deleted/expired/clicked`) to any endpoint (Zapier, Make, n8n, Slack, custom). On Postgres the lifecycle events are delivered durably (outbox + leased relay + retry/DLQ); `link.clicked`/`link.expired` stay best-effort by design. Config persisted via `Store`. See [`docs/WEBHOOKS.md`](docs/WEBHOOKS.md).
 
-The framing: quark **scales down to one binary with zero external dependencies**, and **scales up to a distributed stack** (Valkey + Postgres + ClickHouse) **one opt-in piece at a time**, never all-or-nothing. Compare that to heavier shorteners (e.g. Dub) that require Postgres + Redis + ClickHouse from day one, even for a single low-traffic instance.
+The framing: quark **scales down to one binary with zero external dependencies**, and **scales up to a distributed stack** (Valkey + Postgres + ClickHouse) **one opt-in piece at a time**, never all-or-nothing. Compare that to heavier shorteners (e.g. Dub) that require a MySQL database, Redis, and Tinybird from day one, even for a single low-traffic instance.
 
 ```mermaid
 flowchart LR
@@ -174,7 +211,7 @@ flowchart LR
     Worker --> Sink[(Sink: LMDB or ClickHouse)]
 ```
 
-
+## Running from source
 
 ```bash
 # QUARK_KEY is parsed as a DECIMAL u64 (not hex). Generate one:
@@ -186,14 +223,9 @@ cargo run --release
 
 If `QUARK_KEY` isn't set, or isn't a valid decimal `u64` (a hex string will silently fail to parse), quark logs a loud warning and falls back to a hardcoded dev key. Fine for local testing, **never for production**: the key is what makes the code space unpredictable per instance.
 
-### curl examples
+### More curl examples
 
 ```bash
-# create a short link
-curl -X POST localhost:8080/ -H 'content-type: application/json' \
-  -d '{"url": "https://example.com/some/very/long/path"}'
-# => {"code":"01aB2Cd","url":"https://example.com/some/very/long/path"}
-
 # create with a custom alias and a 1-hour TTL
 curl -X POST localhost:8080/ -H 'content-type: application/json' \
   -d '{"url": "https://example.com", "alias": "promo", "ttl": 3600}'
@@ -215,25 +247,16 @@ quark's non-enumerability is a **measured statistical property** (avalanche/SAC 
 
 ## Configuration
 
-Every var below is optional except `QUARK_KEY` in production. Unset a backend var and quark falls back to the zero-dep default. This table is the common subset; the complete reference (including `QUARK_STRICT_CLUSTER`, `QUARK_NODE_ID`, and the baked-in defaults) is [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
+Every var below is optional except `QUARK_KEY` in production. Unset a backend var and quark falls back to the zero-dep default. This table is the six variables a first deploy actually needs; the complete reference (every `QUARK_*` var, including rate limiting, the Valkey/ClickHouse backends, `QUARK_STRICT_CLUSTER`, `QUARK_NODE_ID`, and the baked-in defaults) is [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
 
 | Var | Purpose | Default |
 |---|---|---|
 | `QUARK_KEY` | Decimal `u64` secret, the permutation key. **Required in production** (each instance should have its own, kept out of source control). | dev fallback key (loud warning logged; not for production) |
-| `QUARK_DATA` | LMDB data directory. Only used when the store is LMDB. | `./data` (container: `/data`) |
 | `QUARK_ADDR` | HTTP bind address. | `0.0.0.0:8080` |
-| `QUARK_ADMIN_TOKEN` | Enables the token-protected admin endpoints, e.g. `GET /:code/stats`. | unset → those endpoints off (404) |
-| `QUARK_VALKEY_URL` | Enable the L2 Valkey cache, e.g. `redis://host:6379`. | unset → L1 + store only |
-| `QUARK_DATABASE_URL` | Use Postgres for the store, e.g. `postgres://user:pass@host:5432/db`. | unset → LMDB |
-| `QUARK_CLICKHOUSE_URL` | Use ClickHouse for analytics, e.g. `http://user:pass@host:8123/db`. | unset → store's embedded sink |
-| `QUARK_ACCESS_LOG` | Enable per-request JSON access log on stdout. | unset → off |
-| `QUARK_RATELIMIT_PER_MIN` | Creations/min per IP on `POST /` (unset/`0` = off). Uses Valkey if `QUARK_VALKEY_URL` is set (global limit), else in-memory per replica. | unset → off |
-| `QUARK_REAL_IP_HEADER` | Header to read the client IP from. | `CF-Connecting-IP` |
-| `QUARK_BLOCK_PRIVATE` | Guard against internal/loop destinations; on by default, `0` disables it. | on |
-| `QUARK_PUBLIC_HOST` | This instance's own host, for anti-loop (otherwise uses the `Host` header). | unset → uses `Host` header |
-| `QUARK_CORS_ORIGINS` | Comma-separated origins allowed to call the API (for the web panel). | unset → no CORS (same-origin only) |
-
-> Only enable `QUARK_RATELIMIT_PER_MIN` behind a proxy that overwrites `QUARK_REAL_IP_HEADER` (e.g. Cloudflare with `CF-Connecting-IP`); exposed directly, a client can forge the header and bypass the limit.
+| `QUARK_DATA` | LMDB data directory. Only used when the store is LMDB. | `./data` (container: `/data`) |
+| `QUARK_ADMIN_TOKEN` | Enables the token-protected admin endpoints that the web panel needs, e.g. `GET /:code/stats`. | unset → those endpoints off (404) |
+| `QUARK_CORS_ORIGINS` | Comma-separated origins allowed to call the API (needed for the separately hosted web panel). | unset → no CORS (same-origin only) |
+| `QUARK_DATABASE_URL` | Use Postgres for the store instead of LMDB, e.g. `postgres://user:pass@host:5432/db`. The first step out of the single-binary default when a second replica or node needs to share links. | unset → LMDB |
 
 ## Operating
 
@@ -289,7 +312,7 @@ includes an optional UTM builder with locally saved templates (`localStorage`).
 
 ## Contributing
 
-Contributions are welcome; see [`CONTRIBUTING.md`](CONTRIBUTING.md). PRs require a one-time [Contributor License Agreement](CLA.md) (a license grant, **you keep ownership of your contributions**).
+Contributions are welcome; see [`CONTRIBUTING.md`](CONTRIBUTING.md). PRs require a one-time [Contributor License Agreement](CLA.md) (a license grant, **you keep ownership of your contributions**). By taking part you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

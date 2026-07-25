@@ -1,0 +1,256 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Privilegio minimo por padrao. Cada job eleva so o que precisa.
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: lucasolopes/quark
+
+jobs:
+  # Gate barato antes de gastar tempo de build. Sem isso a imagem pode sair
+  # com --version mentindo (tag e Cargo.toml divergentes), e isso e uma falha
+  # silenciosa: ninguem percebe ate reportar um bug com a versao errada.
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Tag e Cargo.toml precisam concordar
+        id: v
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+
+          cargo_version="$(sed -n '/^\[package\]/,/^\[/p' Cargo.toml \
+            | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
+
+          if [ "$cargo_version" != "$version" ]; then
+            echo "::error::tag $tag nao bate com a versao do Cargo.toml ($cargo_version)"
+            exit 1
+          fi
+
+          if ! grep -qF "## [$version]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md nao tem uma secao '## [$version]'"
+            exit 1
+          fi
+
+          case "$version" in
+            *-*) prerelease=true ;;
+            *)   prerelease=false ;;
+          esac
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  # Um job por arquitetura, cada um no runner NATIVO daquela arquitetura.
+  # Nunca adicionar docker/setup-qemu-action aqui: com QEMU presente o buildx
+  # pode preferir o emulador em vez do runner arm64 nativo, e um build de
+  # poucos minutos vira 90+ sem nenhum aviso, ate estourar o timeout do job.
+  build:
+    needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # push-by-digest publica so o blob, sem criar nenhuma tag. O manifest
+      # list final (com as tags semanticas de verdade) so existe depois do
+      # job publish. Sem isso, cada release deixaria tags orfas tipo
+      # ":build-amd64-<sha>" visiveis para qualquer um que liste os pacotes
+      # do projeto num registry publico.
+      - name: Build e push da imagem desta arquitetura (por digest)
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          # Scope por arquitetura. Sem isso os dois jobs escrevem na mesma
+          # entrada de cache e toda release comeca fria.
+          cache-from: type=gha,scope=release-linux-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=release-linux-${{ matrix.arch }}
+
+      - name: Exporta o digest desta arquitetura
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      # Nome unico por perna da matrix: upload-artifact rejeita nomes
+      # duplicados quando os dois jobs rodam em paralelo.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Junta os dois manifests por arquitetura num unico manifest list (a
+  # "imagem multiarch" que o Docker resolve sozinho por plataforma) e so
+  # entao aplica as tags semanticas finais.
+  publish:
+    needs: [guard, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.index.outputs.digest }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags semanticas para o manifest final
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # latest=false porque o latest=auto padrao marcaria latest ate numa
+          # prerelease tipo v0.3.0-rc.1. O type=raw abaixo controla o latest
+          # de verdade, condicionado a guard.outputs.prerelease.
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ needs.guard.outputs.prerelease == 'false' }}
+
+      # Monta o manifest a partir dos DIGESTS baixados dos artifacts, nunca
+      # de uma tag intermediaria. Nenhum blob por arquitetura fica com tag
+      # propria no registry; a unica coisa visivel publicamente sao as tags
+      # semanticas finais aplicadas aqui.
+      - name: Cria e publica o manifest list multiarch
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+      - name: Le o digest do indice (manifest list)
+        id: index
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          digest="$(docker buildx imagetools inspect \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION" \
+            --format '{{ json .Manifest }}' | jq -r .digest)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Confere que as duas plataformas estao no indice
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          out="$(docker buildx imagetools inspect \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION")"
+          echo "$out"
+          echo "$out" | grep -q 'linux/amd64'
+          echo "$out" | grep -q 'linux/arm64'
+
+      # Atesta o digest do INDICE, nunca dentro do job de matrix. E o digest
+      # do indice que o usuario alcanca pela tag; atestar os manifests por
+      # arquitetura deixa esse digest sem attestation e "gh attestation
+      # verify" falha para quem so descobre isso depois de reclamar.
+      - name: Atesta a proveniencia do build
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.index.outputs.digest }}
+          push-to-registry: true
+
+  release:
+    needs: [guard, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Extrai a secao desta versao do CHANGELOG
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          awk -v v="## [$VERSION]" '
+            index($0, v) == 1  { grab = 1; next }
+            grab && /^## \[/   { exit }
+            grab && /^\[.*\]: http/ { exit }
+            grab               { print }
+          ' CHANGELOG.md > /tmp/notes.md
+
+          cat >> /tmp/notes.md <<EOF
+
+          ## Imagem do container
+
+          \`\`\`
+          docker pull ghcr.io/lucasolopes/quark:$VERSION
+          \`\`\`
+
+          Plataformas: \`linux/amd64\`, \`linux/arm64\`.
+          Digest: \`$DIGEST\`
+
+          Verifique a proveniencia do build:
+
+          \`\`\`
+          gh attestation verify oci://ghcr.io/lucasolopes/quark:$VERSION --repo lucasolopes/quark
+          \`\`\`
+          EOF
+
+      - name: Cria a GitHub Release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          body_path: /tmp/notes.md
+          prerelease: ${{ needs.guard.outputs.prerelease }}
+          make_latest: ${{ needs.guard.outputs.prerelease == 'false' }}

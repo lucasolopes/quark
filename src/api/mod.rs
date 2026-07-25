@@ -103,6 +103,10 @@ pub struct AppState {
 pub(crate) const HEADER_ADMIN_TOKEN: &str = "x-admin-token";
 /// Double-submit CSRF header for the cookie-session admin path.
 pub(crate) const HEADER_CSRF: &str = "x-quark-csrf";
+/// Response header carrying the running binary's `CARGO_PKG_VERSION`, set on
+/// `GET /health` so operators can confirm which build is live without a body
+/// format change (the health body stays the plain string `"ok"`).
+pub(crate) const HEADER_QUARK_VERSION: &str = "x-quark-version";
 
 impl AppState {
     /// Public short code for a link id: permute the id with the instance key,
