@@ -217,8 +217,8 @@ export function CreateLinkDialog({ open, onOpenChange, folders = [], tags: tagOp
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-3xl">
-        <form onSubmit={handleSubmit} className="flex max-h-[85vh] flex-col">
+      <DialogContent className="sm:max-w-3xl" fullScreenOnMobile>
+        <form onSubmit={handleSubmit} className="flex max-h-[85vh] max-sm:h-full max-sm:max-h-none flex-col">
           <DialogHeader className="shrink-0">
             <DialogTitle>{t("dialogs.create.title")}</DialogTitle>
             <DialogDescription>{t("dialogs.create.description")}</DialogDescription>

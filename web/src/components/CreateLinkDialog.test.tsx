@@ -296,6 +296,14 @@ describe("CreateLinkDialog", () => {
     expect(screen.getByText(/\/summer-promo$/)).toBeInTheDocument();
   });
 
+  it("renders its DialogContent as a full-screen sheet below sm (LUC-96)", () => {
+    render(withProviders(<CreateLinkDialog open onOpenChange={() => {}} />, { withRouter: false }));
+    const content = screen.getByRole("dialog");
+    expect(content.className).toContain("max-sm:inset-0");
+    expect(content.className).toContain("max-sm:h-dvh");
+    expect(content.className).toContain("max-sm:rounded-none");
+  });
+
   it("renders the app destination inputs and submits the iOS value", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ code: "6lB362J", url: "https://ok.com" }), { status: 200 }),

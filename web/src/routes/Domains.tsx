@@ -190,7 +190,7 @@ function DomainsPanel() {
                 data-testid="domain-card"
                 className="card-hover flex flex-col gap-3 rounded-lg border border-border bg-card p-4 shadow-card"
               >
-                <div className="flex items-center gap-3.5">
+                <div className="flex flex-wrap items-center gap-3.5">
                   <div className="flex size-10 shrink-0 items-center justify-center rounded-[9px] bg-secondary">
                     <Globe className="size-[18px] text-muted-foreground" aria-hidden="true" />
                   </div>

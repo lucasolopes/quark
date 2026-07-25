@@ -21,6 +21,19 @@ function DialogClose({ ...props }: DialogPrimitive.Close.Props) {
   return <DialogPrimitive.Close data-slot="dialog-close" {...props} />
 }
 
+/**
+ * Whether the nearest `DialogContent` ancestor is running in
+ * `fullScreenOnMobile` mode. `DialogFooter` reads this to decide whether to
+ * become a sticky, edge-to-edge action bar below `sm` — threading it as a
+ * prop instead would mean touching every call site that renders a
+ * `DialogFooter` (CreateLinkDialog, EditLinkDialog, LinkQrDialog, ...) just
+ * to forward a value already known one level up. Defaults to `false`, so a
+ * `DialogFooter` inside a `DialogContent` that never sets the prop (every
+ * small dialog: confirms, QR, tokens, invites, ...) behaves exactly as
+ * before.
+ */
+const DialogFullScreenMobileContext = React.createContext(false)
+
 function DialogOverlay({
   className,
   ...props
@@ -41,40 +54,84 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  fullScreenOnMobile = false,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
+  /**
+   * Below `sm`, render as a full-viewport sheet instead of the centered
+   * card: edge-to-edge, no corner radius, scrollable body, and a sticky
+   * `DialogFooter` (see the context above) so its actions stay reachable
+   * without scrolling past the form. For large forms (Create/Edit link)
+   * where the centered card leaves cramped margins on a phone; small
+   * dialogs (confirms, QR, tokens, invites, ...) leave this off and keep
+   * today's centered look untouched.
+   */
+  fullScreenOnMobile?: boolean
 }) {
   return (
-    <DialogPortal>
-      <DialogOverlay />
-      <DialogPrimitive.Popup
-        data-slot="dialog-content"
-        className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[540px] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-[16px] border border-input bg-card p-6 text-sm text-popover-foreground shadow-modal data-open:animate-rise data-closed:animate-rise-out outline-none",
-          className
-        )}
-        {...props}
-      >
-        {children}
-        {showCloseButton && (
-          <DialogPrimitive.Close
-            data-slot="dialog-close"
-            render={
-              <Button
-                variant="ghost"
-                className="absolute top-2 right-2"
-                size="icon-sm"
+    <DialogFullScreenMobileContext.Provider value={fullScreenOnMobile}>
+      <DialogPortal>
+        <DialogOverlay />
+        <DialogPrimitive.Popup
+          data-slot="dialog-content"
+          className={cn(
+            "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[540px] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-[16px] border border-input bg-card p-6 text-sm text-popover-foreground shadow-modal data-open:animate-rise data-closed:animate-rise-out outline-none",
+            // The `-translate-x/y-1/2` above compile to the CSS `translate`
+            // property (Tailwind v4's dedicated property for translate/
+            // scale/rotate utilities), never `transform` — so they don't
+            // fight `animate-rise`/`animate-rise-out`, which animate the
+            // separate `transform` property directly in their keyframes
+            // (`translateY(14px)` <-> `none`). The two compose instead of
+            // colliding: final position = centering translate + animation
+            // offset. That's also why full-screen mode below only zeroes
+            // `translate` (`max-sm:translate-x/y-0`) and never touches the
+            // animation classes — the rise/rise-out motion keeps working
+            // unmodified on top of it, just anchored to the viewport edge
+            // instead of the viewport center.
+            // `max-sm:grid-rows-[minmax(0,1fr)]` gives the grid a single,
+            // definite row track sized to the container's full content-box
+            // height, so a child's `height:100%` has something to resolve
+            // against instead of falling back to the child's content height
+            // (which is what let the footer land far below the fold). A bare
+            // `1fr` is NOT enough here — per the CSS Grid spec a standalone
+            // `<flex>` track is shorthand for `minmax(auto, 1fr)`, and that
+            // `auto` minimum is content-based: measured via
+            // `getComputedStyle(dialog).gridTemplateRows` in a real browser,
+            // a bare `max-sm:grid-rows-[1fr]` still resolved to the form's
+            // content height (~949px) instead of the viewport, because the
+            // tall form's intrinsic minimum exceeded the available space and
+            // `auto` won over the `1fr` growth. The explicit `minmax(0, ...)`
+            // floor removes that content-based minimum so the flex factor
+            // actually governs. With one grid item here (the close button is
+            // `absolute`, out of grid flow), there's only one row, so
+            // `gap-4` never inserts any gap.
+            fullScreenOnMobile &&
+              "max-sm:inset-0 max-sm:h-dvh max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none max-sm:grid-rows-[minmax(0,1fr)]",
+            className
+          )}
+          {...props}
+        >
+          {children}
+          {showCloseButton && (
+            <DialogPrimitive.Close
+              data-slot="dialog-close"
+              render={
+                <Button
+                  variant="ghost"
+                  className="absolute top-2 right-2"
+                  size="icon-sm"
+                />
+              }
+            >
+              <XIcon
               />
-            }
-          >
-            <XIcon
-            />
-            <span className="sr-only">Close</span>
-          </DialogPrimitive.Close>
-        )}
-      </DialogPrimitive.Popup>
-    </DialogPortal>
+              <span className="sr-only">Close</span>
+            </DialogPrimitive.Close>
+          )}
+        </DialogPrimitive.Popup>
+      </DialogPortal>
+    </DialogFullScreenMobileContext.Provider>
   )
 }
 
@@ -96,11 +153,20 @@ function DialogFooter({
 }: React.ComponentProps<"div"> & {
   showCloseButton?: boolean
 }) {
+  const fullScreenOnMobile = React.useContext(DialogFullScreenMobileContext)
   return (
     <div
       data-slot="dialog-footer"
       className={cn(
         "-mx-6 -mb-6 flex flex-col-reverse gap-2 rounded-b-[16px] border-t bg-muted/50 p-6 sm:flex-row sm:justify-end",
+        // In full-screen mode the footer is pinned by the flex column (the
+        // body scrolls via overflow-y-auto); these overrides only restore
+        // opacity and square corners at the sheet's edge. Never apply sticky
+        // for the small, centered dialogs, which must keep today's footer
+        // untouched. `-mx-6 -mb-6` still exactly cancels the `p-6` on
+        // `DialogContent` at every size, so the footer stays flush with the
+        // sheet's edges without bleeding past them, full-screen or not.
+        fullScreenOnMobile && "max-sm:rounded-b-none max-sm:bg-card",
         className
       )}
       {...props}

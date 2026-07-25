@@ -117,7 +117,7 @@ export function Tokens() {
               data-testid="token-card"
               className="card-hover flex flex-col gap-3 rounded-lg border border-border bg-card p-4 shadow-card"
             >
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <span className="min-w-0 truncate text-[14.5px] font-semibold text-strong">{token.name}</span>
                 <Button
                   type="button"

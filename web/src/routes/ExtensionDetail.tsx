@@ -350,7 +350,7 @@ function WebhookPanel({ integration }: { integration: Integration }) {
                 const deliveryError = health === "error" ? w.last_delivery_status?.detail : undefined;
                 return (
                   <li key={w.id} className="flex flex-col gap-1">
-                    <div className="flex items-center justify-between gap-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
                       <span
                         className={
                           w.label
