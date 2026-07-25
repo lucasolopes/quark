@@ -199,7 +199,15 @@ pub fn spawn_webhook_worker(
                 maybe = rx.recv() => {
                     match maybe {
                         Some(ev) => deliver_to_matching(&client, &store, &subs, &ev).await,
-                        None => break,
+                        // Channel closed (shutdown): deliver whatever is still
+                        // queued before exiting, mirroring analytics::spawn_worker.
+                        // Without this the events buffered at SIGTERM were dropped.
+                        None => {
+                            while let Ok(ev) = rx.try_recv() {
+                                deliver_to_matching(&client, &store, &subs, &ev).await;
+                            }
+                            break;
+                        }
                     }
                 }
                 _ = ticker.tick() => {

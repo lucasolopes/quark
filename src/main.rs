@@ -335,7 +335,8 @@ async fn main() -> anyhow::Result<()> {
     let (wh_tx, wh_rx) = tokio::sync::mpsc::channel(WEBHOOK_CHANNEL_CAPACITY);
     let clicked = Arc::new(AtomicBool::new(false));
     let expired = Arc::new(AtomicBool::new(false));
-    spawn_webhook_worker(wh_rx, store.clone(), clicked.clone(), expired.clone());
+    let webhook_worker =
+        spawn_webhook_worker(wh_rx, store.clone(), clicked.clone(), expired.clone());
     let dispatcher = WebhookDispatcher::new(wh_tx, clicked, expired);
     let webhooks = if std::env::var("QUARK_DATABASE_URL").is_ok() {
         let relay_client = reqwest::Client::builder()
@@ -373,7 +374,7 @@ async fn main() -> anyhow::Result<()> {
         anonymize_ip: pixel_anonymize_ip,
         ..quark::pixel::PixelBases::default()
     };
-    let _worker = spawn_worker(
+    let analytics_worker = spawn_worker(
         analytics_rx,
         sink.clone(),
         store.clone(),
@@ -519,25 +520,28 @@ async fn main() -> anyhow::Result<()> {
         keycloak,
         keycloak_base_url,
     });
-    match std::env::var("QUARK_VALKEY_URL").ok() {
+    let invalidation_sub = match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {
             tracing::info!("cross-node invalidation: pub/sub subscriber on {INVALIDATION_CHANNEL}");
-            let _sub = spawn_invalidation_subscriber(url, state.clone());
+            Some(spawn_invalidation_subscriber(url, state.clone()))
         }
-        None => tracing::info!("cross-node invalidation: disabled (no QUARK_VALKEY_URL)"),
-    }
+        None => {
+            tracing::info!("cross-node invalidation: disabled (no QUARK_VALKEY_URL)");
+            None
+        }
+    };
 
     // Broken-link monitoring (opt-in). Runs when QUARK_HEALTH_CHECK_SECS is set.
     // Safe to enable on every replica: a lease (Postgres) ensures only one node
     // sweeps at a time, renewed during the sweep, with automatic failover if the
     // holder dies. On the single-node LMDB backend the lease is always granted.
-    match std::env::var("QUARK_HEALTH_CHECK_SECS")
+    let link_checker = match std::env::var("QUARK_HEALTH_CHECK_SECS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
     {
         Some(secs) => {
             let period = std::time::Duration::from_secs(secs.max(quark::health::MIN_CHECK_SECS));
-            let _checker = quark::health::spawn_link_checker(
+            let checker = quark::health::spawn_link_checker(
                 state.store.clone(),
                 state.webhooks.clone(),
                 quark::health::build_client(),
@@ -548,11 +552,13 @@ async fn main() -> anyhow::Result<()> {
                 "link health checker: sweeping every {}s (lease-coordinated; safe on all replicas)",
                 period.as_secs()
             );
+            Some(checker)
         }
         None => {
-            tracing::info!("link health checker: disabled (set QUARK_HEALTH_CHECK_SECS to enable)")
+            tracing::info!("link health checker: disabled (set QUARK_HEALTH_CHECK_SECS to enable)");
+            None
         }
-    }
+    };
 
     // Scheduled Sheets sync (opt-in via QUARK_SHEETS_SYNC_SECS). Lease-coordinated
     // like the link checker so it is safe on every replica; on the single-node
@@ -730,10 +736,91 @@ async fn main() -> anyhow::Result<()> {
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await
     .context("running the HTTP server")?;
 
+    drain_workers(
+        analytics_worker,
+        webhook_worker,
+        invalidation_sub,
+        link_checker,
+    )
+    .await;
+
     Ok(())
+}
+
+/// Resolves on SIGTERM (what a Fly or Docker deploy sends) or Ctrl-C.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            // Without SIGTERM we still honor Ctrl-C; never fail the process here.
+            Err(e) => {
+                tracing::warn!(error = %e, "could not install the SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {}
+        () = terminate => {}
+    }
+    tracing::info!("shutdown signal received, draining");
+}
+
+/// How long the drain may take before the process exits anyway. A deploy must
+/// not hang on a wedged worker.
+const DRAIN_TIMEOUT_SECS: u64 = 10;
+
+/// Drains the background workers after the HTTP server stopped accepting.
+///
+/// Order matters. The analytics and webhook channels close when the last
+/// `Arc<AppState>` drops, because that is where their `Sender`s live: the
+/// server owned one and released it above, and the invalidation subscriber
+/// holds the only other clone. So the cache-only tasks are cancelled and joined
+/// FIRST, which releases that clone; only then do the two workers observe the
+/// channel close, flush what they buffered, and exit.
+///
+/// Everything is bounded by `DRAIN_TIMEOUT_SECS`: losing a few buffered events
+/// is better than a deploy that never finishes.
+async fn drain_workers(
+    analytics: tokio::task::JoinHandle<()>,
+    webhooks: tokio::task::JoinHandle<()>,
+    invalidation: Option<tokio::task::JoinHandle<()>>,
+    link_checker: Option<tokio::task::JoinHandle<()>>,
+) {
+    // Cache invalidation and health sweeps have nothing to persist, so they are
+    // cancelled outright. Awaiting the handle is what guarantees the task is
+    // really gone and its captured `Arc<AppState>` released.
+    for task in [invalidation, link_checker].into_iter().flatten() {
+        task.abort();
+        let _ = task.await;
+    }
+
+    let drained = tokio::time::timeout(std::time::Duration::from_secs(DRAIN_TIMEOUT_SECS), async {
+        let _ = analytics.await;
+        let _ = webhooks.await;
+    })
+    .await;
+    match drained {
+        Ok(()) => tracing::info!("workers drained"),
+        Err(_) => tracing::warn!(
+            timeout_secs = DRAIN_TIMEOUT_SECS,
+            "workers did not drain in time, exiting anyway"
+        ),
+    }
 }
 
 #[cfg(test)]
