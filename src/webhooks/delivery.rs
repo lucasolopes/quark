@@ -218,13 +218,6 @@ pub fn spawn_webhook_worker(
     })
 }
 
-/// How long a full subscription-snapshot refresh (`list_tenants` +
-/// `list_webhooks` per tenant) is allowed to run before it's abandoned in
-/// favor of the previous snapshot (fail-open: a wedged store must never
-/// stall the worker, matching the fail-open contract described below).
-/// Mirrors `analytics::PIXEL_SNAPSHOT_TIMEOUT`.
-const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
-
 /// Re-reads subscriptions from the store across every tenant (LUC-63:
 /// `list_tenants` + `list_webhooks(t)` per tenant, mirroring
 /// `analytics::refresh_pixel_snapshot`), updates the `clicked`/`expired`
@@ -253,7 +246,7 @@ async fn refresh_snapshot(
         }
         Ok::<_, StoreError>(out)
     };
-    match tokio::time::timeout(SNAPSHOT_TIMEOUT, load).await {
+    match tokio::time::timeout(crate::SNAPSHOT_TIMEOUT, load).await {
         Ok(Ok(snapshot)) => {
             let has_clicked = snapshot.iter().any(|(_, subs)| {
                 subs.iter()

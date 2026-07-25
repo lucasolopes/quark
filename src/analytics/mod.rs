@@ -6,7 +6,6 @@ use crate::webhooks::{EventType, WebhookEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
 pub mod clickhouse;
@@ -360,10 +359,10 @@ pub trait AnalyticsSink: Send + Sync + 'static {
 /// Batch size that triggers an immediate flush (in addition to the 5s timer).
 pub const BATCH: usize = 500;
 
-/// How long a full pixel-snapshot refresh (`list_tenants` + `list_pixels` per
-/// tenant) is allowed to run before it's abandoned in favor of the previous
-/// snapshot (fail-open: a wedged store must never stall the worker).
-const PIXEL_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Cadence of the flush/refresh tick: the worker flushes what it buffered and
+/// re-reads its snapshots this often, on top of flushing whenever the buffer
+/// reaches `BATCH`.
+const FLUSH_INTERVAL_SECS: u64 = 5;
 
 /// Per-replica in-memory state for `AlertCounter::Memory`: for each
 /// `(tenant, link_id)`, the current fixed window, the click count in it, and
@@ -530,7 +529,7 @@ async fn process_alerts(
 }
 
 /// Refreshes the cached alert-rule snapshot from `store` across every tenant,
-/// bounded by `PIXEL_SNAPSHOT_TIMEOUT`, mirroring `refresh_pixel_snapshot`.
+/// bounded by `crate::SNAPSHOT_TIMEOUT`, mirroring `refresh_pixel_snapshot`.
 /// Fail-open: on a store error or timeout the previous snapshot is left
 /// untouched and only a line is logged, so a wedged store never stalls the
 /// worker nor empties a known-good snapshot.
@@ -549,7 +548,7 @@ async fn refresh_alert_snapshot(
         }
         Ok::<_, StoreError>(out)
     };
-    match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, load).await {
+    match tokio::time::timeout(crate::SNAPSHOT_TIMEOUT, load).await {
         Ok(Ok(snapshot)) => *alerts = snapshot,
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "alert snapshot refresh failed, keeping previous");
@@ -607,7 +606,7 @@ pub fn spawn_worker(
         let mut alerts: Vec<(TenantId, HashMap<u64, AlertRule>)> = Vec::new();
         refresh_alert_snapshot(&store, &mut alerts).await;
         let counter = AlertCounter::new(control);
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(FLUSH_INTERVAL_SECS));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
@@ -636,7 +635,7 @@ pub fn spawn_worker(
 }
 
 /// Refreshes the cached pixel-config snapshot from `store`, across every
-/// tenant, bounded by `PIXEL_SNAPSHOT_TIMEOUT`. Fail-open: on a store error
+/// tenant, bounded by `crate::SNAPSHOT_TIMEOUT`. Fail-open: on a store error
 /// (listing tenants or any tenant's pixels) or a timeout, the previous
 /// snapshot (`pixels`) is left untouched and the failure is only logged, so a
 /// wedged or erroring store never stalls the worker and never empties out a
@@ -659,7 +658,7 @@ async fn refresh_pixel_snapshot(
         }
         Ok::<_, StoreError>(out)
     };
-    match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, load).await {
+    match tokio::time::timeout(crate::SNAPSHOT_TIMEOUT, load).await {
         Ok(Ok(snapshot)) => *pixels = snapshot,
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "pixel snapshot refresh failed, keeping previous");

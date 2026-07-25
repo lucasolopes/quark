@@ -21,6 +21,14 @@ const ANALYTICS_CHANNEL_CAPACITY: usize = 10_000;
 /// because the forwarding worker shares the runtime with the redirect path and
 /// the delivery is best-effort anyway.
 const PIXEL_FORWARD_TIMEOUT_SECS: u64 = 5;
+/// Cadence of the two hourly housekeeping loops (expired OIDC session GC and
+/// the analytics retention purge). Both only reclaim storage, so an hour is
+/// frequent enough and keeps the load off the request path.
+const HOUSEKEEPING_INTERVAL_SECS: u64 = 3600;
+/// Ceiling for the scheduled Sheets sync lease TTL. The lease is a crash-safety
+/// cap only (the tick releases it when done), so it is capped low enough that
+/// even a missed release frees it before the next tick.
+const SHEETS_LEASE_TTL_CAP_SECS: u64 = 300;
 
 /// Analytics retention window (LUC-65, GDPR), in seconds, from the raw
 /// `QUARK_ANALYTICS_RETENTION_DAYS` env value plus the `multi_tenant` mode.
@@ -586,7 +594,7 @@ async fn main() -> anyhow::Result<()> {
             // when done (see end of loop), so it never stays held between ticks
             // and block the on-demand "Sync now". Capped at 300s (and at the
             // interval) so even a missed release frees it before the next tick.
-            let ttl = secs.min(300);
+            let ttl = secs.min(SHEETS_LEASE_TTL_CAP_SECS);
             tokio::spawn(async move {
                 let client = quark::sheets::client::http_client();
                 let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
@@ -667,7 +675,8 @@ async fn main() -> anyhow::Result<()> {
     if state.oidc.is_some() {
         let store = state.store.clone();
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_secs(HOUSEKEEPING_INTERVAL_SECS));
             loop {
                 ticker.tick().await;
                 if let Err(e) = store.gc_sessions(quark::now()).await {
@@ -705,7 +714,8 @@ async fn main() -> anyhow::Result<()> {
         // error is only logged and never blocks serving.
         let store = state.store.clone();
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_secs(HOUSEKEEPING_INTERVAL_SECS));
             loop {
                 ticker.tick().await;
                 let cutoff = quark::now().saturating_sub(retention);
