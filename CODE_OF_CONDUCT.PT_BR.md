@@ -39,10 +39,12 @@ Este Código de Conduta se aplica dentro de todos os espaços da comunidade e ta
 ## Aplicação
 
 Casos de comportamento abusivo, de assédio ou inaceitável de qualquer outra
-forma podem ser reportados ao mantenedor abrindo um
-[relato privado no repositório](https://github.com/lucasolopes/quark/security/advisories/new)
-ou falando com @lucasolopes diretamente no GitHub. Todas as reclamações serão
-analisadas e investigadas de forma rápida e justa.
+forma podem ser reportados ao mantenedor falando com @lucasolopes diretamente
+no GitHub. Todas as reclamações serão analisadas e investigadas de forma
+rápida e justa. Esse é um canal separado do
+[formulário de security advisory](https://github.com/lucasolopes/quark/security/advisories/new),
+que é reservado para relatos de vulnerabilidade e tem prazos de resposta
+próprios descritos no `SECURITY.md`.
 
 O quark tem um mantenedor só, então não existe comitê de aplicação separado. Se
 o seu relato for sobre o mantenedor, ou se você preferir não falar com ele,

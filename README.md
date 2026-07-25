@@ -8,7 +8,7 @@
 [![GHCR](https://img.shields.io/badge/ghcr.io-lucasolopes%2Fquark-blue?logo=docker)](https://github.com/lucasolopes/quark/pkgs/container/quark)
 ![Runtime deps: none](https://img.shields.io/badge/runtime%20deps-none-brightgreen)
 
-> Short codes are **computed, not stored**: a keyed bijection. One tiny static binary (~1 MB), no Redis, no database, no external services.
+> Short codes are **computed, not stored**: a keyed bijection. One tiny single binary (~1 MB), no Redis, no database, no external services.
 
 **Quick links:** [API](docs/API.md) · [Configuration](docs/CONFIGURATION.md) · [Architecture](docs/ARCHITECTURE.md) · [Deploy](docs/DEPLOY.md) · [Scaling](docs/SCALING.md) · [Development](docs/DEVELOPMENT.md) · [Roadmap](docs/ROADMAP.md)
 

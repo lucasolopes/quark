@@ -27,7 +27,8 @@ things automation cannot check. -->
 - [ ] New `QUARK_*` variables documented in `docs/CONFIGURATION.md` and its twin
 - [ ] New panel strings added to **both** `web/src/i18n/en.ts` and
       `web/src/i18n/pt-BR.ts`
-- [ ] `CHANGELOG.md` updated under `## [Unreleased]`, or not applicable
+- [ ] `CHANGELOG.md` **and** `CHANGELOG.PT_BR.md` updated under
+      `## [Unreleased]`, or not applicable
 - [ ] No new runtime dependency, or the PR explains why it is worth the binary
       size and the "no runtime deps" promise
 - [ ] The redirect hot path (`/:code`) stays allocation-light; if it was

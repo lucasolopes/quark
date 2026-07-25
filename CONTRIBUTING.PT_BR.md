@@ -105,7 +105,9 @@ usuário do painel.
 - Commits: [Conventional Commits](https://www.conventionalcommits.org/) com
   escopo, `feat(web):`, `fix(api):`, `docs:`, `chore:`. **Escreva as mensagens
   de commit em inglês.** O histórico antigo está em português e fica como está.
-- Atualize o `CHANGELOG.md` em `## [Unreleased]` no mesmo PR, não depois.
+- Atualize o `CHANGELOG.md` **e** o `CHANGELOG.PT_BR.md` em `## [Unreleased]`
+  no mesmo PR, não depois. É a mesma regra do gêmeo bilíngue que vale para
+  qualquer outro doc voltado ao usuário.
 - Faça fork e abra o PR contra a `main`.
 
 Como funciona o gate de merge, para nada te pegar de surpresa:

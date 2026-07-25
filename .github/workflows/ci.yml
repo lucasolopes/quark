@@ -100,8 +100,9 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      # Pinado no SHA do master porque o subpath nao publica tag utilizavel.
-      # O Dependabot nao consegue atualizar esse pin sozinho; revisar a mao,
+      # Pinado no SHA (nao na tag) porque este job carrega o token de deploy
+      # de producao do Fly. Pin por SHA e a defesa contra uma tag movida, que
+      # foi o vetor do incidente tj-actions/changed-files; revisar a mao,
       # trimestralmente.
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master@2026-07-24
       - run: flyctl deploy --remote-only

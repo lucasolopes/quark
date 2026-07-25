@@ -8,7 +8,7 @@
 [![GHCR](https://img.shields.io/badge/ghcr.io-lucasolopes%2Fquark-blue?logo=docker)](https://github.com/lucasolopes/quark/pkgs/container/quark)
 ![Runtime deps: none](https://img.shields.io/badge/runtime%20deps-none-brightgreen)
 
-> Os short codes são **calculados, não armazenados**, uma bijeção chaveada. Um binário estático minúsculo (~1 MB), sem Redis, sem banco de dados, sem serviços externos.
+> Os short codes são **calculados, não armazenados**, uma bijeção chaveada. Um binário único minúsculo (~1 MB), sem Redis, sem banco de dados, sem serviços externos.
 
 **Links rápidos:** [API](docs/API.PT_BR.md) · [Configuração](docs/CONFIGURATION.PT_BR.md) · [Arquitetura](docs/ARCHITECTURE.PT_BR.md) · [Deploy](docs/DEPLOY.PT_BR.md) · [Escala](docs/SCALING.PT_BR.md) · [Desenvolvimento](docs/DEVELOPMENT.PT_BR.md) · [Roadmap](docs/ROADMAP.PT_BR.md)
 

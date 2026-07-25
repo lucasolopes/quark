@@ -70,7 +70,7 @@ jobs:
               body:
                 'Thanks for the PR! Before we can merge it, we need you to accept the ' +
                 '[Contributor License Agreement](https://github.com/lucasolopes/quark/blob/main/CLA.md). ' +
-                "It's a license grant only — **you keep ownership of your code**.\n\n" +
+                "It's a license grant only: **you keep ownership of your code**.\n\n" +
                 'To sign, comment exactly:\n\n' +
                 '> I have read the CLA Document and I hereby sign the CLA'
             })
@@ -113,6 +113,6 @@ jobs:
               repo: context.repo.repo,
               issue_number: context.issue.number,
               body:
-                `✅ @${context.payload.comment.user.login} signed the CLA on ${signedAt} — ` +
+                `✅ @${context.payload.comment.user.login} signed the CLA on ${signedAt}: ` +
                 '"I have read the CLA Document and I hereby sign the CLA"'
             })

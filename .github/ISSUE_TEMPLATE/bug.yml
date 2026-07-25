@@ -109,7 +109,7 @@ body:
         issue will be closed as such.
       placeholder: |
         1. QUARK_KEY=... cargo run --release
-        2. curl -X POST localhost:8080/api/links -d '{"url":"..."}'
+        2. curl -X POST localhost:8080/ -H 'content-type: application/json' -d '{"url":"..."}'
         3.
     validations:
       required: true

@@ -102,7 +102,9 @@ library or an existing dependency cannot, and what it costs in binary size. For
 - Commits: [Conventional Commits](https://www.conventionalcommits.org/) with a
   scope, `feat(web):`, `fix(api):`, `docs:`, `chore:`. **Write commit messages
   in English.** Older history is in Portuguese; it stays as is.
-- Update `CHANGELOG.md` under `## [Unreleased]` in the same PR, not later.
+- Update `CHANGELOG.md` **and** `CHANGELOG.PT_BR.md` under `## [Unreleased]` in
+  the same PR, not later. Same bilingual-twin rule as every other user-facing
+  doc.
 - Fork the repo and open the PR against `main`.
 
 What the merge gate looks like, so nothing surprises you:

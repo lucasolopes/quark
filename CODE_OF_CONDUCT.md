@@ -39,10 +39,11 @@ This Code of Conduct applies within all community spaces, and also applies when 
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the maintainer by opening a
-[private report to the repository](https://github.com/lucasolopes/quark/security/advisories/new)
-or by contacting @lucasolopes directly on GitHub. All complaints will be
-reviewed and investigated promptly and fairly.
+reported to the maintainer by contacting @lucasolopes directly on GitHub. All
+complaints will be reviewed and investigated promptly and fairly. This is a
+separate channel from the [security advisory form](https://github.com/lucasolopes/quark/security/advisories/new),
+which is reserved for vulnerability reports and carries its own response-time
+targets described in `SECURITY.md`.
 
 quark has a single maintainer, so there is no separate enforcement committee. If
 your report is about the maintainer, or you would rather not write to them at
