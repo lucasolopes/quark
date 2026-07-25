@@ -4,6 +4,7 @@
 use quark::store::{open_store, Record, Store};
 use quark::tenant::TenantId;
 use std::sync::Arc;
+use serial_test::file_serial;
 
 fn rec(url: &str) -> Record {
     Record {
@@ -26,6 +27,7 @@ fn rec(url: &str) -> Record {
 // --- LMDB arm (no gating) ---
 
 #[tokio::test]
+#[file_serial]
 async fn lmdb_scans_are_bounded_to_tenant() {
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(dir.path()).await.unwrap();
@@ -55,6 +57,7 @@ async fn lmdb_scans_are_bounded_to_tenant() {
 }
 
 #[tokio::test]
+#[file_serial]
 async fn lmdb_default_tenant_is_seeded_and_migration_marker_set() {
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(dir.path()).await.unwrap();
@@ -78,6 +81,7 @@ async fn lmdb_default_tenant_is_seeded_and_migration_marker_set() {
 }
 
 #[tokio::test]
+#[file_serial]
 async fn lmdb_identity_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(dir.path()).await.unwrap();
@@ -121,6 +125,7 @@ async fn lmdb_identity_round_trips() {
 // --- Postgres arm (gated on QUARK_TEST_DATABASE_URL) ---
 
 #[tokio::test]
+#[file_serial]
 async fn migration_seeds_default_tenant_and_columns() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         return;
@@ -135,6 +140,7 @@ async fn migration_seeds_default_tenant_and_columns() {
 }
 
 #[tokio::test]
+#[file_serial]
 async fn pg_two_tenants_do_not_see_each_others_links() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         return;
@@ -373,6 +379,7 @@ async fn assert_full_isolation(store: Arc<dyn Store>) {
 }
 
 #[tokio::test]
+#[file_serial]
 async fn every_tenant_owned_entity_is_isolated() {
     // LMDB arm: always runs.
     let dir = tempfile::tempdir().unwrap();
@@ -391,6 +398,7 @@ async fn every_tenant_owned_entity_is_isolated() {
 // --- P1b: credentials carry tenant + user ---
 
 #[tokio::test]
+#[file_serial]
 async fn lmdb_token_and_session_carry_tenant_and_user() {
     let dir = tempfile::tempdir().unwrap();
     let store = quark::store::open_store(dir.path()).await.unwrap();
@@ -427,6 +435,7 @@ async fn lmdb_token_and_session_carry_tenant_and_user() {
 }
 
 #[tokio::test]
+#[file_serial]
 async fn pg_token_and_session_carry_tenant_and_user() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -478,6 +487,7 @@ async fn pg_token_and_session_carry_tenant_and_user() {
 // / `name` alone, which cannot hold two tenants' rows at once). ---
 
 #[tokio::test]
+#[file_serial]
 async fn pg_wellknown_and_sheets_pks_are_tenant_correct() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");

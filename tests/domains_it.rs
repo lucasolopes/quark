@@ -9,7 +9,6 @@ use quark::domain::{Domain, DomainStatus, SHARED_DOMAIN_ID};
 use quark::store::postgres::PostgresStore;
 use quark::store::{Record, Store};
 use quark::tenant::{Tenant, TenantId};
-use quark::webhooks::delivery::WebhookDispatcher;
 use serial_test::file_serial;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -183,15 +182,6 @@ async fn alias_namespace_is_per_domain() {
 
 const KEY: u64 = 0x1234;
 
-/// A `WebhookDispatcher` whose receiver is dropped: `emit` silently no-ops.
-fn test_webhook_dispatcher() -> Arc<WebhookDispatcher> {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    Arc::new(WebhookDispatcher::new(
-        tx,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    ))
-}
 
 /// Builds a cloud-mode (`multi_tenant = true`) router over `store`, with
 /// `public_host` (if any) as the shared-domain host.
@@ -211,7 +201,7 @@ fn cloud_app(
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .public_host(public_host)
         .multi_tenant(true)
@@ -610,7 +600,7 @@ async fn admin_app_for_tenant(
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .public_host(Some("quark.example.com".to_string()))
         .multi_tenant(multi_tenant)
@@ -1086,7 +1076,7 @@ async fn wellknown_ignores_host_in_oss() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .build();
     let app = router(state);
@@ -1397,7 +1387,7 @@ fn cloud_app_with_suffix(
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .public_host(public_host)
         .oidc_configured(true)
@@ -1635,7 +1625,7 @@ async fn oss_create_still_stamps_default_tenant_and_shared_domain() {
     .cache(cache)
     .host_router(host_router)
     .analytics_tx(analytics_tx)
-    .webhooks(test_webhook_dispatcher())
+    .webhooks(common::test_webhook_dispatcher())
     .key(KEY)
     .build();
     let app = router(state);
@@ -1815,7 +1805,7 @@ async fn oss_admin_stats_and_delete_still_resolve_alias_in_shared_domain() {
     .cache(cache)
     .host_router(host_router)
     .analytics_tx(analytics_tx)
-    .webhooks(test_webhook_dispatcher())
+    .webhooks(common::test_webhook_dispatcher())
     .key(KEY)
     .build();
     let app = router(state);

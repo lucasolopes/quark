@@ -35,22 +35,11 @@ async fn pg_replica(url: &str) -> axum::Router {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .build();
     router(state)
 }
 
-/// A `WebhookDispatcher` for tests that don't exercise webhooks: the
-/// receiver is dropped immediately, so `emit` silently no-ops (logs and
-/// drops) rather than needing a live worker.
-fn test_webhook_dispatcher() -> Arc<quark::webhooks::delivery::WebhookDispatcher> {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
-        tx,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    ))
-}
 
 #[tokio::test]
 #[file_serial]

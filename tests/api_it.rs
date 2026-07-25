@@ -23,22 +23,11 @@ async fn app() -> axum::Router {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .build();
     router(state)
 }
 
-/// A `WebhookDispatcher` for tests that don't exercise webhooks: the
-/// receiver is dropped immediately, so `emit` silently no-ops (logs and
-/// drops) rather than needing a live worker.
-fn test_webhook_dispatcher() -> Arc<quark::webhooks::delivery::WebhookDispatcher> {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
-        tx,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    ))
-}
 
 #[tokio::test]
 async fn creates_and_redirects() {
@@ -787,7 +776,7 @@ async fn unlock_post_is_rate_limited() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some("secret".to_string()))
         .ratelimiter(quark::abuse::ratelimit::RateLimiter::memory(1))
         .build();
@@ -882,7 +871,7 @@ async fn rate_limit_429_after_exceeding() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .ratelimiter(quark::abuse::ratelimit::RateLimiter::memory(1))
         .build();
     let app = router(state);
@@ -1004,7 +993,7 @@ async fn app_admin(token: &str) -> axum::Router {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some(token.to_string()))
         .build();
     router(state)
@@ -1470,7 +1459,7 @@ async fn app_with_analytics_rx() -> (axum::Router, tokio::sync::mpsc::Receiver<C
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .build();
     (router(state), rx)
 }
@@ -2159,7 +2148,7 @@ async fn cors_header_present_when_configured() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .build();
     let app = quark::api::router_with_cors(state, vec!["https://panel.example".into()]);
     let resp = app
@@ -2481,7 +2470,7 @@ async fn admin_links_reports_health_and_broken_filter() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some("secret".to_string()))
         .build();
     let app = router(state);
@@ -2592,7 +2581,7 @@ async fn session_cookie_authorizes_admin_by_scope() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some("secret".to_string()))
         .oidc_configured(true)
         .build();
@@ -2722,7 +2711,7 @@ async fn admin_me_reports_session_and_oidc_state() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some("secret".to_string()))
         .build();
     let app = router(state);
@@ -2813,7 +2802,7 @@ async fn oidc_session_can_create_and_low_scope_token_does_not_block_it() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some("secret".to_string()))
         .oidc_configured(true)
         .build();
@@ -2923,7 +2912,7 @@ async fn logout_requires_csrf_header_and_revokes_session() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some("secret".to_string()))
         .oidc_configured(true)
         .build();
@@ -3009,7 +2998,7 @@ async fn session_cookie_is_ignored_when_oidc_not_configured() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some("secret".to_string()))
         .build();
     let app = router(state);
@@ -3081,7 +3070,7 @@ async fn sheets_status_reports_connected_and_never_leaks_refresh_token() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some("secret".to_string()))
         .oidc_configured(true)
         .sheets(Some(Arc::new(cfg)))
@@ -3187,7 +3176,7 @@ async fn sheets_callback_requires_the_state_cookie() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some("secret".to_string()))
         .oidc_configured(true)
         .sheets(Some(Arc::new(cfg)))
@@ -3257,7 +3246,7 @@ async fn slack_connect_sets_state_cookie_and_callback_requires_it() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some("secret".to_string()))
         .oidc_configured(true)
         .slack(Some(Arc::new(cfg)))
@@ -3321,7 +3310,7 @@ async fn slack_connect_off_when_unconfigured() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some("secret".to_string()))
         .oidc_configured(true)
         .build();
@@ -3368,7 +3357,7 @@ async fn sheets_connect_binds_the_state_cookie_to_the_callers_tenant() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .signing_key(signing_key)
         .sheets(Some(Arc::new(cfg)))
         .build();

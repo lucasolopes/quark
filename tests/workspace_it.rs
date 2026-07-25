@@ -34,16 +34,6 @@ async fn next_tenant_id_starts_above_default() {
     );
 }
 
-/// A `WebhookDispatcher` for tests that don't exercise webhooks: the receiver
-/// is dropped immediately, so `emit` silently no-ops.
-fn test_webhook_dispatcher() -> Arc<quark::webhooks::delivery::WebhookDispatcher> {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
-        tx,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    ))
-}
 
 /// Builds a full quark router over `store` with a given `multi_tenant` mode.
 fn app_over(
@@ -101,7 +91,7 @@ fn app_over_full(
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .oidc_configured(true)
         .multi_tenant(multi_tenant)
         .tenant_domain_suffix(tenant_domain_suffix)

@@ -8,16 +8,6 @@ use tower::ServiceExt;
 
 mod common;
 
-/// A `WebhookDispatcher` for tests that don't exercise webhooks: the
-/// receiver is dropped immediately, so `emit` silently no-ops.
-fn test_webhook_dispatcher() -> Arc<quark::webhooks::delivery::WebhookDispatcher> {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
-        tx,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    ))
-}
 
 async fn app_with_token(admin_token: Option<&str>) -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
@@ -33,7 +23,7 @@ async fn app_with_token(admin_token: Option<&str>) -> axum::Router {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(admin_token.map(|s| s.to_string()))
         .build();
     router(state)

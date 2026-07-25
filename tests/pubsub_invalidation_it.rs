@@ -7,6 +7,7 @@ use quark::store::{open_backends, Record, Store};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use serial_test::file_serial;
 
 mod common;
 
@@ -103,6 +104,7 @@ async fn node_with_host_invalidator(
 }
 
 #[tokio::test]
+#[file_serial]
 async fn cache_invalidation_propagates_to_other_node() {
     let Ok(url) = std::env::var("QUARK_TEST_VALKEY_URL") else {
         eprintln!("skip: QUARK_TEST_VALKEY_URL not set");
@@ -166,6 +168,7 @@ async fn cache_invalidation_propagates_to_other_node() {
 /// node B's dedicated subscriber consumes it via `invalidate_local` (no
 /// re-publish) and drops B's stale `HostRouter` L1 entry.
 #[tokio::test]
+#[file_serial]
 async fn host_invalidation_propagates_to_other_node() {
     let Ok(url) = std::env::var("QUARK_TEST_VALKEY_URL") else {
         eprintln!("skip: QUARK_TEST_VALKEY_URL not set");

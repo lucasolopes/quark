@@ -8,16 +8,6 @@ use tower::ServiceExt;
 
 mod common;
 
-/// A `WebhookDispatcher` for tests that don't exercise webhooks: the
-/// receiver is dropped immediately, so `emit` silently no-ops.
-fn test_webhook_dispatcher() -> Arc<quark::webhooks::delivery::WebhookDispatcher> {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
-        tx,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    ))
-}
 
 async fn app_admin(token: &str) -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
@@ -33,7 +23,7 @@ async fn app_admin(token: &str) -> axum::Router {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .admin_token(Some(token.to_string()))
         .ratelimiter(quark::abuse::ratelimit::RateLimiter::memory(1000))
         .build();
@@ -282,7 +272,7 @@ async fn api_token_works_when_no_env_admin_token_is_configured() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .ratelimiter(quark::abuse::ratelimit::RateLimiter::memory(1000))
         .build();
     let app = router(state);

@@ -18,10 +18,10 @@ use quark::cache::Cache;
 use quark::store::postgres::PostgresStore;
 use quark::store::{OutboxRow, Record, Store};
 use quark::tenant::{Membership, Role, TenantId};
-use quark::webhooks::delivery::WebhookDispatcher;
 use quark::webhooks::{EventType, SubscriptionKind, WebhookSubscription};
 use std::sync::Arc;
 use tower::ServiceExt;
+use serial_test::file_serial;
 
 mod common;
 
@@ -44,6 +44,7 @@ fn rec(url: &str) -> Record {
 }
 
 #[tokio::test]
+#[file_serial]
 async fn cloud_force_rls_is_fail_closed() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -101,6 +102,7 @@ async fn cloud_force_rls_is_fail_closed() {
 /// `app.tenant_id=<tenant>`, so `0 = <tenant>` fails for any non-default
 /// tenant).
 #[tokio::test]
+#[file_serial]
 async fn cloud_analytics_and_outbox_accessors_survive_force_rls() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -209,6 +211,7 @@ async fn cloud_analytics_and_outbox_accessors_survive_force_rls() {
 /// bare pool with no `app.tenant_id` set. If they were FORCE'd, login and API
 /// auth would silently fail closed (0 rows) for every tenant in cloud mode.
 #[tokio::test]
+#[file_serial]
 async fn cloud_hash_lookups_survive_force_rls() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -271,15 +274,6 @@ async fn cloud_hash_lookups_survive_force_rls() {
     );
 }
 
-/// A `WebhookDispatcher` whose receiver is dropped: `emit` silently no-ops.
-fn test_webhook_dispatcher() -> Arc<WebhookDispatcher> {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    Arc::new(WebhookDispatcher::new(
-        tx,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    ))
-}
 
 /// Builds a cloud-mode `AppState` (`multi_tenant = true`, `oidc_configured =
 /// true`, no env admin token) over the given Postgres-backed store/sink, so
@@ -296,7 +290,7 @@ fn cloud_state(store: Arc<dyn Store>, sink: Arc<dyn AnalyticsSink>) -> Arc<AppSt
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .oidc_configured(true)
         .multi_tenant(true)
         .build()
@@ -330,6 +324,7 @@ async fn put_login_session(store: &Arc<dyn Store>, raw: &str, user_id: u64, tena
 /// current tenant is treated as insufficient (403), even though the session row
 /// itself carries `Scope::Full`.
 #[tokio::test]
+#[file_serial]
 async fn admin_guard_role_scopes_in_cloud() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");

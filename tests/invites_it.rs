@@ -11,7 +11,6 @@ use quark::invite::Invite;
 use quark::store::postgres::PostgresStore;
 use quark::store::{open_backends, Store};
 use quark::tenant::{Membership, Role, Tenant, TenantId, User};
-use quark::webhooks::delivery::WebhookDispatcher;
 use serial_test::file_serial;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -351,14 +350,6 @@ async fn delete_invite_is_tenant_scoped() {
 
 const KEY: u64 = 0x1234;
 
-fn test_webhook_dispatcher() -> Arc<WebhookDispatcher> {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    Arc::new(WebhookDispatcher::new(
-        tx,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    ))
-}
 
 /// Builds a router for `tenant`, plus a `x-admin-token` API token with
 /// `scopes` scoped to that tenant. `multi_tenant` toggles the cloud gate the
@@ -414,7 +405,7 @@ async fn admin_app_with_scopes_and_keycloak(
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .public_host(Some("quark.example.com".to_string()))
         .multi_tenant(multi_tenant)
@@ -732,7 +723,7 @@ fn session_app_over_with_keycloak(
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .oidc_configured(true)
         .multi_tenant(multi_tenant)
@@ -1016,7 +1007,7 @@ fn app_over(
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .oidc_configured(true)
         .multi_tenant(multi_tenant)
