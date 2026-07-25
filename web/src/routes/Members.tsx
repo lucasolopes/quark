@@ -192,7 +192,7 @@ export function Members() {
             <li
               key={invite.id}
               data-testid="member-row"
-              className="flex items-center gap-3.5 border-b border-border px-4 py-4 last:border-b-0"
+              className="flex flex-wrap items-center gap-3.5 border-b border-border px-4 py-4 last:border-b-0"
             >
               <div
                 aria-hidden="true"

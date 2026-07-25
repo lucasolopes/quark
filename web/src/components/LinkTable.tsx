@@ -247,8 +247,15 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
             <li
               key={link.code}
               data-testid="link-card"
-              className="card-hover flex items-center gap-4 rounded-lg border border-border bg-card p-4 shadow-card"
+              className="card-hover flex items-center gap-4 rounded-lg border border-border bg-card p-4 shadow-card max-sm:flex-col max-sm:items-stretch"
             >
+              {/* Header group (checkbox + icon well + main info): a row at every
+                  breakpoint. Below `sm` it is the card's own full-width top row
+                  (main info gets the full card width instead of competing with
+                  the footer group for space); at `sm`+ it sits beside the footer
+                  group exactly as the flat 5-item row used to, since every gap
+                  here is the same `gap-4` the outer row already used. */}
+              <div className="flex min-w-0 flex-1 items-center gap-4">
               {canWrite && (
                 <Checkbox
                   checked={selected.has(link.code)}
@@ -334,7 +341,13 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
                   </div>
                 )}
               </div>
+              </div>
 
+              {/* Footer group (clicks + the 3 actions): below `sm` its own
+                  full-width row, clicks pinned left and actions right
+                  (`justify-between`); at `sm`+ `shrink-0` keeps it sized to its
+                  content, sitting beside the header group as before. */}
+              <div className="flex items-center gap-4 shrink-0 max-sm:w-full max-sm:justify-between">
               <div className="shrink-0 text-right">
                 <div className="font-heading text-lg font-bold tabular-nums text-strong">
                   {link.max_visits ? `${clicks} / ${link.max_visits}` : clicks}
@@ -346,7 +359,7 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
                 <Button
                   variant="outline"
                   size="icon"
-                  className="rounded-[8px] border-border"
+                  className="rounded-[8px] border-border max-sm:size-11"
                   aria-label={t("linkTable.copyAria", { code: link.code })}
                   onClick={() => handleCopy(link)}
                 >
@@ -355,7 +368,7 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
                 <Button
                   variant="outline"
                   size="icon"
-                  className="rounded-[8px] border-border"
+                  className="rounded-[8px] border-border max-sm:size-11"
                   aria-label={t("linkTable.viewStatsAria", { code: link.code })}
                   onClick={() => navigate(`/links/${link.code}`)}
                 >
@@ -367,7 +380,7 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
                       <Button
                         variant="outline"
                         size="icon"
-                        className="rounded-[8px] border-border"
+                        className="rounded-[8px] border-border max-sm:size-11"
                         aria-label={t("linkTable.moreActionsAria", { code: link.code })}
                       />
                     }
@@ -393,6 +406,7 @@ export function LinkTable({ links, onEdit, onDelete, canWrite = true }: LinkTabl
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
+              </div>
               </div>
             </li>
           );

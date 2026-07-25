@@ -167,7 +167,7 @@ export function StatsView({ code }: { code: string }) {
             <StatsCharts aggregates={query.data.aggregates} />
           </Suspense>
 
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Card className="rounded-[12px] [--card-spacing:--spacing(5)]">
               <CardHeader>
                 <CardTitle className="font-sans text-[13.5px] font-semibold">{t("charts.perCountryTitle")}</CardTitle>
