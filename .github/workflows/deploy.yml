@@ -44,14 +44,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # O painel sai do MESMO commit que gerou a imagem, senao o rollback
           # volta o backend e deixa o front adiantado, que e exatamente a
           # divergencia que este modelo existe para evitar.
           ref: v${{ inputs.version }}
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
           cache: npm
@@ -67,7 +67,7 @@ jobs:
           npm ci
           npm run build
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: panel-dist
           path: web/dist
@@ -94,7 +94,7 @@ jobs:
       # Sem `ref`, de proposito: o backend precisa apenas do fly.toml, e um
       # rollback nao pode depender de a tag ainda existir. O painel, esse sim,
       # sai da tag, e isso acontece no job panel.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Falha cedo e com mensagem clara se a versao nao existe no registry, em
       # vez de deixar o flyctl errar com "manifest unknown" la na frente.
@@ -124,7 +124,7 @@ jobs:
           test -n "$DIGEST" || { echo "::error::digest vazio"; exit 1; }
           flyctl deploy --image "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         if: ${{ inputs.panel }}
         with:
           name: panel-dist
