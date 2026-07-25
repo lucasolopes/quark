@@ -42,10 +42,10 @@ curl -X POST localhost:8080/ -H 'content-type: application/json' \
 | | Language | Required services | Size | Panel | License |
 |---|---|---|---|---|---|
 | **quark** | Rust | none (embedded LMDB + in-process cache) | ~1 MB single binary | separate React SPA, deployed independently | AGPL-3.0 |
-| [Shlink](https://github.com/shlinkio/shlink) | PHP | a SQL database (MySQL, MariaDB, PostgreSQL, SQL Server or SQLite) | not a single binary | separate app (`shlink-web-client`) | MIT |
+| [Shlink](https://github.com/shlinkio/shlink) | PHP | a SQL database: MySQL, MariaDB, PostgreSQL or SQL Server (SQLite exists but is explicitly not supported for production) | not a single binary | separate app (`shlink-web-client`) | MIT |
 | [YOURLS](https://github.com/YOURLS/YOURLS) | PHP | MySQL or MariaDB | not a single binary | built-in admin UI | MIT |
-| [Kutt](https://github.com/thedevs-network/kutt) | Node.js | none required by default (SQLite embedded); Postgres/MySQL and Redis optional | not a single binary | built-in dashboard | MIT |
-| [Dub](https://github.com/dubinc/dub) | Next.js/TypeScript | Postgres + Redis + Tinybird (analytics) | not a single binary | full dashboard | AGPL-3.0 core, commercial Enterprise Edition |
+| [Kutt](https://github.com/thedevs-network/kutt) | Node.js | none required by default in the current release (SQLite embedded); Postgres/MySQL and Redis optional. Older major versions required Postgres + Redis. | not a single binary | built-in dashboard | MIT |
+| [Dub](https://github.com/dubinc/dub) | Next.js/TypeScript | a PlanetScale-compatible MySQL database + Upstash Redis + Tinybird (analytics) | not a single binary | full dashboard | AGPL-3.0 core, commercial Enterprise Edition |
 
 quark is the only one in this list with **zero required external services**: the other four need at minimum a SQL database, and Dub needs three separate managed services out of the box. That's the same "scales down to one binary" point made in [Backends & scaling](#backends--scaling) below, just next to the competition.
 
@@ -195,7 +195,7 @@ Store and AnalyticsSink are selected **independently**: e.g. Postgres store + Cl
 
 - **Webhooks**: signed outgoing HTTP events (`link.created/updated/deleted/expired/clicked`) to any endpoint (Zapier, Make, n8n, Slack, custom). On Postgres the lifecycle events are delivered durably (outbox + leased relay + retry/DLQ); `link.clicked`/`link.expired` stay best-effort by design. Config persisted via `Store`. See [`docs/WEBHOOKS.md`](docs/WEBHOOKS.md).
 
-The framing: quark **scales down to one binary with zero external dependencies**, and **scales up to a distributed stack** (Valkey + Postgres + ClickHouse) **one opt-in piece at a time**, never all-or-nothing. Compare that to heavier shorteners (e.g. Dub) that require Postgres + Redis + ClickHouse from day one, even for a single low-traffic instance.
+The framing: quark **scales down to one binary with zero external dependencies**, and **scales up to a distributed stack** (Valkey + Postgres + ClickHouse) **one opt-in piece at a time**, never all-or-nothing. Compare that to heavier shorteners (e.g. Dub) that require a MySQL database, Redis, and Tinybird from day one, even for a single low-traffic instance.
 
 ```mermaid
 flowchart LR
