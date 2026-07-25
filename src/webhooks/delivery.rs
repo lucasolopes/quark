@@ -91,10 +91,7 @@ impl WebhookDispatcher {
         match self.tx.try_send(ev) {
             Ok(()) => true,
             Err(e) => {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"webhook_event_dropped": e.to_string()})
-                );
+                tracing::warn!(error = %e, "webhook event dropped, channel full");
                 false
             }
         }
@@ -141,10 +138,7 @@ impl WebhookDispatcher {
         let subs = match store.list_webhooks(tenant).await {
             Ok(subs) => subs,
             Err(e) => {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"webhook_outbox_snapshot_error": e.to_string()})
-                );
+                tracing::warn!(error = %e, "webhook outbox snapshot failed");
                 return Vec::new();
             }
         };
@@ -266,16 +260,10 @@ async fn refresh_snapshot(
             *subs = snapshot;
         }
         Ok(Err(e)) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({"webhook_snapshot_refresh_error": e.to_string()})
-            );
+            tracing::warn!(error = %e, "webhook subscription snapshot refresh failed, keeping previous");
         }
         Err(_) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({"webhook_snapshot_refresh_error": "timed out refreshing subscription snapshot"})
-            );
+            tracing::warn!("webhook subscription snapshot refresh timed out, keeping previous");
         }
     }
 }
@@ -316,12 +304,12 @@ async fn deliver_to_matching_guarded(
         let host = match extract_host(&sub.url) {
             Some(h) => h,
             None => {
-                eprintln!("{}", serde_json::json!({"webhook_invalid_url": &sub.url}));
+                tracing::warn!(url = %sub.url, "webhook destination url is invalid");
                 continue;
             }
         };
         if is_blocked(&host) {
-            eprintln!("{}", serde_json::json!({"webhook_ssrf_blocked": &sub.url}));
+            tracing::warn!(url = %sub.url, "webhook destination blocked by the ssrf guard");
             continue;
         }
         deliver_one(client, store, sub, ev).await;
@@ -369,10 +357,7 @@ pub(crate) fn build_outgoing_request(
             let signature = match sign(&sub.secret, &msg_id, ts, &ev.body) {
                 Ok(sig) => sig,
                 Err(e) => {
-                    eprintln!(
-                        "{}",
-                        serde_json::json!({"webhook_sign_error": e.to_string(), "url": &sub.url})
-                    );
+                    tracing::error!(error = %e, url = %sub.url, "webhook signing failed");
                     return None;
                 }
             };
@@ -432,13 +417,11 @@ async fn deliver_one(
                     "status {}",
                     resp.status().as_u16()
                 ));
-                eprintln!(
-                    "{}",
-                    serde_json::json!({
-                        "webhook_delivery_non_2xx": resp.status().as_u16(),
-                        "url": &sub.url,
-                        "attempt": attempt + 1,
-                    })
+                tracing::warn!(
+                    status = resp.status().as_u16(),
+                    url = %sub.url,
+                    attempt = attempt + 1,
+                    "webhook delivery returned a non-2xx status"
                 );
             }
             Err(e) => {
@@ -448,13 +431,11 @@ async fn deliver_one(
                 // token lives in the URL itself, and reqwest's `Display`
                 // includes it by default. Log the full error first (operators
                 // need it), then redact only for the persisted health detail.
-                eprintln!(
-                    "{}",
-                    serde_json::json!({
-                        "webhook_delivery_error": e.to_string(),
-                        "url": &sub.url,
-                        "attempt": attempt + 1,
-                    })
+                tracing::warn!(
+                    error = %e,
+                    url = %sub.url,
+                    attempt = attempt + 1,
+                    "webhook delivery failed"
                 );
                 outcome = crate::health::HealthStatus::Error(e.without_url().to_string());
             }
@@ -473,10 +454,7 @@ async fn deliver_one(
             .iter()
             .find(|(name, _)| *name == "webhook-id")
             .map(|(_, value)| value.as_str());
-        eprintln!(
-            "{}",
-            serde_json::json!({"webhook_delivery_exhausted": &sub.url, "msg_id": msg_id})
-        );
+        tracing::warn!(url = %sub.url, msg_id, "webhook delivery budget exhausted");
     }
 
     // Health passive recording, off the redirect hot path: `link.clicked`
@@ -487,10 +465,7 @@ async fn deliver_one(
             .record_webhook_health(ev.tenant_id, sub.id, crate::now(), outcome)
             .await
         {
-            eprintln!(
-                "{}",
-                serde_json::json!({"webhook_health_record_error": e.to_string()})
-            );
+            tracing::warn!(error = %e, "webhook health record write failed");
         }
     }
 }
@@ -557,10 +532,7 @@ async fn refresh_relay_snapshot(store: &Arc<dyn Store>) -> Vec<WebhookSubscripti
     match store.list_webhooks(crate::tenant::DEFAULT_TENANT).await {
         Ok(subs) => subs,
         Err(e) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({"webhook_relay_snapshot_error": e.to_string()})
-            );
+            tracing::warn!(error = %e, "webhook relay snapshot failed");
             Vec::new()
         }
     }
@@ -583,10 +555,7 @@ pub async fn poll_once(
     let claimed = match store.claim_due_deliveries(now, limit).await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({"webhook_relay_claim_error": e.to_string()})
-            );
+            tracing::warn!(error = %e, "webhook relay claim failed");
             return 0;
         }
     };
@@ -626,23 +595,19 @@ async fn deliver_claimed(
                 &fetched
             }
             Ok(None) => {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({
-                        "webhook_relay_sub_deleted": delivery.subscription_id,
-                        "delivery_key": &delivery.delivery_key,
-                    })
+                tracing::warn!(
+                    subscription_id = delivery.subscription_id,
+                    delivery_key = %delivery.delivery_key,
+                    "relayed webhook subscription no longer exists"
                 );
                 mark_dead_logged(store, delivery.id, delivery.attempts).await;
                 return;
             }
             Err(e) => {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({
-                        "webhook_relay_sub_lookup_error": e.to_string(),
-                        "delivery_key": &delivery.delivery_key,
-                    })
+                tracing::warn!(
+                    error = %e,
+                    delivery_key = %delivery.delivery_key,
+                    "relayed webhook subscription lookup failed"
                 );
                 let next =
                     now.saturating_add(relay_backoff_secs(delivery.attempts.saturating_add(1)));
@@ -655,28 +620,19 @@ async fn deliver_claimed(
     let host = match extract_host(&sub.url) {
         Some(h) => h,
         None => {
-            eprintln!(
-                "{}",
-                serde_json::json!({"webhook_relay_invalid_url": &sub.url})
-            );
+            tracing::warn!(url = %sub.url, "relayed webhook url is invalid");
             mark_dead_logged(store, delivery.id, delivery.attempts).await;
             return;
         }
     };
     if is_blocked(&host) {
-        eprintln!(
-            "{}",
-            serde_json::json!({"webhook_relay_ssrf_blocked": &sub.url})
-        );
+        tracing::warn!(url = %sub.url, "relayed webhook blocked by the ssrf guard");
         mark_dead_logged(store, delivery.id, delivery.attempts).await;
         return;
     }
 
     let Some(event_type) = EventType::from_wire(&delivery.event_type) else {
-        eprintln!(
-            "{}",
-            serde_json::json!({"webhook_relay_bad_event_type": &delivery.event_type})
-        );
+        tracing::warn!(event_type = %delivery.event_type, "relayed webhook has an unknown event type");
         mark_dead_logged(store, delivery.id, delivery.attempts).await;
         return;
     };
@@ -686,20 +642,14 @@ async fn deliver_claimed(
         tenant_id: delivery.tenant_id,
     };
     let Some(req) = build_outgoing_request(sub, &ev, Some(&delivery.delivery_key)) else {
-        eprintln!(
-            "{}",
-            serde_json::json!({"webhook_relay_build_failed": &delivery.delivery_key})
-        );
+        tracing::warn!(delivery_key = %delivery.delivery_key, "relayed webhook request could not be built");
         mark_dead_logged(store, delivery.id, delivery.attempts).await;
         return;
     };
 
     if post_once(client, sub, &req).await {
         if let Err(e) = store.mark_delivered(delivery.id).await {
-            eprintln!(
-                "{}",
-                serde_json::json!({"webhook_relay_mark_delivered_error": e.to_string()})
-            );
+            tracing::warn!(error = %e, "webhook relay mark-delivered failed");
         }
         // Health passive recording, off the redirect hot path (see
         // `deliver_one`'s comment): `link.clicked` never records here either.
@@ -729,12 +679,10 @@ async fn deliver_claimed(
 
     let attempts = delivery.attempts.saturating_add(1);
     if attempts >= MAX_DELIVERY_ATTEMPTS {
-        eprintln!(
-            "{}",
-            serde_json::json!({
-                "webhook_relay_dead_letter": &delivery.delivery_key,
-                "attempts": attempts,
-            })
+        tracing::error!(
+            delivery_key = %delivery.delivery_key,
+            attempts,
+            "relayed webhook dead-lettered after exhausting its attempts"
         );
         mark_dead_logged(store, delivery.id, attempts).await;
         return;
@@ -744,10 +692,7 @@ async fn deliver_claimed(
         .mark_retry(delivery.id, next_attempt_at, attempts)
         .await
     {
-        eprintln!(
-            "{}",
-            serde_json::json!({"webhook_relay_mark_retry_error": e.to_string()})
-        );
+        tracing::warn!(error = %e, "webhook relay mark-retry failed");
     }
 }
 
@@ -767,20 +712,15 @@ async fn post_once(
     match builder.body(req.body.clone()).send().await {
         Ok(resp) if resp.status().is_success() => true,
         Ok(resp) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "webhook_relay_non_2xx": resp.status().as_u16(),
-                    "url": &sub.url,
-                })
+            tracing::warn!(
+                status = resp.status().as_u16(),
+                url = %sub.url,
+                "relayed webhook returned a non-2xx status"
             );
             false
         }
         Err(e) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({"webhook_relay_error": e.to_string(), "url": &sub.url})
-            );
+            tracing::warn!(error = %e, url = %sub.url, "relayed webhook delivery failed");
             false
         }
     }
@@ -790,10 +730,7 @@ async fn post_once(
 /// leased row that will simply be re-claimed and re-tried after the lease).
 async fn mark_dead_logged(store: &Arc<dyn Store>, id: i64, attempts: u32) {
     if let Err(e) = store.mark_dead(id, attempts).await {
-        eprintln!(
-            "{}",
-            serde_json::json!({"webhook_relay_mark_dead_error": e.to_string()})
-        );
+        tracing::warn!(error = %e, "webhook relay mark-dead failed");
     }
 }
 

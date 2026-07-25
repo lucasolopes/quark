@@ -428,10 +428,7 @@ impl AlertCounter {
                 let count: i64 = match redis::cmd("INCR").arg(&cnt_key).query_async(&mut c).await {
                     Ok(n) => n,
                     Err(e) => {
-                        eprintln!(
-                            "{}",
-                            serde_json::json!({"alert_counter_error": e.to_string()})
-                        );
+                        tracing::warn!(error = %e, "alert counter update failed");
                         return None;
                     }
                 };
@@ -460,10 +457,7 @@ impl AlertCounter {
                     Ok(Some(_)) => Some(count as u64),
                     Ok(None) => None,
                     Err(e) => {
-                        eprintln!(
-                            "{}",
-                            serde_json::json!({"alert_fire_marker_error": e.to_string()})
-                        );
+                        tracing::warn!(error = %e, "alert fire marker write failed");
                         None
                     }
                 }
@@ -558,13 +552,10 @@ async fn refresh_alert_snapshot(
     match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, load).await {
         Ok(Ok(snapshot)) => *alerts = snapshot,
         Ok(Err(e)) => {
-            eprintln!("{}", serde_json::json!({"alert_list_error": e.to_string()}));
+            tracing::warn!(error = %e, "alert snapshot refresh failed, keeping previous");
         }
         Err(_) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({"alert_list_error": "timed out refreshing alert snapshot"})
-            );
+            tracing::warn!("alert snapshot refresh timed out, keeping previous");
         }
     }
 }
@@ -607,12 +598,12 @@ pub fn spawn_worker(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut buf: Vec<ClickEvent> = Vec::with_capacity(BATCH);
-        // Snapshot de pixels agrupado por tenant. Cada clique é encaminhado só
-        // aos pixels do seu próprio tenant (isolamento cross-tenant), então o
-        // tenant dono precisa viajar junto: `PixelConfig` não carrega tenant.
+        // Pixel snapshot grouped by tenant. Every click is forwarded only to
+        // the pixels of its own tenant (cross-tenant isolation), so the owning
+        // tenant has to travel alongside: `PixelConfig` carries no tenant.
         let mut pixels: Vec<(TenantId, Vec<PixelConfig>)> = Vec::new();
         refresh_pixel_snapshot(&store, &mut pixels).await;
-        // Snapshot de regras de limiar por tenant (mesmo molde dos pixels).
+        // Threshold-rule snapshot per tenant (same shape as the pixels one).
         let mut alerts: Vec<(TenantId, HashMap<u64, AlertRule>)> = Vec::new();
         refresh_alert_snapshot(&store, &mut alerts).await;
         let counter = AlertCounter::new(control);
@@ -671,13 +662,10 @@ async fn refresh_pixel_snapshot(
     match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, load).await {
         Ok(Ok(snapshot)) => *pixels = snapshot,
         Ok(Err(e)) => {
-            eprintln!("{}", serde_json::json!({"pixel_list_error": e.to_string()}));
+            tracing::warn!(error = %e, "pixel snapshot refresh failed, keeping previous");
         }
         Err(_) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({"pixel_list_error": "timed out refreshing pixel snapshot"})
-            );
+            tracing::warn!("pixel snapshot refresh timed out, keeping previous");
         }
     }
 }
@@ -699,10 +687,7 @@ async fn flush(
         return;
     }
     if let Err(e) = sink.record_batch(buf).await {
-        eprintln!(
-            "{}",
-            serde_json::json!({"analytics_flush_error": e.to_string()})
-        );
+        tracing::error!(error = %e, "analytics flush failed");
     }
     forward_to_pixels(pixels, client, key, bases, buf, store).await;
     process_alerts(counter, alerts, webhooks, key, buf).await;
@@ -755,13 +740,7 @@ async fn forward_to_pixels(
             {
                 Ok(()) => crate::health::HealthStatus::Ok,
                 Err(e) => {
-                    eprintln!(
-                        "{}",
-                        serde_json::json!({
-                            "pixel_forward_error": e.to_string(),
-                            "pixel_id": config.id,
-                        })
-                    );
+                    tracing::warn!(error = %e, pixel_id = config.id, "pixel forward failed");
                     crate::health::HealthStatus::Error(e.to_string())
                 }
             };

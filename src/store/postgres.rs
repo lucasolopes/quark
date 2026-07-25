@@ -1065,8 +1065,9 @@ impl PostgresStore {
                 backfilled += result.rows_affected() as i64;
             }
             if backfilled > 0 {
-                eprintln!(
-                    "analytics tenant_id backfill: {backfilled} row(s) updated from links.tenant_id"
+                tracing::info!(
+                    rows = backfilled,
+                    "analytics tenant_id backfill completed from links.tenant_id"
                 );
             }
 

@@ -111,7 +111,9 @@ impl SecretBox {
         let primary = match decode_key(&raw) {
             Some(k) => k,
             None => {
-                eprintln!("WARNING: QUARK_ENCRYPTION_KEY is not valid base64 for exactly 32 bytes; secrets at rest will not be encrypted.");
+                tracing::warn!(
+                    "QUARK_ENCRYPTION_KEY is not valid base64 for exactly 32 bytes; secrets at rest will not be encrypted"
+                );
                 return None;
             }
         };
@@ -125,8 +127,8 @@ impl SecretBox {
                 }
                 match decode_key(part) {
                     Some(k) => olds.push(k),
-                    None => eprintln!(
-                        "WARNING: an entry in QUARK_ENCRYPTION_KEY_OLD is not valid base64 for exactly 32 bytes; that old key is ignored."
+                    None => tracing::warn!(
+                        "an entry in QUARK_ENCRYPTION_KEY_OLD is not valid base64 for exactly 32 bytes; that old key is ignored"
                     ),
                 }
             }

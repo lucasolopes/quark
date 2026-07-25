@@ -1,6 +1,6 @@
 use super::{
-    access_log_line, app_destination, cache_control_for, classify_platform, create_link_core,
-    fbclid_from_query, normalize_max_visits, parse_cors_origins, resolve_code, resolve_for_admin,
+    app_destination, cache_control_for, classify_platform, create_link_core, fbclid_from_query,
+    normalize_max_visits, parse_cors_origins, resolve_code, resolve_for_admin,
     send_test_event_guarded, EventType, Platform, SubscriptionKind, WebhookSubscription,
     HEADER_ADMIN_TOKEN, SHARED_DOMAIN_ID,
 };
@@ -1335,26 +1335,6 @@ fn cache_control_with_distant_future_expiry_caps_at_default() {
 fn cache_control_with_past_expiry_is_no_store() {
     let now = 1_000;
     assert_eq!(cache_control_for(Some(now - 1), now), "no-store");
-}
-
-#[test]
-fn access_log_line_is_valid_json_with_expected_fields() {
-    let line = access_log_line("GET", "/abc", 302, 0.4139);
-    let v: serde_json::Value =
-        serde_json::from_str(&line).expect("access_log_line should produce valid JSON");
-    assert_eq!(v["method"], "GET");
-    assert_eq!(v["path"], "/abc");
-    assert_eq!(v["status"], 302);
-    assert_eq!(v["latency_ms"], 0.414);
-}
-
-#[test]
-fn access_log_line_escapes_special_characters_in_path() {
-    let path = "/a\"b\\c";
-    let line = access_log_line("GET", path, 200, 1.0);
-    let v: serde_json::Value = serde_json::from_str(&line)
-        .expect("access_log_line should escape correctly and remain valid JSON");
-    assert_eq!(v["path"], path);
 }
 
 #[test]

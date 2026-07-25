@@ -50,8 +50,34 @@ fn retention_secs_from(env_value: Option<&str>, multi_tenant: bool) -> Option<u6
     }
 }
 
+/// Installs the tracing subscriber. `RUST_LOG` drives the filter (the ecosystem
+/// standard, so `tokio`, `sqlx`, `reqwest`, `hickory-resolver` and `moka` events
+/// are reachable too); `QUARK_LOG_FORMAT=json` switches the output from the
+/// human-readable format to one JSON object per event, which is what the
+/// production log pipeline wants.
+///
+/// The per-request access log now comes from tower-http's `TraceLayer` at DEBUG,
+/// so it is enabled with `RUST_LOG=tower_http=debug` instead of a dedicated env
+/// var.
+fn init_tracing() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let registry = tracing_subscriber::registry().with(filter);
+    if std::env::var("QUARK_LOG_FORMAT").as_deref() == Ok("json") {
+        registry
+            .with(tracing_subscriber::fmt::layer().json())
+            .init();
+    } else {
+        registry.with(tracing_subscriber::fmt::layer()).init();
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    init_tracing();
     let strict_cluster = std::env::var("QUARK_STRICT_CLUSTER")
         .map(|v| !v.is_empty())
         .unwrap_or(false);
@@ -259,9 +285,6 @@ async fn main() {
     let admin_token = std::env::var("QUARK_ADMIN_TOKEN").ok();
     if admin_token.is_none() {
         eprintln!("WARNING: QUARK_ADMIN_TOKEN not set — /stats endpoint disabled.");
-    }
-    if std::env::var("QUARK_ACCESS_LOG").is_err() {
-        eprintln!("per-request access log disabled (set QUARK_ACCESS_LOG=1 to enable)");
     }
 
     let per_min: u32 = std::env::var("QUARK_RATELIMIT_PER_MIN")

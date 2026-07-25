@@ -28,7 +28,6 @@ pub(crate) use serde::{Deserialize, Serialize};
 pub(crate) use std::net::SocketAddr;
 pub(crate) use std::sync::atomic::Ordering;
 pub(crate) use std::sync::Arc;
-pub(crate) use std::time::Instant;
 pub(crate) use tower_http::cors::CorsLayer;
 
 pub struct AppState {

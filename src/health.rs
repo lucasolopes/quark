@@ -273,10 +273,7 @@ pub fn spawn_link_checker(
                 // Another instance holds the lease this round.
                 Ok(false) => continue,
                 Err(e) => {
-                    eprintln!(
-                        "{}",
-                        serde_json::json!({ "health_lease_error": e.to_string() })
-                    );
+                    tracing::warn!(error = %e, "health check lease acquisition failed");
                     continue;
                 }
             }
@@ -303,11 +300,11 @@ pub fn spawn_link_checker(
                     .unwrap_or(true)
             };
             match sweep(&store, &webhooks, key, renew, prober).await {
-                Ok((n, false)) => eprintln!("{}", serde_json::json!({ "health_sweep_checked": n })),
+                Ok((n, false)) => tracing::info!(checked = n, "health sweep completed"),
                 Ok((n, true)) => {
-                    eprintln!("{}", serde_json::json!({ "health_sweep_lease_lost": n }))
+                    tracing::info!(checked = n, "health sweep stopped early, lease lost")
                 }
-                Err(e) => eprintln!("{}", serde_json::json!({ "health_sweep_error": e })),
+                Err(e) => tracing::warn!(error = %e, "health sweep failed"),
             }
         }
     })

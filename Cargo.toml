@@ -16,6 +16,10 @@ path = "src/main.rs"
 [dependencies]
 async-trait = "0.1"
 thiserror = "2"
+# >= 0.1.40 por RUSTSEC-2023-0078 (unsound em Instrumented::into_inner).
+tracing = "0.1.44"
+# >= 0.3.20 por RUSTSEC-2025-0055 (injecao de escape ANSI vinda de input do usuario).
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 axum = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 heed = { version = "0.20", features = ["read-txn-no-tls"] }
@@ -27,7 +31,7 @@ futures-util = "0.3"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "tls-rustls"] }
 clickhouse = "0.13"
 url = "2"
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
 hmac = "0.13.0"
 sha2 = "0.11.0"
 base64 = "0.22.1"

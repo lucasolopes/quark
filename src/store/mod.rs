@@ -1128,7 +1128,7 @@ pub async fn open_backends(data_path: &Path, multi_tenant: bool) -> Result<Backe
                     .filter(|s| !s.is_empty());
                 let pg = match replica {
                     Some(replica_url) => {
-                        eprintln!("store: Postgres primary + read replica");
+                        tracing::info!(backend = "postgres", replica = true, "store selected");
                         Arc::new(
                             postgres::PostgresStore::open_with_replica(
                                 &url,
@@ -1139,7 +1139,7 @@ pub async fn open_backends(data_path: &Path, multi_tenant: bool) -> Result<Backe
                         )
                     }
                     None => {
-                        eprintln!("store: Postgres (single URL, no read replica)");
+                        tracing::info!(backend = "postgres", replica = false, "store selected");
                         Arc::new(postgres::PostgresStore::open(&url, multi_tenant).await?)
                     }
                 };
