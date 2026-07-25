@@ -21,6 +21,22 @@ tabelas do ClickHouse não estão cobertos.
 
 ## [Não lançado]
 
+## [0.3.0] - 2026-07-25
+
+### Adicionado
+- Painel totalmente responsivo (mobile, tablet, desktop): drawer de navegação com hambúrguer em telas pequenas, dialogs de criar/editar link em tela cheia no celular, reflow de cada tela até 360px de largura e alvos de toque de 44px nos controles principais.
+- Script local de QA responsivo (`web/scripts/responsive-qa.mjs`): varre todas as telas em 4 breakpoints e nos dois temas, falhando em qualquer overflow horizontal.
+
+### Alterado
+- Deploys de produção agora são orientados a release: só tags de versão disparam deploy, por um único workflow de release.
+- Upgrades maiores de dependências: axum 0.8, cliente ClickHouse 0.15, chacha20poly1305 0.11, redis 1.4, além de bumps do toolchain React/Vite.
+
+### Corrigido
+- Os gráficos de estatísticas não quebram mais quando o label do tooltip não é string.
+
+### Segurança
+- A validação do id_token OIDC agora exige as claims `exp`, `iss` e `aud`.
+
 ## [0.2.0] - 2026-07-24
 
 Primeira tag e primeira imagem de container publicada. Tudo abaixo já estava
@@ -73,5 +89,6 @@ virou instalável.
 - Núcleo AGPL-3.0-only com um CLA coletado em cada pull request.
 - Relato privado de vulnerabilidade e política de segurança escrita.
 
-[Não lançado]: https://github.com/lucasolopes/quark/compare/v0.2.0...HEAD
+[Não lançado]: https://github.com/lucasolopes/quark/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/lucasolopes/quark/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lucasolopes/quark/releases/tag/v0.2.0

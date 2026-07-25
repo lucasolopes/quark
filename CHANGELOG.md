@@ -20,6 +20,22 @@ layout are not covered.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-25
+
+### Added
+- Fully responsive admin panel (mobile, tablet, desktop): navigation drawer with hamburger on small screens, full-screen create/edit link dialogs on phones, per-screen reflow down to 360px wide, and 44px touch targets on primary controls.
+- Local responsive QA script (`web/scripts/responsive-qa.mjs`): sweeps every screen across 4 breakpoints and both themes, failing on any horizontal overflow.
+
+### Changed
+- Production deploys are now release-driven: only version tags trigger a deploy, through a single release workflow.
+- Major dependency upgrades: axum 0.8, ClickHouse client 0.15, chacha20poly1305 0.11, redis 1.4, plus React/Vite toolchain bumps.
+
+### Fixed
+- Stats charts no longer break when a tooltip label is not a string.
+
+### Security
+- OIDC id_token validation now requires the `exp`, `iss` and `aud` claims.
+
 ## [0.2.0] - 2026-07-24
 
 First tagged release and first published container image. Everything below has
@@ -69,5 +85,6 @@ became installable.
 - AGPL-3.0-only core with a CLA collected on every pull request.
 - Private vulnerability reporting and a written security policy.
 
-[Unreleased]: https://github.com/lucasolopes/quark/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/lucasolopes/quark/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/lucasolopes/quark/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lucasolopes/quark/releases/tag/v0.2.0
