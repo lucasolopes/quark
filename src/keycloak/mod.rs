@@ -190,6 +190,11 @@ pub fn derive_issuer(base: &str, slug: &str) -> String {
 /// `KeycloakAdmin`-calling code (Task 2's tenant-provisioning flow) without a
 /// live Keycloak server.
 pub mod testing {
+    // Test double que nao pode ficar sob cfg(test) (ver doc acima), entao nao e
+    // coberto pelo allow-unwrap-in-tests do clippy.toml. Um mutex envenenado
+    // aqui so acontece se outra thread entrou em panico, e ai o teste ja falhou.
+    #![allow(clippy::unwrap_used)]
+
     use super::{KcError, KeycloakAdmin};
     use async_trait::async_trait;
     use std::sync::Mutex;

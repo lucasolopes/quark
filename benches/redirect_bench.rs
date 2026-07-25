@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 //! In-process microbench of the redirect path (no network/VM in between).
 //! Measures (1) the full redirect via the router and (2) the marginal cost of the
 //! analytics capture added to the 302. Goal: answer "how much does analytics

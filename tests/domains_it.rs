@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::analytics::AnalyticsSink;
@@ -181,7 +186,6 @@ async fn alias_namespace_is_per_domain() {
 // layer a real request hits it, not just at the store.
 
 const KEY: u64 = 0x1234;
-
 
 /// Builds a cloud-mode (`multi_tenant = true`) router over `store`, with
 /// `public_host` (if any) as the shared-domain host.

@@ -1,13 +1,18 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use quark::analytics::AnalyticsSink;
 use quark::api::AppState;
 use quark::cache::Cache;
 use quark::invalidate::{spawn_invalidation_subscriber, Invalidator};
 use quark::store::postgres::PostgresStore;
 use quark::store::{open_backends, Record, Store};
+use serial_test::file_serial;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use serial_test::file_serial;
 
 mod common;
 

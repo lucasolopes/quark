@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::api::router;
@@ -7,7 +12,6 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 mod common;
-
 
 async fn app_admin(token: &str) -> axum::Router {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));

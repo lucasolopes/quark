@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 //! Multi-tenancy P2a enforcement: in cloud mode (`multi_tenant = true`) every
 //! tenant-owned query runs inside a transaction that first did
 //! `SET LOCAL app.tenant_id`, and the tenant-owned tables carry
@@ -19,9 +24,9 @@ use quark::store::postgres::PostgresStore;
 use quark::store::{OutboxRow, Record, Store};
 use quark::tenant::{Membership, Role, TenantId};
 use quark::webhooks::{EventType, SubscriptionKind, WebhookSubscription};
+use serial_test::file_serial;
 use std::sync::Arc;
 use tower::ServiceExt;
-use serial_test::file_serial;
 
 mod common;
 
@@ -273,7 +278,6 @@ async fn cloud_hash_lookups_survive_force_rls() {
          (sessions must not be FORCE'd)"
     );
 }
-
 
 /// Builds a cloud-mode `AppState` (`multi_tenant = true`, `oidc_configured =
 /// true`, no env admin token) over the given Postgres-backed store/sink, so

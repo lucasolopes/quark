@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 //! P2c Task 1+2: `invites` table + store methods (Task 1), plus the
 //! create/list/revoke HTTP endpoints (Task 2). Mirrors the non-superuser,
 //! PG-gated harness in `tests/domains_it.rs`.
@@ -349,7 +354,6 @@ async fn delete_invite_is_tenant_scoped() {
 // --- Task 2: /admin/invites HTTP endpoints ---
 
 const KEY: u64 = 0x1234;
-
 
 /// Builds a router for `tenant`, plus a `x-admin-token` API token with
 /// `scopes` scoped to that tenant. `multi_tenant` toggles the cloud gate the

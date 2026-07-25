@@ -1,10 +1,15 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 //! Multi-tenancy P1a isolation tests. The LMDB arm is always exercised; the
 //! Postgres arm is gated on `QUARK_TEST_DATABASE_URL` (skipped when unset).
 
 use quark::store::{open_store, Record, Store};
 use quark::tenant::TenantId;
-use std::sync::Arc;
 use serial_test::file_serial;
+use std::sync::Arc;
 
 fn rec(url: &str) -> Record {
     Record {

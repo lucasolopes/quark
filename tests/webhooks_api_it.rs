@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 //! Admin `/admin/webhooks` CRUD, secret masking, and emission at the
 //! dispatcher boundary. Mirrors the `/admin/links` test preamble in
 //! `tests/api_it.rs` (`app_admin("secret")`, `ServiceExt::oneshot`,

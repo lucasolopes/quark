@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use base64::{engine::general_purpose::STANDARD as b64, Engine as _};
@@ -230,7 +235,6 @@ async fn get_tenant_by_slug_resolves_or_none() {
 // --- Task 2: /admin/oidc-config HTTP endpoints ------------------------------
 
 const KEY: u64 = 0x1234;
-
 
 /// Builds a router for `tenant`, plus a `x-admin-token` API token with
 /// `scopes` scoped to that tenant. `multi_tenant` toggles the cloud gate the

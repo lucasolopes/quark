@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 //! Horizontal scale: proves that replicas over the same Postgres generate unique
 //! IDs and share data. Gated by QUARK_TEST_DATABASE_URL; without the env var,
 //! the tests skip (but always compile).
@@ -39,7 +44,6 @@ async fn pg_replica(url: &str) -> axum::Router {
         .build();
     router(state)
 }
-
 
 #[tokio::test]
 #[file_serial]

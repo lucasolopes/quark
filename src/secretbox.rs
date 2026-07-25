@@ -89,8 +89,13 @@ fn keyid(key: &[u8; 32]) -> String {
     let digest = Sha256::digest(key);
     let mut out = String::with_capacity(8);
     for b in &digest[..4] {
-        out.push(char::from_digit((b >> 4) as u32, 16).unwrap());
-        out.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+        // Os dois argumentos sao um nibble (0..=15) e a base 16, entao
+        // from_digit nunca devolve None aqui.
+        #[expect(clippy::unwrap_used, reason = "nibble em base 16 sempre converte")]
+        {
+            out.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+            out.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+        }
     }
     out
 }

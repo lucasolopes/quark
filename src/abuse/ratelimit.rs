@@ -63,6 +63,13 @@ impl RateLimiter {
         match &self.0 {
             Mode::Disabled => true,
             Mode::Memory { state, .. } => {
+                // Um mutex so envenena se outra thread entrou em panico
+                // segurando o lock. Com panic = "abort" no release isso mata o
+                // processo, entao aqui esse Err e inalcancavel.
+                #[expect(
+                    clippy::unwrap_used,
+                    reason = "mutex envenenado e inalcancavel sob panic = abort"
+                )]
                 let mut st = state.lock().unwrap();
                 if st.swept_window != window {
                     st.map.retain(|_, (w, _)| *w == window);

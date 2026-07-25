@@ -408,6 +408,12 @@ impl AlertCounter {
         let window = ts / window_secs;
         match self {
             AlertCounter::Memory(state) => {
+                // Mesma razao do rate limiter: sob panic = "abort" um mutex
+                // envenenado nao existe, o processo ja teria morrido.
+                #[expect(
+                    clippy::unwrap_used,
+                    reason = "mutex envenenado e inalcancavel sob panic = abort"
+                )]
                 let mut st = state.lock().unwrap();
                 let entry = st.map.entry((tenant, id)).or_insert((window, 0, false));
                 if entry.0 != window {

@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::analytics::{AnalyticsSink, ClickEvent};
@@ -37,7 +42,6 @@ async fn app_with(
         .build();
     (router(state), rx)
 }
-
 
 async fn create(app: &axum::Router, url: &str, token: Option<&str>) -> String {
     let mut req = Request::post("/").header("content-type", "application/json");

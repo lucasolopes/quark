@@ -160,6 +160,15 @@ impl LmdbStore {
     /// Opens with an explicit node-id (used by tests; avoids a global env race).
     pub fn open_with_node_id(path: &Path, node_id: Option<u8>) -> Result<LmdbStore, StoreError> {
         std::fs::create_dir_all(path).map_err(heed::Error::Io)?;
+        // A unica excecao ao unsafe_code = "deny" do Cargo.toml. Abrir um env
+        // LMDB e inerentemente unsafe na API do heed: o mmap assume que nenhum
+        // outro processo escreve no arquivo por fora, o que o proprio lock do
+        // LMDB garante. Manter a excecao pontual e o que faz qualquer unsafe
+        // NOVO parar o build.
+        #[expect(
+            unsafe_code,
+            reason = "heed exige unsafe para abrir o env: o mmap depende do lock do LMDB"
+        )]
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(MAP_SIZE_BYTES)

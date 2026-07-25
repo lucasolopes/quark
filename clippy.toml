@@ -1,0 +1,6 @@
+# O conjunto anti-panico abaixo e ligado em [lints.clippy] no Cargo.toml. Teste
+# pode entrar em panico a vontade: e o codigo de producao que roda sob
+# panic = "abort", onde um unwrap derruba o processo em vez de devolver 500.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

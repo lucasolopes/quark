@@ -80,6 +80,37 @@ harness = false
 name = "redirect_bench"
 harness = false
 
+# Politica de lint do projeto. Fica aqui, e nao em #![deny] no lib.rs, porque
+# assim os 30 crates de tests/ e os benches herdam automaticamente.
+#
+# O conjunto anti-panico e o que importa mais: o perfil de release usa
+# panic = "abort", entao um unwrap no caminho de request derruba o processo
+# inteiro, nao devolve 500. O codigo ja segue essa disciplina na mao (zero
+# unwrap de producao em src/api/), e isso trava por ferramenta.
+#
+# Grupo ligado precisa de priority = -1, senao os lints individuais em priority
+# 0 nao tem efeito garantido. Nunca ligar restriction ou nursery inteiros:
+# restriction quebraria src/codec.rs (base62) e src/permute.rs (Feistel), que
+# legitimamente fazem aritmetica e indexacao.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+# Anti-panico. expect_used fica de fora por ora: os ~26 sitios de expect no
+# crate sao o idioma de invariante documentada do projeto (RNG do sistema,
+# client reqwest que sempre constroi), cada um precisa de um #[expect] com
+# reason propria, e isso e uma passada separada.
+unwrap_used = "warn"
+panic = "warn"
+# Seguranca async: o projeto usa std::sync::Mutex em pontos de producao
+# justamente porque as secoes criticas sao curtas; um guard cruzando await
+# passa despercebido em review.
+await_holding_lock = "warn"
+let_underscore_future = "warn"
+# Tipos gordos no caminho quente
+result_large_err = "warn"
+large_enum_variant = "warn"
+
 [profile.release]
 lto = true
 codegen-units = 1

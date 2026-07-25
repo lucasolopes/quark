@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::analytics::AnalyticsSink;
@@ -33,7 +38,6 @@ async fn next_tenant_id_starts_above_default() {
         "tenant ids must be >=1 (0 is the default tenant) and monotonic"
     );
 }
-
 
 /// Builds a full quark router over `store` with a given `multi_tenant` mode.
 fn app_over(

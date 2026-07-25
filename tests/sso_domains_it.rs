@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 //! Store-level tests for SSO email-domain discovery (LUC-57, Task 1) plus
 //! the admin HTTP endpoints (LUC-57, Task 2). Postgres-gated on
 //! `QUARK_TEST_DATABASE_URL`; skips when unset.
@@ -207,7 +212,6 @@ impl Dns for FakeDns {
         Ok(self.records.get(name).cloned().unwrap_or_default())
     }
 }
-
 
 /// Gives `tenant` an OIDC config, the precondition `POST /admin/sso-domains`
 /// gates on.
