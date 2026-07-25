@@ -3,16 +3,51 @@
 # quark
 
 [![CI](https://github.com/lucasolopes/quark/actions/workflows/ci.yml/badge.svg)](https://github.com/lucasolopes/quark/actions/workflows/ci.yml)
-![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue)
-![Rust 2021](https://img.shields.io/badge/rust-2021-orange)
+[![Release](https://img.shields.io/github/v/release/lucasolopes/quark?sort=semver)](https://github.com/lucasolopes/quark/releases)
+[![License](https://img.shields.io/github/license/lucasolopes/quark)](LICENSE)
+[![GHCR](https://img.shields.io/badge/ghcr.io-lucasolopes%2Fquark-blue?logo=docker)](https://github.com/lucasolopes/quark/pkgs/container/quark)
 ![Runtime deps: none](https://img.shields.io/badge/runtime%20deps-none-brightgreen)
-![Self-hosted](https://img.shields.io/badge/self--hosted-single%20binary-informational)
 
 > Os short codes são **calculados, não armazenados**, uma bijeção chaveada. Um binário estático minúsculo (~1 MB), sem Redis, sem banco de dados, sem serviços externos.
 
 **Links rápidos:** [API](docs/API.PT_BR.md) · [Configuração](docs/CONFIGURATION.PT_BR.md) · [Arquitetura](docs/ARCHITECTURE.PT_BR.md) · [Deploy](docs/DEPLOY.PT_BR.md) · [Escala](docs/SCALING.PT_BR.md) · [Desenvolvimento](docs/DEVELOPMENT.PT_BR.md) · [Roadmap](docs/ROADMAP.PT_BR.md)
 
+![painel admin do quark, lista de links](docs/assets/panel-pt.png)
+
 Um encurtador de URL cujo short code é uma **permutação ARX de rounds reduzidos e calibrada** do id inteiro interno. O código não é procurado em um índice, ele é **calculado**, nas duas direções, a partir de uma função bijetora minúscula. Essa única decisão de design remove uma classe inteira de problemas (colisões) e um índice inteiro (string → id) de uma vez.
+
+## Início rápido
+
+```bash
+# QUARK_KEY e um segredo, u64 decimal, sem default em producao. Gere um:
+export QUARK_KEY=$(od -An -N8 -tu8 /dev/urandom | tr -d ' ')
+
+docker run -d --name quark \
+  -p 8080:8080 \
+  -v quark-data:/data \
+  -e QUARK_KEY="$QUARK_KEY" \
+  ghcr.io/lucasolopes/quark:0.2.0
+```
+
+Esse é o default zero-dependência: store LMDB, sem Postgres, sem Redis, sem ClickHouse. `-v quark-data:/data` persiste os arquivos do LMDB entre reinícios (o default de `QUARK_DATA` na imagem é `/data`). Veja [Configuração](docs/CONFIGURATION.PT_BR.md) para as demais variáveis, e [`docker-compose.yml`](docker-compose.yml) para uma stack completa com os backends opcionais Postgres/Valkey/ClickHouse já conectados.
+
+```bash
+curl -X POST localhost:8080/ -H 'content-type: application/json' \
+  -d '{"url": "https://example.com/some/very/long/path"}'
+# => {"code":"01aB2Cd","url":"https://example.com/some/very/long/path"}
+```
+
+## quark vs. outros encurtadores self-hosted
+
+| | Linguagem | Serviços exigidos | Tamanho | Painel | Licença |
+|---|---|---|---|---|---|
+| **quark** | Rust | nenhum (LMDB embutido + cache in-process) | ~1 MB, binário único | SPA React separada, deployada de forma independente | AGPL-3.0 |
+| [Shlink](https://github.com/shlinkio/shlink) | PHP | um banco SQL (MySQL, MariaDB, PostgreSQL, SQL Server ou SQLite) | não é um binário único | app separada (`shlink-web-client`) | MIT |
+| [YOURLS](https://github.com/YOURLS/YOURLS) | PHP | MySQL ou MariaDB | não é um binário único | UI de admin embutida | MIT |
+| [Kutt](https://github.com/thedevs-network/kutt) | Node.js | nenhum por default (SQLite embutido); Postgres/MySQL e Redis opcionais | não é um binário único | dashboard embutido | MIT |
+| [Dub](https://github.com/dubinc/dub) | Next.js/TypeScript | Postgres + Redis + Tinybird (analytics) | não é um binário único | dashboard completo | AGPL-3.0 no núcleo, Enterprise Edition comercial |
+
+O quark é o único da lista com **zero serviços externos exigidos**: os outros quatro precisam no mínimo de um banco SQL, e o Dub precisa de três serviços gerenciados separados de saída. É o mesmo ponto de "escala pra baixo até um binário único" feito em [Backends e escala](#backends-e-escala) mais abaixo, agora lado a lado com a concorrência.
 
 ## O pitch
 
@@ -98,6 +133,8 @@ rounds | avalanche_medio | cobertura(/40)
 cargo bench --bench permute_bench
 ```
 
+As tabelas abaixo são números de uma máquina de desenvolvimento, não de um rig de benchmark controlado; as specs exatas de CPU/RAM daquela rodada não foram registradas, então nenhuma é afirmada aqui. Reproduza em sua própria máquina com `cargo bench --bench permute_bench` / `--bench compare_bench` (os harnesses ficam em [`benches/`](benches/)) pra ter números da sua máquina.
+
 Medido nesta máquina (criterion, `benches/permute_bench.rs`):
 
 | op | time/op | ops/sec |
@@ -174,7 +211,7 @@ flowchart LR
     Worker --> Sink[(Sink: LMDB or ClickHouse)]
 ```
 
-## Início rápido
+## Rodando a partir do código-fonte
 
 ```bash
 # QUARK_KEY is parsed as a DECIMAL u64 (not hex). Generate one:
@@ -186,14 +223,9 @@ cargo run --release
 
 Se `QUARK_KEY` não estiver definida, ou não for um `u64` decimal válido (uma string hexadecimal falha silenciosamente no parse), o quark registra um aviso bem visível e cai pra uma chave de dev fixa no código. Está bem pra teste local, **nunca pra produção**: a chave é o que torna o espaço de códigos imprevisível por instância.
 
-### Exemplos com curl
+### Mais exemplos com curl
 
 ```bash
-# create a short link
-curl -X POST localhost:8080/ -H 'content-type: application/json' \
-  -d '{"url": "https://example.com/some/very/long/path"}'
-# => {"code":"01aB2Cd","url":"https://example.com/some/very/long/path"}
-
 # create with a custom alias and a 1-hour TTL
 curl -X POST localhost:8080/ -H 'content-type: application/json' \
   -d '{"url": "https://example.com", "alias": "promo", "ttl": 3600}'
@@ -215,25 +247,16 @@ A não enumerabilidade do quark é uma **propriedade estatística medida** (aval
 
 ## Configuração
 
-Toda variável abaixo é opcional, exceto `QUARK_KEY` em produção. Deixe uma variável de backend sem definir e o quark cai pro default zero-dependência. Esta tabela é o subconjunto comum; a referência completa (incluindo `QUARK_STRICT_CLUSTER`, `QUARK_NODE_ID` e os defaults embutidos) é [`docs/CONFIGURATION.PT_BR.md`](docs/CONFIGURATION.PT_BR.md).
+Toda variável abaixo é opcional, exceto `QUARK_KEY` em produção. Deixe uma variável de backend sem definir e o quark cai pro default zero-dependência. Esta tabela traz as seis variáveis que um primeiro deploy realmente precisa; a referência completa (toda variável `QUARK_*`, incluindo rate limiting, os backends Valkey/ClickHouse, `QUARK_STRICT_CLUSTER`, `QUARK_NODE_ID` e os defaults embutidos) é [`docs/CONFIGURATION.PT_BR.md`](docs/CONFIGURATION.PT_BR.md).
 
 | Var | Propósito | Default |
 |---|---|---|
 | `QUARK_KEY` | Segredo `u64` decimal, a chave da permutação. **Obrigatória em produção** (cada instância deveria ter a sua, fora do controle de versão). | chave de dev fallback (aviso bem visível no log; não use em produção) |
-| `QUARK_DATA` | Diretório de dados do LMDB. Só usada quando o store é LMDB. | `./data` (container: `/data`) |
 | `QUARK_ADDR` | Endereço de bind do HTTP. | `0.0.0.0:8080` |
-| `QUARK_ADMIN_TOKEN` | Habilita os endpoints admin protegidos por token, ex.: `GET /:code/stats`. | não definida → esses endpoints desligados (404) |
-| `QUARK_VALKEY_URL` | Habilita o cache L2 Valkey, ex.: `redis://host:6379`. | não definida → só L1 + store |
-| `QUARK_DATABASE_URL` | Usa Postgres pro store, ex.: `postgres://user:pass@host:5432/db`. | não definida → LMDB |
-| `QUARK_CLICKHOUSE_URL` | Usa ClickHouse pro analytics, ex.: `http://user:pass@host:8123/db`. | não definida → sink embutido do store |
-| `QUARK_ACCESS_LOG` | Habilita o log de acesso JSON por requisição no stdout. | não definida → desligado |
-| `QUARK_RATELIMIT_PER_MIN` | Criações/min por IP em `POST /` (não definida/`0` = desligado). Usa Valkey se `QUARK_VALKEY_URL` estiver definida (limite global), senão em memória por réplica. | não definida → desligado |
-| `QUARK_REAL_IP_HEADER` | Header de onde ler o IP do cliente. | `CF-Connecting-IP` |
-| `QUARK_BLOCK_PRIVATE` | Guarda contra destinos internos/loop; ligada por default, `0` desabilita. | ligada |
-| `QUARK_PUBLIC_HOST` | O próprio host desta instância, pro anti-loop (senão usa o header `Host`). | não definida → usa o header `Host` |
-| `QUARK_CORS_ORIGINS` | Origens separadas por vírgula com permissão de chamar a API (pro painel web). | não definida → sem CORS (só mesma origem) |
-
-> Só habilite `QUARK_RATELIMIT_PER_MIN` atrás de um proxy que sobrescreve `QUARK_REAL_IP_HEADER` (ex.: Cloudflare com `CF-Connecting-IP`); exposto direto, um cliente pode forjar o header e contornar o limite.
+| `QUARK_DATA` | Diretório de dados do LMDB. Só usada quando o store é LMDB. | `./data` (container: `/data`) |
+| `QUARK_ADMIN_TOKEN` | Habilita os endpoints admin protegidos por token que o painel web precisa, ex.: `GET /:code/stats`. | não definida → esses endpoints desligados (404) |
+| `QUARK_CORS_ORIGINS` | Origens separadas por vírgula com permissão de chamar a API (necessária pro painel web, deployado separadamente). | não definida → sem CORS (só mesma origem) |
+| `QUARK_DATABASE_URL` | Usa Postgres pro store em vez de LMDB, ex.: `postgres://user:pass@host:5432/db`. O primeiro passo pra fora do default de binário único quando uma segunda réplica ou nó precisa compartilhar links. | não definida → LMDB |
 
 ## Operando
 
