@@ -1,0 +1,102 @@
+# cargo-deny 0.18+ schema. The old version / unlicensed / copyleft /
+# allow-osi-fsf-free / default keys were removed upstream and now error out, so
+# they are deliberately absent.
+
+[graph]
+all-features = true
+targets = [
+  "x86_64-unknown-linux-gnu",   # Fly / Docker runtime
+  "aarch64-unknown-linux-gnu",  # multiarch GHCR image
+  "x86_64-pc-windows-msvc",     # dev machines
+  "aarch64-apple-darwin",
+]
+
+[output]
+feature-depth = 1
+
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# A yanked crate in the lockfile is a real signal: either the author pulled a
+# broken release or a compromised one.
+yanked = "deny"
+unmaintained = "workspace"
+ignore = [
+  # { id = "RUSTSEC-0000-0000", reason = "no fixed release yet; not reachable from our code paths" },
+]
+
+[licenses]
+# Exact set observed across the current dependency graph. Anything new forces a
+# conscious decision instead of silently entering an AGPL-3.0-only codebase.
+# Deliberately absent and therefore blocked: GPL-2.0-only (incompatible, no
+# "or later"), BUSL-1.1, SSPL-1.0, Elastic-2.0, CC-BY-NC-*. MPL-2.0 and LGPL-*
+# are compatible with AGPL but are left out on purpose so pulling one requires
+# a reviewed PR: MPL is per-file copyleft and changes the distribution
+# obligations of the Docker image.
+allow = [
+  "AGPL-3.0-only",             # quark itself
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.93
+unused-allowed-license = "warn"
+include-dev = false
+include-build = true
+
+[licenses.private]
+ignore = false
+
+[bans]
+multiple-versions = "warn"
+# A wildcard version means "whatever the registry serves today", which defeats
+# the point of a reviewed lockfile.
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+deny = [
+  { crate = "openssl", reason = "quark is rustls-only (reqwest/sqlx/hyper all use rustls-tls)" },
+  { crate = "openssl-sys", reason = "see openssl" },
+  { crate = "native-tls", reason = "see openssl" },
+  { crate = "time@<0.3.0", reason = "RUSTSEC-2020-0071" },
+]
+skip = [
+  # Filled from the first local `cargo deny check bans` run. All are two
+  # coexisting semver-incompatible major/minor lines pulled in transitively
+  # (mostly the sha2/digest/rand v0.x churn and the windows-* target crates);
+  # none of these are attacker-controlled duplication, just normal drift
+  # between direct deps (sqlx, argon2, chacha20poly1305) and the crates that
+  # still pin an older line.
+  { crate = "block-buffer", reason = "digest 0.10 vs 0.11 line" },
+  { crate = "chacha20", reason = "chacha20poly1305 (0.9) vs rand 0.10 (0.10)" },
+  { crate = "cpufeatures", reason = "sha2 0.10 vs 0.11 line" },
+  { crate = "crypto-common", reason = "digest 0.10 vs 0.11 line" },
+  { crate = "digest", reason = "argon2/sqlx (0.10) vs sha2 0.11 (0.11)" },
+  { crate = "getrandom", reason = "rand_core 0.6 (0.2) vs rand 0.10 (0.4)" },
+  { crate = "hashbrown", reason = "sqlx-core's hashlink (0.15) vs indexmap (0.17)" },
+  { crate = "hmac", reason = "sqlx-postgres (0.12) vs dev-dependency (0.13)" },
+  { crate = "rand", reason = "heed's lmdb-master-sys build dep (0.8) vs hickory (0.10)" },
+  { crate = "rand_core", reason = "crypto-common (0.6) vs rand 0.10 (0.10)" },
+  { crate = "sha2", reason = "sqlx-postgres (0.10) vs quark direct dep (0.11)" },
+  { crate = "socket2", reason = "redis (0.5) vs hyper-util/tokio (0.6)" },
+  { crate = "thiserror", reason = "widespread 1.x holdouts vs 2.x adopters" },
+  { crate = "thiserror-impl", reason = "see thiserror" },
+  { crate = "webpki-roots", reason = "sqlx-core (0.26) vs newer transitive dep (1.0)" },
+  { crate = "windows-sys", reason = "three coexisting lines across the windows dep graph" },
+  { crate = "windows-targets", reason = "windows-sys 0.48 vs 0.52" },
+  { crate = "windows_x86_64_gnu", reason = "see windows-targets" },
+  { crate = "windows_x86_64_msvc", reason = "see windows-targets" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

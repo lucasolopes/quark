@@ -13,3 +13,8 @@ web/src/lib/queries.ts   merge=union
 web/src/lib/types.ts     merge=union
 # Cargo.lock is regenerated from Cargo.toml, never union-merged.
 Cargo.lock           merge=binary
+
+# Shell scripts run inside Linux containers; keep LF regardless of the
+# checkout platform's core.autocrlf, or docker-entrypoint.sh breaks the
+# Docker build on Windows with "no such file or directory".
+*.sh                 text eol=lf

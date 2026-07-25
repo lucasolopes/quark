@@ -1,0 +1,98 @@
+# Version updates. Security updates are separate (already enabled on the repo)
+# and are NOT subject to open-pull-requests-limit or to cooldown.
+#
+# Grouping is aggressive on purpose: the main branch ruleset requires 1 approval
+# with require_last_push_approval, so every extra PR is manual review work.
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "rust"]
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: scope
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+    groups:
+      # One PR for every patch/minor bump. Majors stay individual so they get a
+      # real review.
+      cargo-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      # Tightly coupled stacks: bumping one without the others breaks the build,
+      # so they must land together even on a major.
+      tokio-stack:
+        applies-to: version-updates
+        patterns: ["tokio", "tokio-*", "tower", "tower-*", "hyper", "hyper-*", "axum", "axum-*"]
+      rustls-stack:
+        applies-to: version-updates
+        patterns: ["rustls", "rustls-*", "webpki*", "ring", "reqwest"]
+      crypto-stack:
+        applies-to: version-updates
+        patterns: ["sha2", "hmac", "digest", "argon2", "chacha20poly1305", "aead", "crypto-common", "getrandom"]
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "javascript"]
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: scope
+    versioning-strategy: increase
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+    groups:
+      react-stack:
+        applies-to: version-updates
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom", "react-router*"]
+      vite-toolchain:
+        applies-to: version-updates
+        patterns: ["vite", "@vitejs/*", "vitest", "@vitest/*", "typescript", "oxlint", "jsdom", "@testing-library/*"]
+      npm-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # Required for SHA pinning to stay maintainable: Dependabot rewrites the SHA
+  # and the trailing "# vX.Y.Z" comment together.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "github-actions"]
+    commit-message:
+      prefix: "ci(deps)"
+      include: scope
+    cooldown:
+      default-days: 3
+    groups:
+      actions-all:
+        applies-to: version-updates
+        patterns: ["*"]
