@@ -30,3 +30,6 @@ dist-ssr
 /playwright/.cache/
 e2e/.quark.pid
 e2e/.quark.log
+
+# scripts/responsive-qa.mjs output (screenshots + summary.json), local-only
+/responsive-qa-out/
