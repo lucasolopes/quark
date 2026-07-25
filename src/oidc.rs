@@ -56,6 +56,31 @@ impl OidcConfig {
         let issuer = std::env::var("QUARK_OIDC_ISSUER")
             .ok()
             .filter(|s| !s.is_empty())?;
+        // The issuer is the trigger, but OIDC cannot work without the client
+        // credentials and the redirect URL. Letting them default to an empty
+        // string produced a config that looks enabled and fails at the first
+        // login, far from the cause. Warn loudly and stay off instead: this is
+        // the project's fail-open rule for an optional feature, and it keeps the
+        // admin token working as the break-glass path. A hard boot failure would
+        // take the whole service down over a login-only misconfiguration.
+        let mut missing = Vec::new();
+        for var in [
+            "QUARK_OIDC_CLIENT_ID",
+            "QUARK_OIDC_CLIENT_SECRET",
+            "QUARK_OIDC_REDIRECT_URL",
+        ] {
+            if std::env::var(var).ok().filter(|s| !s.is_empty()).is_none() {
+                missing.push(var);
+            }
+        }
+        if !missing.is_empty() {
+            tracing::warn!(
+                missing = missing.join(", "),
+                "QUARK_OIDC_ISSUER is set but required OIDC settings are missing; login stays \
+                 disabled and the admin token remains the only way in"
+            );
+            return None;
+        }
         Some(OidcConfig {
             issuer: issuer.trim_end_matches('/').to_string(),
             client_id: std::env::var("QUARK_OIDC_CLIENT_ID").unwrap_or_default(),

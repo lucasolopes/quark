@@ -16,6 +16,10 @@ path = "src/main.rs"
 [dependencies]
 async-trait = "0.1"
 thiserror = "2"
+# Erro opaco com contexto, restrito a binario e teste: a lib usa erro tipado, e
+# anyhow apagaria a variante para quem consome o trait Store.
+# >= 1.0.103 por RUSTSEC-2026-0190 (unsound em Error::downcast_mut apos context).
+anyhow = "1.0.104"
 # >= 0.1.40 por RUSTSEC-2023-0078 (unsound em Instrumented::into_inner).
 tracing = "0.1.44"
 # >= 0.3.20 por RUSTSEC-2025-0055 (injecao de escape ANSI vinda de input do usuario).
