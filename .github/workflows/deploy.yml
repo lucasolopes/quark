@@ -1,0 +1,172 @@
+name: Deploy manual
+
+# Escape hatch e rollback. O caminho normal para producao e a tag `v*`, que o
+# workflow Release trata de ponta a ponta. Este aqui existe para dois casos que
+# a tag nao cobre bem:
+#
+#   1. Rollback. Producao quebrou e voce precisa voltar para a versao anterior
+#      agora, sem esperar por bump, changelog e build.
+#   2. Redeploy. A imagem esta certa mas o deploy falhou no meio (Fly recusou,
+#      Pages caiu), e rebuildar nao ajudaria em nada.
+#
+# Ele NAO builda a imagem. So pega uma que ja existe no GHCR e a coloca em
+# producao. Se a versao que voce quer nunca foi publicada, o caminho e a tag,
+# nao este workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versao ja publicada no GHCR, sem o v (ex.: 0.2.0)"
+        required: true
+        type: string
+      panel:
+        description: "Deployar tambem o painel"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: lucasolopes/quark
+
+jobs:
+  # Mesma separacao do workflow Release: `npm ci` roda os scripts de lifecycle
+  # de todo o grafo de dependencias do web/, entao ele fica num job SEM nenhum
+  # secret. O dist atravessa por artifact.
+  panel:
+    if: ${{ inputs.panel }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # O painel sai do MESMO commit que gerou a imagem, senao o rollback
+          # volta o backend e deixa o front adiantado, que e exatamente a
+          # divergencia que este modelo existe para evitar.
+          ref: v${{ inputs.version }}
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build do painel
+        working-directory: web
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$VITE_API_BASE_URL" || { echo "::error::VITE_API_BASE_URL vazio"; exit 1; }
+          npm ci
+          npm run build
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: panel-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    # `always()` porque o job panel e pulado quando panel=false, e um needs
+    # pulado bloquearia o deploy. O rollback so-backend precisa funcionar
+    # mesmo (e principalmente) quando o painel esta fora.
+    needs: panel
+    if: ${{ always() && needs.panel.result != 'failure' && needs.panel.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    # Mesmo grupo do job de deploy do Release: um rollback manual nunca corre
+    # em paralelo com um deploy de tag.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      # Sem `ref`, de proposito: o backend precisa apenas do fly.toml, e um
+      # rollback nao pode depender de a tag ainda existir. O painel, esse sim,
+      # sai da tag, e isso acontece no job panel.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Falha cedo e com mensagem clara se a versao nao existe no registry, em
+      # vez de deixar o flyctl errar com "manifest unknown" la na frente.
+      - name: Resolve o digest da versao no GHCR
+        id: img
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          ref="${REGISTRY}/${IMAGE_NAME}:${VERSION}"
+          digest="$(docker buildx imagetools inspect "$ref" \
+            --format '{{ json .Manifest }}' | jq -r '.digest // empty')"
+          if [ -z "$digest" ]; then
+            echo "::error::nao consegui resolver o digest de $ref. A versao foi publicada?"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "resolvido: $ref -> $digest"
+
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master@2026-07-24
+      - name: Deploy do backend no Fly
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          DIGEST: ${{ steps.img.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -n "$DIGEST" || { echo "::error::digest vazio"; exit 1; }
+          flyctl deploy --image "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: ${{ inputs.panel }}
+        with:
+          name: panel-dist
+          path: web/dist
+
+      - name: Deploy do painel no Cloudflare Pages
+        if: ${{ inputs.panel }}
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ID_ACCOUNT }}
+          # Pinado: sem isto a action instala o wrangler mais recente do npm em
+          # tempo de execucao, num job que carrega tokens de producao.
+          wranglerVersion: "4.42.0"
+          # A branch TEM que ser a production branch do projeto no Cloudflare.
+          # Qualquer outro nome vira um preview: o passo fica verde e o painel
+          # de producao nunca muda.
+          command: pages deploy web/dist --project-name=${{ vars.CF_PAGES_PROJECT }} --branch=${{ vars.CF_PAGES_PRODUCTION_BRANCH }}
+
+      - name: Confere a versao em producao
+        env:
+          VERSION: ${{ inputs.version }}
+          HEALTH_URL: ${{ vars.PROD_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$HEALTH_URL" || { echo "::error::PROD_HEALTH_URL vazio"; exit 1; }
+          for i in $(seq 1 20); do
+            # O "|| true" e obrigatorio: com set -e, um curl -f que pegue 502
+            # durante o restart das maquinas abortaria o passo na PRIMEIRA
+            # tentativa, que e justamente a janela para a qual este laco existe.
+            head="$(curl -fsS -m 10 -D- -o /dev/null "$HEALTH_URL" 2>/dev/null || true)"
+            # A captura para no primeiro espaco, entao o \r do CRLF do HTTP
+            # fica de fora sem precisar de um tr a parte (um tr de [:cntrl:]
+            # comeria as quebras de linha e o sed nunca casaria).
+            got="$(printf '%s' "$head" \
+              | sed -n 's/^[Xx]-[Qq]uark-[Vv]ersion:[[:space:]]*\([^[:space:]]*\).*/\1/p')"
+            if [ "$got" = "$VERSION" ]; then
+              echo "producao esta em $got"
+              exit 0
+            fi
+            echo "tentativa $i: producao responde '${got:-vazio}', esperado '$VERSION'"
+            sleep 15
+          done
+          echo "::error::producao nao chegou na versao $VERSION"
+          exit 1
