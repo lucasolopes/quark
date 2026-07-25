@@ -50,11 +50,11 @@
     "@vitejs/plugin-react": "^6.0.3",
     "autoprefixer": "^10.5.2",
     "jsdom": "^29.1.1",
-    "oxlint": "^1.71.0",
+    "oxlint": "^1.75.0",
     "postcss": "^8.5.19",
     "tailwindcss": "^4.3.2",
     "typescript": "7.0.2",
-    "vite": "^8.1.1",
+    "vite": "^8.1.5",
     "vitest": "^4.1.10"
   }
 }
