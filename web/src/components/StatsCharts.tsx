@@ -113,10 +113,13 @@ function PerDayChart({ perDay }: { perDay: Record<string, number> }) {
           <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
           <XAxis dataKey="label" tick={TICK_STYLE} stroke="var(--color-muted-foreground)" />
           <YAxis allowDecimals={false} tick={TICK_STYLE} stroke="var(--color-muted-foreground)" width={32} />
+          {/* String(label): o recharts tipa o label do tooltip como ReactNode, e a
+              interpolacao do i18n aceita apenas string | number. Os outros
+              formatters deste arquivo ja coagem via template literal. */}
           <Tooltip
             {...TOOLTIP_STYLE}
             formatter={(value) => [`${value}`, t("charts.clicks")]}
-            labelFormatter={(label) => t("charts.dayLabel", { label })}
+            labelFormatter={(label) => t("charts.dayLabel", { label: String(label) })}
           />
           <Bar dataKey="count" name={t("charts.clicks")} fill="url(#perDayFill)" radius={[4, 4, 0, 0]} maxBarSize={48} />
         </BarChart>
