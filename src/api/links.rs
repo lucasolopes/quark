@@ -290,15 +290,24 @@ pub(crate) async fn require_admin_for_create(
 /// Reasons `create_link_core` can fail. The `create` handler and the
 /// `/admin/import` handler both map this to a response: `create` picks an
 /// HTTP status, `admin_import` picks a human-readable failure reason string.
-#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CreateError {
+    #[error("invalid url")]
     InvalidUrl,
+    #[error("url without host")]
     NoHost,
+    #[error("blocked destination")]
     Blocked,
+    #[error("alias collides with the numeric code space")]
     AliasCollision,
+    #[error("alias in use")]
     AliasInUse,
+    #[error("invalid ttl")]
     InvalidTtl,
+    #[error("id space exhausted")]
     IdExhausted,
+    #[error("backend error")]
     Backend,
 }
 

@@ -15,16 +15,12 @@ use async_trait::async_trait;
 /// An error from a Keycloak admin call. Wraps a plain message; the HTTP
 /// implementation is thin (see `client.rs`) so there is no richer variant set
 /// to map onto yet.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Not `#[non_exhaustive]`: test fakes in `tests/` construct it directly, and a
+/// tuple struct marked non-exhaustive cannot be built from another crate.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[error("{0}")]
 pub struct KcError(pub String);
-
-impl std::fmt::Display for KcError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for KcError {}
 
 impl From<String> for KcError {
     fn from(s: String) -> Self {

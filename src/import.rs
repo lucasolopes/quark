@@ -53,10 +53,14 @@ pub fn detect_format(content_type: Option<&str>, body: &[u8]) -> ImportFormat {
 
 /// Why parsing an import body failed. Kept coarse: the caller only needs to
 /// map this to a 400 response, not surface fine-grained detail.
-#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ParseError {
+    #[error("body is not valid json")]
     InvalidJson,
+    #[error("body is not valid csv")]
     InvalidCsv,
+    #[error("csv has no url column")]
     MissingUrlColumn,
 }
 

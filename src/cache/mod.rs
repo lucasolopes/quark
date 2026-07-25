@@ -18,14 +18,9 @@ pub const L2_TTL_SECS: u64 = 3600;
 /// the breaker, same as a tier `Err`.
 pub const L2_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("tier: {0}")]
 pub struct TierError(pub String);
-impl std::fmt::Display for TierError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "tier: {}", self.0)
-    }
-}
-impl std::error::Error for TierError {}
 
 /// Pluggable L2 (network) layer. Implemented by `ValkeyTier` (Valkey/Redis) and
 /// by the fake tiers in the tests. Tier errors never propagate to the caller:

@@ -326,10 +326,14 @@ pub struct Claims {
 /// JWKS refetch can fix (a signature that didn't verify, i.e. likely key
 /// rotation) from definitive rejections (expiry, wrong issuer/audience,
 /// azp/nonce/claims) where refetching would only hammer the IdP's jwks_uri.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
 pub enum VerifyError {
     /// Signature did not verify with this key; retry once with a fresh JWKS.
+    #[error("{0}")]
     BadSignature(String),
     /// Token is invalid for a non-key reason; do not refetch.
+    #[error("{0}")]
     Rejected(String),
 }
 

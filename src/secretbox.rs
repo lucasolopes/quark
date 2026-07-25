@@ -60,32 +60,28 @@ pub struct SecretBox {
 /// Failure opening a sealed value: malformed encoding, wrong nonce/ciphertext
 /// split, an unknown key id, or an authentication failure (wrong key, wrong
 /// AAD, or tampered data). No variant carries any plaintext.
-#[derive(Debug)]
+///
+/// No variant carries a cause on purpose: a decryption failure must not explain
+/// *why* it failed, so the `map_err(|_| ..)` at the call sites here is
+/// deliberate and stays.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
 pub enum SecretBoxError {
     /// The payload (or the `enc:v2:` structure) was not well-formed.
+    #[error("sealed value is malformed")]
     InvalidEncoding,
     /// The decoded payload was shorter than one nonce, so there is no
     /// ciphertext to decrypt.
+    #[error("sealed value is shorter than one nonce")]
     Truncated,
     /// The `enc:v2:` key id does not match any key in the keyring.
+    #[error("sealed value uses an unknown key id")]
     UnknownKey,
     /// Decryption failed: wrong key, wrong AAD, or the ciphertext was tampered
     /// with.
+    #[error("decryption failed")]
     DecryptFailed,
 }
-
-impl std::fmt::Display for SecretBoxError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SecretBoxError::InvalidEncoding => write!(f, "sealed value is malformed"),
-            SecretBoxError::Truncated => write!(f, "sealed value is shorter than one nonce"),
-            SecretBoxError::UnknownKey => write!(f, "sealed value uses an unknown key id"),
-            SecretBoxError::DecryptFailed => write!(f, "decryption failed"),
-        }
-    }
-}
-
-impl std::error::Error for SecretBoxError {}
 
 /// Computes the key id: hex of the first 4 bytes of `SHA-256(key)`.
 /// Deterministic from the key, so the same key always names the same id.

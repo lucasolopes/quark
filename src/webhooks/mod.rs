@@ -11,7 +11,6 @@ use base64::{engine::general_purpose::STANDARD as base64_engine, Engine as _};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use std::fmt;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -166,12 +165,15 @@ pub struct WebhookEvent {
 }
 
 /// Errors that can occur while signing a webhook payload.
-#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SignError {
     /// The secret's `whsec_`-stripped remainder is not valid base64.
+    #[error("secret is not valid base64")]
     InvalidSecretEncoding,
     /// The HMAC key material was rejected (should not happen for HMAC-SHA256,
     /// which accepts keys of any length).
+    #[error("invalid HMAC key length")]
     InvalidKeyLength,
     /// The secret is missing the `whsec_` prefix, or decodes to an empty
     /// key. Either way, signing with it would be a no-op an attacker can
@@ -179,25 +181,9 @@ pub enum SignError {
     /// defensive backstop, since the real fix is that a `Generic`
     /// subscription's secret is never left empty (see `admin_webhooks_create`
     /// / `admin_webhooks_patch`).
+    #[error("secret is missing whsec_ prefix or decodes to an empty key")]
     EmptyOrMalformedSecret,
 }
-
-impl fmt::Display for SignError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SignError::InvalidSecretEncoding => write!(f, "secret is not valid base64"),
-            SignError::InvalidKeyLength => write!(f, "invalid HMAC key length"),
-            SignError::EmptyOrMalformedSecret => {
-                write!(
-                    f,
-                    "secret is missing whsec_ prefix or decodes to an empty key"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for SignError {}
 
 /// Generates a new webhook signing secret: `whsec_` followed by the base64
 /// encoding of 32 cryptographically random bytes.

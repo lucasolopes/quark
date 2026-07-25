@@ -12,22 +12,14 @@ use hickory_resolver::Resolver;
 use std::time::Duration;
 
 /// A TXT lookup failed or ran past its time budget.
-#[derive(Debug)]
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
 pub enum DnsError {
+    #[error("dns lookup timed out")]
     Timeout,
+    #[error("dns lookup failed: {0}")]
     Backend(String),
 }
-
-impl std::fmt::Display for DnsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DnsError::Timeout => write!(f, "dns lookup timed out"),
-            DnsError::Backend(e) => write!(f, "dns lookup failed: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for DnsError {}
 
 /// Time budget for a single TXT lookup. Long enough for a real resolver
 /// round trip, short enough that a slow or unresponsive name server can't

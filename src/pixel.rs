@@ -62,23 +62,16 @@ pub struct PixelConfig {
 /// Error forwarding a batch to a provider. The caller (the analytics
 /// worker, in a later task) fails open on this: a provider error never
 /// affects redirects.
-#[derive(Debug)]
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
 pub enum PixelError {
-    Http(reqwest::Error),
+    #[error("http: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("provider returned status {0}")]
     Status(reqwest::StatusCode),
+    #[error("invalid pixel provider base host")]
     InvalidBase,
 }
-
-impl std::fmt::Display for PixelError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PixelError::Http(e) => write!(f, "http: {e}"),
-            PixelError::Status(s) => write!(f, "provider returned status {s}"),
-            PixelError::InvalidBase => write!(f, "invalid pixel provider base host"),
-        }
-    }
-}
-impl std::error::Error for PixelError {}
 
 /// Fixed production provider hosts, injectable only so tests can point at a
 /// local mock server. Production code always constructs this via `Default`

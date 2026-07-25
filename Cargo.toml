@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 async-trait = "0.1"
+thiserror = "2"
 axum = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 heed = { version = "0.20", features = ["read-txn-no-tls"] }
