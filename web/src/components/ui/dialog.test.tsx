@@ -43,6 +43,7 @@ describe("DialogContent — fullScreenOnMobile", () => {
       "max-sm:rounded-none",
       "max-sm:translate-x-0",
       "max-sm:translate-y-0",
+      "max-sm:grid-rows-[minmax(0,1fr)]",
     ]) {
       expect(className).toContain(token);
     }

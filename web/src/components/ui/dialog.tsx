@@ -89,8 +89,25 @@ function DialogContent({
             // animation classes — the rise/rise-out motion keeps working
             // unmodified on top of it, just anchored to the viewport edge
             // instead of the viewport center.
+            // `max-sm:grid-rows-[minmax(0,1fr)]` gives the grid a single,
+            // definite row track sized to the container's full content-box
+            // height, so a child's `height:100%` has something to resolve
+            // against instead of falling back to the child's content height
+            // (which is what let the footer land far below the fold). A bare
+            // `1fr` is NOT enough here — per the CSS Grid spec a standalone
+            // `<flex>` track is shorthand for `minmax(auto, 1fr)`, and that
+            // `auto` minimum is content-based: measured via
+            // `getComputedStyle(dialog).gridTemplateRows` in a real browser,
+            // a bare `max-sm:grid-rows-[1fr]` still resolved to the form's
+            // content height (~949px) instead of the viewport, because the
+            // tall form's intrinsic minimum exceeded the available space and
+            // `auto` won over the `1fr` growth. The explicit `minmax(0, ...)`
+            // floor removes that content-based minimum so the flex factor
+            // actually governs. With one grid item here (the close button is
+            // `absolute`, out of grid flow), there's only one row, so
+            // `gap-4` never inserts any gap.
             fullScreenOnMobile &&
-              "max-sm:inset-0 max-sm:h-dvh max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none",
+              "max-sm:inset-0 max-sm:h-dvh max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none max-sm:grid-rows-[minmax(0,1fr)]",
             className
           )}
           {...props}
