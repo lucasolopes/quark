@@ -31,6 +31,34 @@ pub(crate) use std::sync::Arc;
 pub(crate) use std::time::Instant;
 pub(crate) use tower_http::cors::CorsLayer;
 
+/// The peer socket address, when the server was built with
+/// `into_make_service_with_connect_info`. `None` otherwise, which is the normal
+/// case in tests and behind a proxy that only forwards a header.
+///
+/// This exists because axum 0.8 made `Option<T>` as an extractor require
+/// `OptionalFromRequestParts`, and `ConnectInfo` is a foreign type, so the
+/// orphan rule rules out implementing it there. Extracting into a local newtype
+/// that never fails keeps the handler signatures honest: a missing peer address
+/// is a normal outcome, not a rejected request.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PeerAddr(pub(crate) Option<SocketAddr>);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for PeerAddr {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(PeerAddr(
+            parts
+                .extensions
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|ConnectInfo(addr)| *addr),
+        ))
+    }
+}
+
 pub struct AppState {
     pub cache: Cache,
     pub store: Arc<dyn Store>,
