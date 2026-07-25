@@ -1,8 +1,8 @@
 use super::{
-    access_log_line, app_destination, cache_control_for, classify_platform, create_link_core,
-    fbclid_from_query, normalize_max_visits, parse_cors_origins, resolve_code, resolve_for_admin,
-    send_test_event_guarded, EventType, Platform, SubscriptionKind, WebhookSubscription,
-    HEADER_ADMIN_TOKEN, SHARED_DOMAIN_ID,
+    access_log_line, app_destination, cache_control_for, classify_platform, client_ip,
+    create_link_core, fbclid_from_query, normalize_max_visits, parse_cors_origins, resolve_code,
+    resolve_for_admin, send_test_event_guarded, EventType, Platform, SubscriptionKind,
+    WebhookSubscription, HEADER_ADMIN_TOKEN, SHARED_DOMAIN_ID,
 };
 use crate::store::Record;
 use axum::body::Bytes;
@@ -1507,4 +1507,49 @@ async fn test_send_on_generic_sub_stays_signed() {
         .expect("webhook-signature header");
     let expected = crate::webhooks::sign(&secret, msg_id, ts, &req.body).unwrap();
     assert_eq!(sig, &expected);
+}
+
+/// `client_ip` decides the rate-limit bucket and the IP recorded for analytics,
+/// so each of its three branches is pinned here. The socket fallback in
+/// particular had no coverage: the integration tests that assert 429 all send
+/// the header, which takes priority, so a broken fallback would leave every
+/// header-less caller sharing one bucket without failing a single test.
+#[test]
+fn client_ip_prefers_the_configured_header_then_the_socket_then_unknown() {
+    let sock: std::net::SocketAddr = "203.0.113.7:54321".parse().unwrap();
+    let conn = axum::extract::ConnectInfo(sock);
+
+    // Header wins over the socket.
+    let mut headers = ReqHeaderMap::new();
+    headers.insert("cf-connecting-ip", "9.9.9.9".parse().unwrap());
+    assert_eq!(
+        client_ip(&headers, "cf-connecting-ip", Some(&conn)),
+        "9.9.9.9"
+    );
+
+    // The header name is configurable, and the default one is ignored when
+    // another is configured.
+    let mut headers = ReqHeaderMap::new();
+    headers.insert("x-real-ip", "8.8.8.8".parse().unwrap());
+    headers.insert("cf-connecting-ip", "9.9.9.9".parse().unwrap());
+    assert_eq!(client_ip(&headers, "x-real-ip", Some(&conn)), "8.8.8.8");
+
+    // Absent header falls back to the socket, without the port.
+    let headers = ReqHeaderMap::new();
+    assert_eq!(
+        client_ip(&headers, "cf-connecting-ip", Some(&conn)),
+        "203.0.113.7"
+    );
+
+    // Present but empty (or whitespace) is not an IP: fall back too.
+    let mut headers = ReqHeaderMap::new();
+    headers.insert("cf-connecting-ip", "   ".parse().unwrap());
+    assert_eq!(
+        client_ip(&headers, "cf-connecting-ip", Some(&conn)),
+        "203.0.113.7"
+    );
+
+    // No header and no socket is one conservative bucket, never a panic.
+    let headers = ReqHeaderMap::new();
+    assert_eq!(client_ip(&headers, "cf-connecting-ip", None), "unknown");
 }
