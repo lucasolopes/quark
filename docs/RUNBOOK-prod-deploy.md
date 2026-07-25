@@ -113,12 +113,16 @@ is the one piece of this whole model that lives outside the repository: nothing
 here fails if somebody turns it back on, the panel just silently starts shipping
 from `main` again. Worth re-checking whenever production behaves oddly.
 
-Preview deployments for pull requests are a separate switch on the same screen.
-As of 2026-07-25 no preview is being built (pull requests get no Cloudflare
-Pages check), so the panel side of a change cannot be seen until it ships. To
-get previews back, set Preview deployments to "All non-Production branches".
-Note that even then a preview points at the *production* API, so a pull request
-that adds an endpoint still cannot be fully exercised before its version ships.
+Preview deployments for pull requests are a **separate switch on the same
+screen** and are on: a pull request gets a Cloudflare Pages check and a preview
+URL straight from the Git integration, with no workflow involved. The two
+switches are easy to confuse, and turning the wrong one off costs you PR
+previews without changing anything about production. If Pages checks stop
+appearing on pull requests, that is the switch to look at.
+
+A preview points at the *production* API, because `VITE_API_BASE_URL` is baked
+in at build time. So a pull request that adds an endpoint can be previewed
+visually, but not exercised end to end until its version ships.
 
 To deploy the panel by hand, outside CI:
 
