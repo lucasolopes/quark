@@ -25,6 +25,35 @@ pub(crate) use axum::routing::{get, post};
 pub(crate) use axum::{Json, Router};
 pub(crate) use base64::Engine as _;
 pub(crate) use secrecy::ExposeSecret as _;
+
+/// The client socket address when the server was started with
+/// `into_make_service_with_connect_info`, and `None` otherwise, which is the
+/// case under `tower::ServiceExt::oneshot` in the tests.
+///
+/// This exists because axum 0.8 dropped the blanket `Option<T>` extractor:
+/// `Option<T>` now needs `T: OptionalFromRequestParts`, and `ConnectInfo` has no
+/// such impl. Keeping the optionality here means the handler signatures and the
+/// tests stay exactly as they were.
+pub(crate) struct MaybeConnectInfo(pub(crate) Option<std::net::SocketAddr>);
+
+impl<S> axum::extract::FromRequestParts<S> for MaybeConnectInfo
+where
+    S: Send + Sync,
+{
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(MaybeConnectInfo(
+            parts
+                .extensions
+                .get::<ConnectInfo<std::net::SocketAddr>>()
+                .map(|ConnectInfo(addr)| *addr),
+        ))
+    }
+}
 pub(crate) use serde::{Deserialize, Serialize};
 pub(crate) use std::net::SocketAddr;
 pub(crate) use std::sync::atomic::Ordering;

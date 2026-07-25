@@ -24,7 +24,7 @@ anyhow = "1.0.104"
 tracing = "0.1.44"
 # >= 0.3.20 por RUSTSEC-2025-0055 (injecao de escape ANSI vinda de input do usuario).
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
-axum = "0.7"
+axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 heed = { version = "0.20", features = ["read-txn-no-tls"] }
 moka = { version = "0.12", features = ["sync", "future"] }
