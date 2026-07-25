@@ -264,8 +264,48 @@ jobs:
   # Prerelease NAO deploya. Uma tag como v0.3.0-rc.1 exercita o pipeline
   # inteiro (build multiarch, publish, attestation) sem tocar em producao, o
   # que e a forma barata de ensaiar uma mudanca arriscada no proprio pipeline.
+  # O painel e buildado num job SEM nenhum secret. `npm ci` executa os scripts
+  # de lifecycle de todo o grafo de dependencias do web/, e um postinstall
+  # comprometido num job que carrega FLY_API_TOKEN e CLOUDFLARE_API_TOKEN
+  # exfiltraria as credenciais de producao. Aqui ele so pode ver o que um PR
+  # qualquer ja ve. O dist sai por artifact.
+  panel:
+    needs: guard
+    if: needs.guard.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build do painel
+        working-directory: web
+        env:
+          # Embutido em build time pelo Vite. Se ficar vazio o painel cai no
+          # window.location.origin e passa a chamar a si mesmo em vez da API.
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$VITE_API_BASE_URL" || { echo "::error::VITE_API_BASE_URL vazio"; exit 1; }
+          npm ci
+          npm run build
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: panel-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 1
+
   deploy:
-    needs: [guard, publish]
+    needs: [guard, publish, panel]
     if: needs.guard.outputs.prerelease == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -290,35 +330,27 @@ jobs:
           DIGEST: ${{ needs.publish.outputs.digest }}
         run: |
           set -euo pipefail
+          test -n "$DIGEST" || { echo "::error::digest vazio vindo do publish"; exit 1; }
           flyctl deploy --image "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
 
-      # Frontend: buildado aqui e enviado por wrangler. O auto-deploy da branch
-      # de producao no Cloudflare Pages fica DESLIGADO no dashboard; os previews
-      # de PR continuam ligados e seguem vindo da integracao Git.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      # Frontend: so o dist ja pronto, baixado do job panel. Nenhum npm roda
+      # neste job, entao nenhum codigo de dependencia chega perto dos tokens.
+      # O auto-deploy da branch de producao no Cloudflare Pages fica DESLIGADO
+      # no dashboard.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Build do painel
-        working-directory: web
-        env:
-          # Embutido em build time pelo Vite. Se ficar vazio o painel cai no
-          # window.location.origin e passa a chamar a si mesmo em vez da API.
-          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
-        run: |
-          set -euo pipefail
-          test -n "$VITE_API_BASE_URL" || { echo "::error::VITE_API_BASE_URL vazio"; exit 1; }
-          npm ci
-          npm run build
+          name: panel-dist
+          path: web/dist
 
       - name: Deploy do painel no Cloudflare Pages
         uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ID_ACCOUNT }}
-          command: pages deploy web/dist --project-name=${{ vars.CF_PAGES_PROJECT }} --branch=main
+          # Pinado: sem isto a action instala o wrangler mais recente do npm em
+          # tempo de execucao, num job que carrega tokens de producao.
+          wranglerVersion: "4.42.0"
+          command: pages deploy web/dist --project-name=${{ vars.CF_PAGES_PROJECT }} --branch=${{ vars.CF_PAGES_PRODUCTION_BRANCH }}
 
       # Confere no ar, contra o dominio publico, que producao esta mesmo na
       # versao que acabou de sair. Sem isto o job fica verde mesmo se o Fly
@@ -326,11 +358,20 @@ jobs:
       - name: Confere a versao em producao
         env:
           VERSION: ${{ needs.guard.outputs.version }}
+          HEALTH_URL: ${{ vars.PROD_HEALTH_URL }}
         run: |
           set -euo pipefail
+          test -n "$HEALTH_URL" || { echo "::error::PROD_HEALTH_URL vazio"; exit 1; }
           for i in $(seq 1 20); do
-            got="$(curl -fsS -m 10 -D- -o /dev/null https://backend.quarkus.com.br/health \
-              | tr -d '\r' | sed -n 's/^[Xx]-[Qq]uark-[Vv]ersion: //p')"
+            # O "|| true" e obrigatorio: com set -e, um curl -f que pegue 502
+            # durante o restart das maquinas abortaria o passo na PRIMEIRA
+            # tentativa, que e justamente a janela para a qual este laco existe.
+            head="$(curl -fsS -m 10 -D- -o /dev/null "$HEALTH_URL" 2>/dev/null || true)"
+            # A captura para no primeiro espaco, entao o \r do CRLF do HTTP
+            # fica de fora sem precisar de um tr a parte (e um tr de [:cntrl:]
+            # comeria as quebras de linha e o sed nunca casaria).
+            got="$(printf '%s' "$head" \
+              | sed -n 's/^[Xx]-[Qq]uark-[Vv]ersion:[[:space:]]*\([^[:space:]]*\).*/\1/p')"
             if [ "$got" = "$VERSION" ]; then
               echo "producao esta em $got"
               exit 0
