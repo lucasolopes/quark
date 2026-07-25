@@ -10,7 +10,7 @@ never committed. This runbook lists secret names and shapes, never values.
 | Piece | Where | Purpose |
 |---|---|---|
 | Backend `quark-prod` | Fly app, `gru` | The quark binary (`Dockerfile`). Serves the API + redirects at `backend.quarkus.com.br`. Cloud mode on. |
-| Panel `quark-panel` | Cloudflare Pages | The React SPA (`web/`), served at `app.quarkus.com.br`. Direct-upload (no Git integration). |
+| Panel `quark-panel` | Cloudflare Pages | The React SPA (`web/`), served at `app.quarkus.com.br`. Git-connected for PR previews; production deploys come from the release workflow, not from a push. |
 | Store | Fly Managed Postgres cluster `quark` | The main store (`QUARK_DATABASE_URL`, attached to `quark-prod`) and a separate `keycloak` database for Keycloak. |
 | Cache/pubsub `quark-valkey` | Fly app, `gru` | Self-hosted Valkey on the private network. Optional for a single node; kept cheap (~256mb). |
 | IdP `quark-keycloak` | Fly app, `gru` | Keycloak 26 at `auth.quarkus.com.br`. Per-tenant realm provisioning + the `quark-panel` login realm. Backing DB is the `keycloak` database in the MPG cluster. |
@@ -62,20 +62,67 @@ Break-glass: `QUARK_ADMIN_TOKEN` is intentionally **unset** in prod (SSO-only lo
 the panel hides the token field when `admin_login_enabled` is false). Re-enable it in
 an emergency (IdP down) with `fly secrets set QUARK_ADMIN_TOKEN=<token> -a quark-prod`.
 
-## Panel (Cloudflare Pages `quark-panel`)
+## How production gets deployed
 
-The SPA reads the API base from `VITE_API_BASE_URL` at build time. Build against
-prod and deploy the static output:
+**A git tag is the only thing that deploys.** Pushing to `main` runs CI and
+nothing else. Merging a pull request deploys nothing. This is deliberate: the
+cloud and self-hosters run the exact same artifact, so a bug report that names a
+version means the same code in both places.
+
+Cutting a release:
+
+```
+scripts/release.sh 0.2.1        # bumps Cargo.toml, opens both CHANGELOG sections
+                                # then commits and tags, but does not push
+git push origin main && git push origin v0.2.1
+```
+
+The `Release` workflow then, in order: checks the tag against `Cargo.toml` and
+the CHANGELOG, builds `linux/amd64` and `linux/arm64` on native runners, pushes
+the multiarch image to `ghcr.io/lucasolopes/quark`, attests its provenance,
+creates the GitHub Release, and only then deploys. The backend gets that exact
+image **by digest** (`flyctl deploy --image`, so Fly never rebuilds), and the
+panel is built here and pushed with `wrangler`. The last step polls
+`backend.quarkus.com.br/health` until `X-Quark-Version` reports the new version,
+so a deploy that silently rolled back fails the job instead of going green.
+
+A prerelease tag (`v0.3.0-rc.1`) runs everything **except** the deploy. That is
+the cheap way to rehearse a risky change to the pipeline itself.
+
+### Rollback and manual redeploy
+
+Actions > `Deploy manual` > Run workflow, with a version already published to
+GHCR (`0.2.0`). It rebuilds nothing: it resolves that version's digest and puts
+it back in production, panel included. Use it when prod is broken and you need
+the previous version now, or when the image is fine but the deploy died halfway.
+
+Both this workflow and the tag deploy share the `deploy-production` concurrency
+group, so a manual rollback can never race a tag deploy.
+
+### Panel (Cloudflare Pages `quark-panel`)
+
+The SPA reads the API base from `VITE_API_BASE_URL` at build time. In CI that
+comes from the `VITE_API_BASE_URL` repo variable, and the project name from
+`CF_PAGES_PROJECT`. `app.quarkus.com.br` is mapped to the project as a custom
+domain.
+
+The project is Git-connected, but **automatic production branch deployments are
+turned off** in the dashboard. Preview deployments for pull requests are still
+on, and still come from the Git integration, which is why a PR gets a panel
+preview without any workflow doing it. Note the preview points at the *production*
+API, so a pull request that adds an endpoint cannot be fully previewed until its
+version ships.
+
+To deploy the panel by hand, outside CI:
 
 ```
 cd web
 VITE_API_BASE_URL=https://backend.quarkus.com.br npm run build
-npx wrangler pages deploy dist --project-name quark-panel
+npx wrangler pages deploy dist --project-name quark-panel --branch main
 ```
 
 `wrangler pages deploy` needs a token with Pages Edit (`npx wrangler login` and
-authorize Pages if the stored token is read-only). `app.quarkus.com.br` is mapped
-to the project as a custom domain.
+authorize Pages if the stored token is read-only).
 
 ## DNS (Cloudflare, `quarkus.com.br`)
 
@@ -186,8 +233,11 @@ Because the panel (`app.`) and the API (`backend.`) are different origins:
 
 ## Common operations
 
-- Redeploy backend: `fly deploy -a quark-prod`.
-- Redeploy panel: rebuild (`VITE_API_BASE_URL=...`) + `wrangler pages deploy`.
+- Ship a change: `scripts/release.sh <versao>`, then push main and the tag.
+- Roll back or redeploy: Actions > `Deploy manual`, with a version already in GHCR.
+- Redeploy by hand, bypassing CI: `fly deploy --image ghcr.io/lucasolopes/quark:<versao> -a quark-prod`
+  for the backend, rebuild plus `wrangler pages deploy` for the panel. Prefer the
+  workflow: doing it by hand skips the version check against production.
 - Rotate a secret: `fly secrets set NAME=value -a quark-prod` (rolling restart).
 - Keycloak admin console: `https://auth.quarkus.com.br/admin` (bootstrap admin).
 - Tail logs: `fly logs -a <app>`.

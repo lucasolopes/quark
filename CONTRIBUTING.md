@@ -104,8 +104,14 @@ library or an existing dependency cannot, and what it costs in binary size. For
   in English.** Older history is in Portuguese; it stays as is.
 - Update `CHANGELOG.md` **and** `CHANGELOG.PT_BR.md` under `## [Unreleased]` in
   the same PR, not later. Same bilingual-twin rule as every other user-facing
-  doc.
+  doc. Your entry is what ships in the release notes, so write it for a reader
+  who was not in the pull request.
 - Fork the repo and open the PR against `main`.
+
+Merging does not release anything. A git tag is the only thing that publishes an
+image and deploys, so your change sits on `main` until the next version is cut.
+That is why the `## [Unreleased]` entry matters: it is what the release is
+assembled from.
 
 What the merge gate looks like, so nothing surprises you:
 

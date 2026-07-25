@@ -1,0 +1,122 @@
+name: Deploy manual
+
+# Escape hatch e rollback. O caminho normal para producao e a tag `v*`, que o
+# workflow Release trata de ponta a ponta. Este aqui existe para dois casos que
+# a tag nao cobre bem:
+#
+#   1. Rollback. Producao quebrou e voce precisa voltar para a versao anterior
+#      agora, sem esperar por bump, changelog e build.
+#   2. Redeploy. A imagem esta certa mas o deploy falhou no meio (Fly recusou,
+#      Pages caiu), e rebuildar nao ajudaria em nada.
+#
+# Ele NAO builda nada. So pega uma imagem que ja existe no GHCR e a coloca em
+# producao. Se a versao que voce quer nunca foi publicada, o caminho e a tag,
+# nao este workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versao ja publicada no GHCR, sem o v (ex.: 0.2.0)"
+        required: true
+        type: string
+      panel:
+        description: "Deployar tambem o painel"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: lucasolopes/quark
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    # Mesmo grupo do job de deploy do Release: um rollback manual nunca corre
+    # em paralelo com um deploy de tag.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # O painel tem que sair do MESMO commit que gerou a imagem, senao o
+          # rollback volta o backend e deixa o front adiantado, que e
+          # exatamente o tipo de divergencia que este modelo existe para evitar.
+          ref: v${{ inputs.version }}
+
+      # Falha cedo e com mensagem clara se a versao nao existe no registry, em
+      # vez de deixar o flyctl errar com "manifest unknown" la na frente.
+      - name: Resolve o digest da versao no GHCR
+        id: img
+        run: |
+          set -euo pipefail
+          ref="${REGISTRY}/${IMAGE_NAME}:${{ inputs.version }}"
+          if ! digest="$(docker buildx imagetools inspect "$ref" \
+                --format '{{ json .Manifest }}' 2>/dev/null | jq -r .digest)"; then
+            echo "::error::$ref nao existe no GHCR. Publique a tag primeiro."
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "resolvido: $ref -> $digest"
+
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master@2026-07-24
+      - name: Deploy do backend no Fly
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          DIGEST: ${{ steps.img.outputs.digest }}
+        run: |
+          set -euo pipefail
+          flyctl deploy --image "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: ${{ inputs.panel }}
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build do painel
+        if: ${{ inputs.panel }}
+        working-directory: web
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$VITE_API_BASE_URL" || { echo "::error::VITE_API_BASE_URL vazio"; exit 1; }
+          npm ci
+          npm run build
+
+      - name: Deploy do painel no Cloudflare Pages
+        if: ${{ inputs.panel }}
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ID_ACCOUNT }}
+          command: pages deploy web/dist --project-name=${{ vars.CF_PAGES_PROJECT }} --branch=main
+
+      - name: Confere a versao em producao
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 20); do
+            got="$(curl -fsS -m 10 -D- -o /dev/null https://backend.quarkus.com.br/health \
+              | tr -d '\r' | sed -n 's/^[Xx]-[Qq]uark-[Vv]ersion: //p')"
+            if [ "$got" = "$VERSION" ]; then
+              echo "producao esta em $got"
+              exit 0
+            fi
+            echo "tentativa $i: producao responde '${got:-vazio}', esperado '$VERSION'"
+            sleep 15
+          done
+          echo "::error::producao nao chegou na versao $VERSION"
+          exit 1

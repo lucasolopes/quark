@@ -254,3 +254,89 @@ jobs:
           body_path: /tmp/notes.md
           prerelease: ${{ needs.guard.outputs.prerelease }}
           make_latest: ${{ needs.guard.outputs.prerelease == 'false' }}
+
+  # Producao. Este e o UNICO caminho que deploya: nem push na main, nem merge de
+  # PR sobem qualquer coisa. Cloud e self-hoster passam a rodar exatamente o
+  # mesmo artefato, e o header X-Quark-Version deixa de poder mentir, porque a
+  # unica coisa que chega em producao e uma tag que o guard ja conferiu contra
+  # o Cargo.toml.
+  #
+  # Prerelease NAO deploya. Uma tag como v0.3.0-rc.1 exercita o pipeline
+  # inteiro (build multiarch, publish, attestation) sem tocar em producao, o
+  # que e a forma barata de ensaiar uma mudanca arriscada no proprio pipeline.
+  deploy:
+    needs: [guard, publish]
+    if: needs.guard.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Backend: deploya a imagem QUE ACABOU DE SER PUBLICADA, por digest, nao
+      # por tag. Digest e imutavel; uma tag poderia ser reescrita entre o
+      # publish e o deploy. E `--image` faz o Fly pular o builder remoto dele,
+      # entao producao roda o mesmo bit que o CI testou e que foi atestado, em
+      # vez de um rebuild a partir do fonte.
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master@2026-07-24
+      - name: Deploy do backend no Fly
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          flyctl deploy --image "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+
+      # Frontend: buildado aqui e enviado por wrangler. O auto-deploy da branch
+      # de producao no Cloudflare Pages fica DESLIGADO no dashboard; os previews
+      # de PR continuam ligados e seguem vindo da integracao Git.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build do painel
+        working-directory: web
+        env:
+          # Embutido em build time pelo Vite. Se ficar vazio o painel cai no
+          # window.location.origin e passa a chamar a si mesmo em vez da API.
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$VITE_API_BASE_URL" || { echo "::error::VITE_API_BASE_URL vazio"; exit 1; }
+          npm ci
+          npm run build
+
+      - name: Deploy do painel no Cloudflare Pages
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ID_ACCOUNT }}
+          command: pages deploy web/dist --project-name=${{ vars.CF_PAGES_PROJECT }} --branch=main
+
+      # Confere no ar, contra o dominio publico, que producao esta mesmo na
+      # versao que acabou de sair. Sem isto o job fica verde mesmo se o Fly
+      # aceitar o deploy e as maquinas voltarem na imagem antiga.
+      - name: Confere a versao em producao
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 20); do
+            got="$(curl -fsS -m 10 -D- -o /dev/null https://backend.quarkus.com.br/health \
+              | tr -d '\r' | sed -n 's/^[Xx]-[Qq]uark-[Vv]ersion: //p')"
+            if [ "$got" = "$VERSION" ]; then
+              echo "producao esta em $got"
+              exit 0
+            fi
+            echo "tentativa $i: producao responde '${got:-vazio}', esperado '$VERSION'"
+            sleep 15
+          done
+          echo "::error::producao nao chegou na versao $VERSION"
+          exit 1

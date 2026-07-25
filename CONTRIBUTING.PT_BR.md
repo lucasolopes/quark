@@ -107,8 +107,14 @@ usuário do painel.
   de commit em inglês.** O histórico antigo está em português e fica como está.
 - Atualize o `CHANGELOG.md` **e** o `CHANGELOG.PT_BR.md` em `## [Unreleased]`
   no mesmo PR, não depois. É a mesma regra do gêmeo bilíngue que vale para
-  qualquer outro doc voltado ao usuário.
+  qualquer outro doc voltado ao usuário. O que você escrever ali é o que vai
+  sair nas notas da release, então escreva pensando em quem não acompanhou o
+  pull request.
 - Faça fork e abra o PR contra a `main`.
+
+Mergear não lança nada. Só uma tag do git publica imagem e faz deploy, então sua
+mudança fica na `main` até a próxima versão ser cortada. É por isso que a entrada
+em `## [Unreleased]` importa: é dela que a release é montada.
 
 Como funciona o gate de merge, para nada te pegar de surpresa:
 
