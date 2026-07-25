@@ -107,11 +107,18 @@ comes from the `VITE_API_BASE_URL` repo variable, and the project name from
 domain.
 
 The project is Git-connected, but **automatic production branch deployments are
-turned off** in the dashboard. Preview deployments for pull requests are still
-on, and still come from the Git integration, which is why a PR gets a panel
-preview without any workflow doing it. Note the preview points at the *production*
-API, so a pull request that adds an endpoint cannot be fully previewed until its
-version ships.
+turned off** in the dashboard (Settings > Builds & deployments). That switch is
+what makes the release workflow the only thing that touches production, and it
+is the one piece of this whole model that lives outside the repository: nothing
+here fails if somebody turns it back on, the panel just silently starts shipping
+from `main` again. Worth re-checking whenever production behaves oddly.
+
+Preview deployments for pull requests are a separate switch on the same screen.
+As of 2026-07-25 no preview is being built (pull requests get no Cloudflare
+Pages check), so the panel side of a change cannot be seen until it ships. To
+get previews back, set Preview deployments to "All non-Production branches".
+Note that even then a preview points at the *production* API, so a pull request
+that adds an endpoint still cannot be fully exercised before its version ships.
 
 To deploy the panel by hand, outside CI:
 
