@@ -102,7 +102,13 @@ pub(crate) async fn oidc_login(
     let nonce = crate::oidc::random_token();
     let (verifier, challenge) = crate::oidc::pkce_pair();
     let url = runtime.authorize_url(&state, &nonce, &challenge, params.login_hint.as_deref());
-    let value = crate::oidc::sign_login_state(&st.signing_key, &state, &verifier, &nonce, tenant);
+    let value = crate::oidc::sign_login_state(
+        st.signing_key.expose_secret(),
+        &state,
+        &verifier,
+        &nonce,
+        tenant,
+    );
     let secure = if request_is_https(&headers) {
         "; Secure"
     } else {
@@ -154,7 +160,7 @@ pub(crate) async fn oidc_callback(
     // tenant carried by a cookie that verifies successfully takes the
     // per-tenant path below, unaffected by this check.
     let login = cookie_value(&headers, LOGIN_COOKIE)
-        .and_then(|c| crate::oidc::verify_login_state(&st.signing_key, c));
+        .and_then(|c| crate::oidc::verify_login_state(st.signing_key.expose_secret(), c));
     let tenant_from_cookie = login.as_ref().and_then(|(_, _, _, t)| *t);
     if tenant_from_cookie.is_none() && (st.oidc.is_none() || !st.oidc_configured) {
         return (StatusCode::NOT_FOUND, "oidc not configured").into_response();

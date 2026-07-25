@@ -10,6 +10,7 @@ use axum::extract::State;
 use axum::http::HeaderMap as ReqHeaderMap;
 use axum::routing::any;
 use axum::Router as TestRouter;
+use secrecy::ExposeSecret as _;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::net::TcpListener;
@@ -97,7 +98,7 @@ async fn build_state(
         cache,
         store,
         key: 0x1234,
-        signing_key,
+        signing_key: secrecy::SecretBox::new(Box::new(signing_key)),
         analytics_tx,
         sink,
         admin_token: admin_token.map(str::to_string),
@@ -349,8 +350,13 @@ async fn callback_tenant_from_cookie_but_config_gone_is_400_not_global() {
         })
         .await
         .unwrap();
-    let cookie_value =
-        crate::oidc::sign_login_state(&st.signing_key, "st8", "verif", "nnc", Some(tenant_id));
+    let cookie_value = crate::oidc::sign_login_state(
+        st.signing_key.expose_secret(),
+        "st8",
+        "verif",
+        "nnc",
+        Some(tenant_id),
+    );
     let mut headers = ReqHeaderMap::new();
     headers.insert(
         axum::http::header::COOKIE,
@@ -380,8 +386,13 @@ async fn callback_tampered_tenant_in_cookie_is_rejected() {
     // swapped-in tenant is never authenticated into.
     let st = multi_tenant_state().await;
     let real_tenant = crate::tenant::TenantId(1);
-    let cookie_value =
-        crate::oidc::sign_login_state(&st.signing_key, "st8", "verif", "nnc", Some(real_tenant));
+    let cookie_value = crate::oidc::sign_login_state(
+        st.signing_key.expose_secret(),
+        "st8",
+        "verif",
+        "nnc",
+        Some(real_tenant),
+    );
     let tampered = cookie_value.replacen(".1.", ".2.", 1);
     assert_ne!(
         tampered, cookie_value,

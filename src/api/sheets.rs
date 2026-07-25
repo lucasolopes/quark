@@ -35,8 +35,13 @@ pub(crate) async fn sheets_connect(
     // then this is the only way the callback — which carries no admin
     // credential — learns the tenant).
     let state = crate::oidc::random_token();
-    let signed =
-        crate::oidc::sign_login_state(&st.signing_key, &state, &p.tenant.0.to_string(), "", None);
+    let signed = crate::oidc::sign_login_state(
+        st.signing_key.expose_secret(),
+        &state,
+        &p.tenant.0.to_string(),
+        "",
+        None,
+    );
     let url = crate::sheets::connect_url(cfg, &state);
     let secure = if request_is_https(&headers) {
         "; Secure"
@@ -110,7 +115,7 @@ pub(crate) async fn sheets_callback(
     // `sheets_connect`); it comes from the SAME HMAC-verified cookie as the
     // state itself, so it is exactly as trustworthy.
     let verified = cookie_value(&headers, SHEETS_STATE_COOKIE)
-        .and_then(|c| crate::oidc::verify_login_state(&st.signing_key, c));
+        .and_then(|c| crate::oidc::verify_login_state(st.signing_key.expose_secret(), c));
     let cookie_state = verified.as_ref().map(|(state, _, _, _)| state.as_str());
     let tenant = verified
         .as_ref()

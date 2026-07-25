@@ -24,6 +24,7 @@ pub(crate) use axum::response::{IntoResponse, Response};
 pub(crate) use axum::routing::{get, post};
 pub(crate) use axum::{Json, Router};
 pub(crate) use base64::Engine as _;
+pub(crate) use secrecy::ExposeSecret as _;
 pub(crate) use serde::{Deserialize, Serialize};
 pub(crate) use std::net::SocketAddr;
 pub(crate) use std::sync::atomic::Ordering;
@@ -37,7 +38,13 @@ pub struct AppState {
     /// Dedicated 32-byte secret for signing unlock cookies (link passwords).
     /// Kept separate from `key` (the 64-bit code-permutation key) so the MAC
     /// secret has full entropy and no shared purpose with the public codec.
-    pub signing_key: [u8; 32],
+    ///
+    /// Wrapped in `SecretBox` so a `Debug` derive on anything holding it cannot
+    /// print the key: `AppState` deliberately does not derive `Debug`, but that
+    /// absence only holds until someone adds it. Every read goes through
+    /// `expose_secret()`, which also makes the call sites that touch key
+    /// material greppable.
+    pub signing_key: secrecy::SecretBox<[u8; 32]>,
     pub analytics_tx: tokio::sync::mpsc::Sender<ClickEvent>,
     pub sink: Arc<dyn AnalyticsSink>,
     pub admin_token: Option<String>,

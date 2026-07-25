@@ -92,7 +92,7 @@ fn bench(c: &mut Criterion) {
             cache,
             store: store.clone(),
             key,
-            signing_key: [0u8; 32],
+            signing_key: secrecy::SecretBox::new(Box::new([0u8; 32])),
             analytics_tx: tx.clone(),
             sink,
             admin_token: None,

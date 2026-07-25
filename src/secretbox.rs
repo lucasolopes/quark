@@ -280,8 +280,12 @@ impl SecretBox {
 
 /// Decodes a base64 key that must be exactly 32 bytes; `None` otherwise.
 fn decode_key(raw: &str) -> Option<[u8; 32]> {
-    let bytes = b64.decode(raw.trim()).ok()?;
-    bytes.try_into().ok()
+    // `Zeroizing` wipes the decoded buffer when it drops: without it the raw key
+    // stays in the heap allocation after the copy into the array. Note this is
+    // hygiene for the normal path only, `panic = "abort"` in release means no
+    // destructor runs on an abort.
+    let bytes = zeroize::Zeroizing::new(b64.decode(raw.trim()).ok()?);
+    bytes.as_slice().try_into().ok()
 }
 
 /// Seals `s` with `sb` when present, otherwise passes it through unchanged.

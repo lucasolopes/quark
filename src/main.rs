@@ -497,7 +497,7 @@ async fn main() -> anyhow::Result<()> {
         cache,
         store,
         key,
-        signing_key,
+        signing_key: secrecy::SecretBox::new(Box::new(signing_key)),
         analytics_tx,
         sink,
         admin_token,

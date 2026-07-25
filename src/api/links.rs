@@ -1116,7 +1116,8 @@ pub(crate) async fn unlock(
     // code, and the cookie name is always a safe base62 string. The token is also
     // bound to the current password hash, so rotating the password kills it.
     let canonical = st.encode_code(id);
-    let (token, _expiry) = crate::password::unlock_token(&st.signing_key, &canonical, &hash, now());
+    let (token, _expiry) =
+        crate::password::unlock_token(st.signing_key.expose_secret(), &canonical, &hash, now());
     let secure = if request_is_https(&headers) {
         "; Secure"
     } else {
@@ -1198,7 +1199,13 @@ pub(crate) async fn redirect(
             // `canonical` is computed only here, never on the unprotected hot path.
             if let Some(hash) = rec.password_hash.as_deref() {
                 let canonical = st.encode_code(id);
-                if !is_unlocked(&headers, &st.signing_key, &canonical, hash, now) {
+                if !is_unlocked(
+                    &headers,
+                    st.signing_key.expose_secret(),
+                    &canonical,
+                    hash,
+                    now,
+                ) {
                     return interstitial_response(&code, raw_query.as_deref(), &headers, false);
                 }
             }
