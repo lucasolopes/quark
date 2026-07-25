@@ -83,8 +83,8 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
     let app = Router::new()
         .route("/", post(create))
         .route("/health", get(health))
-        .route("/:code", get(redirect).post(unlock))
-        .route("/:code/stats", get(stats))
+        .route("/{code}", get(redirect).post(unlock))
+        .route("/{code}/stats", get(stats))
         .route("/admin/stats", get(admin_stats))
         .route("/admin/links", get(admin_links_list))
         .route("/admin/import", post(admin_import))
@@ -94,17 +94,17 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         // DELETE/PATCH anyway). Verified by `admin_bulk_add_tag_*` tests.
         .route("/admin/links/bulk", post(admin_links_bulk))
         .route(
-            "/admin/links/:code",
+            "/admin/links/{code}",
             axum::routing::delete(admin_link_delete).patch(admin_link_patch),
         )
         .route(
-            "/admin/links/:code/alert",
+            "/admin/links/{code}/alert",
             axum::routing::get(admin_link_alert_get)
                 .put(admin_link_alert_put)
                 .delete(admin_link_alert_delete),
         )
         .route(
-            "/admin/links/:code/analytics",
+            "/admin/links/{code}/analytics",
             axum::routing::delete(admin_link_analytics_delete),
         )
         .route(
@@ -112,10 +112,10 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             get(admin_webhooks_list).post(admin_webhooks_create),
         )
         .route(
-            "/admin/webhooks/:id",
+            "/admin/webhooks/{id}",
             axum::routing::patch(admin_webhooks_patch).delete(admin_webhooks_delete),
         )
-        .route("/admin/webhooks/:id/test", post(admin_webhooks_test))
+        .route("/admin/webhooks/{id}/test", post(admin_webhooks_test))
         .route("/admin/login", get(oidc_login))
         .route("/admin/callback", get(oidc_callback))
         .route("/admin/logout", post(oidc_logout))
@@ -133,12 +133,12 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             get(admin_domains_list).post(admin_domains_create),
         )
         .route(
-            "/admin/domains/:id",
+            "/admin/domains/{id}",
             axum::routing::delete(admin_domains_delete),
         )
-        .route("/admin/domains/:id/verify", post(admin_domains_verify))
+        .route("/admin/domains/{id}/verify", post(admin_domains_verify))
         .route(
-            "/admin/domains/:id/primary",
+            "/admin/domains/{id}/primary",
             post(admin_domains_set_primary),
         )
         .route(
@@ -146,11 +146,11 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             get(admin_sso_domains_list).post(admin_sso_domains_create),
         )
         .route(
-            "/admin/sso-domains/:id",
+            "/admin/sso-domains/{id}",
             axum::routing::delete(admin_sso_domains_delete),
         )
         .route(
-            "/admin/sso-domains/:id/verify",
+            "/admin/sso-domains/{id}/verify",
             post(admin_sso_domains_verify),
         )
         .route("/admin/sso/discover", get(sso_discover))
@@ -159,10 +159,10 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             get(admin_invites_list).post(admin_invites_create),
         )
         .route(
-            "/admin/invites/:id",
+            "/admin/invites/{id}",
             axum::routing::delete(admin_invites_delete),
         )
-        .route("/admin/invites/:token/accept", post(admin_invites_accept))
+        .route("/admin/invites/{token}/accept", post(admin_invites_accept))
         .route("/admin/integrations/sheets/connect", get(sheets_connect))
         .route("/admin/integrations/sheets/callback", get(sheets_callback))
         .route("/admin/integrations/sheets/sync", post(sheets_sync))
@@ -180,7 +180,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             get(admin_tokens_list).post(admin_tokens_create),
         )
         .route(
-            "/admin/tokens/:id",
+            "/admin/tokens/{id}",
             axum::routing::delete(admin_tokens_delete),
         )
         .route(
@@ -188,7 +188,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             get(admin_pixels_list).post(admin_pixels_create),
         )
         .route(
-            "/admin/pixels/:id",
+            "/admin/pixels/{id}",
             axum::routing::delete(admin_pixels_delete),
         )
         .route(
@@ -198,7 +198,7 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route("/apple-app-site-association", get(wellknown_aasa))
         .route("/.well-known/assetlinks.json", get(wellknown_assetlinks))
         .route(
-            "/admin/wellknown/:name",
+            "/admin/wellknown/{name}",
             get(admin_wellknown_get)
                 .put(admin_wellknown_put)
                 .delete(admin_wellknown_delete),

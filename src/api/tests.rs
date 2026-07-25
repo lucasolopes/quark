@@ -1517,13 +1517,12 @@ async fn test_send_on_generic_sub_stays_signed() {
 #[test]
 fn client_ip_prefers_the_configured_header_then_the_socket_then_unknown() {
     let sock: std::net::SocketAddr = "203.0.113.7:54321".parse().unwrap();
-    let conn = axum::extract::ConnectInfo(sock);
 
     // Header wins over the socket.
     let mut headers = ReqHeaderMap::new();
     headers.insert("cf-connecting-ip", "9.9.9.9".parse().unwrap());
     assert_eq!(
-        client_ip(&headers, "cf-connecting-ip", Some(&conn)),
+        client_ip(&headers, "cf-connecting-ip", Some(sock)),
         "9.9.9.9"
     );
 
@@ -1532,12 +1531,12 @@ fn client_ip_prefers_the_configured_header_then_the_socket_then_unknown() {
     let mut headers = ReqHeaderMap::new();
     headers.insert("x-real-ip", "8.8.8.8".parse().unwrap());
     headers.insert("cf-connecting-ip", "9.9.9.9".parse().unwrap());
-    assert_eq!(client_ip(&headers, "x-real-ip", Some(&conn)), "8.8.8.8");
+    assert_eq!(client_ip(&headers, "x-real-ip", Some(sock)), "8.8.8.8");
 
     // Absent header falls back to the socket, without the port.
     let headers = ReqHeaderMap::new();
     assert_eq!(
-        client_ip(&headers, "cf-connecting-ip", Some(&conn)),
+        client_ip(&headers, "cf-connecting-ip", Some(sock)),
         "203.0.113.7"
     );
 
@@ -1545,7 +1544,7 @@ fn client_ip_prefers_the_configured_header_then_the_socket_then_unknown() {
     let mut headers = ReqHeaderMap::new();
     headers.insert("cf-connecting-ip", "   ".parse().unwrap());
     assert_eq!(
-        client_ip(&headers, "cf-connecting-ip", Some(&conn)),
+        client_ip(&headers, "cf-connecting-ip", Some(sock)),
         "203.0.113.7"
     );
 
