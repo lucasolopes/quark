@@ -94,4 +94,20 @@ describe("MobileNav", () => {
     renderMobileNav({ children: <div data-testid="my-header">Header stuff</div> });
     expect(screen.getByTestId("my-header")).toBeInTheDocument();
   });
+
+  it("close button is the first focusable element inside the popup (tab order)", async () => {
+    renderMobileNav();
+    const dialog = screen.getByRole("dialog");
+    const closeButton = screen.getByRole("button", { name: "Close menu" });
+
+    // Verify the close button is a direct child of the popup (appears first in DOM)
+    expect(closeButton.parentElement).toBe(dialog);
+
+    // Verify it's the first focusable by checking it comes before the first nav link
+    const firstNavLink = screen.getByRole("link", { name: "Links" });
+    const closeButtonIndex = Array.from(dialog.querySelectorAll("button, a, [tabindex]")).indexOf(closeButton);
+    const firstNavLinkIndex = Array.from(dialog.querySelectorAll("button, a, [tabindex]")).indexOf(firstNavLink);
+
+    expect(closeButtonIndex).toBeLessThan(firstNavLinkIndex);
+  });
 });

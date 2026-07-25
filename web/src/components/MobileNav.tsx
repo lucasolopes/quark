@@ -48,6 +48,19 @@ export function MobileNav({ open, onOpenChange, groups, children, footer }: Mobi
         >
           <DialogPrimitive.Title className="sr-only">{t("shell.mobileNavTitle")}</DialogPrimitive.Title>
 
+          <DialogPrimitive.Close
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="size-11 mb-3"
+                aria-label={t("shell.closeMenu")}
+              />
+            }
+          >
+            <XIcon className="size-4" aria-hidden="true" />
+          </DialogPrimitive.Close>
+
           {children}
 
           <nav className="flex flex-col gap-4">
@@ -81,19 +94,6 @@ export function MobileNav({ open, onOpenChange, groups, children, footer }: Mobi
           <div className="flex-1" />
 
           {footer}
-
-          <DialogPrimitive.Close
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="absolute top-3 right-3"
-                aria-label={t("shell.closeMenu")}
-              />
-            }
-          >
-            <XIcon className="size-4" aria-hidden="true" />
-          </DialogPrimitive.Close>
         </DialogPrimitive.Popup>
       </DialogPortal>
     </DialogPrimitive.Root>

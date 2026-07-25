@@ -248,7 +248,7 @@ export function Shell() {
           {me.data?.display}
         </div>
       </div>
-      <Button variant="ghost" size="icon" aria-label={t("shell.logout")} onClick={handleLogout}>
+      <Button variant="ghost" size="icon" className="max-md:min-h-11 max-md:min-w-11" aria-label={t("shell.logout")} onClick={handleLogout}>
         <LogOut className="size-4" aria-hidden="true" />
       </Button>
     </div>
@@ -260,7 +260,7 @@ export function Shell() {
     <Button
       variant="outline"
       size="icon"
-      className="size-[34px]"
+      className="size-[34px] max-md:min-h-11 max-md:min-w-11"
       aria-label={isDark ? t("shell.themeToLight") : t("shell.themeToDark")}
       onClick={toggle}
     >
@@ -324,7 +324,7 @@ export function Shell() {
                 variant="ghost"
                 size="icon"
                 className="size-11 md:hidden"
-                aria-label={t("shell.openSearch")}
+                aria-label={searchExpanded ? t("shell.closeSearch") : t("shell.openSearch")}
                 onClick={() => setSearchExpanded((expanded) => !expanded)}
               >
                 <Search className="size-5" aria-hidden="true" />
@@ -401,7 +401,7 @@ export function Shell() {
             {connectedLine}
             {userCard}
             <div className="flex items-center justify-between gap-2 border-t border-sidebar-border pt-3">
-              <LanguageSwitcher className="font-mono" />
+              <LanguageSwitcher className="font-mono max-md:[&_button]:min-h-11 max-md:[&_button]:min-w-11" />
               {themeToggle}
             </div>
           </>

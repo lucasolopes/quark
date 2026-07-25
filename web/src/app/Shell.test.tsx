@@ -256,7 +256,10 @@ describe("Shell v2 — mobile drawer + expandable search", () => {
     const mobileInput = await screen.findByTestId("mobile-search-input");
     expect(mobileInput).toHaveFocus();
 
-    await userEvent.click(screen.getByRole("button", { name: "Close search" }));
+    // The close button is the X inside the search row; use getAllByRole to get the specific instance
+    const closeButtons = screen.getAllByRole("button", { name: "Close search" });
+    // The X button is the one in the search row (the second instance after lupa)
+    await userEvent.click(closeButtons[closeButtons.length - 1]);
     expect(screen.queryByTestId("mobile-search-input")).not.toBeInTheDocument();
   });
 
@@ -274,5 +277,20 @@ describe("Shell v2 — mobile drawer + expandable search", () => {
 
     // New link must NOT be in that same parent (it's in the right cluster).
     expect(newLink.parentElement).not.toBe(hamburger.parentElement);
+  });
+
+  it("lupa aria-label reflects its expanded state: 'Search' when closed, 'Close search' when open", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
+    render(withProviders(<Shell />, { initialEntries: ["/links"] }));
+    await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
+
+    const lupa = screen.getByRole("button", { name: "Search" });
+    expect(lupa).toHaveAttribute("aria-label", "Search");
+
+    await userEvent.click(lupa);
+    await waitFor(() => expect(lupa).toHaveAttribute("aria-label", "Close search"));
+
+    await userEvent.click(lupa);
+    await waitFor(() => expect(lupa).toHaveAttribute("aria-label", "Search"));
   });
 });
