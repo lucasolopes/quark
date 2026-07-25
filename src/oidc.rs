@@ -339,6 +339,25 @@ impl VerifyError {
     }
 }
 
+/// Builds the `Validation` used for id_tokens. Pure: no I/O, easy to test.
+///
+/// `set_issuer` and `set_audience` only say WHICH values are acceptable, they do
+/// not make the claim mandatory. The default `required_spec_claims` holds just
+/// `exp`, so `iss` and `aud` would be checked only when present and well formed.
+/// jsonwebtoken marks a claim carrying the wrong JSON type as "failed to parse"
+/// and then treats that exactly like "not present" (the type confusion advisory),
+/// which means a malformed `aud` would skip the audience check altogether.
+/// Requiring them explicitly closes that path: absent or malformed becomes a
+/// rejected token instead of a token accepted without verification.
+pub(crate) fn id_token_validation(issuer: &str, client_id: &str) -> Validation {
+    let mut val = Validation::new(Algorithm::RS256);
+    val.set_issuer(&[issuer]);
+    val.set_audience(&[client_id]);
+    val.validate_exp = true;
+    val.set_required_spec_claims(&["exp", "iss", "aud"]);
+    val
+}
+
 pub fn verify_id_token(
     id_token: &str,
     key: &DecodingKey,
@@ -346,10 +365,7 @@ pub fn verify_id_token(
     client_id: &str,
     nonce: &str,
 ) -> Result<Claims, VerifyError> {
-    let mut val = Validation::new(Algorithm::RS256);
-    val.set_issuer(&[issuer]);
-    val.set_audience(&[client_id]);
-    val.validate_exp = true;
+    let val = id_token_validation(issuer, client_id);
     let data = decode::<serde_json::Value>(id_token, key, &val).map_err(|e| {
         // Only a signature mismatch is worth a JWKS refetch; expiry/issuer/
         // audience are definitive for this token regardless of the key set.
@@ -1387,5 +1403,26 @@ mod tests {
         // the required value as a substring must not pass.
         let substring = serde_json::json!({ "groups": ["acme-contractors-alumni"] });
         assert!(!passes_required_group(&substring, &cfg));
+    }
+
+    #[test]
+    fn id_token_validation_requires_exp_iss_and_aud() {
+        let val = id_token_validation("https://idp.example", "client-123");
+
+        // The point of the test: jsonwebtoken treats a claim with the wrong JSON
+        // type as absent, so anything merely "validated when present" can be
+        // skipped by malforming it. exp, iss and aud have to be REQUIRED, not
+        // just configured, or a malformed aud silently skips the audience check.
+        for claim in ["exp", "iss", "aud"] {
+            assert!(
+                val.required_spec_claims.contains(claim),
+                "{claim} must be required, otherwise a malformed {claim} skips its own check"
+            );
+        }
+
+        assert!(val.validate_exp);
+        assert!(val.validate_aud);
+        assert_eq!(val.iss, Some(["https://idp.example".to_string()].into()));
+        assert_eq!(val.aud, Some(["client-123".to_string()].into()));
     }
 }
