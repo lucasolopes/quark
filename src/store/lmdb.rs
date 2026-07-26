@@ -1085,6 +1085,82 @@ impl Store for LmdbStore {
         Ok(())
     }
 
+    async fn delete_tenant(&self, id: TenantId) -> Result<(), StoreError> {
+        let prefix = tprefix(id);
+        let mut wtxn = self.env.write_txn()?;
+
+        // The tenant's link ids, read before the `links` range goes away: the
+        // `aliases` sub-db is the one tenant-owned sub-db NOT keyed by tenant
+        // (P3 made the alias namespace per-domain, so its 8-byte prefix is a
+        // domain id). Deleting the `tprefix` range there would key off a
+        // domain id that happens to equal this tenant id, which is another
+        // tenant's data. Matching on the link the alias points at is exact.
+        let mut own_links = std::collections::HashSet::new();
+        for item in self.links.prefix_iter(&wtxn, prefix.as_slice())? {
+            let (key, _) = item?;
+            own_links.insert(id_from_tkey(key));
+        }
+        let mut doomed_aliases = Vec::new();
+        for item in self.aliases.iter(&wtxn)? {
+            let (key, link_id) = item?;
+            if own_links.contains(&link_id) {
+                doomed_aliases.push(key.to_vec());
+            }
+        }
+        for key in doomed_aliases {
+            self.aliases.delete(&mut wtxn, &key)?;
+        }
+
+        // Every other tenant-owned sub-db is a contiguous `tprefix` range.
+        // `remap_data_type` gives one `Database<Bytes, Bytes>` view per sub-db
+        // so the value types (BeU64, Str, Bytes) do not each need their own
+        // copy of this loop.
+        for db in [
+            self.links.remap_data_type::<Bytes>(),
+            self.stats.remap_data_type::<Bytes>(),
+            self.events.remap_data_type::<Bytes>(),
+            self.webhooks.remap_data_type::<Bytes>(),
+            self.api_tokens.remap_data_type::<Bytes>(),
+            self.visits.remap_data_type::<Bytes>(),
+            self.pixels.remap_data_type::<Bytes>(),
+            self.wellknown.remap_data_type::<Bytes>(),
+            self.health.remap_data_type::<Bytes>(),
+            self.sheets.remap_data_type::<Bytes>(),
+            self.alert_rules.remap_data_type::<Bytes>(),
+        ] {
+            // Keys are collected first: the prefix iterator borrows the
+            // transaction, and deleting through it needs the transaction
+            // mutably.
+            let mut keys = Vec::new();
+            for item in db.prefix_iter(&wtxn, prefix.as_slice())? {
+                let (key, _) = item?;
+                keys.push(key.to_vec());
+            }
+            for key in keys {
+                db.delete(&mut wtxn, &key)?;
+            }
+        }
+
+        // `memberships` is keyed `user_id || tenant_id`, so the tenant is the
+        // suffix and there is no range to sweep: the whole sub-db is scanned
+        // and only the entries pointing at this tenant go. `users` is global
+        // and is never touched.
+        let mut doomed_memberships = Vec::new();
+        for item in self.memberships.iter(&wtxn)? {
+            let (key, _) = item?;
+            if key.len() == 16 && key[8..16] == prefix {
+                doomed_memberships.push(key.to_vec());
+            }
+        }
+        for key in doomed_memberships {
+            self.memberships.delete(&mut wtxn, &key)?;
+        }
+
+        self.tenants.delete(&mut wtxn, &id.0)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
     async fn get_tenant(&self, id: TenantId) -> Result<Option<Tenant>, StoreError> {
         let rtxn = self.env.read_txn()?;
         match self.tenants.get(&rtxn, &id.0)? {

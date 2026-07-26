@@ -1421,3 +1421,408 @@ async fn delete_realm_is_called_with_the_tenant_slug() {
 
     assert_eq!(kc.calls(), vec!["delete_realm(acme)".to_string()]);
 }
+
+// --- Workspace deletion, Postgres arm (LUC-138) ---
+
+/// Seeds the tenant-owned rows the cross-backend battery in
+/// `tests/tenant_isolation_it.rs` cannot reach: the cloud-only tables
+/// (`domains`, `invites`, `oidc_configs`, `sso_email_domains`), the session,
+/// the analytics rows and an outbox delivery. Returns the raw session token
+/// so the caller can look the session back up by hash.
+async fn seed_cloud_only_rows(store: &PostgresStore, tenant: TenantId, salt: u64) -> String {
+    let raw = generate_token();
+    store
+        .put_session(
+            tenant,
+            &Session {
+                token_hash: hash_token(&raw),
+                subject: format!("wipe-subject-{salt}"),
+                display: format!("Wipe {salt}"),
+                scopes: vec![],
+                created: 0,
+                expires: quark::now() + 3600,
+                tenant_id: tenant,
+                user_id: 7000 + salt,
+                id_token: None,
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .put_domain(&quark::domain::Domain {
+            id: 7100 + salt,
+            tenant_id: tenant,
+            host: format!("wipe-{salt}.example.com"),
+            token: format!("token-{salt}"),
+            status: quark::domain::DomainStatus::Pending,
+            created: 0,
+            verified_at: None,
+        })
+        .await
+        .unwrap();
+    store
+        .create_invite(&quark::invite::Invite {
+            id: 7200 + salt,
+            tenant_id: tenant,
+            email: format!("invited{salt}@example.com"),
+            role: quark::tenant::Role::Member,
+            token_hash: format!("invite-hash-{salt}"),
+            invited_by: 7000 + salt,
+            created: 0,
+            expires: quark::now() + 3600,
+            accepted_at: None,
+            accepted_by: None,
+        })
+        .await
+        .unwrap();
+    store
+        .put_oidc_config(&quark::oidc::TenantOidcConfig {
+            tenant_id: tenant,
+            issuer: format!("https://kc.example.com/realms/wipe-{salt}"),
+            client_id: "quark".to_string(),
+            client_secret: String::new(),
+            scopes: vec!["openid".to_string()],
+            admin_claim: "groups".to_string(),
+            admin_value: "quark-admins".to_string(),
+            readonly_value: "quark-readers".to_string(),
+            member_value: String::new(),
+            required_value: None,
+            post_login_url: None,
+            post_logout_url: None,
+        })
+        .await
+        .unwrap();
+    store
+        .put_sso_domain(&quark::sso::SsoEmailDomain {
+            id: 7300 + salt,
+            tenant_id: tenant,
+            domain: format!("wipe-sso-{salt}.example.com"),
+            token: format!("sso-token-{salt}"),
+            status: quark::domain::DomainStatus::Pending,
+            created: 0,
+            verified_at: None,
+        })
+        .await
+        .unwrap();
+    store
+        .enqueue_deliveries(&[quark::store::OutboxRow {
+            delivery_key: format!("wipe-delivery-{salt}"),
+            subscription_id: 7400 + salt,
+            event_type: "link.created".to_string(),
+            payload: "{}".to_string(),
+            created: 0,
+            // Far in the future so `claim_due_deliveries` never leases it out
+            // from under the assertions below.
+            next_attempt_at: quark::now() + 86_400,
+            tenant_id: tenant,
+        }])
+        .await
+        .unwrap();
+    let click = quark::analytics::ClickEvent {
+        id: 7500 + salt,
+        event_id: String::new(),
+        ts: 1_752_300_000,
+        referer: None,
+        country: Some("BR".into()),
+        user_agent: Some("iPhone".into()),
+        city: None,
+        bot: false,
+        ip: None,
+        fbc: None,
+        variant: None,
+        tenant_id: tenant.0,
+    };
+    store.record_batch(&[click]).await.unwrap();
+    raw
+}
+
+/// The outbox rows still on the table, by owning tenant. `webhook_deliveries`
+/// has no tenant-scoped read on the `Store` trait (the relay claims across
+/// tenants), so this goes through the relay's own claim. Called exactly once
+/// per test: claiming leases the rows it returns, so a second call would not
+/// see the same set.
+async fn claim_all_deliveries(store: &PostgresStore) -> Vec<TenantId> {
+    store
+        .claim_due_deliveries(quark::now() + 172_800, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|d| d.tenant_id)
+        .collect()
+}
+
+/// `delete_tenant` must take out every row the doomed tenant owns across all
+/// of `TENANT_OWNED_TABLES` plus `memberships` and `tenants` — and not one row
+/// belonging to the tenant next to it. This runs in cloud mode, where
+/// `FORCE ROW LEVEL SECURITY` is on: a `DELETE` issued without the RLS tenant
+/// context deletes zero rows and raises no error at all, so the first half of
+/// this test is what catches that.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_removes_every_owned_row_pg() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let doomed = TenantId(51);
+    let neighbor = TenantId(52);
+    for (tenant, salt) in [(doomed, 1u64), (neighbor, 2u64)] {
+        store
+            .put_tenant(&quark::tenant::Tenant {
+                id: tenant,
+                name: format!("Wipe {salt}"),
+                slug: format!("wipe-{salt}"),
+                created: 0,
+            })
+            .await
+            .unwrap();
+        store
+            .put_user(&User {
+                id: 7000 + salt,
+                subject: format!("wipe-subject-{salt}"),
+                email: format!("owner{salt}@example.com"),
+                display: format!("Owner {salt}"),
+                created: 0,
+            })
+            .await
+            .unwrap();
+        store
+            .put_membership(&quark::tenant::Membership {
+                user_id: 7000 + salt,
+                tenant_id: tenant,
+                role: quark::tenant::Role::Owner,
+                created: 0,
+            })
+            .await
+            .unwrap();
+    }
+    let doomed_session = seed_cloud_only_rows(&store, doomed, 1).await;
+    let neighbor_session = seed_cloud_only_rows(&store, neighbor, 2).await;
+
+    store.delete_tenant(doomed).await.unwrap();
+
+    // --- the doomed tenant keeps nothing ---
+    assert!(store.get_tenant(doomed).await.unwrap().is_none(), "tenant");
+    assert!(
+        store.get_membership(7001, doomed).await.unwrap().is_none(),
+        "membership"
+    );
+    assert!(
+        store
+            .get_session_by_hash(&hash_token(&doomed_session), quark::now())
+            .await
+            .unwrap()
+            .is_none(),
+        "session"
+    );
+    assert!(
+        store
+            .get_domain_by_host("wipe-1.example.com")
+            .await
+            .unwrap()
+            .is_none(),
+        "domain"
+    );
+    assert!(
+        store.list_invites(doomed).await.unwrap().is_empty(),
+        "invite"
+    );
+    assert!(
+        store.get_oidc_config_bare(doomed).await.unwrap().is_none(),
+        "oidc config"
+    );
+    assert!(
+        store.list_sso_domains(doomed).await.unwrap().is_empty(),
+        "sso email domain"
+    );
+    let deliveries = claim_all_deliveries(&store).await;
+    assert!(
+        !deliveries.contains(&doomed),
+        "the doomed tenant must have no outbox row left: {deliveries:?}"
+    );
+    assert_eq!(
+        store.stats_for_tenant(doomed.0).await.unwrap().total,
+        0,
+        "click rows"
+    );
+
+    // --- the neighbor keeps everything (the assertion that matters) ---
+    assert!(
+        store.get_tenant(neighbor).await.unwrap().is_some(),
+        "neighbor tenant"
+    );
+    assert!(
+        store
+            .get_membership(7002, neighbor)
+            .await
+            .unwrap()
+            .is_some(),
+        "neighbor membership"
+    );
+    assert!(
+        store
+            .get_session_by_hash(&hash_token(&neighbor_session), quark::now())
+            .await
+            .unwrap()
+            .is_some(),
+        "neighbor session"
+    );
+    assert!(
+        store
+            .get_domain_by_host("wipe-2.example.com")
+            .await
+            .unwrap()
+            .is_some(),
+        "neighbor domain"
+    );
+    assert_eq!(
+        store.list_invites(neighbor).await.unwrap().len(),
+        1,
+        "neighbor invite"
+    );
+    assert!(
+        store
+            .get_oidc_config_bare(neighbor)
+            .await
+            .unwrap()
+            .is_some(),
+        "neighbor oidc config"
+    );
+    assert_eq!(
+        store.list_sso_domains(neighbor).await.unwrap().len(),
+        1,
+        "neighbor sso email domain"
+    );
+    assert_eq!(
+        deliveries.iter().filter(|t| **t == neighbor).count(),
+        1,
+        "the neighbor's outbox row must survive: {deliveries:?}"
+    );
+    assert_eq!(
+        store.stats_for_tenant(neighbor.0).await.unwrap().total,
+        1,
+        "neighbor click rows"
+    );
+
+    // `users` is global and is never touched: the deleted tenant's owner can
+    // be a member of other workspaces.
+    assert!(
+        store.get_user_by_id(7001).await.unwrap().is_some(),
+        "the deleted tenant's owner must keep their global user row"
+    );
+}
+
+/// Deleting a tenant id that does not exist is a no-op and not an error: the
+/// whole thing is one transaction, so there is no half-deleted state to be
+/// left in, and nobody else's rows move.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_is_atomic_pg() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let neighbor = TenantId(61);
+    store
+        .put_tenant(&quark::tenant::Tenant {
+            id: neighbor,
+            name: "Bystander".to_string(),
+            slug: "bystander".to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    let session = seed_cloud_only_rows(&store, neighbor, 5).await;
+
+    store
+        .delete_tenant(TenantId(9_999))
+        .await
+        .expect("deleting an unknown tenant is idempotent, not an error");
+
+    assert!(store.get_tenant(neighbor).await.unwrap().is_some());
+    assert!(store
+        .get_session_by_hash(&hash_token(&session), quark::now())
+        .await
+        .unwrap()
+        .is_some());
+    assert!(store
+        .get_domain_by_host("wipe-5.example.com")
+        .await
+        .unwrap()
+        .is_some());
+    assert_eq!(store.list_invites(neighbor).await.unwrap().len(), 1);
+    assert!(store
+        .get_oidc_config_bare(neighbor)
+        .await
+        .unwrap()
+        .is_some());
+    assert_eq!(store.list_sso_domains(neighbor).await.unwrap().len(), 1);
+    assert_eq!(store.stats_for_tenant(neighbor.0).await.unwrap().total, 1);
+}
+
+/// The slug goes back to being available: the `tenants` row is gone, so the
+/// UNIQUE constraint no longer stands in the way of creating it again. This is
+/// the promise the spec makes about a hard delete.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_frees_the_slug_pg() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (_user_id, raw) = seed_session(&store, "slug-reuse-subject").await;
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+
+    fn create_req(raw: &str) -> Request<Body> {
+        Request::post("/admin/tenants")
+            .header("content-type", "application/json")
+            .header("cookie", format!("qk_session={raw}"))
+            .body(Body::from(r#"{"name":"Acme","slug":"acme-reuse"}"#))
+            .unwrap()
+    }
+
+    let resp = app.clone().oneshot(create_req(&raw)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let tenant: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let tenant_id = TenantId(tenant["id"].as_u64().unwrap());
+
+    store.delete_tenant(tenant_id).await.unwrap();
+    assert!(
+        store
+            .get_tenant_by_slug("acme-reuse")
+            .await
+            .unwrap()
+            .is_none(),
+        "the slug must no longer resolve to a tenant"
+    );
+
+    // Creating the workspace switched this session into it, and `sessions` is
+    // a tenant-owned table, so the delete took the session row with it. The
+    // acting user's cookie stops working the moment their current workspace is
+    // deleted; a fresh session is what proves the slug itself is free.
+    assert_eq!(
+        app.clone()
+            .oneshot(create_req(&raw))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED,
+        "the session that was switched into the deleted workspace dies with it"
+    );
+
+    let (_second_user, raw2) = seed_session(&store, "slug-reuse-subject-2").await;
+    let again = app.oneshot(create_req(&raw2)).await.unwrap();
+    assert_eq!(
+        again.status(),
+        StatusCode::OK,
+        "the slug must be free to use again after the delete"
+    );
+}
