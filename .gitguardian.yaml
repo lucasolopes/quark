@@ -1,0 +1,26 @@
+# ggshield configuration.
+#
+# This file is read by the ggshield CLI (local runs and pre-commit hooks). The
+# GitGuardian GitHub App does not read it: incidents raised by the App are
+# resolved in the GitGuardian dashboard, not here.
+version: 2
+
+secret:
+  ignored-matches:
+    # The Standard Webhooks interoperability test vector.
+    #
+    # quark signs outbound webhooks per the Standard Webhooks specification,
+    # and `sign_matches_standard_webhooks_vector` in `src/webhooks/mod.rs`
+    # asserts the exact signature the spec publishes for this input:
+    #
+    #     v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=
+    #
+    # That assertion is the only proof the implementation matches the spec byte
+    # for byte, so the secret cannot be swapped for a different fixture without
+    # discarding the conformance test.
+    #
+    # Scanners flag it as a Stripe webhook secret because Standard Webhooks
+    # inherited the `whsec_` prefix from Stripe. The value is published in the
+    # specification itself and grants access to nothing.
+    - name: Standard Webhooks spec test vector (public, not a live credential)
+      match: whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw
