@@ -138,6 +138,7 @@ async fn cloud_analytics_and_outbox_accessors_survive_force_rls() {
         external_id: None,
         last_delivery_at: None,
         last_delivery_status: Default::default(),
+        disabled_reason: None,
     };
     t1.put_webhook(&sub).await.unwrap();
 

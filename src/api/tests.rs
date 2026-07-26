@@ -1438,6 +1438,7 @@ fn sub(url: &str, secret: &str, kind: SubscriptionKind) -> WebhookSubscription {
         external_id: None,
         last_delivery_at: None,
         last_delivery_status: Default::default(),
+        disabled_reason: None,
     }
 }
 

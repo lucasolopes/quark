@@ -196,6 +196,7 @@ pub(crate) async fn slack_callback(
         external_id: channel_id,
         last_delivery_at: None,
         last_delivery_status: Default::default(),
+        disabled_reason: None,
     };
     if st.store.put_webhook(tenant, &sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -269,6 +270,7 @@ mod tests {
             external_id: external_id.map(str::to_string),
             last_delivery_at: None,
             last_delivery_status: Default::default(),
+            disabled_reason: None,
         }
     }
 

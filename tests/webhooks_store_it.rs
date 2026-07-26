@@ -38,6 +38,7 @@ async fn webhook_crud_round_trip_pg() {
         external_id: None,
         last_delivery_at: None,
         last_delivery_status: Default::default(),
+        disabled_reason: None,
     };
     store
         .put_webhook(quark::tenant::DEFAULT_TENANT, &sub)
@@ -92,6 +93,7 @@ async fn record_webhook_health_updates_only_health_fields_pg() {
         external_id: None,
         last_delivery_at: None,
         last_delivery_status: quark::health::HealthStatus::Never,
+        disabled_reason: None,
     };
     store
         .put_webhook(quark::tenant::DEFAULT_TENANT, &sub)
@@ -122,6 +124,77 @@ async fn record_webhook_health_updates_only_health_fields_pg() {
     assert_eq!(got.connector_id.as_deref(), Some("zapier"));
     assert_eq!(got.url.expose(), "https://h/x");
     assert!(got.active);
+}
+
+/// Uma subscription ativa apontando para `url`, pronta para `put_webhook`.
+fn active_sub(id: u64, url: &str) -> WebhookSubscription {
+    WebhookSubscription {
+        id,
+        url: url.into(),
+        events: vec![EventType::LinkCreated],
+        secret: "whsec_a".into(),
+        active: true,
+        created: 1,
+        kind: SubscriptionKind::Generic,
+        label: None,
+        connector_id: None,
+        external_id: None,
+        last_delivery_at: None,
+        last_delivery_status: Default::default(),
+        disabled_reason: None,
+    }
+}
+
+#[tokio::test]
+#[file_serial]
+async fn disable_webhook_sets_inactive_with_reason_pg() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let tenant = quark::tenant::DEFAULT_TENANT;
+    let id = store.next_webhook_id(tenant).await.unwrap();
+    store
+        .put_webhook(tenant, &active_sub(id, "https://example.com/hook"))
+        .await
+        .unwrap();
+
+    store
+        .disable_webhook(tenant, id, "status 410")
+        .await
+        .unwrap();
+
+    let got = store.get_webhook(tenant, id).await.unwrap().unwrap();
+    assert!(!got.active, "a subscription deveria ter sido desativada");
+    assert_eq!(got.disabled_reason.as_deref(), Some("status 410"));
+}
+
+#[tokio::test]
+#[file_serial]
+async fn reactivating_clears_the_disabled_reason_pg() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let tenant = quark::tenant::DEFAULT_TENANT;
+    let id = store.next_webhook_id(tenant).await.unwrap();
+    let mut sub = active_sub(id, "https://example.com/hook");
+    store.put_webhook(tenant, &sub).await.unwrap();
+    store
+        .disable_webhook(tenant, id, "status 404")
+        .await
+        .unwrap();
+
+    sub.active = true;
+    sub.disabled_reason = None;
+    store.put_webhook(tenant, &sub).await.unwrap();
+
+    let got = store.get_webhook(tenant, id).await.unwrap().unwrap();
+    assert!(got.active);
+    assert_eq!(
+        got.disabled_reason, None,
+        "reativar tem que limpar o motivo"
+    );
 }
 
 #[tokio::test]

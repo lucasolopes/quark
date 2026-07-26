@@ -245,6 +245,14 @@ pub struct WebhookSubscription {
     /// Resultado da ultima entrega registrada (health passivo).
     #[serde(default)]
     pub last_delivery_status: crate::health::HealthStatus,
+    /// Why the system disabled this subscription; `None` when `active` reflects
+    /// a user choice. Set when a destination answers permanently (404/410) and
+    /// the confirmation attempt fails too. This is what lets the panel tell "I
+    /// paused it" apart from "the system disabled it": deriving that from
+    /// `!active && status == error` would lie when the user manually pauses a
+    /// webhook that was already failing.
+    #[serde(default)]
+    pub disabled_reason: Option<String>,
 }
 
 impl std::fmt::Debug for WebhookSubscription {
@@ -273,6 +281,7 @@ impl std::fmt::Debug for WebhookSubscription {
             .field("external_id", &self.external_id)
             .field("last_delivery_at", &self.last_delivery_at)
             .field("last_delivery_status", &self.last_delivery_status)
+            .field("disabled_reason", &self.disabled_reason)
             .finish()
     }
 }
@@ -456,6 +465,7 @@ mod tests {
             external_id: None,
             last_delivery_at: None,
             last_delivery_status: Default::default(),
+            disabled_reason: None,
         };
         let shown = format!("{sub:?}");
         assert!(
@@ -590,6 +600,7 @@ mod tests {
             external_id: None,
             last_delivery_at: None,
             last_delivery_status: Default::default(),
+            disabled_reason: None,
         };
         let shown = format!("{sub:?}");
         assert!(
@@ -683,6 +694,7 @@ mod tests {
             external_id: None,
             last_delivery_at: None,
             last_delivery_status: Default::default(),
+            disabled_reason: None,
         };
         assert!(matches(&sub, &EventType::LinkCreated));
         assert!(!matches(&sub, &EventType::LinkClicked));

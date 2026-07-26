@@ -434,6 +434,18 @@ pub trait Store: Send + Sync + 'static {
         at: u64,
         status: crate::health::HealthStatus,
     ) -> Result<(), StoreError>;
+    /// Desativa uma subscription e registra por que. Usado quando o destino
+    /// responde de forma permanente (404/410) e a tentativa de confirmacao
+    /// tambem falha: sem isso o dispatcher retenta um destino morto para
+    /// sempre. Reativar e responsabilidade do usuario pelo painel, e limpa o
+    /// motivo (ver `put_webhook`). No-op silencioso se a subscription nao
+    /// existe mais.
+    async fn disable_webhook(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        reason: &str,
+    ) -> Result<(), StoreError>;
     /// Upserts the click-threshold alert rule for a link (LUC-38), keyed by
     /// `(tenant, link_id)`. Replaces any existing rule for that link.
     async fn put_alert_rule(

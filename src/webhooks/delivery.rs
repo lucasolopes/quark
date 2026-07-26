@@ -1127,6 +1127,14 @@ mod tests {
                 .push((tenant, id, at, status));
             Ok(())
         }
+        async fn disable_webhook(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _id: u64,
+            _reason: &str,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
         async fn put_alert_rule(
             &self,
             _tenant: crate::tenant::TenantId,
@@ -1659,6 +1667,7 @@ mod tests {
             external_id: None,
             last_delivery_at: None,
             last_delivery_status: Default::default(),
+            disabled_reason: None,
         }
     }
 
