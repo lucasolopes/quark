@@ -1347,6 +1347,9 @@ impl quark::keycloak::KeycloakAdmin for EnsureRealmFailsKeycloakAdmin {
     ) -> Result<(), quark::keycloak::KcError> {
         unreachable!("provisioning must stop at ensure_realm's failure")
     }
+    async fn delete_realm(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+        unreachable!("this fake only exercises the creation path")
+    }
 }
 
 #[tokio::test]
@@ -1404,4 +1407,17 @@ async fn create_tenant_survives_ensure_realm_failure() {
             .is_none(),
         "with ensure_realm failing, no oidc_config must be written (the backfill retries it)"
     );
+}
+
+/// `delete_realm` is the only Keycloak call workspace deletion makes. The
+/// contract asserted here is the shape and the slug: the mock records exactly
+/// one call, naming exactly the tenant being deleted.
+#[tokio::test]
+async fn delete_realm_is_called_with_the_tenant_slug() {
+    let kc = quark::keycloak::testing::MockKeycloakAdmin::default();
+    let admin: &dyn quark::keycloak::KeycloakAdmin = &kc;
+
+    admin.delete_realm("acme").await.unwrap();
+
+    assert_eq!(kc.calls(), vec!["delete_realm(acme)".to_string()]);
 }
