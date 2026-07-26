@@ -208,15 +208,17 @@ async fn main() -> anyhow::Result<()> {
                                 .await
                                 {
                                     Ok(()) => seeded += 1,
-                                    Err(e) => tracing::info!(
-                                        "{}",
-                                        serde_json::json!({ "tenant_subdomain_backfill_error": e.to_string(), "tenant_id": t.id.0 })
+                                    Err(e) => tracing::warn!(
+                                        error = %e,
+                                        tenant = t.id.0,
+                                        "tenant subdomain backfill failed"
                                     ),
                                 }
                             }
-                            Err(e) => tracing::info!(
-                                "{}",
-                                serde_json::json!({ "tenant_subdomain_backfill_error": e.to_string(), "tenant_id": t.id.0 })
+                            Err(e) => tracing::warn!(
+                                error = %e,
+                                tenant = t.id.0,
+                                "tenant subdomain backfill could not resolve the host"
                             ),
                         }
                     }
@@ -724,10 +726,7 @@ fn spawn_sheets_sync(state: &std::sync::Arc<AppState>) {
                     let tenants = match store.list_tenants().await {
                         Ok(t) => t,
                         Err(e) => {
-                            tracing::info!(
-                                "{}",
-                                serde_json::json!({ "sheets_sync_list_tenants_error": e.to_string() })
-                            );
+                            tracing::warn!(error = %e, "sheets sync could not list tenants");
                             continue;
                         }
                     };
@@ -765,10 +764,7 @@ fn spawn_sheets_sync(state: &std::sync::Arc<AppState>) {
                             tracing::info!(tenant = t.id.0, "sheets sync completed");
                         }
                         if let Err(e) = store.put_sheets_connection(t.id, &conn).await {
-                            tracing::info!(
-                                "{}",
-                                serde_json::json!({ "sheets_sync_persist_error": e.to_string(), "tenant": t.id.0 })
-                            );
+                            tracing::warn!(error = %e, tenant = t.id.0, "sheets sync persist failed");
                         }
                     }
                     // Release the lease now that this tick finished so it is not
@@ -792,10 +788,7 @@ fn spawn_session_gc(state: &std::sync::Arc<AppState>) {
             loop {
                 ticker.tick().await;
                 if let Err(e) = store.gc_sessions(quark::now()).await {
-                    tracing::info!(
-                        "{}",
-                        serde_json::json!({ "session_gc_error": e.to_string() })
-                    );
+                    tracing::warn!(error = %e, "session gc failed");
                 }
             }
         });
@@ -822,10 +815,7 @@ fn spawn_analytics_purge(state: &std::sync::Arc<AppState>, multi_tenant: bool) {
     }
     let retention_secs: Option<u64> = retention_secs_from(retention_env.as_deref(), multi_tenant);
     if let Some(retention) = retention_secs {
-        tracing::info!(
-            "{}",
-            serde_json::json!({ "analytics_retention_secs": retention })
-        );
+        tracing::info!(retention_secs = retention, "analytics retention configured");
         // Hourly purge task (mirrors the session GC above), fail-open: a purge
         // error is only logged and never blocks serving.
         let store = state.store.clone();
@@ -836,14 +826,10 @@ fn spawn_analytics_purge(state: &std::sync::Arc<AppState>, multi_tenant: bool) {
                 ticker.tick().await;
                 let cutoff = quark::now().saturating_sub(retention);
                 match store.purge_click_events_before(cutoff).await {
-                    Ok(n) => tracing::info!(
-                        "{}",
-                        serde_json::json!({ "analytics_purge_deleted": n, "cutoff_ts": cutoff })
-                    ),
-                    Err(e) => tracing::info!(
-                        "{}",
-                        serde_json::json!({ "analytics_purge_error": e.to_string() })
-                    ),
+                    Ok(n) => {
+                        tracing::info!(deleted = n, cutoff_ts = cutoff, "analytics purge completed")
+                    }
+                    Err(e) => tracing::warn!(error = %e, "analytics purge failed"),
                 }
             }
         });
