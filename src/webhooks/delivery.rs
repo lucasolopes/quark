@@ -852,6 +852,18 @@ async fn deliver_claimed(
                 tracing::warn!(error = %e, webhook_id = sub.id, "webhook disable write failed");
             }
         }
+        // Two different outcomes reach this line, and an operator grepping for
+        // an unstable destination must not have to count dead ones alongside
+        // it. `deliver_one` splits the same pair of messages.
+        if confirmed_permanent.is_some() {
+            tracing::error!(
+                delivery_key = %delivery.delivery_key,
+                attempts,
+                "relayed webhook dead-lettered on a confirmed permanent failure"
+            );
+            mark_dead_logged(store, delivery.id, attempts).await;
+            return;
+        }
         tracing::error!(
             delivery_key = %delivery.delivery_key,
             attempts,
