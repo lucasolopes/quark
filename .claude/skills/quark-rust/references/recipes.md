@@ -169,18 +169,20 @@ pt-BR on the twin.
   `tempfile::tempdir()`.
 - LMDB's `lock.mdb` is held by a live process on Windows: a forgotten `cargo run`
   blocks the next `open()`.
-- **The LMDB tests exhaust the Windows pagefile (LUC-137).** `MAP_SIZE_BYTES` is
-  64 GiB, and on Windows an mmap counts against the commit charge the moment the
-  env opens, unlike Linux where the reservation is lazy. `cargo test` runs 30
-  test binaries in parallel, several of which open LMDB envs, so the commit
-  charge runs out and `store::lmdb::tests::*` fail with OS error 1455
-  (`ERROR_COMMITMENT_LIMIT`, "the paging file is too small").
-  The failure does not stay inside the tests: allocation also fails inside
-  `rustc`, which surfaces as `E0786 found invalid metadata files` and
-  `crate X required to be available in rlib format`, and as builds dying with no
-  message at all. Do not chase those as a corrupt `target/` - check for 1455
-  first. Workaround until LUC-137 lands: `cargo test -j 4 -- --test-threads=1`,
-  and rely on CI (Linux) for the LMDB tests.
+- **Under resource contention the build fails in three disguises (LUC-137).**
+  Another agent session running cargo, or too much build parallelism, and you get
+  `Db(Io(Os { code: 1455 }))` (`ERROR_COMMITMENT_LIMIT`) opening the LMDB env in
+  tests, `LNK1102: out of memory` linking a test binary, and - the misleading one
+  - `E0786 found invalid metadata files` / `crate X required to be available in
+  rlib format`. The third looks like a corrupt `target/` and is not: a `rustc`
+  killed mid-write leaves a half-finished artifact.
+  The LMDB `MAP_SIZE_BYTES` of 64 GiB makes the process sensitive to this on
+  Windows (an mmap counts against the commit charge as soon as the env opens,
+  unlike Linux where the reservation is lazy), but it is the condition, not the
+  trigger. Do not change it.
+  Fix: check for a competing `rustc`/`cargo`/`link` process first, then drop the
+  parallelism - `cargo test --no-run -j 2` clears it, and one target at a time
+  (`--test <name>`) always works. Suspect `target/` last.
 - Never run two cargo commands against the same `target/` at once. Give clippy
   its own: `CARGO_TARGET_DIR=target-clippy cargo clippy --all-targets -- -D warnings`.
   Mixing check artifacts (rmeta) with build artifacts (rlib) breaks the test

@@ -76,6 +76,12 @@ async fn lmdb_default_tenant_is_seeded_and_migration_marker_set() {
     // data written under the default tenant.
     let d = store.clone().for_tenant(quark::tenant::DEFAULT_TENANT);
     d.put_link(42, &rec("https://kept.example")).await.unwrap();
+    // Both handles have to go: `d` holds its own `Arc` of the store, so dropping
+    // only `store` leaves the LMDB env open. heed 0.22 rejects reopening a live
+    // env with `EnvAlreadyOpened` (0.20 allowed it), which is the stricter and
+    // correct behavior - reopening a still-open env was never what this test
+    // meant to exercise.
+    drop(d);
     drop(store);
     let store2 = open_store(dir.path()).await.unwrap();
     let d2 = store2.clone().for_tenant(quark::tenant::DEFAULT_TENANT);
