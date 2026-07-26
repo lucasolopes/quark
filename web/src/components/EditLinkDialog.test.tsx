@@ -397,6 +397,19 @@ describe("EditLinkDialog — TTL chips", () => {
   });
 });
 
+describe("EditLinkDialog — full screen mobile (LUC-96)", () => {
+  beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
+
+  it("renders its DialogContent as a full-screen sheet below sm", () => {
+    const l = makeLink();
+    render(withProviders(<EditLinkDialog link={l} open onOpenChange={() => {}} />, { withRouter: false }));
+    const content = screen.getByRole("dialog");
+    expect(content.className).toContain("max-sm:inset-0");
+    expect(content.className).toContain("max-sm:h-dvh");
+    expect(content.className).toContain("max-sm:rounded-none");
+  });
+});
+
 describe("EditLinkDialog — short-link preview", () => {
   beforeEach(() => { localStorage.setItem("quark_admin_token", "s"); vi.restoreAllMocks(); });
 

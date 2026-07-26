@@ -2171,6 +2171,23 @@ async fn cors_header_present_when_configured() {
 }
 
 #[tokio::test]
+async fn health_exposes_version_header() {
+    let app = app().await;
+    let res = app
+        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let version = res
+        .headers()
+        .get("x-quark-version")
+        .expect("header x-quark-version ausente")
+        .to_str()
+        .unwrap();
+    assert_eq!(version, env!("CARGO_PKG_VERSION"));
+}
+
+#[tokio::test]
 async fn redirect_without_rules_goes_to_default_url() {
     let app = app().await;
     let resp = app

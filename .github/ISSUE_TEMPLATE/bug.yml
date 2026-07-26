@@ -1,0 +1,131 @@
+name: Bug report
+description: Something in quark is broken or does not match the docs
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems do not go here. Report them privately at
+        https://github.com/lucasolopes/quark/security/advisories/new
+
+        Pode responder em português, se preferir.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched open and closed issues and this is not a duplicate
+          required: true
+        - label: This is not a security vulnerability
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: quark version
+      description: Output of `quark --version`, the GHCR image digest, or a commit SHA
+      placeholder: "quark 0.2.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running quark
+      options:
+        - Single binary from source (cargo run / cargo build --release)
+        - Docker image from GHCR
+        - docker compose (repo compose file)
+        - Fly.io
+        - Kubernetes
+        - Other (describe in steps)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: store
+    attributes:
+      label: Store backend
+      options: ["LMDB (embedded default)", "Postgres"]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cache
+    attributes:
+      label: Cache
+      options: ["In-process only (default)", "Valkey or Redis L2"]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: analytics
+    attributes:
+      label: Analytics sink
+      options: ["Embedded (default)", "ClickHouse", "Not used"]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area
+      options:
+        - Redirect hot path (/:code)
+        - Admin API (link CRUD, tenants, domains, invites)
+        - Admin panel (web/)
+        - Auth (admin token, API tokens and scopes, OIDC, SSO domains)
+        - Analytics and aggregates
+        - Webhooks
+        - Import, sheets, pixels
+        - Docs
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: What happens
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Smallest reproduction that still fails. `curl` calls against a fresh
+        instance are ideal. A repro that needs a cloud provider, a cluster, or
+        your private reverse proxy is usually not reproducible for us and the
+        issue will be closed as such.
+      placeholder: |
+        1. QUARK_KEY=... cargo run --release
+        2. curl -X POST localhost:8080/ -H 'content-type: application/json' -d '{"url":"..."}'
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        Run with `RUST_LOG=debug`. Redact QUARK_KEY, QUARK_ADMIN_TOKEN, API
+        tokens, OIDC client secrets, and webhook secrets before pasting.
+      render: text
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and OS
+      description: Only needed for admin panel bugs
+      placeholder: "Firefox 141 on Ubuntu 24.04"

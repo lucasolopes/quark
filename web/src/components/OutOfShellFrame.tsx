@@ -30,7 +30,7 @@ export function OutOfShellBackdrop({
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 bg-hero-glow" />
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 bg-dot-grid" />
       {topRight && <div className="absolute right-4 top-4">{topRight}</div>}
-      <div className="flex min-h-svh items-center justify-center p-4">{children}</div>
+      <div className="flex min-h-svh items-center justify-center p-4 max-sm:py-8">{children}</div>
     </div>
   );
 }

@@ -245,6 +245,32 @@ body {
   }
 }
 
+/* Entrada do drawer de navegação mobile (painel deslizando da esquerda). */
+@utility animate-slide-in-left {
+  animation: slide-in-left 0.2s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* Saída do drawer de navegação mobile (espelho reverso, mais curta). */
+@utility animate-slide-out-left {
+  animation: slide-out-left 0.15s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+@keyframes slide-out-left {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+
 /* Hover lift de card interativo (qcard-hov do mock). */
 @utility card-hover {
   transition:

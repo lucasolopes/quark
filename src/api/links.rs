@@ -536,7 +536,7 @@ pub(crate) async fn primary_link_host(
 
 pub(crate) async fn create(
     State(st): State<Arc<AppState>>,
-    conn: MaybeConnectInfo,
+    PeerAddr(peer): PeerAddr,
     headers: HeaderMap,
     Json(req): Json<CreateReq>,
 ) -> Response {
@@ -544,7 +544,7 @@ pub(crate) async fn create(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
-    let ip = client_ip(&headers, &st.real_ip_header, conn.0);
+    let ip = client_ip(&headers, &st.real_ip_header, peer);
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
     }
@@ -711,7 +711,7 @@ pub(crate) async fn admin_import(
 pub(crate) fn client_ip(
     headers: &HeaderMap,
     header_name: &str,
-    conn: Option<SocketAddr>,
+    peer: Option<SocketAddr>,
 ) -> String {
     if let Some(v) = headers.get(header_name).and_then(|v| v.to_str().ok()) {
         let v = v.trim();
@@ -719,7 +719,7 @@ pub(crate) fn client_ip(
             return v.to_string();
         }
     }
-    if let Some(addr) = conn {
+    if let Some(addr) = peer {
         return addr.ip().to_string();
     }
     "unknown".to_string()
@@ -1046,12 +1046,12 @@ pub(crate) fn interstitial_response(
 pub(crate) async fn unlock(
     State(st): State<Arc<AppState>>,
     Path(code): Path<String>,
-    conn: MaybeConnectInfo,
+    PeerAddr(peer): PeerAddr,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let ip = client_ip(&headers, &st.real_ip_header, conn.0);
+    let ip = client_ip(&headers, &st.real_ip_header, peer);
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
     }
@@ -1141,7 +1141,7 @@ pub(crate) async fn unlock(
 pub(crate) async fn redirect(
     State(st): State<Arc<AppState>>,
     Path(code): Path<String>,
-    conn: MaybeConnectInfo,
+    PeerAddr(peer): PeerAddr,
     RawQuery(raw_query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
@@ -1313,7 +1313,7 @@ pub(crate) async fn redirect(
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string()),
                 bot: false,
-                ip: match client_ip(&headers, &st.real_ip_header, conn.0) {
+                ip: match client_ip(&headers, &st.real_ip_header, peer) {
                     s if s == "unknown" => None,
                     s => Some(s),
                 },

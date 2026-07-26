@@ -86,6 +86,13 @@ fn init_tracing() {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // `--version` answers before anything else is set up: it must work with no
+    // config, no backends, and no log subscriber installed. Stays a `println!`
+    // because it is program output on stdout, not a log line.
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("quark {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     init_tracing();
     let strict_cluster = std::env::var("QUARK_STRICT_CLUSTER")
         .map(|v| !v.is_empty())

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Route, Routes, useSearchParams } from "react-router-dom";
+import { Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 import { Shell } from "./Shell";
 import { withProviders } from "@/test-utils";
 
@@ -29,6 +29,26 @@ function renderShellWithProbe(initialEntries: string[]) {
         <Route path="/" element={<Shell />}>
           <Route path="links" element={<SearchParamsProbe />} />
           <Route path="analytics" element={<SearchParamsProbe />} />
+        </Route>
+      </Routes>,
+      { initialEntries },
+    ),
+  );
+}
+
+/** Shows the current route's pathname, so a drawer nav-item click is observable. */
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}</div>;
+}
+
+function renderShellWithLocationProbe(initialEntries: string[]) {
+  return render(
+    withProviders(
+      <Routes>
+        <Route path="/" element={<Shell />}>
+          <Route path="links" element={<LocationProbe />} />
+          <Route path="analytics" element={<LocationProbe />} />
         </Route>
       </Routes>,
       { initialEntries },
@@ -192,5 +212,85 @@ describe("Shell v2 — sidebar + topbar", () => {
     await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: "New link" }));
     await waitFor(() => expect(screen.getByTestId("probe").textContent).toBe("new=1"));
+  });
+});
+
+describe("Shell v2 — mobile drawer + expandable search", () => {
+  beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+
+  it("shows a hamburger button that opens the mobile nav drawer", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
+    render(withProviders(<Shell />, { initialEntries: ["/links"] }));
+    await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    const hamburger = screen.getByRole("button", { name: "Open menu" });
+    // Regression guard (LUC-96 review finding): mobile primary control must
+    // meet the 44px touch target, not the base `size-icon` 32px.
+    expect(hamburger.className).toMatch(/\bsize-11\b/);
+
+    await userEvent.click(hamburger);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("clicking a nav item inside the drawer navigates there and closes the drawer", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
+    renderShellWithLocationProbe(["/links"]);
+    await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: "Open menu" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("link", { name: "Analytics" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByTestId("location-probe")).toHaveTextContent("/analytics");
+  });
+
+  it("the lupa expands the mobile search row with an autofocused input, and the X collapses it again", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
+    render(withProviders(<Shell />, { initialEntries: ["/links"] }));
+    await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
+    expect(screen.queryByTestId("mobile-search-input")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+    const mobileInput = await screen.findByTestId("mobile-search-input");
+    expect(mobileInput).toHaveFocus();
+
+    // The close button is the X inside the search row; use getAllByRole to get the specific instance
+    const closeButtons = screen.getAllByRole("button", { name: "Close search" });
+    // The X button is the one in the search row (the second instance after lupa)
+    await userEvent.click(closeButtons[closeButtons.length - 1]);
+    expect(screen.queryByTestId("mobile-search-input")).not.toBeInTheDocument();
+  });
+
+  it("mobile topbar order: lupa sits adjacent to hamburger on the LEFT (not with New-link on right)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
+    render(withProviders(<Shell />, { initialEntries: ["/links"] }));
+    await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
+
+    const hamburger = screen.getByRole("button", { name: "Open menu" });
+    const lupa = screen.getByRole("button", { name: "Search" });
+    const newLink = screen.getByRole("button", { name: "New link" });
+
+    // Hamburger and lupa must share the same parent (left wrapper).
+    expect(hamburger.parentElement).toBe(lupa.parentElement);
+
+    // New link must NOT be in that same parent (it's in the right cluster).
+    expect(newLink.parentElement).not.toBe(hamburger.parentElement);
+  });
+
+  it("lupa aria-label reflects its expanded state: 'Search' when closed, 'Close search' when open", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));
+    render(withProviders(<Shell />, { initialEntries: ["/links"] }));
+    await waitFor(() => expect(screen.getByText("quark")).toBeInTheDocument());
+
+    const lupa = screen.getByRole("button", { name: "Search" });
+    expect(lupa).toHaveAttribute("aria-label", "Search");
+
+    await userEvent.click(lupa);
+    await waitFor(() => expect(lupa).toHaveAttribute("aria-label", "Close search"));
+
+    await userEvent.click(lupa);
+    await waitFor(() => expect(lupa).toHaveAttribute("aria-label", "Search"));
   });
 });

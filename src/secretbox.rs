@@ -232,10 +232,15 @@ impl SecretBox {
             return Err(SecretBoxError::Truncated);
         }
         let (nonce_bytes, ciphertext) = payload.split_at(NONCE_LEN);
-        let nonce = XNonce::from_slice(nonce_bytes);
+        // try_from, not from_slice: from_slice panics on a length mismatch and
+        // is deprecated as of chacha20poly1305 0.11. The split_at above already
+        // guarantees NONCE_LEN, so the error arm is unreachable; it maps to
+        // Truncated rather than unwrapping, to keep a panic path out of a
+        // crypto module.
+        let nonce = XNonce::try_from(nonce_bytes).map_err(|_| SecretBoxError::Truncated)?;
         for entry in &self.keys {
             if let Ok(pt) = entry.cipher.decrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: ciphertext,
                     aad: b"",
@@ -268,11 +273,16 @@ impl SecretBox {
             return Err(SecretBoxError::Truncated);
         }
         let (nonce_bytes, ciphertext) = payload.split_at(NONCE_LEN);
-        let nonce = XNonce::from_slice(nonce_bytes);
+        // try_from, not from_slice: from_slice panics on a length mismatch and
+        // is deprecated as of chacha20poly1305 0.11. The split_at above already
+        // guarantees NONCE_LEN, so the error arm is unreachable; it maps to
+        // Truncated rather than unwrapping, to keep a panic path out of a
+        // crypto module.
+        let nonce = XNonce::try_from(nonce_bytes).map_err(|_| SecretBoxError::Truncated)?;
         let plaintext = entry
             .cipher
             .decrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: ciphertext,
                     aad,

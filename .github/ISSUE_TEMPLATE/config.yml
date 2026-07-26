@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or help getting quark running
+    url: https://github.com/lucasolopes/quark/discussions/categories/q-a
+    about: Setup, configuration, and usage questions belong in Discussions, not the issue tracker.
+  - name: Idea or feedback
+    url: https://github.com/lucasolopes/quark/discussions/categories/ideas
+    about: Half-formed ideas and "would you consider" questions. Concrete requests can go straight to a feature request.
+  - name: Report a security vulnerability
+    url: https://github.com/lucasolopes/quark/security/advisories/new
+    about: Private disclosure. Never open a public issue for a security problem.
+  - name: Documentation
+    url: https://github.com/lucasolopes/quark/tree/main/docs
+    about: API, configuration, architecture, deploy, and scaling docs, in English and Portuguese.

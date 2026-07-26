@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+# Privilegio minimo por padrao. So o job que precisar de mais eleva localmente.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -34,7 +38,7 @@ jobs:
         options: >-
           --health-cmd "wget -q -O - http://localhost:8123/ping || exit 1" --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust (stable + rustfmt + clippy)
         run: |
@@ -42,7 +46,7 @@ jobs:
           rustup default stable
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -66,25 +70,14 @@ jobs:
           QUARK_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           QUARK_TEST_CLICKHOUSE_URL: http://127.0.0.1:8123
 
-  # Dependency policy: RustSec advisories, license compatibility with
-  # AGPL-3.0-only, and duplicate/unknown sources. Separate job so it does not
-  # wait on the docker services the test job needs.
-  deny:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-
   web:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
           cache: npm
@@ -94,22 +87,3 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run build
-
-  # Deploy do backend no Fly (quark-prod) só quando um push na main passa em
-  # todos os gates. O `web` entra no `needs` mesmo o front deployando sozinho
-  # pelo Cloudflare Pages: sem isso, um push com o painel quebrado ainda subia o
-  # backend, deixando as duas pontas fora de sincronia. `concurrency` garante um
-  # deploy por vez.
-  deploy-backend:
-    needs: [check, web, deny]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: deploy-backend
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

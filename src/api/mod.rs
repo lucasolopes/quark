@@ -26,39 +26,39 @@ pub(crate) use axum::{Json, Router};
 pub(crate) use base64::Engine as _;
 pub(crate) use secrecy::ExposeSecret as _;
 
-/// The client socket address when the server was started with
-/// `into_make_service_with_connect_info`, and `None` otherwise, which is the
-/// case under `tower::ServiceExt::oneshot` in the tests.
-///
-/// This exists because axum 0.8 dropped the blanket `Option<T>` extractor:
-/// `Option<T>` now needs `T: OptionalFromRequestParts`, and `ConnectInfo` has no
-/// such impl. Keeping the optionality here means the handler signatures and the
-/// tests stay exactly as they were.
-pub(crate) struct MaybeConnectInfo(pub(crate) Option<std::net::SocketAddr>);
+pub(crate) use serde::{Deserialize, Serialize};
+pub(crate) use std::net::SocketAddr;
+pub(crate) use std::sync::atomic::Ordering;
+pub(crate) use std::sync::Arc;
+pub(crate) use tower_http::cors::CorsLayer;
 
-impl<S> axum::extract::FromRequestParts<S> for MaybeConnectInfo
-where
-    S: Send + Sync,
-{
+/// The peer socket address, when the server was built with
+/// `into_make_service_with_connect_info`. `None` otherwise, which is the normal
+/// case in tests and behind a proxy that only forwards a header.
+///
+/// This exists because axum 0.8 made `Option<T>` as an extractor require
+/// `OptionalFromRequestParts`, and `ConnectInfo` is a foreign type, so the
+/// orphan rule rules out implementing it there. Extracting into a local newtype
+/// that never fails keeps the handler signatures honest: a missing peer address
+/// is a normal outcome, not a rejected request.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PeerAddr(pub(crate) Option<SocketAddr>);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for PeerAddr {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(
         parts: &mut axum::http::request::Parts,
         _state: &S,
     ) -> Result<Self, Self::Rejection> {
-        Ok(MaybeConnectInfo(
+        Ok(PeerAddr(
             parts
                 .extensions
-                .get::<ConnectInfo<std::net::SocketAddr>>()
+                .get::<ConnectInfo<SocketAddr>>()
                 .map(|ConnectInfo(addr)| *addr),
         ))
     }
 }
-pub(crate) use serde::{Deserialize, Serialize};
-pub(crate) use std::net::SocketAddr;
-pub(crate) use std::sync::atomic::Ordering;
-pub(crate) use std::sync::Arc;
-pub(crate) use tower_http::cors::CorsLayer;
 
 pub struct AppState {
     pub cache: Cache,
@@ -138,6 +138,10 @@ pub struct AppState {
 pub(crate) const HEADER_ADMIN_TOKEN: &str = "x-admin-token";
 /// Double-submit CSRF header for the cookie-session admin path.
 pub(crate) const HEADER_CSRF: &str = "x-quark-csrf";
+/// Response header carrying the running binary's `CARGO_PKG_VERSION`, set on
+/// `GET /health` so operators can confirm which build is live without a body
+/// format change (the health body stays the plain string `"ok"`).
+pub(crate) const HEADER_QUARK_VERSION: &str = "x-quark-version";
 
 impl AppState {
     /// Public short code for a link id: permute the id with the instance key,

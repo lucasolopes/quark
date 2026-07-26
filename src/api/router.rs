@@ -11,8 +11,8 @@ pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-pub(crate) async fn health() -> &'static str {
-    "ok"
+pub(crate) async fn health() -> impl axum::response::IntoResponse {
+    ([(HEADER_QUARK_VERSION, env!("CARGO_PKG_VERSION"))], "ok")
 }
 
 /// CORS origins from the `QUARK_CORS_ORIGINS` env var (comma-separated list).
