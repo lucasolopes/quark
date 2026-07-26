@@ -251,11 +251,20 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 2: Teste de captura de `tracing` no caminho real de entrega
+### Task 2: Fechar o vazamento por `error = %e` e provar com captura de `tracing`
 
-Prova de ponta a ponta, exigida pelo aceite da LUC-140: um webhook que falha não deixa o token na saída de log.
+**Correção do spec, achada na Task 1.** O spec afirmava que o newtype torna o vazamento impossível por construção. Isso vale para `url = %sub.url`, mas **não** para `error = %e`: o `Display` de `reqwest::Error` embute a URL completa com token. O comentário em `delivery.rs:436-442` documenta exatamente isso e loga o erro cheio de propósito, aplicando `without_url()` só ao detalhe persistido.
+
+Sobram dois sítios vazando, que a Task 1 deliberadamente não tocou:
+- `src/webhooks/delivery.rs:443` (`deliver_one`, erro de transporte)
+- `src/webhooks/delivery.rs:732` (`post_once`, erro de transporte no relay)
+
+Esta task fecha os dois e prova com o teste de captura.
+
+**Atenção ao desenho do teste:** um servidor que responde 500 **não** exercita esse caminho. 500 é resposta HTTP válida e cai no ramo `Ok(resp)`, que nunca constrói um `reqwest::Error`. O teste precisa forçar **erro de transporte** — apontar para uma porta fechada é o jeito mais simples e determinístico.
 
 **Files:**
+- Modify: `src/webhooks/delivery.rs:443` e `:732`
 - Create: `tests/webhooks_log_redaction_it.rs`
 
 **Interfaces:**
@@ -312,23 +321,13 @@ async fn a_failing_delivery_never_logs_the_url_token() {
         .with_max_level(tracing::Level::TRACE)
         .finish();
 
-    // Servidor local que responde 500 em tudo, para forcar o caminho de falha
-    // e os `warn!` que carregam `url`.
+    // Porta fechada de proposito: forca um `reqwest::Error` de transporte, que
+    // e o unico caminho que constroi o erro cujo `Display` embute a URL. Um
+    // servidor que responde 500 NAO serve aqui: 500 e resposta valida, cai no
+    // ramo `Ok(resp)`, e o teste passaria com o vazamento vivo.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        loop {
-            let Ok((mut stream, _)) = listener.accept().await else {
-                return;
-            };
-            tokio::spawn(async move {
-                use tokio::io::AsyncWriteExt;
-                let _ = stream
-                    .write_all(b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\n\r\n")
-                    .await;
-            });
-        }
-    });
+    drop(listener);
 
     let url = format!("http://{addr}/hook/{SECRET_TOKEN}");
 
@@ -368,7 +367,24 @@ Esperado: falha de compilação no helper, ou falha de asserção se o teste for
 
 - [ ] **Step 3: Fazer passar**
 
-Ajuste o seam de disparo até o teste compilar e rodar. Nenhuma mudança em `src/` deve ser necessária: a Task 1 já redige. Se o teste passar de primeira depois de compilar, confirme que ele é capaz de falhar comentando temporariamente o `Display` redigido e rodando de novo.
+Primeiro confirme que o teste **falha de verdade** com o código atual: ele tem que acusar o token vindo do `error = %e`, não passar de graça. Se passar antes da correção, o teste não está exercitando o caminho de transporte e precisa ser consertado antes de qualquer outra coisa.
+
+Depois, feche os dois sítios:
+
+```rust
+// src/webhooks/delivery.rs, em deliver_one (linha ~443)
+tracing::warn!(
+    error = %e.without_url(),
+    url = %sub.url,
+    attempt = attempt + 1,
+    "webhook delivery failed"
+);
+
+// src/webhooks/delivery.rs, em post_once (linha ~732)
+tracing::warn!(error = %e.without_url(), url = %sub.url, "relayed webhook delivery failed");
+```
+
+Atualize o comentário de `delivery.rs:436-442`: ele hoje justifica logar o erro cheio ("Log the full error first (operators need it)"), e essa justificativa deixou de valer. O `url = %sub.url` redigido já dá ao operador o host e o id da subscription, que é o que ele precisa para achar a linha no banco. O resto da URL nunca foi diagnóstico, era só a credencial.
 
 - [ ] **Step 4: Rodar o gate**
 
