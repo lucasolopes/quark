@@ -312,6 +312,10 @@ async fn delete_tenant_succeeds_for_the_owner()
 // O realm e apagado com o slug certo, e apenas ele.
 async fn delete_tenant_deletes_only_its_own_realm()
 
+// Apagar o workspace ATUAL nao desloga: a sessao passa a apontar para o
+// workspace restante e o request seguinte funciona, sem 401.
+async fn delete_tenant_keeps_the_session_alive_on_another_workspace()
+
 // Falha no Keycloak nao desfaz a exclusao nem devolve erro: o tenant sumiu,
 // a resposta e 204, e sai um warn. Espelha
 // create_tenant_survives_ensure_realm_failure, que ja existe.
@@ -332,8 +336,22 @@ Estrutura, seguindo o que `admin_tenants_create` (`tenants.rs:261-340`) já faz:
 6. `store.delete_tenant(target)` → `503` em erro. **Nada foi apagado**, a transação garante.
 7. `sink.delete_tenant_data(target.0)` best-effort: erro só loga `warn!`.
 8. `keycloak.delete_realm(&slug)` best-effort: erro só loga `warn!` com o slug. **Capture o slug ANTES do passo 6**, senão o tenant já sumiu e você não tem o nome do realm.
-9. Invalide o cache do `host_router` para os hosts do tenant, como `admin_tenants_create` faz depois de semear o subdomínio.
-10. `204 No Content`.
+9. **Reemita a sessão apontando para um workspace restante.** Descoberto na
+   Task 3 e não previsto no spec: `sessions` é tenant-owned, e
+   `POST /admin/tenants` troca a sessão para o workspace recém-criado. Então o
+   `Owner` que apaga o workspace em que está perde o cookie, e o request
+   seguinte dá `401`. Deslogar alguém como efeito colateral de uma exclusão
+   bem-sucedida é bug disfarçado de comportamento.
+
+   O usuário obrigatoriamente tem outro workspace, porque o passo 5 já barra a
+   exclusão do último. Use o mesmo caminho que `admin_workspace_switch`
+   (`tenants.rs:352-375`) usa para trocar a sessão, escolhendo a primeira
+   membership restante.
+
+   Se o alvo **não** for o workspace atual da sessão, não mexa na sessão.
+10. Invalide o cache do `host_router` para os hosts do tenant, como
+    `admin_tenants_create` faz depois de semear o subdomínio.
+11. `204 No Content`.
 
 A ordem 6 → 8 é a decisão do spec e não deve ser invertida: realm apagado com o tenant vivo é um workspace no qual ninguém consegue entrar.
 
