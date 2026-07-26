@@ -72,6 +72,8 @@ export const en = {
     slugHint: "Used in URLs and must be unique. Lowercase letters, numbers and dashes.",
     submit: "Create workspace",
     creating: "Creating…",
+    creatingDetail: "We are setting up the sign-in for your workspace, which lives in a separate system. That part usually takes a few seconds.",
+    creatingSlow: "This is taking longer than usual. Your workspace is already saved, so reloading the page is safe.",
     slugTaken: "That slug is already taken. Pick another.",
     createError: "Could not create the workspace. Try again.",
     switchError: "Could not switch workspaces. Try again.",

@@ -74,6 +74,8 @@ export const ptBR: Messages = {
     slugHint: "Usado nas URLs e precisa ser único. Letras minúsculas, números e hífens.",
     submit: "Criar workspace",
     creating: "Criando…",
+    creatingDetail: "Estamos preparando o login do seu workspace, que fica em outro sistema. Essa parte costuma levar alguns segundos.",
+    creatingSlow: "Está demorando mais que o normal. Seu workspace já foi salvo, então pode recarregar a página sem problema.",
     slugTaken: "Esse slug já está em uso. Escolha outro.",
     createError: "Não deu pra criar o workspace. Tente de novo.",
     switchError: "Não deu pra mudar de workspace. Tente de novo.",
