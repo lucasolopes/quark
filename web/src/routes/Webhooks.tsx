@@ -62,27 +62,36 @@ const KIND_LABEL_KEY: Record<SubscriptionKind, MessageKey> = {
 };
 
 /**
- * Health of a webhook row, for the status dot: `paused` when the user turned
- * it off (`active: false`), `failing` when it's on but its last delivery
- * attempt errored, `active` otherwise (last attempt ok, or never attempted
- * yet — a subscription that only follows `link.clicked` can sit at "never"
- * indefinitely by design, see docs/WEBHOOKS.md#connection-health).
+ * Health of a webhook row, for the status dot: `disabled` when quark itself
+ * turned it off after a permanent delivery failure (`disabled_reason` set,
+ * see docs/WEBHOOKS.md#permanent-failures), `paused` when the user turned it
+ * off, `failing` when it's on but its last delivery attempt errored, `active`
+ * otherwise (last attempt ok, or never attempted yet — a subscription that
+ * only follows `link.clicked` can sit at "never" indefinitely by design, see
+ * docs/WEBHOOKS.md#connection-health).
  */
-type WebhookHealth = "active" | "failing" | "paused";
+type WebhookHealth = "active" | "failing" | "paused" | "disabled";
 
 const HEALTH_DOT_CLASS: Record<WebhookHealth, string> = {
   active: "bg-primary",
   failing: "bg-destructive",
   paused: "bg-muted-foreground",
+  // Same alarm color as `failing`, dimmed: the integration is broken, but
+  // quark already stopped retrying it, so it is not an ongoing failure.
+  disabled: "bg-destructive/60",
 };
 
 const HEALTH_LABEL_KEY: Record<WebhookHealth, MessageKey> = {
   active: "webhooks.statusActive",
   failing: "webhooks.statusFailing",
   paused: "webhooks.statusPaused",
+  disabled: "webhooks.statusDisabled",
 };
 
 function webhookHealth(webhook: Webhook): WebhookHealth {
+  // `disabled` is checked before `paused` on purpose: both are `active: false`,
+  // and testing `paused` first would swallow the state entirely.
+  if (!webhook.active && webhook.disabled_reason) return "disabled";
   if (!webhook.active) return "paused";
   if (webhook.last_delivery_status?.state === "error") return "failing";
   return "active";
@@ -293,6 +302,11 @@ export function Webhooks() {
                   {health === "failing" && (
                     <span className="text-xs text-destructive">
                       · {t("webhooks.deliveryError", { detail: webhook.last_delivery_status?.detail ?? "—" })}
+                    </span>
+                  )}
+                  {health === "disabled" && (
+                    <span className="text-xs text-destructive">
+                      · {t("webhooks.disabledReason", { reason: webhook.disabled_reason ?? "—" })}
                     </span>
                   )}
                   {webhook.last_delivery_status?.state === "ok" && webhook.last_delivery_at != null && (

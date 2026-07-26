@@ -364,6 +364,36 @@ forwarding](CONVERSION-FORWARDING.PT_BR.md), que já roda fora do caminho
 quente do redirect no worker de analytics; a gravação ali é best-effort e
 nunca trava o próximo lote desse worker.
 
+## Falhas permanentes
+
+A maioria das falhas de entrega vale a pena retentar: um timeout, um `5xx`, um
+`429`, uma conexão recusada. Um `404` ou um `410` não. `410 Gone` é o código
+para "isso foi removido e não volta", e um `404` numa URL de webhook quase
+sempre quer dizer a mesma coisa: o Zap foi apagado, o canal do Slack foi
+desconectado, o endpoint mudou de nome. Retentar esses casos no ritmo normal
+gasta tentativas por dias contra um destino que nunca vai responder.
+
+O quark trata `404` e `410` como permanentes. Quando um deles chega, a entrega
+é retentada mais uma vez na hora para confirmar. Se essa segunda tentativa der
+certo, ou voltar com qualquer outra coisa, nada acontece e a política normal de
+retry assume: um deploy que serve `404` por alguns segundos não custa a sua
+assinatura. Se a segunda tentativa também responder `404` ou `410`, o quark
+para de retentar e desliga a assinatura, gravando o motivo.
+
+`400` e `422` ficam de fora de propósito. Um `422` geralmente quer dizer que o
+payload do quark está errado, e não que o endpoint sumiu, e derrubar uma
+integração que funciona por causa de um bug nosso é o pior resultado possível.
+
+Uma assinatura desligada assim volta como `active: false` com o campo
+`disabled_reason` preenchido (por exemplo `"status 410"`) em
+`GET /admin/webhooks`. O painel mostra ela como **Desativado** com o motivo ao
+lado da linha, que é o que a diferencia de uma assinatura que você mesmo
+pausou: pausa manual tem `disabled_reason: null`.
+
+Nada é reativado sozinho. Conserte o endpoint e ligue de volta a chave Ativo na
+linha (ou `PATCH /admin/webhooks/:id` com `{"active": true}`). Isso limpa o
+`disabled_reason` e as entregas voltam.
+
 ## Alertas de limiar de cliques
 
 Um link pode carregar uma regra de alerta: disparar `link.threshold_reached`

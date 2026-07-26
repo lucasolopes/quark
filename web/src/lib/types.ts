@@ -184,6 +184,8 @@ export interface Webhook {
   /** Unix timestamp of the last delivery attempt; null/absent when never attempted. */
   last_delivery_at?: number | null;
   last_delivery_status?: HealthStatus;
+  /** Why quark turned the subscription off after a permanent delivery failure (e.g. `"status 410"`). Null/absent when it is on, or when the user paused it by hand. */
+  disabled_reason?: string | null;
 }
 export interface ListWebhooksResponse { webhooks: Webhook[]; }
 export interface CreateWebhookRequest { url: string; events: WebhookEvent[]; active?: boolean; kind: SubscriptionKind; connector_id?: string; }

@@ -56,6 +56,152 @@ async fn app_admin(token: &str) -> axum::Router {
     app_admin_with_dispatcher(token).await.0
 }
 
+/// Same router as `app_admin`, plus the `Store` behind it, so a test can
+/// reach past the HTTP surface and drive `disable_webhook` the way the
+/// delivery worker does.
+async fn app_admin_with_store(token: &str) -> (axum::Router, Arc<dyn quark::store::Store>) {
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    let cache = Cache::new(store.clone(), 1000, None);
+    let host_router = Arc::new(quark::domain_router::HostRouter::new(
+        store.clone(),
+        None,
+        None,
+    ));
+    let (tx, _rx) = tokio::sync::mpsc::channel(100);
+    let (wh_tx, _wh_rx) = tokio::sync::mpsc::channel(100);
+    let webhooks = Arc::new(WebhookDispatcher::new(
+        wh_tx,
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    ));
+    let state = common::TestState::new(store.clone(), sink)
+        .cache(cache)
+        .host_router(host_router)
+        .analytics_tx(tx)
+        .webhooks(webhooks)
+        .admin_token(Some(token.to_string()))
+        .build();
+    (router(state), store)
+}
+
+/// Creates a generic webhook through the admin API and returns its id.
+async fn create_webhook(app: &axum::Router, token: &str) -> u64 {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/webhooks")
+                .header("content-type", "application/json")
+                .header("x-admin-token", token)
+                .body(Body::from(
+                    r#"{"url":"https://example.com/hook","events":["link.created"]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    created["id"].as_u64().unwrap()
+}
+
+/// `GET /admin/webhooks` parsed as JSON.
+async fn list_webhooks(app: &axum::Router, token: &str) -> serde_json::Value {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/webhooks")
+                .header("x-admin-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn list_webhooks_exposes_disabled_reason() {
+    let (app, store) = app_admin_with_store("secret").await;
+    let id = create_webhook(&app, "secret").await;
+
+    store
+        .disable_webhook(quark::tenant::DEFAULT_TENANT, id, "status 410")
+        .await
+        .unwrap();
+
+    let body = list_webhooks(&app, "secret").await;
+    let row = &body["webhooks"][0];
+    assert_eq!(row["active"], serde_json::json!(false));
+    assert_eq!(row["disabled_reason"], serde_json::json!("status 410"));
+}
+
+#[tokio::test]
+async fn a_user_paused_webhook_has_no_disabled_reason() {
+    let (app, _store) = app_admin_with_store("secret").await;
+    let id = create_webhook(&app, "secret").await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/admin/webhooks/{id}"))
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(r#"{"active":false}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = list_webhooks(&app, "secret").await;
+    let row = &body["webhooks"][0];
+    assert_eq!(row["active"], serde_json::json!(false));
+    assert_eq!(
+        row["disabled_reason"],
+        serde_json::Value::Null,
+        "pausa manual nao pode se passar por desativacao automatica"
+    );
+}
+
+/// Reativar pelo toggle e o caminho documentado para voltar de uma
+/// desativacao automatica, entao ele tem que apagar o motivo. Sem isso o
+/// motivo velho sobrevive e reaparece na proxima pausa manual.
+#[tokio::test]
+async fn reactivating_through_the_api_clears_the_disabled_reason() {
+    let (app, store) = app_admin_with_store("secret").await;
+    let id = create_webhook(&app, "secret").await;
+    store
+        .disable_webhook(quark::tenant::DEFAULT_TENANT, id, "status 404")
+        .await
+        .unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/admin/webhooks/{id}"))
+                .header("content-type", "application/json")
+                .header("x-admin-token", "secret")
+                .body(Body::from(r#"{"active":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = list_webhooks(&app, "secret").await;
+    let row = &body["webhooks"][0];
+    assert_eq!(row["active"], serde_json::json!(true));
+    assert_eq!(row["disabled_reason"], serde_json::Value::Null);
+}
+
 /// Same as `app_admin_with_dispatcher`, but with `clicked_subscribed` preset
 /// to `true` up front, so the redirect handler's webhook gate is open
 /// without waiting on the delivery worker's periodic refresh.

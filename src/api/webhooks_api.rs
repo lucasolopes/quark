@@ -37,6 +37,11 @@ pub(crate) struct WebhookRow {
     connector_id: Option<String>,
     last_delivery_at: Option<u64>,
     last_delivery_status: crate::health::HealthStatus,
+    /// Why the delivery worker turned this subscription off (see
+    /// `Store::disable_webhook`). `None` when the subscription is on, or when
+    /// the user paused it by hand: the panel needs to tell the two apart to
+    /// show "disabled" instead of "paused".
+    disabled_reason: Option<String>,
 }
 
 pub(crate) async fn admin_webhooks_list(
@@ -63,6 +68,7 @@ pub(crate) async fn admin_webhooks_list(
                     connector_id: s.connector_id,
                     last_delivery_at: s.last_delivery_at,
                     last_delivery_status: s.last_delivery_status,
+                    disabled_reason: s.disabled_reason,
                 })
                 .collect();
             Json(serde_json::json!({ "webhooks": rows })).into_response()
@@ -299,6 +305,11 @@ pub(crate) async fn admin_webhooks_patch(
     }
     if let Some(active) = req.active {
         sub.active = active;
+        // Flipping the switch is user intent either way, so it clears an
+        // automatic disable: reactivating is the documented way back from a
+        // 404/410, and pausing by hand must not inherit a stale reason and
+        // keep reporting itself as "disabled by quark" in the panel.
+        sub.disabled_reason = None;
     }
     if let Some(kind) = req.kind {
         sub.kind = kind;
