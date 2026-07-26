@@ -61,10 +61,17 @@ fn no_log_macro_builds_its_message_with_serde_json() {
                 continue;
             }
             // The macro and the `json!` may sit on the same line or on the
-            // following ones (rustfmt breaks the call up). Looking at the next
-            // two lines covers both shapes.
-            let window = lines[idx..(idx + 3).min(lines.len())].join(" ");
-            if window.contains("json!") {
+            // following ones (rustfmt breaks the call up), so look ahead a few
+            // lines.
+            //
+            // `json!` alone is not enough to accuse: `src/` uses it about 90
+            // times legitimately, and "log the error, then return a JSON body"
+            // is the normal shape of a handler. What identifies the legacy
+            // pattern is the `"{}"` format string standing in for a message,
+            // with the data serialized into it. Requiring both is what keeps
+            // this from failing a correct handler.
+            let window = lines[idx..(idx + 4).min(lines.len())].join(" ");
+            if window.contains("json!") && window.contains("\"{}\"") {
                 offenders.push(format!("{shown}:{}: {}", idx + 1, line.trim()));
             }
         }

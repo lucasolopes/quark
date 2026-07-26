@@ -214,15 +214,15 @@ async fn main() -> anyhow::Result<()> {
                                     Ok(()) => seeded += 1,
                                     Err(e) => tracing::warn!(
                                         error = %e,
-                                        tenant = t.id.0,
+                                        tenant_id = t.id.0,
                                         "tenant subdomain backfill failed"
                                     ),
                                 }
                             }
                             Err(e) => tracing::warn!(
                                 error = %e,
-                                tenant = t.id.0,
-                                "tenant subdomain backfill could not resolve the host"
+                                tenant_id = t.id.0,
+                                "tenant subdomain backfill could not look up the domain row"
                             ),
                         }
                     }
@@ -439,8 +439,15 @@ async fn main() -> anyhow::Result<()> {
         });
     match &sheets_config {
         Some(cfg) => match cfg.sync_secs {
-            Some(secs) => tracing::info!(sync_secs = secs, "sheets sync enabled, scheduled"),
-            None => tracing::info!("sheets sync: enabled (on demand)"),
+            // `scheduled` is on both arms so a pipeline can tell the two modes
+            // apart by field. With it only on one, the absent field and a
+            // disabled sync look the same.
+            Some(secs) => tracing::info!(
+                scheduled = true,
+                sync_secs = secs,
+                "sheets sync enabled, scheduled"
+            ),
+            None => tracing::info!(scheduled = false, "sheets sync enabled, on demand"),
         },
         None => tracing::info!(
             "sheets sync: disabled (set QUARK_SHEETS_CLIENT_ID/_SECRET/_REDIRECT_URL to enable)"
@@ -766,12 +773,12 @@ fn spawn_sheets_sync(state: &std::sync::Arc<AppState>) {
                         };
                         if let Err(e) = &outcome {
                             conn.last_status = quark::sheets::SyncStatus::Error(e.to_string());
-                            tracing::warn!(error = %e, tenant = t.id.0, "sheets sync failed");
+                            tracing::warn!(error = %e, tenant_id = t.id.0, "sheets sync failed");
                         } else {
-                            tracing::info!(tenant = t.id.0, "sheets sync completed");
+                            tracing::info!(tenant_id = t.id.0, "sheets sync completed");
                         }
                         if let Err(e) = store.put_sheets_connection(t.id, &conn).await {
-                            tracing::warn!(error = %e, tenant = t.id.0, "sheets sync persist failed");
+                            tracing::warn!(error = %e, tenant_id = t.id.0, "sheets sync persist failed");
                         }
                     }
                     // Release the lease now that this tick finished so it is not
