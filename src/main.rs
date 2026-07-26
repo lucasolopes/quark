@@ -644,16 +644,10 @@ async fn main() -> anyhow::Result<()> {
                             Err(e) => Err(e),
                         };
                         if let Err(e) = &outcome {
-                            conn.last_status = quark::sheets::SyncStatus::Error(e.clone());
-                            tracing::info!(
-                                "{}",
-                                serde_json::json!({ "sheets_sync_error": e, "tenant": t.id.0 })
-                            );
+                            conn.last_status = quark::sheets::SyncStatus::Error(e.to_string());
+                            tracing::warn!(error = %e, tenant = t.id.0, "sheets sync failed");
                         } else {
-                            tracing::info!(
-                                "{}",
-                                serde_json::json!({ "sheets_sync": "ok", "tenant": t.id.0 })
-                            );
+                            tracing::info!(tenant = t.id.0, "sheets sync completed");
                         }
                         if let Err(e) = store.put_sheets_connection(t.id, &conn).await {
                             tracing::info!(

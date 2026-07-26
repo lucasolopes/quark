@@ -12,7 +12,7 @@ use crate::store::{
 use crate::tenant::{Membership, Role, Tenant, TenantId, User};
 use crate::webhooks::{SubscriptionKind, WebhookSubscription};
 use sqlx::postgres::{PgPoolOptions, PgRow};
-use sqlx::{PgPool, Row};
+use sqlx::{AssertSqlSafe, PgPool, Row};
 
 /// AAD field label for the per-tenant OIDC `client_secret`. The full AAD is
 /// `format!("{tenant_id}:{AAD_OIDC_CLIENT_SECRET}")`, binding the v2 ciphertext
@@ -809,9 +809,9 @@ impl PostgresStore {
             // default to 0 = the seeded default tenant). Idempotent via
             // `ADD COLUMN IF NOT EXISTS`.
             for table in TENANT_OWNED_TABLES {
-                sqlx::query(&format!(
+                sqlx::query(AssertSqlSafe(format!(
                     "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tenant_id BIGINT NOT NULL DEFAULT 0"
-                ))
+                )))
                 .execute(&mut *conn)
                 .await
                 .map_err(StoreError::backend)?;
@@ -935,20 +935,20 @@ impl PostgresStore {
             // `WHERE tenant_id = $` predicate on every query. P1b flips FORCE on
             // (cloud mode) and drives `app.tenant_id` via `begin_tenant_tx`.
             for table in TENANT_OWNED_TABLES {
-                sqlx::query(&format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"))
+                sqlx::query(AssertSqlSafe(format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")))
                     .execute(&mut *conn)
                     .await
                     .map_err(StoreError::backend)?;
                 let policy = format!("{table}_tenant_isolation");
                 // No `CREATE POLICY IF NOT EXISTS` exists; drop-then-create keeps
                 // the idempotent-boot contract.
-                sqlx::query(&format!("DROP POLICY IF EXISTS {policy} ON {table}"))
+                sqlx::query(AssertSqlSafe(format!("DROP POLICY IF EXISTS {policy} ON {table}")))
                     .execute(&mut *conn)
                     .await
                     .map_err(StoreError::backend)?;
-                sqlx::query(&format!(
+                sqlx::query(AssertSqlSafe(format!(
                     "CREATE POLICY {policy} ON {table} USING (tenant_id = current_setting('app.tenant_id', true)::bigint)"
-                ))
+                )))
                 .execute(&mut *conn)
                 .await
                 .map_err(StoreError::backend)?;
@@ -1031,7 +1031,7 @@ impl PostgresStore {
                     .iter()
                     .filter(|t| !NOT_FORCED.contains(t))
                 {
-                    sqlx::query(&format!("ALTER TABLE {table} FORCE ROW LEVEL SECURITY"))
+                    sqlx::query(AssertSqlSafe(format!("ALTER TABLE {table} FORCE ROW LEVEL SECURITY")))
                         .execute(&mut *conn)
                         .await
                         .map_err(StoreError::backend)?;

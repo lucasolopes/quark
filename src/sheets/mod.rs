@@ -11,6 +11,29 @@ pub mod client;
 
 use serde::{Deserialize, Serialize};
 
+/// Why a Sheets sync (or the OAuth token call it starts with) failed.
+///
+/// The connector persists this into `SyncStatus::Error` and shows it in the
+/// panel, so the `Display` text is user-facing. Typed rather than a `String` so
+/// a token failure (the user has to reconnect) is distinguishable from an API
+/// failure (usually transient) without matching on prose.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum SheetsError {
+    #[error("could not reach the google token endpoint")]
+    TokenTransport(#[source] reqwest::Error),
+    #[error("google rejected the token request with status {0}")]
+    TokenStatus(reqwest::StatusCode),
+    #[error("the google token response could not be parsed")]
+    TokenMalformed(#[source] reqwest::Error),
+    #[error(transparent)]
+    Api(#[from] client::SheetsApiError),
+    #[error("reading the link catalog failed")]
+    Store(#[from] crate::store::StoreError),
+    #[error("catalog exceeds {0} links; snapshot sync is not supported at this size")]
+    CatalogTooLarge(usize),
+}
+
 /// The Drive scope requested: create and edit only the spreadsheets the app
 /// itself creates. The most privacy-preserving Sheets/Drive scope.
 pub const SHEETS_SCOPE: &str = "https://www.googleapis.com/auth/drive.file";
@@ -124,7 +147,7 @@ pub async fn exchange_code(
     client: &reqwest::Client,
     cfg: &SheetsConfig,
     code: &str,
-) -> Result<TokenResponse, String> {
+) -> Result<TokenResponse, SheetsError> {
     let resp = client
         .post(TOKEN_ENDPOINT)
         .form(&[
@@ -136,13 +159,13 @@ pub async fn exchange_code(
         ])
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(SheetsError::TokenTransport)?;
     if !resp.status().is_success() {
-        return Err(format!("token exchange failed: {}", resp.status()));
+        return Err(SheetsError::TokenStatus(resp.status()));
     }
     resp.json::<TokenResponse>()
         .await
-        .map_err(|e| e.to_string())
+        .map_err(SheetsError::TokenMalformed)
 }
 
 /// Trades a stored refresh token for a fresh short-lived access token.
@@ -150,7 +173,7 @@ pub async fn refresh_access_token(
     client: &reqwest::Client,
     cfg: &SheetsConfig,
     refresh_token: &str,
-) -> Result<String, String> {
+) -> Result<String, SheetsError> {
     let resp = client
         .post(TOKEN_ENDPOINT)
         .form(&[
@@ -161,14 +184,14 @@ pub async fn refresh_access_token(
         ])
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(SheetsError::TokenTransport)?;
     if !resp.status().is_success() {
-        return Err(format!("token refresh failed: {}", resp.status()));
+        return Err(SheetsError::TokenStatus(resp.status()));
     }
     let tok = resp
         .json::<TokenResponse>()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(SheetsError::TokenMalformed)?;
     Ok(tok.access_token)
 }
 
@@ -239,7 +262,7 @@ pub async fn sync(
     access_token: &str,
     now: u64,
     tenant: crate::tenant::TenantId,
-) -> Result<(), String> {
+) -> Result<(), SheetsError> {
     if conn.spreadsheet_id.is_none() {
         let id = api
             .create_spreadsheet(access_token, SPREADSHEET_TITLE)
@@ -257,17 +280,14 @@ pub async fn sync(
     loop {
         let page = store
             .list_links(tenant, after, SYNC_PAGE, None, None, false)
-            .await
-            .map_err(|e| format!("list_links: {e:?}"))?;
+            .await?;
         let got = page.len();
         if let Some((last_id, _)) = page.last() {
             after = Some(*last_id);
         }
         links.extend(page);
         if links.len() > MAX_SYNC_LINKS {
-            return Err(format!(
-                "catalog exceeds {MAX_SYNC_LINKS} links; snapshot sync not supported at this size"
-            ));
+            return Err(SheetsError::CatalogTooLarge(MAX_SYNC_LINKS));
         }
         if got < SYNC_PAGE {
             break;
