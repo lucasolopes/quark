@@ -38,7 +38,7 @@ base64 = "0.22.1"
 chacha20poly1305 = "0.11"
 getrandom = "0.4.3"
 argon2 = "0.5"
-jsonwebtoken = "10"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 csv = "1"
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["tokio"] }
