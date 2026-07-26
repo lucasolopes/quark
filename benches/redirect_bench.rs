@@ -1,3 +1,8 @@
+// Benchmark setup panics on failure by design: a broken fixture is the signal,
+// not something to recover from. clippy.toml covers items under
+// #[test]/#[cfg(test)], which a bench crate is not.
+#![allow(clippy::unwrap_used)]
+
 //! In-process microbench of the redirect path (no network/VM in between).
 //! Measures (1) the full redirect via the router and (2) the marginal cost of the
 //! analytics capture added to the 302. Goal: answer "how much does analytics
@@ -8,9 +13,8 @@
 //! doesn't show up here — but oha couldn't measure it above the noise either.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use quark::abuse::ratelimit::RateLimiter;
 use quark::analytics::{spawn_worker, ClickEvent};
-use quark::api::{router, AppState};
+use quark::api::router;
 use quark::cache::Cache;
 use quark::codec::to_base62;
 use quark::permute::encode;
@@ -20,6 +24,11 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::Request;
 use tower::ServiceExt;
+
+// The bench builds the same `AppState` the integration tests do, so a new
+// field on `AppState` is a one-line change in the builder, not here.
+#[path = "../tests/common/mod.rs"]
+mod common;
 
 fn bench(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -78,39 +87,22 @@ fn bench(c: &mut Criterion) {
             None,
             None,
         ));
-        let state = Arc::new(AppState {
-            oidc: None,
-            sheets: None,
-            sheets_api: None,
-            oidc_configured: false,
-            multi_tenant: false,
-            tenant_domain_suffix: None,
-            oidc_tenants: quark::oidc::TenantOidcCache::new(),
-            keycloak: None,
-            keycloak_base_url: None,
-            slack: None,
-            cache,
-            store: store.clone(),
-            key,
-            signing_key: [0u8; 32],
-            analytics_tx: tx.clone(),
-            sink,
-            admin_token: None,
-            ratelimiter: RateLimiter::disabled(),
-            block_private: true,
-            public_host: None,
-            real_ip_header: "cf-connecting-ip".to_string(),
-            webhooks: {
-                let (wh_tx, _wh_rx) = tokio::sync::mpsc::channel(1);
-                Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
-                    wh_tx,
-                    Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                    Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                ))
-            },
-            host_router,
-            dns: std::sync::Arc::new(quark::dns::NullDns),
-        });
+        let webhooks = {
+            let (wh_tx, _wh_rx) = tokio::sync::mpsc::channel(1);
+            Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
+                wh_tx,
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ))
+        };
+        let state = common::TestState::new(store.clone(), sink)
+            .cache(cache)
+            .host_router(host_router)
+            .analytics_tx(tx.clone())
+            .webhooks(webhooks)
+            .key(key)
+            .real_ip_header("cf-connecting-ip".to_string())
+            .build();
         let code = to_base62(encode(1, key));
         (state, code, tx, worker)
     });

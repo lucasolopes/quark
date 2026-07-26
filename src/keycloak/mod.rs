@@ -10,21 +10,15 @@
 
 pub mod client;
 
-use async_trait::async_trait;
-
 /// An error from a Keycloak admin call. Wraps a plain message; the HTTP
 /// implementation is thin (see `client.rs`) so there is no richer variant set
 /// to map onto yet.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Not `#[non_exhaustive]`: test fakes in `tests/` construct it directly, and a
+/// tuple struct marked non-exhaustive cannot be built from another crate.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[error("{0}")]
 pub struct KcError(pub String);
-
-impl std::fmt::Display for KcError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for KcError {}
 
 impl From<String> for KcError {
     fn from(s: String) -> Self {
@@ -36,8 +30,8 @@ impl From<String> for KcError {
 /// the calling logic (Task 2) is testable with a mock and no live Keycloak
 /// server. Every method is idempotent: safe to call again on a partially
 /// provisioned tenant (e.g. after a crash mid-provision).
-#[async_trait]
-pub trait KeycloakAdmin: Send + Sync {
+#[async_trait::async_trait]
+pub trait KeycloakAdmin: Send + Sync + 'static {
     /// Creates the tenant's realm (named `slug`) with the SMTP server
     /// configured. A `409 Conflict` (realm already exists) is treated as
     /// success.
@@ -84,10 +78,11 @@ impl SmtpConfig {
             user: std::env::var("QUARK_KEYCLOAK_SMTP_USER").unwrap_or_default(),
             password: std::env::var("QUARK_KEYCLOAK_SMTP_PASSWORD").unwrap_or_default(),
             from: std::env::var("QUARK_KEYCLOAK_SMTP_FROM").unwrap_or_default(),
-            starttls: matches!(
-                std::env::var("QUARK_KEYCLOAK_SMTP_STARTTLS").as_deref(),
-                Ok("true") | Ok("1")
-            ),
+            // Same convention as every other boolean env var in the crate, and
+            // what CONFIGURATION.md documents: any value other than `0` is on.
+            starttls: std::env::var("QUARK_KEYCLOAK_SMTP_STARTTLS")
+                .map(|v| v != "0")
+                .unwrap_or(false),
         }
     }
 
@@ -134,8 +129,38 @@ pub struct KeycloakConfig {
 
 impl KeycloakConfig {
     pub fn from_env() -> Option<KeycloakConfig> {
+        // `QUARK_KEYCLOAK_BASE_URL` is the trigger, but the admin client is what
+        // every call actually authenticates with. Letting the id or the secret
+        // default to an empty string produced a config that looks enabled and
+        // fails at the first provisioning call, far from the cause. Warn and
+        // stay off, mirroring `OidcConfig::from_env`: provisioning is an
+        // optional feature, and a tenant can still be created without a realm.
+        //
+        // The SMTP fields below keep `unwrap_or_default` on purpose: a realm
+        // works with no SMTP server configured (only outbound mail silently
+        // fails to send), so empty genuinely means "not configured" there.
+        let base_url = std::env::var("QUARK_KEYCLOAK_BASE_URL").unwrap_or_default();
+        if !base_url.is_empty() {
+            let mut missing = Vec::new();
+            for var in [
+                "QUARK_KEYCLOAK_ADMIN_CLIENT_ID",
+                "QUARK_KEYCLOAK_ADMIN_CLIENT_SECRET",
+            ] {
+                if std::env::var(var).ok().filter(|s| !s.is_empty()).is_none() {
+                    missing.push(var);
+                }
+            }
+            if !missing.is_empty() {
+                tracing::warn!(
+                    missing = missing.join(", "),
+                    "QUARK_KEYCLOAK_BASE_URL is set but the admin client is incomplete; realm \
+                     provisioning stays disabled"
+                );
+                return None;
+            }
+        }
         Self::from_parts(
-            &std::env::var("QUARK_KEYCLOAK_BASE_URL").unwrap_or_default(),
+            &base_url,
             &std::env::var("QUARK_KEYCLOAK_ADMIN_CLIENT_ID").unwrap_or_default(),
             &std::env::var("QUARK_KEYCLOAK_ADMIN_CLIENT_SECRET").unwrap_or_default(),
             SmtpConfig::from_env(),
@@ -194,8 +219,12 @@ pub fn derive_issuer(base: &str, slug: &str) -> String {
 /// `KeycloakAdmin`-calling code (Task 2's tenant-provisioning flow) without a
 /// live Keycloak server.
 pub mod testing {
+    // Test double que nao pode ficar sob cfg(test) (ver doc acima), entao nao e
+    // coberto pelo allow-unwrap-in-tests do clippy.toml. Um mutex envenenado
+    // aqui so acontece se outra thread entrou em panico, e ai o teste ja falhou.
+    #![allow(clippy::unwrap_used)]
+
     use super::{KcError, KeycloakAdmin};
-    use async_trait::async_trait;
     use std::sync::Mutex;
 
     /// Records every call (as a formatted string) so tests can assert call
@@ -221,7 +250,7 @@ pub mod testing {
         }
     }
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl KeycloakAdmin for MockKeycloakAdmin {
         async fn ensure_realm(&self, slug: &str) -> Result<(), KcError> {
             self.calls

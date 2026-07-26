@@ -9,8 +9,8 @@
 //! This module also hosts the shared `HealthStatus` enum, reused by webhook
 //! and pixel delivery health tracking.
 
-use crate::abuse::{extract_host, is_internal_host};
-use crate::store::{LinkHealth, Record, Store};
+use crate::abuse::{extract_host, is_internal_host, is_internal_ip};
+use crate::store::{LinkHealth, Record, Store, StoreError};
 use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{EventType, WebhookEvent};
 use crate::{codec, permute};
@@ -42,9 +42,14 @@ pub fn classify(status: Option<u16>) -> bool {
 
 /// The reqwest client the checker uses: bounded timeout, no redirect following
 /// (a `3xx` is treated as alive, and not following avoids SSRF via redirect).
+#[expect(
+    clippy::expect_used,
+    reason = "a client with only timeouts and a redirect policy always builds"
+)]
 pub fn build_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(PROBE_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(crate::HTTP_CONNECT_TIMEOUT_SECS))
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("reqwest client builds")
@@ -101,42 +106,6 @@ pub async fn safe_to_probe(url: &str) -> bool {
     any
 }
 
-/// Whether an IP address is in a range the server must never be pointed at by a
-/// stored destination (loopback, private, link-local, unspecified, and IPv6
-/// unique-local `fc00::/7`).
-fn is_internal_ip(ip: &std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_documentation()
-        }
-        std::net::IpAddr::V6(v6) => {
-            if v6.is_loopback() || v6.is_unspecified() {
-                return true;
-            }
-            // An IPv4-mapped (`::ffff:a.b.c.d`) or deprecated IPv4-compatible
-            // (`::a.b.c.d`) address routes to the embedded v4 target on a
-            // dual-stack host, so classify it by that v4 address.
-            let seg = v6.segments();
-            if seg[..6].iter().all(|&x| x == 0) || v6.to_ipv4_mapped().is_some() {
-                let v4 = std::net::Ipv4Addr::new(
-                    (seg[6] >> 8) as u8,
-                    (seg[6] & 0xff) as u8,
-                    (seg[7] >> 8) as u8,
-                    (seg[7] & 0xff) as u8,
-                );
-                return is_internal_ip(&std::net::IpAddr::V4(v4));
-            }
-            // unique-local fc00::/7 or link-local fe80::/10
-            (seg[0] & 0xfe00) == 0xfc00 || (seg[0] & 0xffc0) == 0xfe80
-        }
-    }
-}
-
 /// Builds the webhook event body for a health transition, matching the envelope
 /// the lifecycle events use (`{id, type, timestamp, data:{code, url, status}}`).
 fn transition_body(event_type: EventType, code: &str, url: &str, status: Option<u16>) -> String {
@@ -180,7 +149,7 @@ pub async fn sweep<P, F, R, RF>(
     key: u64,
     renew: R,
     prober: P,
-) -> Result<(usize, bool), String>
+) -> Result<(usize, bool), StoreError>
 where
     P: Fn(String) -> F,
     F: Future<Output = Option<LinkHealth>>,
@@ -189,8 +158,7 @@ where
 {
     let prev: HashMap<u64, LinkHealth> = store
         .list_link_health(crate::tenant::DEFAULT_TENANT)
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
         .into_iter()
         .collect();
     let mut after: Option<u64> = None;
@@ -208,8 +176,7 @@ where
                 None,
                 false,
             )
-            .await
-            .map_err(|e| e.to_string())?;
+            .await?;
         let n = page.len();
         if n == 0 {
             break;
@@ -271,8 +238,7 @@ where
                 }
                 store
                     .put_link_health(crate::tenant::DEFAULT_TENANT, id, &health)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                    .await?;
             }
         }
         if n < LIST_PAGE {
@@ -308,10 +274,7 @@ pub fn spawn_link_checker(
                 // Another instance holds the lease this round.
                 Ok(false) => continue,
                 Err(e) => {
-                    eprintln!(
-                        "{}",
-                        serde_json::json!({ "health_lease_error": e.to_string() })
-                    );
+                    tracing::warn!(error = %e, "health check lease acquisition failed");
                     continue;
                 }
             }
@@ -338,11 +301,11 @@ pub fn spawn_link_checker(
                     .unwrap_or(true)
             };
             match sweep(&store, &webhooks, key, renew, prober).await {
-                Ok((n, false)) => eprintln!("{}", serde_json::json!({ "health_sweep_checked": n })),
+                Ok((n, false)) => tracing::info!(checked = n, "health sweep completed"),
                 Ok((n, true)) => {
-                    eprintln!("{}", serde_json::json!({ "health_sweep_lease_lost": n }))
+                    tracing::info!(checked = n, "health sweep stopped early, lease lost")
                 }
-                Err(e) => eprintln!("{}", serde_json::json!({ "health_sweep_error": e })),
+                Err(e) => tracing::warn!(error = %e, "health sweep failed"),
             }
         }
     })
@@ -363,36 +326,6 @@ mod tests {
         assert!(!classify(Some(404)));
         assert!(!classify(Some(500)));
         assert!(!classify(None)); // connection error / timeout
-    }
-
-    #[test]
-    fn internal_ip_classification() {
-        use std::net::IpAddr;
-        for s in [
-            "127.0.0.1",
-            "10.1.2.3",
-            "192.168.0.1",
-            "169.254.169.254", // cloud metadata (link-local)
-            "0.0.0.0",
-            "::1",
-            "fc00::1",                // unique-local
-            "fe80::1",                // link-local
-            "::ffff:127.0.0.1",       // IPv4-mapped loopback
-            "::ffff:169.254.169.254", // IPv4-mapped metadata
-            "::7f00:1",               // IPv4-compatible 127.0.0.1 (deprecated)
-            "::a9fe:a9fe",            // IPv4-compatible 169.254.169.254
-        ] {
-            assert!(
-                super::is_internal_ip(&s.parse::<IpAddr>().unwrap()),
-                "{s} must be internal"
-            );
-        }
-        for s in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
-            assert!(
-                !super::is_internal_ip(&s.parse::<IpAddr>().unwrap()),
-                "{s} must be public"
-            );
-        }
     }
 
     #[tokio::test]

@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 //! Store-level tests for SSO email-domain discovery (LUC-57, Task 1) plus
 //! the admin HTTP endpoints (LUC-57, Task 2). Postgres-gated on
 //! `QUARK_TEST_DATABASE_URL`; skips when unset.
@@ -14,7 +19,6 @@ use quark::sso::SsoEmailDomain;
 use quark::store::postgres::PostgresStore;
 use quark::store::Store;
 use quark::tenant::{Tenant, TenantId};
-use quark::webhooks::delivery::WebhookDispatcher;
 use serial_test::file_serial;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -209,16 +213,6 @@ impl Dns for FakeDns {
     }
 }
 
-/// A `WebhookDispatcher` whose receiver is dropped: `emit` silently no-ops.
-fn test_webhook_dispatcher() -> Arc<WebhookDispatcher> {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    Arc::new(WebhookDispatcher::new(
-        tx,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    ))
-}
-
 /// Gives `tenant` an OIDC config, the precondition `POST /admin/sso-domains`
 /// gates on.
 async fn seed_oidc_config(store: &PostgresStore, tenant: TenantId) {
@@ -282,7 +276,7 @@ async fn admin_app_for_tenant(
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .public_host(Some("quark.example.com".to_string()))
         .multi_tenant(multi_tenant)
@@ -810,7 +804,7 @@ fn discover_app(
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .ratelimiter(ratelimiter)
         .public_host(Some("quark.example.com".to_string()))
@@ -1100,7 +1094,7 @@ async fn create_is_rate_limited() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .ratelimiter(quark::abuse::ratelimit::RateLimiter::memory(1))
         .public_host(Some("quark.example.com".to_string()))

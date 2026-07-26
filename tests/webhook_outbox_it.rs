@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::any;
@@ -240,6 +245,7 @@ async fn delivery_for_sub_missing_from_snapshot_is_looked_up_not_dead_lettered()
 #[file_serial]
 async fn failing_endpoint_dead_letters_after_max() {
     let Some((store, pool)) = setup().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let (url, _mock) = spawn_mock(vec![500]).await;
@@ -292,6 +298,7 @@ async fn failing_endpoint_dead_letters_after_max() {
 #[file_serial]
 async fn concurrent_claims_are_disjoint() {
     let Some((store, _pool)) = setup().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let sub = add_sub(&store, "https://e.com/hook").await;
@@ -323,6 +330,7 @@ async fn concurrent_claims_are_disjoint() {
 #[file_serial]
 async fn webhook_id_equals_delivery_key_across_attempts() {
     let Some((store, _pool)) = setup().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let (url, mock) = spawn_mock(vec![500, 200]).await;
@@ -370,6 +378,7 @@ async fn webhook_id_equals_delivery_key_across_attempts() {
 #[file_serial]
 async fn duplicate_enqueue_inserts_one_row() {
     let Some((store, pool)) = setup().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let sub = add_sub(&store, "https://e.com/hook").await;

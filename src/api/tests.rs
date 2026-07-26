@@ -1,8 +1,8 @@
 use super::{
-    access_log_line, app_destination, cache_control_for, classify_platform, client_ip,
-    create_link_core, fbclid_from_query, normalize_max_visits, parse_cors_origins, resolve_code,
-    resolve_for_admin, send_test_event_guarded, EventType, Platform, SubscriptionKind,
-    WebhookSubscription, HEADER_ADMIN_TOKEN, SHARED_DOMAIN_ID,
+    app_destination, cache_control_for, classify_platform, client_ip, create_link_core,
+    fbclid_from_query, normalize_max_visits, parse_cors_origins, resolve_code, resolve_for_admin,
+    send_test_event_guarded, EventType, Platform, SubscriptionKind, WebhookSubscription,
+    HEADER_ADMIN_TOKEN, SHARED_DOMAIN_ID,
 };
 use crate::store::Record;
 use axum::body::Bytes;
@@ -10,6 +10,7 @@ use axum::extract::State;
 use axum::http::HeaderMap as ReqHeaderMap;
 use axum::routing::any;
 use axum::Router as TestRouter;
+use secrecy::ExposeSecret as _;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::net::TcpListener;
@@ -97,7 +98,7 @@ async fn build_state(
         cache,
         store,
         key: 0x1234,
-        signing_key,
+        signing_key: secrecy::SecretBox::new(Box::new(signing_key)),
         analytics_tx,
         sink,
         admin_token: admin_token.map(str::to_string),
@@ -349,8 +350,13 @@ async fn callback_tenant_from_cookie_but_config_gone_is_400_not_global() {
         })
         .await
         .unwrap();
-    let cookie_value =
-        crate::oidc::sign_login_state(&st.signing_key, "st8", "verif", "nnc", Some(tenant_id));
+    let cookie_value = crate::oidc::sign_login_state(
+        st.signing_key.expose_secret(),
+        "st8",
+        "verif",
+        Some("nnc"),
+        Some(tenant_id),
+    );
     let mut headers = ReqHeaderMap::new();
     headers.insert(
         axum::http::header::COOKIE,
@@ -380,8 +386,13 @@ async fn callback_tampered_tenant_in_cookie_is_rejected() {
     // swapped-in tenant is never authenticated into.
     let st = multi_tenant_state().await;
     let real_tenant = crate::tenant::TenantId(1);
-    let cookie_value =
-        crate::oidc::sign_login_state(&st.signing_key, "st8", "verif", "nnc", Some(real_tenant));
+    let cookie_value = crate::oidc::sign_login_state(
+        st.signing_key.expose_secret(),
+        "st8",
+        "verif",
+        Some("nnc"),
+        Some(real_tenant),
+    );
     let tampered = cookie_value.replacen(".1.", ".2.", 1);
     assert_ne!(
         tampered, cookie_value,
@@ -1335,26 +1346,6 @@ fn cache_control_with_distant_future_expiry_caps_at_default() {
 fn cache_control_with_past_expiry_is_no_store() {
     let now = 1_000;
     assert_eq!(cache_control_for(Some(now - 1), now), "no-store");
-}
-
-#[test]
-fn access_log_line_is_valid_json_with_expected_fields() {
-    let line = access_log_line("GET", "/abc", 302, 0.4139);
-    let v: serde_json::Value =
-        serde_json::from_str(&line).expect("access_log_line should produce valid JSON");
-    assert_eq!(v["method"], "GET");
-    assert_eq!(v["path"], "/abc");
-    assert_eq!(v["status"], 302);
-    assert_eq!(v["latency_ms"], 0.414);
-}
-
-#[test]
-fn access_log_line_escapes_special_characters_in_path() {
-    let path = "/a\"b\\c";
-    let line = access_log_line("GET", path, 200, 1.0);
-    let v: serde_json::Value = serde_json::from_str(&line)
-        .expect("access_log_line should escape correctly and remain valid JSON");
-    assert_eq!(v["path"], path);
 }
 
 #[test]

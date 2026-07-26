@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use quark::store::{postgres::PostgresStore, Record, Store};
 use serial_test::file_serial;
 
@@ -100,6 +105,7 @@ async fn search_matches_url_and_alias() {
 #[file_serial]
 async fn search_escapes_wildcards() {
     let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     seed_links(
@@ -137,6 +143,7 @@ async fn search_escapes_wildcards() {
 #[file_serial]
 async fn search_is_case_insensitive() {
     let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let ids = seed_links(
@@ -174,6 +181,7 @@ async fn search_is_case_insensitive() {
 #[file_serial]
 async fn search_keyset_pagination() {
     let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let ids = seed_links(

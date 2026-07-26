@@ -20,23 +20,41 @@ path = "src/main.rs"
 
 [dependencies]
 async-trait = "0.1"
+thiserror = "2"
+# Erro opaco com contexto, restrito a binario e teste: a lib usa erro tipado, e
+# anyhow apagaria a variante para quem consome o trait Store.
+# >= 1.0.103 por RUSTSEC-2026-0190 (unsound em Error::downcast_mut apos context).
+anyhow = "1.0.104"
+# >= 0.1.40 por RUSTSEC-2023-0078 (unsound em Instrumented::into_inner).
+tracing = "0.1.44"
+# >= 0.3.20 por RUSTSEC-2025-0055 (injecao de escape ANSI vinda de input do usuario).
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
-heed = { version = "0.20", features = ["read-txn-no-tls"] }
+# 0.22 trocou a feature read-txn-no-tls pelo metodo read_txn_without_tls() no
+# builder, que tipa o Env como Env<WithoutTls>.
+heed = "0.22"
 moka = { version = "0.12", features = ["sync", "future"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 redis = { version = "1.4", features = ["tokio-comp"] }
 futures-util = "0.3"
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "tls-rustls"] }
+# 0.9 exige impl SqlSafeStr nas funcoes query*: string montada precisa de
+# AssertSqlSafe explicito (ver o DDL de schema em store/postgres.rs).
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "tls-rustls"] }
 clickhouse = "0.15"
 url = "2"
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
 hmac = "0.13.0"
 sha2 = "0.11.0"
 base64 = "0.22.1"
 chacha20poly1305 = "0.11"
 getrandom = "0.4.3"
+# Material de chave nao pode ser um tipo que se imprime: SecretBox redige no
+# Debug e zera na memoria no drop, e expose_secret marca no codigo cada ponto
+# que realmente toca a chave.
+secrecy = "0.10"
+zeroize = "1.9"
 argon2 = "0.5"
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -70,6 +88,36 @@ harness = false
 [[bench]]
 name = "redirect_bench"
 harness = false
+
+# Politica de lint do projeto. Fica aqui, e nao em #![deny] no lib.rs, porque
+# assim os 30 crates de tests/ e os benches herdam automaticamente.
+#
+# O conjunto anti-panico e o que importa mais: o perfil de release usa
+# panic = "abort", entao um unwrap no caminho de request derruba o processo
+# inteiro, nao devolve 500. O codigo ja segue essa disciplina na mao (zero
+# unwrap de producao em src/api/), e isso trava por ferramenta.
+#
+# Grupo ligado precisa de priority = -1, senao os lints individuais em priority
+# 0 nao tem efeito garantido. Nunca ligar restriction ou nursery inteiros:
+# restriction quebraria src/codec.rs (base62) e src/permute.rs (Feistel), que
+# legitimamente fazem aritmetica e indexacao.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+# Anti-panico. Cada excecao carrega um #[expect(..., reason = ...)], que volta
+# a avisar quando deixar de ser necessaria.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+# Seguranca async: o projeto usa std::sync::Mutex em pontos de producao
+# justamente porque as secoes criticas sao curtas; um guard cruzando await
+# passa despercebido em review.
+await_holding_lock = "warn"
+let_underscore_future = "warn"
+# Tipos gordos no caminho quente
+result_large_err = "warn"
+large_enum_variant = "warn"
 
 [profile.release]
 lto = true

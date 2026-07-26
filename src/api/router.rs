@@ -15,34 +15,6 @@ pub(crate) async fn health() -> impl axum::response::IntoResponse {
     ([(HEADER_QUARK_VERSION, env!("CARGO_PKG_VERSION"))], "ok")
 }
 
-/// Formats an access log line as JSON. Pure function: no I/O, easy to test.
-pub(crate) fn access_log_line(method: &str, path: &str, status: u16, latency_ms: f64) -> String {
-    let latency_ms = (latency_ms * 1000.0).round() / 1000.0;
-    serde_json::json!({
-        "method": method,
-        "path": path,
-        "status": status,
-        "latency_ms": latency_ms,
-    })
-    .to_string()
-}
-
-/// Middleware that logs one JSON line per request to stdout (Coolify captures stdout).
-/// Purely observational: doesn't alter the response.
-pub(crate) async fn log_requests(req: Request, next: Next) -> Response {
-    let start = Instant::now();
-    let method = req.method().to_string();
-    let path = req.uri().path().to_string();
-
-    let response = next.run(req).await;
-
-    let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let status = response.status().as_u16();
-    println!("{}", access_log_line(&method, &path, status, latency_ms));
-
-    response
-}
-
 /// CORS origins from the `QUARK_CORS_ORIGINS` env var (comma-separated list).
 pub fn parse_cors_origins(raw: Option<String>) -> Vec<String> {
     match raw {
@@ -259,9 +231,13 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         app.layer(cors)
     };
 
-    if std::env::var("QUARK_ACCESS_LOG").is_ok() {
-        app.layer(axum::middleware::from_fn(log_requests))
-    } else {
-        app
-    }
+    // Per-request span and response event, from tower-http. Both are emitted at
+    // DEBUG on purpose: at the default `info` filter the redirect hot path pays
+    // only a level check, and turning the access log on is `RUST_LOG=tower_http=debug`
+    // rather than a separate env var.
+    app.layer(
+        tower_http::trace::TraceLayer::new_for_http()
+            .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::DEBUG))
+            .on_response(tower_http::trace::DefaultOnResponse::new().level(tracing::Level::DEBUG)),
+    )
 }

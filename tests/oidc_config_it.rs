@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use base64::{engine::general_purpose::STANDARD as b64, Engine as _};
@@ -9,7 +14,6 @@ use quark::oidc::TenantOidcConfig;
 use quark::store::postgres::PostgresStore;
 use quark::store::{open_backends, Store};
 use quark::tenant::{Tenant, TenantId};
-use quark::webhooks::delivery::WebhookDispatcher;
 use serial_test::file_serial;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
@@ -232,15 +236,6 @@ async fn get_tenant_by_slug_resolves_or_none() {
 
 const KEY: u64 = 0x1234;
 
-fn test_webhook_dispatcher() -> Arc<WebhookDispatcher> {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    Arc::new(WebhookDispatcher::new(
-        tx,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    ))
-}
-
 /// Builds a router for `tenant`, plus a `x-admin-token` API token with
 /// `scopes` scoped to that tenant. `multi_tenant` toggles the cloud gate the
 /// three oidc-config endpoints share. Mirrors `invites_it::admin_app_with_scopes`.
@@ -281,7 +276,7 @@ async fn admin_app_with_scopes(
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .public_host(Some("quark.example.com".to_string()))
         .multi_tenant(multi_tenant)
@@ -642,7 +637,7 @@ async fn oidc_config_endpoints_404_in_oss_without_postgres() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .oidc_configured(true)
         .build();
@@ -662,7 +657,7 @@ async fn oidc_config_endpoints_404_in_oss_without_postgres() {
 /// Postgres and without any global env OIDC configured — the same ungated
 /// OSS shape as `oidc_config_endpoints_404_in_oss_without_postgres`, but for
 /// the login/callback surface rather than the CRUD one. This is the router
-/// path (not the direct-handler-call path the `api.rs` unit tests use), so it
+/// path (not the direct-handler-call path the `src/api/` unit tests use), so it
 /// proves the actual routes wired into `router()` carry the gate, not just
 /// the functions behind them.
 #[tokio::test]
@@ -681,7 +676,7 @@ async fn oss_login_and_callback_404_without_oidc_configured_or_postgres() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .build();
     let app = router(state);
@@ -707,7 +702,7 @@ async fn oss_login_and_callback_404_without_oidc_configured_or_postgres() {
 
 /// A `?org=` login against an OSS deployment (`multi_tenant: false`) is also
 /// `404`, at the router level, mirroring `org_login_requires_multi_tenant_mode`
-/// in the `api.rs` unit tests (which calls the handler directly) but through
+/// in the `src/api/` unit tests (which calls the handler directly) but through
 /// the actual route.
 #[tokio::test]
 #[file_serial]
@@ -725,7 +720,7 @@ async fn oss_org_login_404_at_router_level() {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .build();
     let app = router(state);
@@ -760,7 +755,7 @@ async fn admin_app_with_breakglass_token(store: Arc<PostgresStore>, token: &str)
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .key(KEY)
         .admin_token(Some(token.to_string()))
         .public_host(Some("quark.example.com".to_string()))

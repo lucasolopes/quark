@@ -62,23 +62,21 @@ pub struct PixelConfig {
 /// Error forwarding a batch to a provider. The caller (the analytics
 /// worker, in a later task) fails open on this: a provider error never
 /// affects redirects.
-#[derive(Debug)]
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
 pub enum PixelError {
-    Http(reqwest::Error),
+    #[error("http: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("provider returned status {0}")]
     Status(reqwest::StatusCode),
-    InvalidBase,
+    #[error("invalid pixel provider base host")]
+    InvalidBase(#[source] url::ParseError),
+    /// The base parsed but is a cannot-be-a-base URL (e.g. `mailto:`), so no
+    /// path can be appended to it. `url` reports this as `()`, so there is no
+    /// cause to carry.
+    #[error("pixel provider base cannot have a path")]
+    BaseCannotHavePath,
 }
-
-impl std::fmt::Display for PixelError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PixelError::Http(e) => write!(f, "http: {e}"),
-            PixelError::Status(s) => write!(f, "provider returned status {s}"),
-            PixelError::InvalidBase => write!(f, "invalid pixel provider base host"),
-        }
-    }
-}
-impl std::error::Error for PixelError {}
 
 /// Fixed production provider hosts, injectable only so tests can point at a
 /// local mock server. Production code always constructs this via `Default`
@@ -256,7 +254,7 @@ pub fn meta_payload(events: &[ClickEvent], key: u64, anonymize_ip_flag: bool) ->
 pub fn provider_url(base: &str, config: &PixelConfig) -> Result<String, PixelError> {
     match config.provider {
         Provider::Ga4 => {
-            let mut url = Url::parse(base).map_err(|_| PixelError::InvalidBase)?;
+            let mut url = Url::parse(base).map_err(PixelError::InvalidBase)?;
             url.set_path("/mp/collect");
             url.query_pairs_mut()
                 .append_pair(
@@ -270,9 +268,9 @@ pub fn provider_url(base: &str, config: &PixelConfig) -> Result<String, PixelErr
             Ok(url.to_string())
         }
         Provider::MetaCapi => {
-            let mut url = Url::parse(base).map_err(|_| PixelError::InvalidBase)?;
+            let mut url = Url::parse(base).map_err(PixelError::InvalidBase)?;
             url.path_segments_mut()
-                .map_err(|_| PixelError::InvalidBase)?
+                .map_err(|_| PixelError::BaseCannotHavePath)?
                 .push("v19.0")
                 .push(config.credentials.pixel_id.as_deref().unwrap_or(""))
                 .push("events");
@@ -566,10 +564,10 @@ mod tests {
     #[test]
     fn provider_url_invalid_base_is_an_error_not_a_panic() {
         let err = provider_url("not a url", &ga4_config()).unwrap_err();
-        assert!(matches!(err, PixelError::InvalidBase));
+        assert!(matches!(err, PixelError::InvalidBase(_)));
 
         let err = provider_url("not a url", &meta_config()).unwrap_err();
-        assert!(matches!(err, PixelError::InvalidBase));
+        assert!(matches!(err, PixelError::InvalidBase(_)));
     }
 
     type Captured = Arc<Mutex<Vec<(String, String, Value)>>>;

@@ -1,4 +1,6 @@
-use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
+use crate::analytics::{
+    is_bot, Aggregates, AnalyticsError, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX,
+};
 use crate::auth::ApiToken;
 use crate::domain::{Domain, DomainStatus};
 use crate::invite::Invite;
@@ -12,7 +14,7 @@ use crate::store::{
 use crate::tenant::{Membership, Role, Tenant, TenantId, User};
 use crate::webhooks::{SubscriptionKind, WebhookSubscription};
 use sqlx::postgres::{PgPoolOptions, PgRow};
-use sqlx::{PgPool, Row};
+use sqlx::{AssertSqlSafe, PgPool, Row};
 
 /// AAD field label for the per-tenant OIDC `client_secret`. The full AAD is
 /// `format!("{tenant_id}:{AAD_OIDC_CLIENT_SECRET}")`, binding the v2 ciphertext
@@ -298,6 +300,10 @@ struct OidcConfigBlob {
     post_logout_url: Option<String>,
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "OidcConfigBlob is a plain struct of String/Option<String>, which always serializes"
+)]
 fn oidc_config_blob(cfg: &TenantOidcConfig, sb: &Option<SecretBox>) -> serde_json::Value {
     serde_json::to_value(OidcConfigBlob {
         client_id: cfg.client_id.clone(),
@@ -809,9 +815,9 @@ impl PostgresStore {
             // default to 0 = the seeded default tenant). Idempotent via
             // `ADD COLUMN IF NOT EXISTS`.
             for table in TENANT_OWNED_TABLES {
-                sqlx::query(&format!(
+                sqlx::query(AssertSqlSafe(format!(
                     "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS tenant_id BIGINT NOT NULL DEFAULT 0"
-                ))
+                )))
                 .execute(&mut *conn)
                 .await
                 .map_err(StoreError::backend)?;
@@ -935,20 +941,20 @@ impl PostgresStore {
             // `WHERE tenant_id = $` predicate on every query. P1b flips FORCE on
             // (cloud mode) and drives `app.tenant_id` via `begin_tenant_tx`.
             for table in TENANT_OWNED_TABLES {
-                sqlx::query(&format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"))
+                sqlx::query(AssertSqlSafe(format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")))
                     .execute(&mut *conn)
                     .await
                     .map_err(StoreError::backend)?;
                 let policy = format!("{table}_tenant_isolation");
                 // No `CREATE POLICY IF NOT EXISTS` exists; drop-then-create keeps
                 // the idempotent-boot contract.
-                sqlx::query(&format!("DROP POLICY IF EXISTS {policy} ON {table}"))
+                sqlx::query(AssertSqlSafe(format!("DROP POLICY IF EXISTS {policy} ON {table}")))
                     .execute(&mut *conn)
                     .await
                     .map_err(StoreError::backend)?;
-                sqlx::query(&format!(
+                sqlx::query(AssertSqlSafe(format!(
                     "CREATE POLICY {policy} ON {table} USING (tenant_id = current_setting('app.tenant_id', true)::bigint)"
-                ))
+                )))
                 .execute(&mut *conn)
                 .await
                 .map_err(StoreError::backend)?;
@@ -1031,7 +1037,7 @@ impl PostgresStore {
                     .iter()
                     .filter(|t| !NOT_FORCED.contains(t))
                 {
-                    sqlx::query(&format!("ALTER TABLE {table} FORCE ROW LEVEL SECURITY"))
+                    sqlx::query(AssertSqlSafe(format!("ALTER TABLE {table} FORCE ROW LEVEL SECURITY")))
                         .execute(&mut *conn)
                         .await
                         .map_err(StoreError::backend)?;
@@ -1065,8 +1071,9 @@ impl PostgresStore {
                 backfilled += result.rows_affected() as i64;
             }
             if backfilled > 0 {
-                eprintln!(
-                    "analytics tenant_id backfill: {backfilled} row(s) updated from links.tenant_id"
+                tracing::info!(
+                    rows = backfilled,
+                    "analytics tenant_id backfill completed from links.tenant_id"
                 );
             }
 
@@ -3289,7 +3296,7 @@ fn counter_rows(agg: &Aggregates) -> Vec<(&'static str, String, i64)> {
 
 #[async_trait::async_trait]
 impl AnalyticsSink for PostgresStore {
-    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), StoreError> {
+    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), AnalyticsError> {
         if events.is_empty() {
             return Ok(());
         }
@@ -3364,7 +3371,7 @@ impl AnalyticsSink for PostgresStore {
         Ok(())
     }
 
-    async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError> {
+    async fn stats(&self, id: u64) -> Result<Option<Stats>, AnalyticsError> {
         let counter_rows =
             sqlx::query("SELECT dimension, bucket, count FROM click_counters WHERE id=$1")
                 .bind(id as i64)
@@ -3464,7 +3471,7 @@ impl AnalyticsSink for PostgresStore {
     async fn click_totals(
         &self,
         ids: &[u64],
-    ) -> Result<std::collections::HashMap<u64, u64>, StoreError> {
+    ) -> Result<std::collections::HashMap<u64, u64>, AnalyticsError> {
         if ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
@@ -3499,7 +3506,7 @@ impl AnalyticsSink for PostgresStore {
     /// — `WHERE tenant_id = $1` on both queries is the ONLY isolation this
     /// aggregate has. Dropping it from either query would leak every
     /// tenant's clicks into every other tenant's `/admin/stats`.
-    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError> {
+    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, AnalyticsError> {
         let tenant = tenant as i64;
         let counter_rows = sqlx::query(
             "SELECT dimension, bucket, SUM(count)::BIGINT AS count FROM click_counters \

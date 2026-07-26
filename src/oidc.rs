@@ -1,6 +1,6 @@
 //! OIDC login (stage 1): configuration, discovery, PKCE, code exchange, and
 //! id_token verification. Opt-in via `QUARK_OIDC_ISSUER`; the flow is driven by
-//! the `/admin/login` and `/admin/callback` routes in `api.rs`. The panel admin
+//! the `/admin/login` and `/admin/callback` routes in `api/oidc_login.rs`. The panel admin
 //! token stays a break-glass path regardless.
 
 use crate::auth::Scope;
@@ -14,6 +14,49 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// Request budget for calls to the IdP (discovery, JWKS, code exchange). A login
+/// waits on these, so the budget is short enough to fail visibly rather than hang
+/// the browser.
+const OIDC_HTTP_TIMEOUT_SECS: u64 = 10;
+
+/// Why an OIDC setup or login step failed.
+///
+/// Separate from [`VerifyError`], which classifies id_token verification alone
+/// and carries the retry decision (a bad signature is worth one JWKS refetch, a
+/// rejection is not). This one covers everything around it: discovery, the JWKS
+/// fetch, key selection, and the code exchange.
+///
+/// Typed rather than a `String` because the variants have genuinely different
+/// operational meanings: `Http`/`Status` mean the IdP is unreachable or unhappy
+/// (transient, worth retrying a login), while `NoMatchingKey` and
+/// `MissingIdToken` mean the IdP answered with something unusable
+/// (a configuration problem, retrying will not help).
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum OidcError {
+    #[error("{operation} could not reach the identity provider")]
+    Http {
+        operation: &'static str,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("{operation} returned status {status}")]
+    Status {
+        operation: &'static str,
+        status: reqwest::StatusCode,
+    },
+    #[error("no matching jwk for the token kid")]
+    NoMatchingKey,
+    #[error("the jwk could not be turned into a decoding key")]
+    InvalidJwk(#[source] jsonwebtoken::errors::Error),
+    #[error("the token response had no id_token")]
+    MissingIdToken,
+    #[error("building the http client failed")]
+    Client(#[source] reqwest::Error),
+    #[error(transparent)]
+    Verify(#[from] VerifyError),
+}
 
 /// OIDC settings read once from the environment. `from_env` returns `None` when
 /// `QUARK_OIDC_ISSUER` is unset, which keeps OIDC fully off by default.
@@ -51,11 +94,41 @@ impl OidcConfig {
         let issuer = std::env::var("QUARK_OIDC_ISSUER")
             .ok()
             .filter(|s| !s.is_empty())?;
+        // The issuer is the trigger, but OIDC cannot work without the client
+        // credentials and the redirect URL. Letting them default to an empty
+        // string produced a config that looks enabled and fails at the first
+        // login, far from the cause. Warn loudly and stay off instead: this is
+        // the project's fail-open rule for an optional feature, and it keeps the
+        // admin token working as the break-glass path. A hard boot failure would
+        // take the whole service down over a login-only misconfiguration.
+        // Each required value is read ONCE and carried through, so the config
+        // cannot be built from a var that changed between the check and the read.
+        let mut missing = Vec::new();
+        let mut required = Vec::new();
+        for var in [
+            "QUARK_OIDC_CLIENT_ID",
+            "QUARK_OIDC_CLIENT_SECRET",
+            "QUARK_OIDC_REDIRECT_URL",
+        ] {
+            match std::env::var(var).ok().filter(|s| !s.is_empty()) {
+                Some(v) => required.push(v),
+                None => missing.push(var),
+            }
+        }
+        if !missing.is_empty() {
+            tracing::warn!(
+                missing = missing.join(", "),
+                "QUARK_OIDC_ISSUER is set but required OIDC settings are missing; login stays \
+                 disabled and the admin token remains the only way in"
+            );
+            return None;
+        }
+        let [client_id, client_secret, redirect_url] = <[String; 3]>::try_from(required).ok()?;
         Some(OidcConfig {
             issuer: issuer.trim_end_matches('/').to_string(),
-            client_id: std::env::var("QUARK_OIDC_CLIENT_ID").unwrap_or_default(),
-            client_secret: std::env::var("QUARK_OIDC_CLIENT_SECRET").unwrap_or_default(),
-            redirect_url: std::env::var("QUARK_OIDC_REDIRECT_URL").unwrap_or_default(),
+            client_id,
+            client_secret,
+            redirect_url,
             scopes: std::env::var("QUARK_OIDC_SCOPES")
                 .unwrap_or_else(|_| "openid profile email".to_string()),
             admin_claim: std::env::var("QUARK_OIDC_ADMIN_CLAIM")
@@ -133,16 +206,25 @@ pub struct Discovery {
 }
 
 /// Fetches the IdP discovery document.
-pub async fn discover(client: &reqwest::Client, issuer: &str) -> Result<Discovery, String> {
+pub async fn discover(client: &reqwest::Client, issuer: &str) -> Result<Discovery, OidcError> {
     let url = format!(
         "{}/.well-known/openid-configuration",
         issuer.trim_end_matches('/')
     );
-    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let resp = client.get(&url).send().await.map_err(|e| OidcError::Http {
+        operation: "discovery",
+        source: e,
+    })?;
     if !resp.status().is_success() {
-        return Err(format!("discovery HTTP {}", resp.status()));
+        return Err(OidcError::Status {
+            operation: "discovery",
+            status: resp.status(),
+        });
     }
-    resp.json::<Discovery>().await.map_err(|e| e.to_string())
+    resp.json::<Discovery>().await.map_err(|e| OidcError::Http {
+        operation: "discovery",
+        source: e,
+    })
 }
 
 /// A single RSA JWK (the only key type quark verifies).
@@ -159,16 +241,25 @@ pub struct Jwks {
 }
 
 /// Fetches the IdP JWKS (RSA signing keys).
-pub async fn fetch_jwks(client: &reqwest::Client, jwks_uri: &str) -> Result<Jwks, String> {
+pub async fn fetch_jwks(client: &reqwest::Client, jwks_uri: &str) -> Result<Jwks, OidcError> {
     let resp = client
         .get(jwks_uri)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| OidcError::Http {
+            operation: "jwks fetch",
+            source: e,
+        })?;
     if !resp.status().is_success() {
-        return Err(format!("jwks HTTP {}", resp.status()));
+        return Err(OidcError::Status {
+            operation: "jwks fetch",
+            status: resp.status(),
+        });
     }
-    resp.json::<Jwks>().await.map_err(|e| e.to_string())
+    resp.json::<Jwks>().await.map_err(|e| OidcError::Http {
+        operation: "jwks fetch",
+        source: e,
+    })
 }
 
 /// Reads the `kid` (key id) from a JWT header, so the caller can pick the right
@@ -191,19 +282,23 @@ pub fn token_issuer(id_token: &str) -> Option<String> {
 
 /// Builds a verification key for the JWT's `kid` from a JWKS. When the token
 /// carries no `kid` and there is exactly one key, that key is used.
-pub fn select_key(jwks: &Jwks, kid: Option<&str>) -> Result<DecodingKey, String> {
+pub fn select_key(jwks: &Jwks, kid: Option<&str>) -> Result<DecodingKey, OidcError> {
     let jwk = match kid {
         Some(kid) => jwks.keys.iter().find(|k| k.kid.as_deref() == Some(kid)),
         None if jwks.keys.len() == 1 => jwks.keys.first(),
         None => None,
     }
-    .ok_or_else(|| "no matching JWK for token kid".to_string())?;
-    DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(|e| e.to_string())
+    .ok_or(OidcError::NoMatchingKey)?;
+    DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(OidcError::InvalidJwk)
 }
 
 /// A random PKCE verifier and its S256 challenge (base64url, no pad).
 pub fn pkce_pair() -> (String, String) {
     let mut raw = [0u8; 32];
+    #[expect(
+        clippy::expect_used,
+        reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+    )]
     getrandom::fill(&mut raw).expect("system RNG must be available");
     let verifier = b64url.encode(raw);
     let challenge = b64url.encode(Sha256::digest(verifier.as_bytes()));
@@ -213,6 +308,10 @@ pub fn pkce_pair() -> (String, String) {
 /// A random opaque value (state / nonce), base64url.
 pub fn random_token() -> String {
     let mut raw = [0u8; 24];
+    #[expect(
+        clippy::expect_used,
+        reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+    )]
     getrandom::fill(&mut raw).expect("system RNG must be available");
     b64url.encode(raw)
 }
@@ -279,7 +378,7 @@ pub async fn exchange_code(
     disco: &Discovery,
     code: &str,
     verifier: &str,
-) -> Result<String, String> {
+) -> Result<String, OidcError> {
     #[derive(Deserialize)]
     struct TokenResp {
         id_token: Option<String>,
@@ -297,13 +396,24 @@ pub async fn exchange_code(
         .form(&params)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| OidcError::Http {
+            operation: "token exchange",
+            source: e,
+        })?;
     if !resp.status().is_success() {
-        return Err(format!("token endpoint HTTP {}", resp.status()));
+        return Err(OidcError::Status {
+            operation: "token exchange",
+            status: resp.status(),
+        });
     }
-    let body = resp.json::<TokenResp>().await.map_err(|e| e.to_string())?;
-    body.id_token
-        .ok_or_else(|| "token response missing id_token".to_string())
+    let body = resp
+        .json::<TokenResp>()
+        .await
+        .map_err(|e| OidcError::Http {
+            operation: "token exchange",
+            source: e,
+        })?;
+    body.id_token.ok_or(OidcError::MissingIdToken)
 }
 
 /// The claims quark reads out of a verified id_token.
@@ -321,10 +431,14 @@ pub struct Claims {
 /// JWKS refetch can fix (a signature that didn't verify, i.e. likely key
 /// rotation) from definitive rejections (expiry, wrong issuer/audience,
 /// azp/nonce/claims) where refetching would only hammer the IdP's jwks_uri.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
 pub enum VerifyError {
     /// Signature did not verify with this key; retry once with a fresh JWKS.
+    #[error("{0}")]
     BadSignature(String),
     /// Token is invalid for a non-key reason; do not refetch.
+    #[error("{0}")]
     Rejected(String),
 }
 
@@ -591,7 +705,7 @@ pub struct OidcRuntime {
 
 impl OidcRuntime {
     /// Resolves discovery and the initial JWKS for `config`.
-    pub async fn init(config: OidcConfig) -> Result<OidcRuntime, String> {
+    pub async fn init(config: OidcConfig) -> Result<OidcRuntime, OidcError> {
         Self::build(config).await
     }
 
@@ -602,7 +716,7 @@ impl OidcRuntime {
     /// same `/admin/callback` route, which resolves the tenant from the
     /// signed login-state cookie rather than from a per-tenant redirect
     /// URI — so it still comes from `QUARK_OIDC_REDIRECT_URL`.
-    pub async fn from_config(cfg: &TenantOidcConfig) -> Result<OidcRuntime, String> {
+    pub async fn from_config(cfg: &TenantOidcConfig) -> Result<OidcRuntime, OidcError> {
         let config = OidcConfig {
             issuer: cfg.issuer.trim_end_matches('/').to_string(),
             client_id: cfg.client_id.clone(),
@@ -628,11 +742,14 @@ impl OidcRuntime {
         Self::build(config).await
     }
 
-    async fn build(config: OidcConfig) -> Result<OidcRuntime, String> {
+    async fn build(config: OidcConfig) -> Result<OidcRuntime, OidcError> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(OIDC_HTTP_TIMEOUT_SECS))
+            .connect_timeout(std::time::Duration::from_secs(
+                crate::HTTP_CONNECT_TIMEOUT_SECS,
+            ))
             .build()
-            .map_err(|e| e.to_string())?;
+            .map_err(OidcError::Client)?;
         let discovery = discover(&client, &config.issuer).await?;
         let jwks = fetch_jwks(&client, &discovery.jwks_uri).await?;
         Ok(OidcRuntime {
@@ -679,7 +796,7 @@ impl OidcRuntime {
     }
 
     /// Exchanges a callback code for the id_token.
-    pub async fn exchange_code(&self, code: &str, verifier: &str) -> Result<String, String> {
+    pub async fn exchange_code(&self, code: &str, verifier: &str) -> Result<String, OidcError> {
         exchange_code(&self.client, &self.config, &self.discovery, code, verifier).await
     }
 
@@ -688,7 +805,7 @@ impl OidcRuntime {
     /// not verify (both signal IdP key rotation). Definitive rejections
     /// (expiry, issuer/audience, azp/nonce/claims) return immediately without a
     /// refetch, so a burst of bad logins can't hammer the provider's jwks_uri.
-    pub async fn verify(&self, id_token: &str, nonce: &str) -> Result<Claims, String> {
+    pub async fn verify(&self, id_token: &str, nonce: &str) -> Result<Claims, OidcError> {
         let kid = token_kid(id_token);
         {
             let jwks = self.jwks.read().await;
@@ -702,7 +819,7 @@ impl OidcRuntime {
                 ) {
                     Ok(claims) => return Ok(claims),
                     // Definitive: a fresh key set cannot change the outcome.
-                    Err(e) if !e.retryable() => return Err(e.message().to_string()),
+                    Err(e) if !e.retryable() => return Err(e.into()),
                     // Signature mismatch: fall through to refetch and retry.
                     Err(_) => {}
                 }
@@ -716,8 +833,7 @@ impl OidcRuntime {
             &self.config.issuer,
             &self.config.client_id,
             nonce,
-        )
-        .map_err(|e| e.message().to_string())?;
+        )?;
         *self.jwks.write().await = fresh;
         Ok(claims)
     }
@@ -753,7 +869,7 @@ impl TenantOidcCache {
         &self,
         tenant: TenantId,
         cfg: &TenantOidcConfig,
-    ) -> Result<Arc<OidcRuntime>, String> {
+    ) -> Result<Arc<OidcRuntime>, OidcError> {
         if let Some(rt) = self.cache.get(&tenant).await {
             return Ok(rt);
         }
@@ -786,15 +902,26 @@ impl Default for TenantOidcCache {
 /// substituted in transit. Value: `"state.verifier.nonce.tenant.mac"` (tenant
 /// empty when absent, still covered by the MAC), back-compat with the old
 /// 3-field callers via `None`.
+///
+/// `nonce` is the OIDC anti-replay nonce, so it is `Some` only on the OIDC
+/// login flow. The OAuth flows that reuse this cookie (Sheets, Slack) have no
+/// nonce of their own and pass `None`, which serializes to the same empty field
+/// the payload always carried - a cookie signed before this signature existed
+/// still verifies.
 pub fn sign_login_state(
     key: &[u8],
     state: &str,
     verifier: &str,
-    nonce: &str,
+    nonce: Option<&str>,
     tenant: Option<TenantId>,
 ) -> String {
+    let nonce = nonce.unwrap_or("");
     let tenant_field = tenant.map(|t| t.0.to_string()).unwrap_or_default();
     let payload = format!("{state}.{verifier}.{nonce}.{tenant_field}");
+    #[expect(
+        clippy::expect_used,
+        reason = "HMAC-SHA256 accepts a key of any length, so this never errors"
+    )]
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     format!("{payload}.{}", b64url.encode(mac.finalize().into_bytes()))
@@ -817,6 +944,10 @@ pub fn verify_login_state(
         (parts[0], parts[1], parts[2], parts[3], parts[4]);
     let provided = b64url.decode(mac_b64).ok()?;
     let payload = format!("{state}.{verifier}.{nonce}.{tenant_field}");
+    #[expect(
+        clippy::expect_used,
+        reason = "HMAC-SHA256 accepts a key of any length, so this never errors"
+    )]
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     mac.verify_slice(&provided).ok()?;
@@ -951,9 +1082,21 @@ mod tests {
     }
 
     #[test]
+    fn absent_nonce_signs_the_same_payload_as_the_old_empty_string() {
+        // Sheets and Slack used to pass "" for the nonce; they now pass None.
+        // Both must produce byte-identical cookies, otherwise every in-flight
+        // OAuth cookie would fail verification the moment this deploys.
+        let key = b"login-state-signing-key-0123456789";
+        assert_eq!(
+            sign_login_state(key, "st8", "verif", None, None),
+            sign_login_state(key, "st8", "verif", Some(""), None),
+        );
+    }
+
+    #[test]
     fn login_state_cookie_round_trip_and_tamper() {
         let key = b"login-state-signing-key-0123456789";
-        let cookie = sign_login_state(key, "st8", "verif", "nnc", None);
+        let cookie = sign_login_state(key, "st8", "verif", Some("nnc"), None);
         assert_eq!(
             verify_login_state(key, &cookie),
             Some(("st8".into(), "verif".into(), "nnc".into(), None))
@@ -971,14 +1114,14 @@ mod tests {
     fn login_state_cookie_carries_tenant_and_tamper_is_rejected() {
         let key = b"login-state-signing-key-0123456789";
         let tenant = TenantId(42);
-        let cookie = sign_login_state(key, "st8", "verif", "nnc", Some(tenant));
+        let cookie = sign_login_state(key, "st8", "verif", Some("nnc"), Some(tenant));
         assert_eq!(
             verify_login_state(key, &cookie),
             Some(("st8".into(), "verif".into(), "nnc".into(), Some(tenant)))
         );
 
         // Absent tenant (global login) round-trips as None.
-        let global_cookie = sign_login_state(key, "st8", "verif", "nnc", None);
+        let global_cookie = sign_login_state(key, "st8", "verif", Some("nnc"), None);
         assert_eq!(
             verify_login_state(key, &global_cookie).unwrap().3,
             None,

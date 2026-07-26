@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use quark::cache::valkey::ValkeyTier;
 use quark::cache::CacheTier;
 use quark::store::Record;

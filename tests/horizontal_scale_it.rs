@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 //! Horizontal scale: proves that replicas over the same Postgres generate unique
 //! IDs and share data. Gated by QUARK_TEST_DATABASE_URL; without the env var,
 //! the tests skip (but always compile).
@@ -35,21 +40,9 @@ async fn pg_replica(url: &str) -> axum::Router {
         .cache(cache)
         .host_router(host_router)
         .analytics_tx(analytics_tx)
-        .webhooks(test_webhook_dispatcher())
+        .webhooks(common::test_webhook_dispatcher())
         .build();
     router(state)
-}
-
-/// A `WebhookDispatcher` for tests that don't exercise webhooks: the
-/// receiver is dropped immediately, so `emit` silently no-ops (logs and
-/// drops) rather than needing a live worker.
-fn test_webhook_dispatcher() -> Arc<quark::webhooks::delivery::WebhookDispatcher> {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    Arc::new(quark::webhooks::delivery::WebhookDispatcher::new(
-        tx,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    ))
 }
 
 #[tokio::test]

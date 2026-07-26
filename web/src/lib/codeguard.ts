@@ -1,6 +1,6 @@
 /**
  * Mirrors `codec::from_base62` + the collision check in the backend's
- * `src/api.rs` (Rust): an alias is rejected when, decoded as base62, it
+ * `src/api/links.rs` (Rust): an alias is rejected when, decoded as base62, it
  * would fall in the same space as the system-generated numeric codes. Keeps
  * the frontend aligned with the 400 the API would return anyway — here we
  * just avoid the round-trip.
@@ -29,7 +29,7 @@ export function isNumericCode(s: string): boolean {
 /**
  * `true` when `s`, ignoring leading/trailing whitespace, starts with
  * `http://` or `https://` — the same check the backend performs
- * (`starts_with`, `src/api.rs`): a case-sensitive prefix comparison, no
+ * (`starts_with`, `src/api/links.rs`): a case-sensitive prefix comparison, no
  * parsing via `URL`. A scheme like `HTTP://` would pass JS's `new URL` but
  * would be rejected by the backend; matching this here avoids that mismatch.
  */

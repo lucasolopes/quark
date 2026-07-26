@@ -40,8 +40,12 @@ impl Invalidator {
         let publish = cmd.query_async::<()>(&mut c);
         match tokio::time::timeout(PUBLISH_TIMEOUT, publish).await {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => eprintln!("invalidate: publish '{msg}' failed (ignored): {e}"),
-            Err(_) => eprintln!("invalidate: publish '{msg}' timed out (ignored)"),
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, message = %msg, "invalidation publish failed, ignored")
+            }
+            Err(_) => {
+                tracing::warn!(message = %msg, "invalidation publish timed out, ignored")
+            }
         }
     }
 }
@@ -81,8 +85,10 @@ pub fn spawn_invalidation_subscriber(url: String, state: Arc<AppState>) -> JoinH
     tokio::spawn(async move {
         loop {
             match run_once(&url, &state).await {
-                Ok(()) => eprintln!("invalidate: subscriber stream ended; reconnecting"),
-                Err(e) => eprintln!("invalidate: subscriber error ({e}); reconnecting"),
+                Ok(()) => tracing::warn!("invalidation subscriber stream ended, reconnecting"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "invalidation subscriber failed, reconnecting")
+                }
             }
             tokio::time::sleep(RECONNECT_BACKOFF).await;
         }
@@ -96,20 +102,23 @@ async fn run_once(url: &str, state: &Arc<AppState>) -> Result<(), redis::RedisEr
     let client = redis::Client::open(url)?;
     let mut pubsub = client.get_async_pubsub().await?;
     pubsub.subscribe(INVALIDATION_CHANNEL).await?;
-    eprintln!("invalidate: subscribed to {INVALIDATION_CHANNEL}");
+    tracing::info!(
+        channel = INVALIDATION_CHANNEL,
+        "invalidation subscriber connected"
+    );
     let mut stream = pubsub.on_message();
     while let Some(msg) = stream.next().await {
         let payload: String = match msg.get_payload() {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("invalidate: unreadable payload (ignored): {e}");
+                tracing::warn!(error = %e, "invalidation payload unreadable, ignored");
                 continue;
             }
         };
         match parse_message(&payload) {
             Some(Invalidation::Link(id)) => state.cache.invalidate_local(id).await,
             Some(Invalidation::Host(name)) => state.host_router.invalidate_local(&name).await,
-            None => eprintln!("invalidate: unknown message '{payload}' (ignored)"),
+            None => tracing::warn!(payload = %payload, "unknown invalidation message, ignored"),
         }
     }
     Ok(())

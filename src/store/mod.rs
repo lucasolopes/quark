@@ -259,48 +259,38 @@ pub struct OutboxDelivery {
     pub tenant_id: TenantId,
 }
 
-#[derive(Debug)]
+/// `#[from]` is used only for the two local, unambiguous causes (heed and
+/// serde_json), which also gives them `source()`. Driver errors from sqlx,
+/// redis and clickhouse deliberately go through `StoreError::backend` into
+/// `Backend(String)` instead: flattening keeps those crates out of
+/// `quark::store`'s semver surface and keeps the `Err` small on the redirect
+/// hot path (the same concern documented at `src/api/guard.rs:16-18`).
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
 pub enum StoreError {
-    Db(heed::Error),
-    Serde(serde_json::Error),
+    #[error("db: {0}")]
+    Db(#[from] heed::Error),
+    #[error("serde: {0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("backend: {0}")]
     Backend(String),
+    #[error("id space exhausted")]
     IdSpaceExhausted,
     /// Operation not supported by this backend (e.g. server-side search on LMDB).
+    #[error("operation not supported by this backend")]
     Unsupported,
     /// A unique-constraint violation (e.g. duplicate tenant `slug`). Kept
     /// distinct from `Backend` so callers can map it to `409 Conflict`
     /// instead of `503`.
+    #[error("unique constraint violated")]
     UniqueViolation,
 }
-impl std::fmt::Display for StoreError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StoreError::Db(e) => write!(f, "db: {e}"),
-            StoreError::Serde(e) => write!(f, "serde: {e}"),
-            StoreError::Backend(s) => write!(f, "backend: {s}"),
-            StoreError::IdSpaceExhausted => write!(f, "id space exhausted"),
-            StoreError::Unsupported => write!(f, "operation not supported by this backend"),
-            StoreError::UniqueViolation => write!(f, "unique constraint violated"),
-        }
-    }
-}
-impl std::error::Error for StoreError {}
 impl StoreError {
     /// Builds a `Backend` from any displayable error (sqlx,
     /// clickhouse, etc). Shortens the repeated `.map_err(|e| Backend(e.to_string()))`
     /// in the network backends: `.map_err(StoreError::backend)`.
     pub fn backend<E: std::fmt::Display>(e: E) -> StoreError {
         StoreError::Backend(e.to_string())
-    }
-}
-impl From<heed::Error> for StoreError {
-    fn from(e: heed::Error) -> Self {
-        StoreError::Db(e)
-    }
-}
-impl From<serde_json::Error> for StoreError {
-    fn from(e: serde_json::Error) -> Self {
-        StoreError::Serde(e)
     }
 }
 
@@ -871,6 +861,8 @@ pub trait Store: Send + Sync + 'static {
 
 /// A tenant-scoped view over a `Store`. Its methods mirror the tenant-owned
 /// `Store` methods but capture the tenant, so a call site cannot forget it.
+/// `tests/tenant_isolation_it.rs` drives the isolation suite through it: two
+/// handles on the same store must never see each other's rows.
 pub struct ScopedStore {
     inner: Arc<dyn Store>,
     tenant: TenantId,
@@ -1138,7 +1130,7 @@ pub async fn open_backends(data_path: &Path, multi_tenant: bool) -> Result<Backe
                     .filter(|s| !s.is_empty());
                 let pg = match replica {
                     Some(replica_url) => {
-                        eprintln!("store: Postgres primary + read replica");
+                        tracing::info!(backend = "postgres", replica = true, "store selected");
                         Arc::new(
                             postgres::PostgresStore::open_with_replica(
                                 &url,
@@ -1149,7 +1141,7 @@ pub async fn open_backends(data_path: &Path, multi_tenant: bool) -> Result<Backe
                         )
                     }
                     None => {
-                        eprintln!("store: Postgres (single URL, no read replica)");
+                        tracing::info!(backend = "postgres", replica = false, "store selected");
                         Arc::new(postgres::PostgresStore::open(&url, multi_tenant).await?)
                     }
                 };

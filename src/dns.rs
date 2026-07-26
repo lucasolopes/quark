@@ -3,7 +3,6 @@
 //! tenant published the expected `_quark-verify.<host>` TXT record. Never
 //! call this from the redirect hot path — a DNS round trip has no place
 //! there.
-use async_trait::async_trait;
 use hickory_resolver::config::{ResolverConfig, CLOUDFLARE};
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::proto::rr::RData;
@@ -12,22 +11,14 @@ use hickory_resolver::Resolver;
 use std::time::Duration;
 
 /// A TXT lookup failed or ran past its time budget.
-#[derive(Debug)]
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
 pub enum DnsError {
+    #[error("dns lookup timed out")]
     Timeout,
+    #[error("dns lookup failed: {0}")]
     Backend(String),
 }
-
-impl std::fmt::Display for DnsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DnsError::Timeout => write!(f, "dns lookup timed out"),
-            DnsError::Backend(e) => write!(f, "dns lookup failed: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for DnsError {}
 
 /// Time budget for a single TXT lookup. Long enough for a real resolver
 /// round trip, short enough that a slow or unresponsive name server can't
@@ -36,8 +27,8 @@ const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Seam over TXT record lookup, so tests can inject known records instead of
 /// hitting a real name server.
-#[async_trait]
-pub trait Dns: Send + Sync {
+#[async_trait::async_trait]
+pub trait Dns: Send + Sync + 'static {
     async fn lookup_txt(&self, name: &str) -> Result<Vec<String>, DnsError>;
 }
 
@@ -58,12 +49,14 @@ impl HickoryDns {
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl Dns for HickoryDns {
     async fn lookup_txt(&self, name: &str) -> Result<Vec<String>, DnsError> {
         let lookup =
             tokio::time::timeout(LOOKUP_TIMEOUT, self.resolver.lookup(name, RecordType::TXT))
                 .await
+                // `Elapsed` carries no information beyond "it timed out", which
+                // the variant already says.
                 .map_err(|_| DnsError::Timeout)?
                 .map_err(|e| DnsError::Backend(e.to_string()))?;
         let mut out = Vec::new();
@@ -86,7 +79,7 @@ impl Dns for HickoryDns {
 /// never calls it).
 pub struct NullDns;
 
-#[async_trait]
+#[async_trait::async_trait]
 impl Dns for NullDns {
     async fn lookup_txt(&self, _name: &str) -> Result<Vec<String>, DnsError> {
         Ok(Vec::new())

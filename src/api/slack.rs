@@ -20,8 +20,13 @@ pub(crate) async fn slack_connect(State(st): State<Arc<AppState>>, headers: Head
         return sheets_off_status(&st).into_response();
     };
     let state = crate::oidc::random_token();
-    let signed =
-        crate::oidc::sign_login_state(&st.signing_key, &state, &p.tenant.0.to_string(), "", None);
+    let signed = crate::oidc::sign_login_state(
+        st.signing_key.expose_secret(),
+        &state,
+        &p.tenant.0.to_string(),
+        None,
+        None,
+    );
     let url = crate::slack::connect_url(cfg, &state);
     let secure = if request_is_https(&headers) {
         "; Secure"
@@ -86,7 +91,7 @@ pub(crate) async fn slack_callback(
         return (StatusCode::UNAUTHORIZED, "install was denied at Slack").into_response();
     }
     let verified = cookie_value(&headers, SLACK_STATE_COOKIE)
-        .and_then(|c| crate::oidc::verify_login_state(&st.signing_key, c));
+        .and_then(|c| crate::oidc::verify_login_state(st.signing_key.expose_secret(), c));
     let cookie_state = verified.as_ref().map(|(state, _, _, _)| state.as_str());
     let tenant = verified
         .as_ref()
@@ -105,7 +110,10 @@ pub(crate) async fn slack_callback(
     };
     let access = match crate::slack::exchange_code(&reqwest_client(), cfg, &code).await {
         Ok(a) => a,
-        Err(_) => return (StatusCode::BAD_GATEWAY, "slack oauth exchange failed").into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "slack oauth exchange failed");
+            return (StatusCode::BAD_GATEWAY, "slack oauth exchange failed").into_response();
+        }
     };
     if !access.ok {
         return (StatusCode::BAD_GATEWAY, "slack rejected the install").into_response();

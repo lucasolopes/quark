@@ -1,4 +1,6 @@
-use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
+use crate::analytics::{
+    is_bot, Aggregates, AnalyticsError, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX,
+};
 use crate::auth::ApiToken;
 use crate::domain::{Domain, DomainStatus};
 use crate::oidc::TenantOidcConfig;
@@ -9,7 +11,7 @@ use crate::tenant::{Membership, Tenant, TenantId, User, DEFAULT_TENANT};
 use crate::webhooks::WebhookSubscription;
 use heed::byteorder::BigEndian;
 use heed::types::{Bytes, Str, U64};
-use heed::{Database, Env, EnvOpenOptions};
+use heed::{Database, Env, EnvOpenOptions, WithoutTls};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -123,7 +125,7 @@ fn compose_id(node_id: Option<u8>, counter: u64) -> Result<u64, StoreError> {
 }
 
 pub struct LmdbStore {
-    env: Env,
+    env: Env<WithoutTls>,
     // Tenant-owned sub-dbs: keys are `tkey(tenant, original_key)` (Bytes), so
     // each tenant occupies a disjoint contiguous range.
     links: Database<Bytes, Bytes>,
@@ -160,8 +162,22 @@ impl LmdbStore {
     /// Opens with an explicit node-id (used by tests; avoids a global env race).
     pub fn open_with_node_id(path: &Path, node_id: Option<u8>) -> Result<LmdbStore, StoreError> {
         std::fs::create_dir_all(path).map_err(heed::Error::Io)?;
+        // A unica excecao ao unsafe_code = "deny" do Cargo.toml. Abrir um env
+        // LMDB e inerentemente unsafe na API do heed: o mmap assume que nenhum
+        // outro processo escreve no arquivo por fora, o que o proprio lock do
+        // LMDB garante. Manter a excecao pontual e o que faz qualquer unsafe
+        // NOVO parar o build.
+        #[expect(
+            unsafe_code,
+            reason = "heed exige unsafe para abrir o env: o mmap depende do lock do LMDB"
+        )]
         let env = unsafe {
             EnvOpenOptions::new()
+                // Read transactions must be Send (they cross await points in the
+                // async Store impl), which is what no-TLS buys. Was the
+                // read-txn-no-tls Cargo feature until heed 0.22 turned it into a
+                // builder method that types the Env.
+                .read_txn_without_tls()
                 .map_size(MAP_SIZE_BYTES)
                 .max_dbs(MAX_DBS)
                 .open(path)?
@@ -226,6 +242,10 @@ impl LmdbStore {
         for name in TENANT_OWNED_DBS {
             // Re-open each sub-db with a raw Bytes/Bytes codec so we can re-key
             // regardless of the value type it normally stores.
+            #[expect(
+                clippy::expect_used,
+                reason = "every TENANT_OWNED_DBS sub-db is created in open()"
+            )]
             let db: Database<Bytes, Bytes> = self
                 .env
                 .open_database(&wtxn, Some(name))?
@@ -1401,9 +1421,12 @@ impl Store for LmdbStore {
     }
 }
 
-#[async_trait::async_trait]
-impl AnalyticsSink for LmdbStore {
-    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), StoreError> {
+/// The analytics work, kept in `StoreError` terms because this backend *is* a
+/// store: heed and serde_json errors convert into it with a plain `?`. The
+/// trait impl below adapts to `AnalyticsError` at the boundary, which is where
+/// the two vocabularies actually meet.
+impl LmdbStore {
+    async fn record_batch_inner(&self, events: &[ClickEvent]) -> Result<(), StoreError> {
         if events.is_empty() {
             return Ok(());
         }
@@ -1444,7 +1467,7 @@ impl AnalyticsSink for LmdbStore {
         Ok(())
     }
 
-    async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError> {
+    async fn stats_inner(&self, id: u64) -> Result<Option<Stats>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let k = tkey_id(DEFAULT_TENANT, id);
         let agg = match self.stats.get(&rtxn, &k)? {
@@ -1472,7 +1495,7 @@ impl AnalyticsSink for LmdbStore {
     /// link's `Aggregates` under that prefix; any other tenant id gets
     /// `Aggregates::default()`, matching OSS semantics (there is no other
     /// tenant's data here to return, so nothing leaks).
-    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError> {
+    async fn stats_for_tenant_inner(&self, tenant: u64) -> Result<Aggregates, StoreError> {
         if tenant != DEFAULT_TENANT.0 {
             return Ok(Aggregates::default());
         }
@@ -1484,6 +1507,21 @@ impl AnalyticsSink for LmdbStore {
             total.merge(&agg);
         }
         Ok(total)
+    }
+}
+
+#[async_trait::async_trait]
+impl AnalyticsSink for LmdbStore {
+    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), AnalyticsError> {
+        Ok(self.record_batch_inner(events).await?)
+    }
+
+    async fn stats(&self, id: u64) -> Result<Option<Stats>, AnalyticsError> {
+        Ok(self.stats_inner(id).await?)
+    }
+
+    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, AnalyticsError> {
+        Ok(self.stats_for_tenant_inner(tenant).await?)
     }
 }
 

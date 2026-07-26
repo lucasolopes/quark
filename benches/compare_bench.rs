@@ -1,3 +1,8 @@
+// Benchmark setup panics on failure by design: a broken fixture is the signal,
+// not something to recover from. clippy.toml covers items under
+// #[test]/#[cfg(test)], which a bench crate is not.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! Head-to-head: quark's ARX-Feistel short-code generation vs three real
 //! competitor approaches, all pure-Rust crates, benched on the same machine
 //! with the same criterion harness.

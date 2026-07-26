@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use quark::store::{postgres::PostgresStore, Store};
 use quark::webhooks::{EventType, SubscriptionKind, WebhookSubscription};
 use serial_test::file_serial;
@@ -122,6 +127,7 @@ async fn record_webhook_health_updates_only_health_fields_pg() {
 #[file_serial]
 async fn next_webhook_id_increments_pg() {
     let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let a = store

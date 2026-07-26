@@ -1,4 +1,7 @@
 /target
+# clippy roda com CARGO_TARGET_DIR proprio: misturar artefatos de check (rmeta)
+# com os de build (rlib) no mesmo target/ corrompe a compilacao dos testes.
+/target-clippy
 *.mdb
 /data
 
@@ -20,3 +23,9 @@ web/.env.local
 
 # Artefatos de processo SDD (briefs, reports, diffs de review) — scratch local, fora do repo.
 .superpowers/
+
+# Claude Code: worktrees e estado local ficam fora do repo.
+# .claude/skills/ é versionada de propósito (convenções do projeto).
+.claude/worktrees/
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

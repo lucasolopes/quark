@@ -10,11 +10,11 @@ prior docs. This is a maintenance log, so it has no `.PT_BR.md` twin.
 ## Created
 
 - `docs/API.md` and `docs/API.PT_BR.md`: full HTTP reference for every route in
-  `src/api.rs` (`router_with_cors`): method, required scope, request/response
+  `src/api/router.rs` (`router_with_cors`): method, required scope, request/response
   shape, and status codes, including the shared auth failure table.
 - `docs/CONFIGURATION.md` and `docs/CONFIGURATION.PT_BR.md`: every `QUARK_*`
   environment variable from `src/main.rs`, `src/cluster.rs`, `src/store/mod.rs`,
-  and `src/api.rs`, with defaults and purpose, plus the baked-in constants.
+  and `src/api/`, with defaults and purpose, plus the baked-in constants.
 - `docs/DEVELOPMENT.md` and `docs/DEVELOPMENT.PT_BR.md`: build/run, the Docker
   Postgres/Valkey/ClickHouse stack, the `QUARK_TEST_*` gated integration tests,
   and why they run single-threaded.

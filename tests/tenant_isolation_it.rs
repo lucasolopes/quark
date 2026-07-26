@@ -1,8 +1,14 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 //! Multi-tenancy P1a isolation tests. The LMDB arm is always exercised; the
 //! Postgres arm is gated on `QUARK_TEST_DATABASE_URL` (skipped when unset).
 
 use quark::store::{open_store, Record, Store};
 use quark::tenant::TenantId;
+use serial_test::file_serial;
 use std::sync::Arc;
 
 fn rec(url: &str) -> Record {
@@ -26,6 +32,7 @@ fn rec(url: &str) -> Record {
 // --- LMDB arm (no gating) ---
 
 #[tokio::test]
+#[file_serial]
 async fn lmdb_scans_are_bounded_to_tenant() {
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(dir.path()).await.unwrap();
@@ -55,6 +62,7 @@ async fn lmdb_scans_are_bounded_to_tenant() {
 }
 
 #[tokio::test]
+#[file_serial]
 async fn lmdb_default_tenant_is_seeded_and_migration_marker_set() {
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(dir.path()).await.unwrap();
@@ -68,6 +76,12 @@ async fn lmdb_default_tenant_is_seeded_and_migration_marker_set() {
     // data written under the default tenant.
     let d = store.clone().for_tenant(quark::tenant::DEFAULT_TENANT);
     d.put_link(42, &rec("https://kept.example")).await.unwrap();
+    // Both handles have to go: `d` holds its own `Arc` of the store, so dropping
+    // only `store` leaves the LMDB env open. heed 0.22 rejects reopening a live
+    // env with `EnvAlreadyOpened` (0.20 allowed it), which is the stricter and
+    // correct behavior - reopening a still-open env was never what this test
+    // meant to exercise.
+    drop(d);
     drop(store);
     let store2 = open_store(dir.path()).await.unwrap();
     let d2 = store2.clone().for_tenant(quark::tenant::DEFAULT_TENANT);
@@ -78,6 +92,7 @@ async fn lmdb_default_tenant_is_seeded_and_migration_marker_set() {
 }
 
 #[tokio::test]
+#[file_serial]
 async fn lmdb_identity_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(dir.path()).await.unwrap();
@@ -121,8 +136,10 @@ async fn lmdb_identity_round_trips() {
 // --- Postgres arm (gated on QUARK_TEST_DATABASE_URL) ---
 
 #[tokio::test]
+#[file_serial]
 async fn migration_seeds_default_tenant_and_columns() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let store = quark::store::open_postgres(&url).await.unwrap();
@@ -135,8 +152,10 @@ async fn migration_seeds_default_tenant_and_columns() {
 }
 
 #[tokio::test]
+#[file_serial]
 async fn pg_two_tenants_do_not_see_each_others_links() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let store = quark::store::open_postgres(&url).await.unwrap();
@@ -373,6 +392,7 @@ async fn assert_full_isolation(store: Arc<dyn Store>) {
 }
 
 #[tokio::test]
+#[file_serial]
 async fn every_tenant_owned_entity_is_isolated() {
     // LMDB arm: always runs.
     let dir = tempfile::tempdir().unwrap();
@@ -391,6 +411,7 @@ async fn every_tenant_owned_entity_is_isolated() {
 // --- P1b: credentials carry tenant + user ---
 
 #[tokio::test]
+#[file_serial]
 async fn lmdb_token_and_session_carry_tenant_and_user() {
     let dir = tempfile::tempdir().unwrap();
     let store = quark::store::open_store(dir.path()).await.unwrap();
@@ -427,6 +448,7 @@ async fn lmdb_token_and_session_carry_tenant_and_user() {
 }
 
 #[tokio::test]
+#[file_serial]
 async fn pg_token_and_session_carry_tenant_and_user() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
@@ -478,6 +500,7 @@ async fn pg_token_and_session_carry_tenant_and_user() {
 // / `name` alone, which cannot hold two tenants' rows at once). ---
 
 #[tokio::test]
+#[file_serial]
 async fn pg_wellknown_and_sheets_pks_are_tenant_correct() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");

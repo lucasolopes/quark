@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use base64::Engine as _;
 use quark::analytics::spawn_worker;
 use quark::api::{router, AppState};
@@ -16,6 +17,18 @@ use std::sync::Arc;
 const CACHE_CAPACITY: u64 = 100_000;
 /// Analytics channel capacity (buffered `ClickEvent`s before backpressure).
 const ANALYTICS_CHANNEL_CAPACITY: usize = 10_000;
+/// Request budget for forwarding a conversion to a third-party pixel. Short
+/// because the forwarding worker shares the runtime with the redirect path and
+/// the delivery is best-effort anyway.
+const PIXEL_FORWARD_TIMEOUT_SECS: u64 = 5;
+/// Cadence of the two hourly housekeeping loops (expired OIDC session GC and
+/// the analytics retention purge). Both only reclaim storage, so an hour is
+/// frequent enough and keeps the load off the request path.
+const HOUSEKEEPING_INTERVAL_SECS: u64 = 3600;
+/// Ceiling for the scheduled Sheets sync lease TTL. The lease is a crash-safety
+/// cap only (the tick releases it when done), so it is capped low enough that
+/// even a missed release frees it before the next tick.
+const SHEETS_LEASE_TTL_CAP_SECS: u64 = 300;
 
 /// Analytics retention window (LUC-65, GDPR), in seconds, from the raw
 /// `QUARK_ANALYTICS_RETENTION_DAYS` env value plus the `multi_tenant` mode.
@@ -46,29 +59,56 @@ fn retention_secs_from(env_value: Option<&str>, multi_tenant: bool) -> Option<u6
     }
 }
 
+/// Installs the tracing subscriber. `RUST_LOG` drives the filter (the ecosystem
+/// standard, so `tokio`, `sqlx`, `reqwest`, `hickory-resolver` and `moka` events
+/// are reachable too); `QUARK_LOG_FORMAT=json` switches the output from the
+/// human-readable format to one JSON object per event, which is what the
+/// production log pipeline wants.
+///
+/// The per-request access log now comes from tower-http's `TraceLayer` at DEBUG,
+/// so it is enabled with `RUST_LOG=tower_http=debug` instead of a dedicated env
+/// var.
+fn init_tracing() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let registry = tracing_subscriber::registry().with(filter);
+    if std::env::var("QUARK_LOG_FORMAT").as_deref() == Ok("json") {
+        registry
+            .with(tracing_subscriber::fmt::layer().json())
+            .init();
+    } else {
+        registry.with(tracing_subscriber::fmt::layer()).init();
+    }
+}
+
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
+    // `--version` answers before anything else is set up: it must work with no
+    // config, no backends, and no log subscriber installed. Stays a `println!`
+    // because it is program output on stdout, not a log line.
     if std::env::args().any(|a| a == "--version" || a == "-V") {
         println!("quark {}", env!("CARGO_PKG_VERSION"));
-        return;
+        return Ok(());
     }
+    init_tracing();
     let strict_cluster = std::env::var("QUARK_STRICT_CLUSTER")
         .map(|v| !v.is_empty())
         .unwrap_or(false);
-    if let Err(msg) = quark::cluster::cluster_preflight(
+    quark::cluster::cluster_preflight(
         strict_cluster,
         std::env::var("QUARK_DATABASE_URL").is_ok(),
         std::env::var("QUARK_VALKEY_URL").is_ok(),
-    ) {
-        eprintln!("FATAL: {msg}");
-        std::process::exit(1);
-    }
+    )
+    .context("cluster preflight")?;
     let path = std::env::var("QUARK_DATA").unwrap_or_else(|_| "./data".into());
     let key = std::env::var("QUARK_KEY")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or_else(|| {
-            eprintln!("WARNING: QUARK_KEY not set. Using dev key. DO NOT use in production.");
+            tracing::warn!("QUARK_KEY not set. Using dev key. DO NOT use in production.");
             0x9E3779B97F4A7C15
         });
     // Dedicated secret for signing link-password unlock cookies, separate from
@@ -90,12 +130,13 @@ async fn main() {
             k
         })
         .unwrap_or_else(|| {
-            eprintln!(
-                "WARNING: QUARK_SIGNING_KEY not set (or < 32 bytes). Using a random per-process \
+            tracing::warn!(
+                "QUARK_SIGNING_KEY not set (or < 32 bytes). Using a random per-process \
                  key; link-password unlock cookies will not survive a restart and are not shared \
                  across nodes. Set QUARK_SIGNING_KEY for multi-node or persistent deployments."
             );
             let mut k = [0u8; 32];
+            #[expect(clippy::expect_used, reason = "the OS RNG being unavailable is not a recoverable condition for a security path")]
             getrandom::fill(&mut k).expect("system RNG must be available");
             k
         });
@@ -103,7 +144,7 @@ async fn main() {
         .map(|v| v != "0")
         .unwrap_or(false);
     if multi_tenant {
-        eprintln!("multi-tenant mode ENABLED (FORCE RLS + per-tenant tx on Postgres)");
+        tracing::info!("multi-tenant mode ENABLED (FORCE RLS + per-tenant tx on Postgres)");
     }
     // Base suffix for the auto per-tenant subdomain (multi-tenancy
     // P3-completion), e.g. `quarkus.com.br`. Cloud-only; unset disables the
@@ -114,8 +155,8 @@ async fn main() {
         .filter(|s| !s.is_empty());
     let (store, sink) = open_backends(std::path::Path::new(&path), multi_tenant)
         .await
-        .expect("open backends");
-    eprintln!(
+        .context("opening the storage backends")?;
+    tracing::info!(
         "backend: {}",
         if std::env::var("QUARK_DATABASE_URL").is_ok() {
             "postgres"
@@ -123,7 +164,7 @@ async fn main() {
             "lmdb"
         }
     );
-    eprintln!(
+    tracing::info!(
         "analytics sink: {}",
         if std::env::var("QUARK_CLICKHOUSE_URL").is_ok() {
             "clickhouse"
@@ -141,8 +182,8 @@ async fn main() {
     // safe to run on every replica, every boot.
     if std::env::var("QUARK_ENCRYPTION_KEY").is_ok() {
         match store.reencrypt_legacy_secrets().await {
-            Ok(n) => eprintln!("secret re-encryption backfill: {n} re-encrypted"),
-            Err(e) => eprintln!("WARNING: secret re-encryption backfill failed: {e}"),
+            Ok(n) => tracing::info!("secret re-encryption backfill: {n} re-encrypted"),
+            Err(e) => tracing::warn!("secret re-encryption backfill failed: {e}"),
         }
     }
 
@@ -167,48 +208,62 @@ async fn main() {
                                 .await
                                 {
                                     Ok(()) => seeded += 1,
-                                    Err(e) => eprintln!(
+                                    Err(e) => tracing::info!(
                                         "{}",
                                         serde_json::json!({ "tenant_subdomain_backfill_error": e.to_string(), "tenant_id": t.id.0 })
                                     ),
                                 }
                             }
-                            Err(e) => eprintln!(
+                            Err(e) => tracing::info!(
                                 "{}",
                                 serde_json::json!({ "tenant_subdomain_backfill_error": e.to_string(), "tenant_id": t.id.0 })
                             ),
                         }
                     }
-                    eprintln!(
+                    tracing::info!(
                         "tenant subdomain backfill: {seeded} seeded, {} already present (suffix {suffix})",
                         tenants.len() - seeded
                     );
                 }
-                Err(e) => eprintln!(
-                    "WARNING: tenant subdomain backfill skipped (list_tenants failed: {e})"
-                ),
+                Err(e) => {
+                    tracing::warn!("tenant subdomain backfill skipped (list_tenants failed: {e})")
+                }
             }
         }
     }
     match std::env::var("QUARK_NODE_ID") {
         Ok(n) if !n.is_empty() && std::env::var("QUARK_DATABASE_URL").is_ok() => {
-            eprintln!(
-                "WARNING: QUARK_NODE_ID={n} ignored on the Postgres backend (node-id is LMDB-only)"
+            tracing::warn!(
+                "QUARK_NODE_ID={n} ignored on the Postgres backend (node-id is LMDB-only)"
             );
         }
         Ok(n) if !n.is_empty() => {
-            eprintln!("========================================================================");
-            eprintln!(
-                "WARNING: QUARK_NODE_ID={n} set on the LMDB backend (no QUARK_DATABASE_URL)."
+            tracing::info!(
+                "========================================================================"
             );
-            eprintln!("  LMDB stores are per-node: each replica keeps its OWN file and replicas");
-            eprintln!("  do NOT share links. A redirect that lands on a node without the link");
-            eprintln!("  returns 404. node-id only partitions the id space (8+32 bits) so codes");
-            eprintln!("  do not collide; it does NOT make this a shared multi-node store.");
-            eprintln!("  True multi-node needs the Postgres backend (set QUARK_DATABASE_URL).");
-            eprintln!("  The node id MUST be unique per replica (e.g. a StatefulSet ordinal);");
-            eprintln!("  quark cannot detect a duplicate and a collision silently reuses ids.");
-            eprintln!("========================================================================");
+            tracing::warn!("QUARK_NODE_ID={n} set on the LMDB backend (no QUARK_DATABASE_URL).");
+            tracing::info!(
+                "  LMDB stores are per-node: each replica keeps its OWN file and replicas"
+            );
+            tracing::info!(
+                "  do NOT share links. A redirect that lands on a node without the link"
+            );
+            tracing::info!(
+                "  returns 404. node-id only partitions the id space (8+32 bits) so codes"
+            );
+            tracing::info!("  do not collide; it does NOT make this a shared multi-node store.");
+            tracing::info!(
+                "  True multi-node needs the Postgres backend (set QUARK_DATABASE_URL)."
+            );
+            tracing::info!(
+                "  The node id MUST be unique per replica (e.g. a StatefulSet ordinal);"
+            );
+            tracing::info!(
+                "  quark cannot detect a duplicate and a collision silently reuses ids."
+            );
+            tracing::info!(
+                "========================================================================"
+            );
         }
         _ => {}
     }
@@ -225,40 +280,38 @@ async fn main() {
         .map(|conn| Arc::new(Invalidator { conn: Some(conn) }));
 
     let cache = match std::env::var("QUARK_VALKEY_URL").ok() {
-        Some(url) => {
-            match ValkeyTier::open(&url).await {
-                Ok(tier) => {
-                    let shown = url.rsplit('@').next().unwrap_or(&url);
-                    eprintln!("L2 Valkey enabled: {shown}");
-                    Cache::with_l2(
-                        store.clone(),
-                        CACHE_CAPACITY,
-                        Arc::new(tier),
-                        quark::cache::L1_TTL_SECS,
-                        quark::cache::L2_TTL_SECS,
-                        invalidator.clone(),
-                    )
-                }
-                Err(e) => {
-                    eprintln!("WARNING: failed to connect to Valkey ({e}); continuing with L1+store only.");
-                    Cache::new(store.clone(), CACHE_CAPACITY, invalidator.clone())
-                }
+        Some(url) => match ValkeyTier::open(&url).await {
+            Ok(tier) => {
+                let shown = url.rsplit('@').next().unwrap_or(&url);
+                tracing::info!("L2 Valkey enabled: {shown}");
+                Cache::with_l2(
+                    store.clone(),
+                    CACHE_CAPACITY,
+                    Arc::new(tier),
+                    quark::cache::L1_TTL_SECS,
+                    quark::cache::L2_TTL_SECS,
+                    invalidator.clone(),
+                )
             }
-        }
+            Err(e) => {
+                tracing::warn!("failed to connect to Valkey ({e}); continuing with L1+store only.");
+                Cache::new(store.clone(), CACHE_CAPACITY, invalidator.clone())
+            }
+        },
         None => Cache::new(store.clone(), CACHE_CAPACITY, invalidator.clone()),
     };
     let (analytics_tx, analytics_rx) = tokio::sync::mpsc::channel(ANALYTICS_CHANNEL_CAPACITY);
     let pixel_client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(PIXEL_FORWARD_TIMEOUT_SECS))
+        .connect_timeout(std::time::Duration::from_secs(
+            quark::HTTP_CONNECT_TIMEOUT_SECS,
+        ))
         .build()
-        .expect("build pixel forwarding client");
+        .context("building the pixel forwarding client")?;
     let admin_token = std::env::var("QUARK_ADMIN_TOKEN").ok();
     if admin_token.is_none() {
-        eprintln!("WARNING: QUARK_ADMIN_TOKEN not set — /stats endpoint disabled.");
-    }
-    if std::env::var("QUARK_ACCESS_LOG").is_err() {
-        eprintln!("per-request access log disabled (set QUARK_ACCESS_LOG=1 to enable)");
+        tracing::warn!("QUARK_ADMIN_TOKEN not set — /stats endpoint disabled.");
     }
 
     let per_min: u32 = std::env::var("QUARK_RATELIMIT_PER_MIN")
@@ -271,9 +324,9 @@ async fn main() {
         (n, None) => quark::abuse::ratelimit::RateLimiter::memory(n),
     };
     if per_min == 0 {
-        eprintln!("rate-limit disabled (set QUARK_RATELIMIT_PER_MIN=n to enable)");
+        tracing::info!("rate-limit disabled (set QUARK_RATELIMIT_PER_MIN=n to enable)");
     } else {
-        eprintln!(
+        tracing::info!(
             "rate-limit: {per_min}/min per IP ({})",
             if control_conn.is_some() {
                 "global via Valkey"
@@ -297,21 +350,25 @@ async fn main() {
     let (wh_tx, wh_rx) = tokio::sync::mpsc::channel(WEBHOOK_CHANNEL_CAPACITY);
     let clicked = Arc::new(AtomicBool::new(false));
     let expired = Arc::new(AtomicBool::new(false));
-    spawn_webhook_worker(wh_rx, store.clone(), clicked.clone(), expired.clone());
+    let webhook_worker =
+        spawn_webhook_worker(wh_rx, store.clone(), clicked.clone(), expired.clone());
     let dispatcher = WebhookDispatcher::new(wh_tx, clicked, expired);
     let webhooks = if std::env::var("QUARK_DATABASE_URL").is_ok() {
         let relay_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(DELIVERY_TIMEOUT_SECS))
+            .connect_timeout(std::time::Duration::from_secs(
+                quark::HTTP_CONNECT_TIMEOUT_SECS,
+            ))
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .expect("build webhook relay client");
+            .context("building the webhook relay client")?;
         spawn_webhook_relay(store.clone(), relay_client);
-        eprintln!(
+        tracing::info!(
             "webhook delivery: durable Postgres outbox + leased relay (lifecycle events); clicked/expired best-effort in-memory"
         );
         Arc::new(dispatcher.with_outbox(store.clone()))
     } else {
-        eprintln!("webhook delivery: in-memory best-effort channel (LMDB backend)");
+        tracing::info!("webhook delivery: in-memory best-effort channel (LMDB backend)");
         Arc::new(dispatcher)
     };
 
@@ -326,13 +383,13 @@ async fn main() {
         .map(|v| v != "0")
         .unwrap_or(false);
     if pixel_anonymize_ip {
-        eprintln!("pixel forward: IP anonymization ENABLED (IPv4 /24, IPv6 /48)");
+        tracing::info!("pixel forward: IP anonymization ENABLED (IPv4 /24, IPv6 /48)");
     }
     let pixel_bases = quark::pixel::PixelBases {
         anonymize_ip: pixel_anonymize_ip,
         ..quark::pixel::PixelBases::default()
     };
-    let _worker = spawn_worker(
+    let analytics_worker = spawn_worker(
         analytics_rx,
         sink.clone(),
         store.clone(),
@@ -352,17 +409,17 @@ async fn main() {
             let issuer = cfg.issuer.clone();
             match quark::oidc::OidcRuntime::init(cfg).await {
                 Ok(rt) => {
-                    eprintln!("oidc login: enabled (issuer {issuer})");
+                    tracing::info!("oidc login: enabled (issuer {issuer})");
                     Some(Arc::new(rt))
                 }
                 Err(e) => {
-                    eprintln!("WARNING: OIDC configured but init failed ({e}); login disabled, admin token still works");
+                    tracing::warn!("OIDC configured but init failed ({e}); login disabled, admin token still works");
                     None
                 }
             }
         }
         None => {
-            eprintln!("oidc login: disabled (set QUARK_OIDC_ISSUER to enable)");
+            tracing::info!("oidc login: disabled (set QUARK_OIDC_ISSUER to enable)");
             None
         }
     };
@@ -377,10 +434,10 @@ async fn main() {
         });
     match &sheets_config {
         Some(cfg) => match cfg.sync_secs {
-            Some(secs) => eprintln!("sheets sync: enabled (scheduled every {secs}s)"),
-            None => eprintln!("sheets sync: enabled (on demand)"),
+            Some(secs) => tracing::info!("sheets sync: enabled (scheduled every {secs}s)"),
+            None => tracing::info!("sheets sync: enabled (on demand)"),
         },
-        None => eprintln!(
+        None => tracing::info!(
             "sheets sync: disabled (set QUARK_SHEETS_CLIENT_ID/_SECRET/_REDIRECT_URL to enable)"
         ),
     }
@@ -391,8 +448,8 @@ async fn main() {
     // subscription; no bespoke storage or HTTP seam is needed.
     let slack = quark::slack::SlackConfig::from_env();
     match &slack {
-        Some(_) => eprintln!("slack connect: enabled (Add to Slack OAuth)"),
-        None => eprintln!(
+        Some(_) => tracing::info!("slack connect: enabled (Add to Slack OAuth)"),
+        None => tracing::info!(
             "slack connect: disabled (set QUARK_SLACK_CLIENT_ID/_SECRET/_REDIRECT_URL to enable)"
         ),
     }
@@ -410,7 +467,7 @@ async fn main() {
     // cloud-only. In OSS (`!multi_tenant`) nothing calls it, so skip building
     // the system resolver and use the inert `NullDns` (LUC-51).
     let dns: Arc<dyn quark::dns::Dns> = if multi_tenant {
-        Arc::new(quark::dns::HickoryDns::new().expect("failed to build DNS resolver"))
+        Arc::new(quark::dns::HickoryDns::new().context("building the DNS resolver")?)
     } else {
         Arc::new(quark::dns::NullDns)
     };
@@ -424,14 +481,14 @@ async fn main() {
     let keycloak: Option<Arc<dyn quark::keycloak::KeycloakAdmin>> = match keycloak_config {
         Some(cfg) => {
             let base = cfg.base_url.clone();
-            eprintln!("keycloak admin: enabled (base {base})");
+            tracing::info!("keycloak admin: enabled (base {base})");
             Some(Arc::new(quark::keycloak::client::HttpKeycloakAdmin::new(
                 cfg,
                 quark::keycloak::client::keycloak_client(),
             )))
         }
         None => {
-            eprintln!("keycloak admin: disabled (set QUARK_KEYCLOAK_BASE_URL to enable)");
+            tracing::info!("keycloak admin: disabled (set QUARK_KEYCLOAK_BASE_URL to enable)");
             None
         }
     };
@@ -444,10 +501,10 @@ async fn main() {
     if multi_tenant {
         if let (Some(kc), Some(base)) = (&keycloak, &keycloak_base_url) {
             match quark::api::backfill_keycloak_provisioning(&store, kc, base).await {
-                Ok(n) => eprintln!("keycloak tenant backfill: {n} provisioned"),
-                Err(e) => eprintln!(
-                    "WARNING: keycloak tenant backfill skipped (list_tenants failed: {e})"
-                ),
+                Ok(n) => tracing::info!("keycloak tenant backfill: {n} provisioned"),
+                Err(e) => {
+                    tracing::warn!("keycloak tenant backfill skipped (list_tenants failed: {e})")
+                }
             }
         }
     }
@@ -456,7 +513,7 @@ async fn main() {
         cache,
         store,
         key,
-        signing_key,
+        signing_key: secrecy::SecretBox::new(Box::new(signing_key)),
         analytics_tx,
         sink,
         admin_token,
@@ -478,39 +535,153 @@ async fn main() {
         keycloak,
         keycloak_base_url,
     });
-    match std::env::var("QUARK_VALKEY_URL").ok() {
+    let invalidation_sub = match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {
-            eprintln!("cross-node invalidation: pub/sub subscriber on {INVALIDATION_CHANNEL}");
-            let _sub = spawn_invalidation_subscriber(url, state.clone());
+            tracing::info!("cross-node invalidation: pub/sub subscriber on {INVALIDATION_CHANNEL}");
+            Some(spawn_invalidation_subscriber(url, state.clone()))
         }
-        None => eprintln!("cross-node invalidation: disabled (no QUARK_VALKEY_URL)"),
-    }
+        None => {
+            tracing::info!("cross-node invalidation: disabled (no QUARK_VALKEY_URL)");
+            None
+        }
+    };
 
     // Broken-link monitoring (opt-in). Runs when QUARK_HEALTH_CHECK_SECS is set.
     // Safe to enable on every replica: a lease (Postgres) ensures only one node
     // sweeps at a time, renewed during the sweep, with automatic failover if the
     // holder dies. On the single-node LMDB backend the lease is always granted.
-    match std::env::var("QUARK_HEALTH_CHECK_SECS")
+    let link_checker = match std::env::var("QUARK_HEALTH_CHECK_SECS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
     {
         Some(secs) => {
             let period = std::time::Duration::from_secs(secs.max(quark::health::MIN_CHECK_SECS));
-            let _checker = quark::health::spawn_link_checker(
+            let checker = quark::health::spawn_link_checker(
                 state.store.clone(),
                 state.webhooks.clone(),
                 quark::health::build_client(),
                 period,
                 state.key,
             );
-            eprintln!(
+            tracing::info!(
                 "link health checker: sweeping every {}s (lease-coordinated; safe on all replicas)",
                 period.as_secs()
             );
+            Some(checker)
         }
-        None => eprintln!("link health checker: disabled (set QUARK_HEALTH_CHECK_SECS to enable)"),
+        None => {
+            tracing::info!("link health checker: disabled (set QUARK_HEALTH_CHECK_SECS to enable)");
+            None
+        }
+    };
+
+    spawn_sheets_sync(&state);
+
+    spawn_session_gc(&state);
+
+    spawn_analytics_purge(&state, multi_tenant);
+
+    let app = router(state);
+
+    let addr = std::env::var("QUARK_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .with_context(|| format!("binding {addr}"))?;
+    tracing::info!("quark listening on {addr}");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("running the HTTP server")?;
+
+    drain_workers(
+        analytics_worker,
+        webhook_worker,
+        invalidation_sub,
+        link_checker,
+    )
+    .await;
+
+    Ok(())
+}
+
+/// Resolves on SIGTERM (what a Fly or Docker deploy sends) or Ctrl-C.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            // Without SIGTERM we still honor Ctrl-C; never fail the process here.
+            Err(e) => {
+                tracing::warn!(error = %e, "could not install the SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {}
+        () = terminate => {}
+    }
+    tracing::info!("shutdown signal received, draining");
+}
+
+/// How long the drain may take before the process exits anyway. A deploy must
+/// not hang on a wedged worker.
+const DRAIN_TIMEOUT_SECS: u64 = 10;
+
+/// Drains the background workers after the HTTP server stopped accepting.
+///
+/// Order matters. The analytics and webhook channels close when the last
+/// `Arc<AppState>` drops, because that is where their `Sender`s live: the
+/// server owned one and released it above, and the invalidation subscriber
+/// holds the only other clone. So the cache-only tasks are cancelled and joined
+/// FIRST, which releases that clone; only then do the two workers observe the
+/// channel close, flush what they buffered, and exit.
+///
+/// Everything is bounded by `DRAIN_TIMEOUT_SECS`: losing a few buffered events
+/// is better than a deploy that never finishes.
+async fn drain_workers(
+    analytics: tokio::task::JoinHandle<()>,
+    webhooks: tokio::task::JoinHandle<()>,
+    invalidation: Option<tokio::task::JoinHandle<()>>,
+    link_checker: Option<tokio::task::JoinHandle<()>>,
+) {
+    // Cache invalidation and health sweeps have nothing to persist, so they are
+    // cancelled outright. Awaiting the handle is what guarantees the task is
+    // really gone and its captured `Arc<AppState>` released.
+    for task in [invalidation, link_checker].into_iter().flatten() {
+        task.abort();
+        let _ = task.await;
     }
 
+    let drained = tokio::time::timeout(std::time::Duration::from_secs(DRAIN_TIMEOUT_SECS), async {
+        let _ = analytics.await;
+        let _ = webhooks.await;
+    })
+    .await;
+    match drained {
+        Ok(()) => tracing::info!("workers drained"),
+        Err(_) => tracing::warn!(
+            timeout_secs = DRAIN_TIMEOUT_SECS,
+            "workers did not drain in time, exiting anyway"
+        ),
+    }
+}
+
+/// Spawns the scheduled Google Sheets sync when it is configured. Opt-in via
+/// `QUARK_SHEETS_SYNC_SECS`; lease-coordinated so it is safe on every replica.
+fn spawn_sheets_sync(state: &std::sync::Arc<AppState>) {
     // Scheduled Sheets sync (opt-in via QUARK_SHEETS_SYNC_SECS). Lease-coordinated
     // like the link checker so it is safe on every replica; on the single-node
     // LMDB backend the lease is always granted. Never logs the token.
@@ -520,7 +691,7 @@ async fn main() {
         // schedule (on-demand sync still works, using the request Host) rather
         // than write "https://localhost/<code>" links into the sheet.
         if cfg.sync_secs.is_some() && state.public_host.is_none() {
-            eprintln!(
+            tracing::info!(
                 "sheets sync: scheduled sync disabled (set QUARK_PUBLIC_HOST so short URLs are correct; on-demand sync still works)"
             );
         }
@@ -537,7 +708,7 @@ async fn main() {
             // when done (see end of loop), so it never stays held between ticks
             // and block the on-demand "Sync now". Capped at 300s (and at the
             // interval) so even a missed release frees it before the next tick.
-            let ttl = secs.min(300);
+            let ttl = secs.min(SHEETS_LEASE_TTL_CAP_SECS);
             tokio::spawn(async move {
                 let client = quark::sheets::client::http_client();
                 let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
@@ -553,7 +724,7 @@ async fn main() {
                     let tenants = match store.list_tenants().await {
                         Ok(t) => t,
                         Err(e) => {
-                            eprintln!(
+                            tracing::info!(
                                 "{}",
                                 serde_json::json!({ "sheets_sync_list_tenants_error": e.to_string() })
                             );
@@ -588,19 +759,13 @@ async fn main() {
                             Err(e) => Err(e),
                         };
                         if let Err(e) = &outcome {
-                            conn.last_status = quark::sheets::SyncStatus::Error(e.clone());
-                            eprintln!(
-                                "{}",
-                                serde_json::json!({ "sheets_sync_error": e, "tenant": t.id.0 })
-                            );
+                            conn.last_status = quark::sheets::SyncStatus::Error(e.to_string());
+                            tracing::warn!(error = %e, tenant = t.id.0, "sheets sync failed");
                         } else {
-                            eprintln!(
-                                "{}",
-                                serde_json::json!({ "sheets_sync": "ok", "tenant": t.id.0 })
-                            );
+                            tracing::info!(tenant = t.id.0, "sheets sync completed");
                         }
                         if let Err(e) = store.put_sheets_connection(t.id, &conn).await {
-                            eprintln!(
+                            tracing::info!(
                                 "{}",
                                 serde_json::json!({ "sheets_sync_persist_error": e.to_string(), "tenant": t.id.0 })
                             );
@@ -613,16 +778,21 @@ async fn main() {
             });
         }
     }
+}
 
+/// Spawns the hourly garbage collection of expired OIDC login sessions.
+/// No-op when OIDC is off, since there are no sessions to collect.
+fn spawn_session_gc(state: &std::sync::Arc<AppState>) {
     // Garbage-collect expired OIDC login sessions hourly (only when OIDC is on).
     if state.oidc.is_some() {
         let store = state.store.clone();
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_secs(HOUSEKEEPING_INTERVAL_SECS));
             loop {
                 ticker.tick().await;
                 if let Err(e) = store.gc_sessions(quark::now()).await {
-                    eprintln!(
+                    tracing::info!(
                         "{}",
                         serde_json::json!({ "session_gc_error": e.to_string() })
                     );
@@ -630,7 +800,11 @@ async fn main() {
             }
         });
     }
+}
 
+/// Spawns the hourly analytics retention purge (LUC-65, GDPR) when a retention
+/// window is configured. Unlimited retention spawns nothing.
+fn spawn_analytics_purge(state: &std::sync::Arc<AppState>, multi_tenant: bool) {
     // Analytics retention purge (LUC-65, GDPR). Retention window:
     // `QUARK_ANALYTICS_RETENTION_DAYS` (days -> seconds) wins when set and
     // valid; otherwise cloud (`multi_tenant`) defaults to 365 days and
@@ -641,14 +815,14 @@ async fn main() {
     let retention_env = std::env::var("QUARK_ANALYTICS_RETENTION_DAYS").ok();
     if let Some(v) = &retention_env {
         if v.trim().parse::<u64>().is_err() {
-            eprintln!(
-                "WARNING: QUARK_ANALYTICS_RETENTION_DAYS={v:?} is not a valid non-negative integer; falling back to the mode default instead of disabling retention"
+            tracing::warn!(
+                "QUARK_ANALYTICS_RETENTION_DAYS={v:?} is not a valid non-negative integer; falling back to the mode default instead of disabling retention"
             );
         }
     }
     let retention_secs: Option<u64> = retention_secs_from(retention_env.as_deref(), multi_tenant);
     if let Some(retention) = retention_secs {
-        eprintln!(
+        tracing::info!(
             "{}",
             serde_json::json!({ "analytics_retention_secs": retention })
         );
@@ -656,16 +830,17 @@ async fn main() {
         // error is only logged and never blocks serving.
         let store = state.store.clone();
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_secs(HOUSEKEEPING_INTERVAL_SECS));
             loop {
                 ticker.tick().await;
                 let cutoff = quark::now().saturating_sub(retention);
                 match store.purge_click_events_before(cutoff).await {
-                    Ok(n) => eprintln!(
+                    Ok(n) => tracing::info!(
                         "{}",
                         serde_json::json!({ "analytics_purge_deleted": n, "cutoff_ts": cutoff })
                     ),
-                    Err(e) => eprintln!(
+                    Err(e) => tracing::info!(
                         "{}",
                         serde_json::json!({ "analytics_purge_error": e.to_string() })
                     ),
@@ -673,20 +848,8 @@ async fn main() {
             }
         });
     } else {
-        eprintln!("analytics retention: unlimited (no purge)");
+        tracing::info!("analytics retention: unlimited (no purge)");
     }
-
-    let app = router(state);
-
-    let addr = std::env::var("QUARK_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
-    let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
-    eprintln!("quark listening on {addr}");
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .await
-    .expect("serve");
 }
 
 #[cfg(test)]

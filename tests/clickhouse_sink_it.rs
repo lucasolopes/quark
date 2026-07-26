@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use quark::analytics::clickhouse::ClickHouseSink;
 use quark::analytics::{AnalyticsSink, ClickEvent};
 use serial_test::file_serial;
@@ -121,6 +126,7 @@ async fn bot_filter_ch() {
 #[file_serial]
 async fn recent_limits_to_n_ch() {
     let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_CLICKHOUSE_URL not set");
         return;
     };
     let evs: Vec<ClickEvent> = (0..1200u64)

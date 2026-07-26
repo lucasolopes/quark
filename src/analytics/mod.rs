@@ -6,7 +6,6 @@ use crate::webhooks::{EventType, WebhookEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
 pub mod clickhouse;
@@ -325,16 +324,51 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Why an analytics sink call failed.
+///
+/// Separate from `StoreError` because a sink is not necessarily a store: two of
+/// the three implementations happen to be (`LmdbStore`, `PostgresStore`) but
+/// `ClickHouseSink` is not, and it was returning a store error for something
+/// with no store involved. `From<StoreError>` keeps the store-backed impls a
+/// plain `?`.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum AnalyticsError {
+    #[error("analytics backend failure: {0}")]
+    Backend(String),
+    /// The sink does not implement this query (e.g. a per-tenant aggregate on a
+    /// backend that only keeps per-link counters).
+    #[error("operation not supported by this analytics sink")]
+    Unsupported,
+}
+
+impl AnalyticsError {
+    /// Builds a `Backend` from any displayable error, mirroring
+    /// `StoreError::backend`.
+    pub fn backend<E: std::fmt::Display>(e: E) -> AnalyticsError {
+        AnalyticsError::Backend(e.to_string())
+    }
+}
+
+impl From<StoreError> for AnalyticsError {
+    fn from(e: StoreError) -> Self {
+        match e {
+            StoreError::Unsupported => AnalyticsError::Unsupported,
+            other => AnalyticsError::Backend(other.to_string()),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait AnalyticsSink: Send + Sync + 'static {
-    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), StoreError>;
-    async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError>;
+    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), AnalyticsError>;
+    async fn stats(&self, id: u64) -> Result<Option<Stats>, AnalyticsError>;
     /// Aggregate analytics across every link owned by `tenant` — the "all my
     /// links" view behind `GET /admin/stats` (multi-tenancy P4a). Unlike
     /// `stats`, there's no single link to key `recent` off of, so this
     /// returns aggregates only, and it never returns `None`: a tenant with no
     /// clicks yet gets `Aggregates::default()`, not a missing-record signal.
-    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError>;
+    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, AnalyticsError>;
     /// Total real clicks per link id (LUC-89): the number the panel's "Visitas"
     /// column and the Sheets mirror show, so they match the Analytics view
     /// instead of the `max_visits` enforcement counter (which is 0 for links
@@ -344,7 +378,7 @@ pub trait AnalyticsSink: Send + Sync + 'static {
     async fn click_totals(
         &self,
         ids: &[u64],
-    ) -> Result<std::collections::HashMap<u64, u64>, StoreError> {
+    ) -> Result<std::collections::HashMap<u64, u64>, AnalyticsError> {
         let mut out = std::collections::HashMap::new();
         for &id in ids {
             if let Some(s) = self.stats(id).await? {
@@ -360,10 +394,10 @@ pub trait AnalyticsSink: Send + Sync + 'static {
 /// Batch size that triggers an immediate flush (in addition to the 5s timer).
 pub const BATCH: usize = 500;
 
-/// How long a full pixel-snapshot refresh (`list_tenants` + `list_pixels` per
-/// tenant) is allowed to run before it's abandoned in favor of the previous
-/// snapshot (fail-open: a wedged store must never stall the worker).
-const PIXEL_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Cadence of the flush/refresh tick: the worker flushes what it buffered and
+/// re-reads its snapshots this often, on top of flushing whenever the buffer
+/// reaches `BATCH`.
+const FLUSH_INTERVAL_SECS: u64 = 5;
 
 /// Per-replica in-memory state for `AlertCounter::Memory`: for each
 /// `(tenant, link_id)`, the current fixed window, the click count in it, and
@@ -409,6 +443,12 @@ impl AlertCounter {
         let window = ts / window_secs;
         match self {
             AlertCounter::Memory(state) => {
+                // Mesma razao do rate limiter: sob panic = "abort" um mutex
+                // envenenado nao existe, o processo ja teria morrido.
+                #[expect(
+                    clippy::unwrap_used,
+                    reason = "mutex envenenado e inalcancavel sob panic = abort"
+                )]
                 let mut st = state.lock().unwrap();
                 let entry = st.map.entry((tenant, id)).or_insert((window, 0, false));
                 if entry.0 != window {
@@ -428,10 +468,7 @@ impl AlertCounter {
                 let count: i64 = match redis::cmd("INCR").arg(&cnt_key).query_async(&mut c).await {
                     Ok(n) => n,
                     Err(e) => {
-                        eprintln!(
-                            "{}",
-                            serde_json::json!({"alert_counter_error": e.to_string()})
-                        );
+                        tracing::warn!(error = %e, "alert counter update failed");
                         return None;
                     }
                 };
@@ -460,10 +497,7 @@ impl AlertCounter {
                     Ok(Some(_)) => Some(count as u64),
                     Ok(None) => None,
                     Err(e) => {
-                        eprintln!(
-                            "{}",
-                            serde_json::json!({"alert_fire_marker_error": e.to_string()})
-                        );
+                        tracing::warn!(error = %e, "alert fire marker write failed");
                         None
                     }
                 }
@@ -476,6 +510,10 @@ impl AlertCounter {
 /// the shape `api::webhook_event_payload` uses for lifecycle events.
 fn generate_alert_event_id() -> String {
     let mut bytes = [0u8; 16];
+    #[expect(
+        clippy::expect_used,
+        reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+    )]
     getrandom::fill(&mut bytes).expect("system RNG must be available");
     let hex = crate::hex(&bytes);
     format!("evt_{hex}")
@@ -536,7 +574,7 @@ async fn process_alerts(
 }
 
 /// Refreshes the cached alert-rule snapshot from `store` across every tenant,
-/// bounded by `PIXEL_SNAPSHOT_TIMEOUT`, mirroring `refresh_pixel_snapshot`.
+/// bounded by `crate::SNAPSHOT_TIMEOUT`, mirroring `refresh_pixel_snapshot`.
 /// Fail-open: on a store error or timeout the previous snapshot is left
 /// untouched and only a line is logged, so a wedged store never stalls the
 /// worker nor empties a known-good snapshot.
@@ -555,16 +593,13 @@ async fn refresh_alert_snapshot(
         }
         Ok::<_, StoreError>(out)
     };
-    match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, load).await {
+    match tokio::time::timeout(crate::SNAPSHOT_TIMEOUT, load).await {
         Ok(Ok(snapshot)) => *alerts = snapshot,
         Ok(Err(e)) => {
-            eprintln!("{}", serde_json::json!({"alert_list_error": e.to_string()}));
+            tracing::warn!(error = %e, "alert snapshot refresh failed, keeping previous");
         }
         Err(_) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({"alert_list_error": "timed out refreshing alert snapshot"})
-            );
+            tracing::warn!("alert snapshot refresh timed out, keeping previous");
         }
     }
 }
@@ -607,16 +642,16 @@ pub fn spawn_worker(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut buf: Vec<ClickEvent> = Vec::with_capacity(BATCH);
-        // Snapshot de pixels agrupado por tenant. Cada clique é encaminhado só
-        // aos pixels do seu próprio tenant (isolamento cross-tenant), então o
-        // tenant dono precisa viajar junto: `PixelConfig` não carrega tenant.
+        // Pixel snapshot grouped by tenant. Every click is forwarded only to
+        // the pixels of its own tenant (cross-tenant isolation), so the owning
+        // tenant has to travel alongside: `PixelConfig` carries no tenant.
         let mut pixels: Vec<(TenantId, Vec<PixelConfig>)> = Vec::new();
         refresh_pixel_snapshot(&store, &mut pixels).await;
-        // Snapshot de regras de limiar por tenant (mesmo molde dos pixels).
+        // Threshold-rule snapshot per tenant (same shape as the pixels one).
         let mut alerts: Vec<(TenantId, HashMap<u64, AlertRule>)> = Vec::new();
         refresh_alert_snapshot(&store, &mut alerts).await;
         let counter = AlertCounter::new(control);
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(FLUSH_INTERVAL_SECS));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
@@ -645,7 +680,7 @@ pub fn spawn_worker(
 }
 
 /// Refreshes the cached pixel-config snapshot from `store`, across every
-/// tenant, bounded by `PIXEL_SNAPSHOT_TIMEOUT`. Fail-open: on a store error
+/// tenant, bounded by `crate::SNAPSHOT_TIMEOUT`. Fail-open: on a store error
 /// (listing tenants or any tenant's pixels) or a timeout, the previous
 /// snapshot (`pixels`) is left untouched and the failure is only logged, so a
 /// wedged or erroring store never stalls the worker and never empties out a
@@ -668,16 +703,13 @@ async fn refresh_pixel_snapshot(
         }
         Ok::<_, StoreError>(out)
     };
-    match tokio::time::timeout(PIXEL_SNAPSHOT_TIMEOUT, load).await {
+    match tokio::time::timeout(crate::SNAPSHOT_TIMEOUT, load).await {
         Ok(Ok(snapshot)) => *pixels = snapshot,
         Ok(Err(e)) => {
-            eprintln!("{}", serde_json::json!({"pixel_list_error": e.to_string()}));
+            tracing::warn!(error = %e, "pixel snapshot refresh failed, keeping previous");
         }
         Err(_) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({"pixel_list_error": "timed out refreshing pixel snapshot"})
-            );
+            tracing::warn!("pixel snapshot refresh timed out, keeping previous");
         }
     }
 }
@@ -699,10 +731,7 @@ async fn flush(
         return;
     }
     if let Err(e) = sink.record_batch(buf).await {
-        eprintln!(
-            "{}",
-            serde_json::json!({"analytics_flush_error": e.to_string()})
-        );
+        tracing::error!(error = %e, "analytics flush failed");
     }
     forward_to_pixels(pixels, client, key, bases, buf, store).await;
     process_alerts(counter, alerts, webhooks, key, buf).await;
@@ -755,13 +784,7 @@ async fn forward_to_pixels(
             {
                 Ok(()) => crate::health::HealthStatus::Ok,
                 Err(e) => {
-                    eprintln!(
-                        "{}",
-                        serde_json::json!({
-                            "pixel_forward_error": e.to_string(),
-                            "pixel_id": config.id,
-                        })
-                    );
+                    tracing::warn!(error = %e, pixel_id = config.id, "pixel forward failed");
                     crate::health::HealthStatus::Error(e.to_string())
                 }
             };

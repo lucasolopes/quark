@@ -13,6 +13,10 @@ pub fn to_base62(mut n: u64) -> String {
         buf[i] = ALPHABET[(n % 62) as usize];
         n /= 62;
     }
+    #[expect(
+        clippy::expect_used,
+        reason = "the base62 alphabet is ASCII by construction"
+    )]
     String::from_utf8(buf.to_vec()).expect("alphabet is ASCII")
 }
 

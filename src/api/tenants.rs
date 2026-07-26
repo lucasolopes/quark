@@ -47,14 +47,7 @@ pub async fn seed_tenant_subdomain(
 /// shape `admin_tenants_create`'s subdomain seed already uses for its own
 /// best-effort failures.
 pub(crate) fn log_keycloak_step_error(tenant_id: u64, step: &str, err: impl std::fmt::Display) {
-    eprintln!(
-        "{}",
-        serde_json::json!({
-            "keycloak_provision_error": err.to_string(),
-            "step": step,
-            "tenant_id": tenant_id,
-        })
-    );
+    tracing::warn!(error = %err, step, tenant_id, "keycloak provisioning step failed");
 }
 
 /// Runs the full per-tenant Keycloak provisioning sequence (multi-tenancy
@@ -108,12 +101,9 @@ pub async fn provision_tenant_keycloak(
                     Err(e) => log_keycloak_step_error(tenant.id.0, "ensure_user", e),
                 }
             }
-            Ok(_) => eprintln!(
-                "{}",
-                serde_json::json!({
-                    "keycloak_provision_skip": "owner email unavailable",
-                    "tenant_id": tenant.id.0,
-                })
+            Ok(_) => tracing::warn!(
+                tenant_id = tenant.id.0,
+                "keycloak provisioning skipped, owner email unavailable"
             ),
             Err(e) => log_keycloak_step_error(tenant.id.0, "get_user_by_id", e),
         }
@@ -190,19 +180,16 @@ pub async fn backfill_keycloak_provisioning(
                     match store.update_oidc_config_issuer(t.id, &expected).await {
                         Ok(()) => {
                             reconciled += 1;
-                            eprintln!(
-                                "{}",
-                                serde_json::json!({
-                                    "keycloak_issuer_reconciled": expected,
-                                    "previous_issuer": cfg.issuer,
-                                    "tenant_id": t.id.0,
-                                })
+                            tracing::info!(
+                                issuer = %expected,
+                                previous_issuer = %cfg.issuer,
+                                tenant_id = t.id.0,
+                                "keycloak issuer reconciled"
                             );
                         }
-                        Err(e) => eprintln!(
-                            "{}",
-                            serde_json::json!({ "keycloak_backfill_error": e.to_string(), "tenant_id": t.id.0 })
-                        ),
+                        Err(e) => {
+                            tracing::warn!(error = %e, tenant_id = t.id.0, "keycloak backfill failed")
+                        }
                     }
                 }
                 // Member-role backfill: tenants provisioned before the
@@ -215,10 +202,7 @@ pub async fn backfill_keycloak_provisioning(
                 // whatever it configured.
                 if cfg.client_id == "quark" && cfg.member_value.is_empty() {
                     if let Err(e) = keycloak.ensure_groups_and_mapper(&t.slug).await {
-                        eprintln!(
-                            "{}",
-                            serde_json::json!({ "keycloak_backfill_error": e.to_string(), "tenant_id": t.id.0 })
-                        );
+                        tracing::warn!(error = %e, tenant_id = t.id.0, "keycloak backfill failed");
                     } else {
                         match store
                             .update_oidc_config_member_value(t.id, "quark-members")
@@ -226,18 +210,15 @@ pub async fn backfill_keycloak_provisioning(
                         {
                             Ok(()) => {
                                 reconciled += 1;
-                                eprintln!(
-                                    "{}",
-                                    serde_json::json!({
-                                        "keycloak_member_value_reconciled": "quark-members",
-                                        "tenant_id": t.id.0,
-                                    })
+                                tracing::info!(
+                                    member_value = "quark-members",
+                                    tenant_id = t.id.0,
+                                    "keycloak member value reconciled"
                                 );
                             }
-                            Err(e) => eprintln!(
-                                "{}",
-                                serde_json::json!({ "keycloak_backfill_error": e.to_string(), "tenant_id": t.id.0 })
-                            ),
+                            Err(e) => {
+                                tracing::warn!(error = %e, tenant_id = t.id.0, "keycloak backfill failed")
+                            }
                         }
                     }
                 }
@@ -252,17 +233,16 @@ pub async fn backfill_keycloak_provisioning(
                 provision_tenant_keycloak(store, keycloak.as_ref(), base_url, t, owner).await;
                 provisioned += 1;
             }
-            Err(e) => eprintln!(
-                "{}",
-                serde_json::json!({ "keycloak_backfill_error": e.to_string(), "tenant_id": t.id.0 })
-            ),
+            Err(e) => {
+                tracing::warn!(error = %e, tenant_id = t.id.0, "keycloak backfill failed")
+            }
         }
     }
     // Reconciles are reported separately so the returned count keeps its
     // original meaning (tenants newly provisioned this pass, logged by
     // `main.rs`); a stale-issuer fix is not a fresh provision.
     if reconciled > 0 {
-        eprintln!("keycloak config backfill: {reconciled} reconciled");
+        tracing::info!(reconciled, "keycloak config backfill completed");
     }
     Ok(provisioned)
 }
@@ -336,10 +316,9 @@ pub(crate) async fn admin_tenants_create(
                     .invalidate(&subdomain_host(&tenant.slug, suffix))
                     .await
             }
-            Err(e) => eprintln!(
-                "{}",
-                serde_json::json!({ "tenant_subdomain_seed_error": e.to_string(), "tenant_id": id })
-            ),
+            Err(e) => {
+                tracing::warn!(error = %e, tenant_id = id, "tenant subdomain seed failed")
+            }
         }
     }
     // Keycloak realm auto-provisioning (multi-tenancy P2e): same best-effort

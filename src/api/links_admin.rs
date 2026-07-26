@@ -673,6 +673,18 @@ pub(crate) struct BulkResp {
     results: Vec<BulkItemResult>,
 }
 
+/// Why one item of a bulk operation failed. The `Display` text goes straight
+/// into the per-item `error` field of the batch summary, so it stays short and
+/// stable, matching the rest of the API's error strings.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BulkItemError {
+    #[error("not found")]
+    NotFound,
+    #[error("store error")]
+    Store,
+}
+
 /// Applies one bulk operation to a single link, reusing the exact per-link
 /// mutation path of `admin_link_delete` / `admin_link_patch`: resolve → get →
 /// mutate `rec` → lifecycle `WebhookEvent` → `put_link_tx`/`delete_link_tx` →
@@ -684,16 +696,16 @@ pub(crate) async fn bulk_apply_one(
     code: &str,
     op: BulkOp,
     value: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), BulkItemError> {
     let (id, alias) = match resolve_for_admin(st, tenant, code).await {
         Ok(Some(v)) => v,
-        Ok(None) => return Err("not found".to_string()),
-        Err(_) => return Err("store error".to_string()),
+        Ok(None) => return Err(BulkItemError::NotFound),
+        Err(_) => return Err(BulkItemError::Store),
     };
     let mut rec = match st.store.get_link(tenant, id).await {
         Ok(Some(r)) => r,
-        Ok(None) => return Err("not found".to_string()),
-        Err(_) => return Err("store error".to_string()),
+        Ok(None) => return Err(BulkItemError::NotFound),
+        Err(_) => return Err(BulkItemError::Store),
     };
     let canonical_code = st.encode_code(id);
 
@@ -713,7 +725,7 @@ pub(crate) async fn bulk_apply_one(
         };
         let rows = st.webhooks.lifecycle_deliveries(tenant, &ev).await;
         if st.store.delete_link_tx(tenant, id, &rows).await.is_err() {
-            return Err("store error".to_string());
+            return Err(BulkItemError::Store);
         }
         if let Some(a) = &alias {
             let _ = st.store.delete_alias(tenant, a).await;
@@ -763,7 +775,7 @@ pub(crate) async fn bulk_apply_one(
     };
     let rows = st.webhooks.lifecycle_deliveries(tenant, &ev).await;
     if st.store.put_link_tx(tenant, id, &rec, &rows).await.is_err() {
-        return Err("store error".to_string());
+        return Err(BulkItemError::Store);
     }
     st.cache.invalidate(id).await;
     st.webhooks.emit_if_in_memory(ev);
@@ -821,7 +833,7 @@ pub(crate) async fn admin_links_bulk(
                 results.push(BulkItemResult {
                     code: code.clone(),
                     ok: false,
-                    error: Some(e),
+                    error: Some(e.to_string()),
                 });
             }
         }

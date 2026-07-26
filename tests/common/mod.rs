@@ -204,7 +204,7 @@ impl TestState {
             cache,
             store: self.store,
             key: self.key,
-            signing_key: self.signing_key,
+            signing_key: secrecy::SecretBox::new(Box::new(self.signing_key)),
             analytics_tx,
             sink: self.sink,
             admin_token: self.admin_token,

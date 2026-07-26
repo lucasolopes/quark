@@ -1,5 +1,9 @@
-use async_trait::async_trait;
-use quark::sheets::client::SheetsApi;
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
+use quark::sheets::client::{SheetsApi, SheetsApiError};
 use quark::sheets::{sync, SheetsConnection, SyncStatus};
 use quark::store::{open_backends, Record};
 use quark::tenant::{Tenant, TenantId, DEFAULT_TENANT};
@@ -9,9 +13,9 @@ struct MockApi {
     rows: Arc<Mutex<Vec<Vec<String>>>>,
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl SheetsApi for MockApi {
-    async fn create_spreadsheet(&self, _tok: &str, _title: &str) -> Result<String, String> {
+    async fn create_spreadsheet(&self, _tok: &str, _title: &str) -> Result<String, SheetsApiError> {
         Ok("sheet-1".to_string())
     }
     async fn update_values(
@@ -19,7 +23,7 @@ impl SheetsApi for MockApi {
         _tok: &str,
         _sid: &str,
         rows: &[Vec<String>],
-    ) -> Result<(), String> {
+    ) -> Result<(), SheetsApiError> {
         *self.rows.lock().unwrap() = rows.to_vec();
         Ok(())
     }

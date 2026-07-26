@@ -102,7 +102,13 @@ pub(crate) async fn oidc_login(
     let nonce = crate::oidc::random_token();
     let (verifier, challenge) = crate::oidc::pkce_pair();
     let url = runtime.authorize_url(&state, &nonce, &challenge, params.login_hint.as_deref());
-    let value = crate::oidc::sign_login_state(&st.signing_key, &state, &verifier, &nonce, tenant);
+    let value = crate::oidc::sign_login_state(
+        st.signing_key.expose_secret(),
+        &state,
+        &verifier,
+        Some(&nonce),
+        tenant,
+    );
     let secure = if request_is_https(&headers) {
         "; Secure"
     } else {
@@ -154,7 +160,7 @@ pub(crate) async fn oidc_callback(
     // tenant carried by a cookie that verifies successfully takes the
     // per-tenant path below, unaffected by this check.
     let login = cookie_value(&headers, LOGIN_COOKIE)
-        .and_then(|c| crate::oidc::verify_login_state(&st.signing_key, c));
+        .and_then(|c| crate::oidc::verify_login_state(st.signing_key.expose_secret(), c));
     let tenant_from_cookie = login.as_ref().and_then(|(_, _, _, t)| *t);
     if tenant_from_cookie.is_none() && (st.oidc.is_none() || !st.oidc_configured) {
         return (StatusCode::NOT_FOUND, "oidc not configured").into_response();
@@ -166,8 +172,14 @@ pub(crate) async fn oidc_callback(
     let Some((state, verifier, nonce, tenant)) = login else {
         return (StatusCode::BAD_REQUEST, "missing or invalid login state").into_response();
     };
-    // CSRF: the state echoed by the IdP must match the one we signed.
-    if params.state.as_deref() != Some(state.as_str()) {
+    // CSRF: the state echoed by the IdP must match the one we signed. Compared
+    // in constant time, like the Sheets and Slack callbacks do: `state` is a
+    // secret the attacker must not be able to recover a prefix of by timing.
+    let state_matches = match params.state.as_deref() {
+        Some(echoed) => constant_time_eq(echoed.as_bytes(), state.as_bytes()),
+        None => false,
+    };
+    if !state_matches {
         return (StatusCode::BAD_REQUEST, "state mismatch").into_response();
     }
     let Some(code) = params.code else {
@@ -357,8 +369,8 @@ pub(crate) async fn oidc_callback(
 /// (local-only logout, as before) when OIDC is off, the IdP advertised no
 /// `end_session_endpoint`, or the session carried no stored `id_token`.
 pub(crate) async fn oidc_logout(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if headers.get(HEADER_CSRF).is_none() {
-        return StatusCode::FORBIDDEN.into_response();
+    if let Err(status) = csrf_guard(&headers) {
+        return status.into_response();
     }
     // Read the session BEFORE deleting it, so we still have its `id_token` (the
     // end-session hint) and `tenant_id` (which realm issued it).

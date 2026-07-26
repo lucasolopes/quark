@@ -60,32 +60,28 @@ pub struct SecretBox {
 /// Failure opening a sealed value: malformed encoding, wrong nonce/ciphertext
 /// split, an unknown key id, or an authentication failure (wrong key, wrong
 /// AAD, or tampered data). No variant carries any plaintext.
-#[derive(Debug)]
+///
+/// No variant carries a cause on purpose: a decryption failure must not explain
+/// *why* it failed, so the `map_err(|_| ..)` at the call sites here is
+/// deliberate and stays.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
 pub enum SecretBoxError {
     /// The payload (or the `enc:v2:` structure) was not well-formed.
+    #[error("sealed value is malformed")]
     InvalidEncoding,
     /// The decoded payload was shorter than one nonce, so there is no
     /// ciphertext to decrypt.
+    #[error("sealed value is shorter than one nonce")]
     Truncated,
     /// The `enc:v2:` key id does not match any key in the keyring.
+    #[error("sealed value uses an unknown key id")]
     UnknownKey,
     /// Decryption failed: wrong key, wrong AAD, or the ciphertext was tampered
     /// with.
+    #[error("decryption failed")]
     DecryptFailed,
 }
-
-impl std::fmt::Display for SecretBoxError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SecretBoxError::InvalidEncoding => write!(f, "sealed value is malformed"),
-            SecretBoxError::Truncated => write!(f, "sealed value is shorter than one nonce"),
-            SecretBoxError::UnknownKey => write!(f, "sealed value uses an unknown key id"),
-            SecretBoxError::DecryptFailed => write!(f, "decryption failed"),
-        }
-    }
-}
-
-impl std::error::Error for SecretBoxError {}
 
 /// Computes the key id: hex of the first 4 bytes of `SHA-256(key)`.
 /// Deterministic from the key, so the same key always names the same id.
@@ -93,8 +89,13 @@ fn keyid(key: &[u8; 32]) -> String {
     let digest = Sha256::digest(key);
     let mut out = String::with_capacity(8);
     for b in &digest[..4] {
-        out.push(char::from_digit((b >> 4) as u32, 16).unwrap());
-        out.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+        // Os dois argumentos sao um nibble (0..=15) e a base 16, entao
+        // from_digit nunca devolve None aqui.
+        #[expect(clippy::unwrap_used, reason = "nibble em base 16 sempre converte")]
+        {
+            out.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+            out.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+        }
     }
     out
 }
@@ -115,7 +116,9 @@ impl SecretBox {
         let primary = match decode_key(&raw) {
             Some(k) => k,
             None => {
-                eprintln!("WARNING: QUARK_ENCRYPTION_KEY is not valid base64 for exactly 32 bytes; secrets at rest will not be encrypted.");
+                tracing::warn!(
+                    "QUARK_ENCRYPTION_KEY is not valid base64 for exactly 32 bytes; secrets at rest will not be encrypted"
+                );
                 return None;
             }
         };
@@ -129,8 +132,8 @@ impl SecretBox {
                 }
                 match decode_key(part) {
                     Some(k) => olds.push(k),
-                    None => eprintln!(
-                        "WARNING: an entry in QUARK_ENCRYPTION_KEY_OLD is not valid base64 for exactly 32 bytes; that old key is ignored."
+                    None => tracing::warn!(
+                        "an entry in QUARK_ENCRYPTION_KEY_OLD is not valid base64 for exactly 32 bytes; that old key is ignored"
                     ),
                 }
             }
@@ -179,8 +182,16 @@ impl SecretBox {
         }
         let entry = &self.keys[self.primary];
         let mut nonce_bytes = [0u8; NONCE_LEN];
-        getrandom::fill(&mut nonce_bytes).expect("system randomness source unavailable");
+        #[expect(
+            clippy::expect_used,
+            reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+        )]
+        getrandom::fill(&mut nonce_bytes).expect("system RNG must be available");
         let nonce = XNonce::from(nonce_bytes);
+        #[expect(
+            clippy::expect_used,
+            reason = "XChaCha20-Poly1305 has no input-dependent failure mode for in-memory buffers"
+        )]
         let ciphertext = entry
             .cipher
             .encrypt(
@@ -292,8 +303,12 @@ impl SecretBox {
 
 /// Decodes a base64 key that must be exactly 32 bytes; `None` otherwise.
 fn decode_key(raw: &str) -> Option<[u8; 32]> {
-    let bytes = b64.decode(raw.trim()).ok()?;
-    bytes.try_into().ok()
+    // `Zeroizing` wipes the decoded buffer when it drops: without it the raw key
+    // stays in the heap allocation after the copy into the array. Note this is
+    // hygiene for the normal path only, `panic = "abort"` in release means no
+    // destructor runs on an abort.
+    let bytes = zeroize::Zeroizing::new(b64.decode(raw.trim()).ok()?);
+    bytes.as_slice().try_into().ok()
 }
 
 /// Seals `s` with `sb` when present, otherwise passes it through unchanged.

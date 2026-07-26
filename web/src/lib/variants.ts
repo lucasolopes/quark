@@ -6,7 +6,7 @@
  * the weight is the percentage of traffic each destination receives.
  */
 
-/** Max A/B variants per link. Mirrors the server-side cap (`MAX_VARIANTS` in `src/api.rs`). */
+/** Max A/B variants per link. Mirrors the server-side cap (`MAX_VARIANTS` in `src/api/links.rs`). */
 export const MAX_VARIANTS = 10;
 
 /**

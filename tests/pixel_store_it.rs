@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use quark::pixel::{PixelConfig, PixelCredentials, Provider};
 use quark::store::postgres::PostgresStore;
 use quark::store::Store;
@@ -32,6 +37,7 @@ async fn next_pixel_id_increments_pg() {
 #[file_serial]
 async fn pixel_round_trip_pg() {
     let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let config = PixelConfig {
@@ -140,6 +146,7 @@ async fn record_pixel_health_updates_only_health_fields_pg() {
 #[file_serial]
 async fn pixel_put_upserts_pg() {
     let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let mut config = PixelConfig {

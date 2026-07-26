@@ -107,6 +107,10 @@ pub(crate) const HTTP_CLIENT_TIMEOUT_SECS: u64 = 10;
 /// event as recorded at emission time, before it is queued for delivery.
 pub(crate) fn generate_event_id() -> String {
     let mut bytes = [0u8; 16];
+    #[expect(
+        clippy::expect_used,
+        reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+    )]
     getrandom::fill(&mut bytes).expect("system RNG must be available");
     let hex = crate::hex(&bytes);
     format!("evt_{hex}")
@@ -290,15 +294,24 @@ pub(crate) async fn require_admin_for_create(
 /// Reasons `create_link_core` can fail. The `create` handler and the
 /// `/admin/import` handler both map this to a response: `create` picks an
 /// HTTP status, `admin_import` picks a human-readable failure reason string.
-#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CreateError {
+    #[error("invalid url")]
     InvalidUrl,
+    #[error("url without host")]
     NoHost,
+    #[error("blocked destination")]
     Blocked,
+    #[error("alias collides with the numeric code space")]
     AliasCollision,
+    #[error("alias in use")]
     AliasInUse,
+    #[error("invalid ttl")]
     InvalidTtl,
+    #[error("id space exhausted")]
     IdExhausted,
+    #[error("backend error")]
     Backend,
 }
 
@@ -1107,7 +1120,8 @@ pub(crate) async fn unlock(
     // code, and the cookie name is always a safe base62 string. The token is also
     // bound to the current password hash, so rotating the password kills it.
     let canonical = st.encode_code(id);
-    let (token, _expiry) = crate::password::unlock_token(&st.signing_key, &canonical, &hash, now());
+    let (token, _expiry) =
+        crate::password::unlock_token(st.signing_key.expose_secret(), &canonical, &hash, now());
     let secure = if request_is_https(&headers) {
         "; Secure"
     } else {
@@ -1189,7 +1203,13 @@ pub(crate) async fn redirect(
             // `canonical` is computed only here, never on the unprotected hot path.
             if let Some(hash) = rec.password_hash.as_deref() {
                 let canonical = st.encode_code(id);
-                if !is_unlocked(&headers, &st.signing_key, &canonical, hash, now) {
+                if !is_unlocked(
+                    &headers,
+                    st.signing_key.expose_secret(),
+                    &canonical,
+                    hash,
+                    now,
+                ) {
                     return interstitial_response(&code, raw_query.as_deref(), &headers, false);
                 }
             }
@@ -1329,8 +1349,8 @@ pub(crate) async fn redirect(
             // GPC (`sec-gpc` header, read above) suppresses this send: the
             // same channel feeds both analytics capture and conversion
             // forwarding, so gating it here covers both per the opt-out.
-            if !gpc {
-                let _ = st.analytics_tx.try_send(ev);
+            if !gpc && st.analytics_tx.try_send(ev).is_err() {
+                note_analytics_drop();
             }
 
             (
@@ -1401,5 +1421,27 @@ pub(crate) async fn admin_stats(State(st): State<Arc<AppState>>, headers: Header
     match st.sink.stats_for_tenant(p.tenant.0).await {
         Ok(agg) => Json(agg).into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+/// Running count of click events dropped because the analytics channel was
+/// full. The redirect must never block on analytics, so a full channel drops
+/// the event — but dropping it silently made saturation invisible (LUC-103).
+static ANALYTICS_DROPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many drops pass between log lines. Saturation produces drops at request
+/// rate, so logging every one would bury the rest of the log.
+const ANALYTICS_DROP_LOG_EVERY: u64 = 1000;
+
+/// Records one dropped click event and logs on the first drop and every
+/// `ANALYTICS_DROP_LOG_EVERY` after it. Only ever called on the drop path, so
+/// a healthy redirect pays nothing for it.
+fn note_analytics_drop() {
+    let n = ANALYTICS_DROPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if n == 1 || n.is_multiple_of(ANALYTICS_DROP_LOG_EVERY) {
+        tracing::warn!(
+            dropped_total = n,
+            "analytics channel full, click event dropped"
+        );
     }
 }

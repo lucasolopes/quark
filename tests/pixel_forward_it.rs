@@ -1,3 +1,8 @@
+// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
+// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
+// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+#![allow(clippy::unwrap_used)]
+
 use axum::extract::State;
 use axum::routing::post;
 use axum::Router;
@@ -338,7 +343,10 @@ async fn worker_flush_is_fail_open_when_provider_returns_500() {
 /// store). A pixel added *after* the worker has started is invisible until
 /// the next tick refreshes the snapshot; once it does, forwarding uses the
 /// refreshed snapshot with no further store call needed on the flush path.
-#[tokio::test]
+// `start_paused` makes the 5s refresh tick cost nothing: tokio auto-advances the
+// clock whenever every task is parked on a timer, so the sleep below resolves
+// instantly instead of burning 5.5s of wall clock.
+#[tokio::test(start_paused = true)]
 async fn worker_forwards_to_a_pixel_added_after_start_once_the_snapshot_refreshes() {
     let (mock_base, captured) = mock_server("/mp/collect").await;
     let dir = tempfile::tempdir().unwrap();
@@ -371,7 +379,8 @@ async fn worker_forwards_to_a_pixel_added_after_start_once_the_snapshot_refreshe
 
     // Past the 5s ticker: the worker refreshes its cached snapshot here,
     // with no event flowing through the channel (so no per-flush store
-    // call is exercised, only the ticker-driven refresh).
+    // call is exercised, only the ticker-driven refresh). Virtual time, so
+    // this is free.
     tokio::time::sleep(std::time::Duration::from_millis(5_500)).await;
 
     tx.send(ev(42, 1_752_300_000)).await.unwrap();
