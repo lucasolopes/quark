@@ -166,6 +166,12 @@ array of idempotent DDL in `PostgresStore::init_schema`
 
 ## Schema evolution: LMDB sub-dbs
 
+**An LMDB env cannot be reopened while it is still open.** heed 0.22 answers
+`EnvAlreadyOpened`; 0.20 tolerated it. What makes this bite is that a handle is
+an `Arc`: dropping the variable you named is not enough if a `ScopedStore` or a
+second clone is still alive. In a test that means dropping every handle before
+reopening the same path.
+
 A new sub-db requires bumping `const MAX_DBS: u32 = 17;`
 (`src/store/lmdb.rs:94`, whose comment counts the sub-dbs) - otherwise `open()`
 fails at runtime, not compile time. `create_database` calls live in
