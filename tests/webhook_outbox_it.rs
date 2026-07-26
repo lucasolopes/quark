@@ -109,7 +109,7 @@ async fn add_sub(store: &Arc<dyn Store>, url: &str) -> WebhookSubscription {
         .unwrap();
     let sub = WebhookSubscription {
         id,
-        url: url.to_string(),
+        url: url.into(),
         events: vec![EventType::LinkCreated],
         secret: TEST_SECRET.to_string(),
         active: true,

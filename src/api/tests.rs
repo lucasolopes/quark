@@ -1427,7 +1427,7 @@ async fn spawn_test_server() -> (String, std::sync::Arc<ServerState>) {
 fn sub(url: &str, secret: &str, kind: SubscriptionKind) -> WebhookSubscription {
     WebhookSubscription {
         id: 1,
-        url: url.to_string(),
+        url: url.into(),
         events: vec![EventType::LinkCreated],
         secret: secret.to_string(),
         active: true,

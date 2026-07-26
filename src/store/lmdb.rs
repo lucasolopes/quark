@@ -1890,7 +1890,8 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap()
-                .url,
+                .url
+                .expose(),
             "https://e.com"
         );
         assert_eq!(
@@ -1955,7 +1956,7 @@ mod tests {
         );
         // Campos nao-health preservados.
         assert_eq!(got.connector_id.as_deref(), Some("zapier"));
-        assert_eq!(got.url, "https://h/x");
+        assert_eq!(got.url.expose(), "https://h/x");
         assert!(got.active);
     }
 

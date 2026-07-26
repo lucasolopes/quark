@@ -114,11 +114,96 @@ impl SubscriptionKind {
     }
 }
 
+/// Placeholder printed when the destination has no host to show, either
+/// because the string is not a URL at all or because the authority part is
+/// empty. Never contains anything derived from the value itself.
+const NO_HOST: &str = "<invalid url>";
+
+/// A webhook destination URL. For Slack, Discord, Telegram and most of the
+/// generic connectors (Make, Zapier, n8n) **the URL is the credential**: the
+/// token lives in the path, and whoever holds the URL can post to the channel.
+/// That is why `Display` and `Debug` are redacted: any
+/// `tracing::warn!(url = %sub.url, ...)` prints the host and nothing else.
+///
+/// The raw value only comes out of `expose()`, mirroring `ExposeSecret` from
+/// `secrecy`. `reqwest` does not implement `IntoUrl` for this type, so every
+/// site that builds the outbound request needs an explicit `expose()` and
+/// reintroducing the leak becomes a compile error instead of a review habit.
+///
+/// `serde` is transparent: the value persisted in LMDB and Postgres, and the
+/// one returned by `GET /admin/webhooks`, stay the raw string. There is no data
+/// migration and no API contract change.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WebhookUrl(String);
+
+impl WebhookUrl {
+    pub fn new(raw: impl Into<String>) -> Self {
+        Self(raw.into())
+    }
+
+    /// The raw value. Use only where the URL really has to go on the wire.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    /// Redacted form carrying the subscription id, which is what an operator
+    /// needs to find the row in the store.
+    pub fn redacted(&self, id: u64) -> String {
+        format!("{}#{id}", self.host_or_placeholder())
+    }
+
+    /// The authority part, with userinfo stripped. Done with plain slicing
+    /// rather than `abuse::extract_host` because this runs inside `Display`:
+    /// it must not allocate, and it must return something for a value that
+    /// does not parse as a URL at all (`extract_host` gives `None`, which on a
+    /// malformed destination would leave the log line with no host at the exact
+    /// moment someone is trying to work out which webhook is broken).
+    fn host_or_placeholder(&self) -> &str {
+        let after_scheme = self.0.split("://").nth(1).unwrap_or(&self.0);
+        let authority = after_scheme
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or(NO_HOST);
+        // `user:password@host` puts a credential before the host.
+        let host = authority.rsplit('@').next().unwrap_or(NO_HOST);
+        if host.is_empty() {
+            NO_HOST
+        } else {
+            host
+        }
+    }
+}
+
+impl std::fmt::Display for WebhookUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/\u{2026}", self.host_or_placeholder())
+    }
+}
+
+impl std::fmt::Debug for WebhookUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WebhookUrl({self})")
+    }
+}
+
+impl From<String> for WebhookUrl {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for WebhookUrl {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
 /// A registered outbound webhook subscription.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookSubscription {
     pub id: u64,
-    pub url: String,
+    pub url: WebhookUrl,
     pub events: Vec<EventType>,
     pub secret: String,
     pub active: bool,
@@ -283,6 +368,114 @@ pub fn channel_payload(kind: SubscriptionKind, message: &str) -> Option<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Discord incoming webhook: everything after the id is the credential.
+    const DISCORD: &str =
+        "https://discord.com/api/webhooks/1234567890/aVerySecretTokenThatMustNeverLeak";
+
+    #[test]
+    fn display_redacts_the_token_and_keeps_the_host() {
+        let url = WebhookUrl::new(DISCORD);
+        let shown = format!("{url}");
+        assert!(
+            !shown.contains("aVerySecretTokenThatMustNeverLeak"),
+            "leaked: {shown}"
+        );
+        assert!(
+            shown.contains("discord.com"),
+            "no host left to diagnose with: {shown}"
+        );
+    }
+
+    #[test]
+    fn debug_redacts_the_token_too() {
+        let url = WebhookUrl::new(DISCORD);
+        let shown = format!("{url:?}");
+        assert!(
+            !shown.contains("aVerySecretTokenThatMustNeverLeak"),
+            "leaked: {shown}"
+        );
+    }
+
+    /// A subscription is `Debug`, and `{:?}` on the whole struct must not be a
+    /// way around the newtype.
+    #[test]
+    fn subscription_debug_does_not_leak_the_url() {
+        let sub = WebhookSubscription {
+            id: 1,
+            url: WebhookUrl::new(DISCORD),
+            events: vec![EventType::LinkCreated],
+            secret: "whsec_x".into(),
+            active: true,
+            created: 0,
+            kind: SubscriptionKind::Generic,
+            label: None,
+            connector_id: None,
+            external_id: None,
+            last_delivery_at: None,
+            last_delivery_status: Default::default(),
+        };
+        let shown = format!("{sub:?}");
+        assert!(
+            !shown.contains("aVerySecretTokenThatMustNeverLeak"),
+            "leaked: {shown}"
+        );
+    }
+
+    #[test]
+    fn userinfo_is_not_printed_either() {
+        let url = WebhookUrl::new("https://user:hunter2@hooks.example.com/services/abc");
+        let shown = format!("{url}");
+        assert!(!shown.contains("hunter2"), "leaked credentials: {shown}");
+        assert!(shown.contains("hooks.example.com"), "no host: {shown}");
+    }
+
+    #[test]
+    fn a_query_string_is_not_printed_either() {
+        let url = WebhookUrl::new("https://hooks.example.com?token=hunter2");
+        let shown = format!("{url}");
+        assert!(!shown.contains("hunter2"), "leaked query: {shown}");
+    }
+
+    #[test]
+    fn expose_returns_the_raw_url() {
+        assert_eq!(WebhookUrl::new(DISCORD).expose(), DISCORD);
+    }
+
+    #[test]
+    fn serde_is_transparent_so_persisted_blobs_do_not_change() {
+        let url = WebhookUrl::new(DISCORD);
+        assert_eq!(
+            serde_json::to_string(&url).unwrap(),
+            format!("\"{DISCORD}\"")
+        );
+        let back: WebhookUrl = serde_json::from_str(&format!("\"{DISCORD}\"")).unwrap();
+        assert_eq!(back.expose(), DISCORD);
+    }
+
+    #[test]
+    fn legacy_subscription_blob_still_deserializes() {
+        let legacy = r#"{"id":7,"url":"https://h/x","events":["link.created"],"secret":"s","active":true,"created":0}"#;
+        let sub: WebhookSubscription = serde_json::from_str(legacy).unwrap();
+        assert_eq!(sub.url.expose(), "https://h/x");
+    }
+
+    #[test]
+    fn redacted_includes_the_subscription_id() {
+        let shown = WebhookUrl::new(DISCORD).redacted(42);
+        assert!(shown.contains("42"), "no id to find the row with: {shown}");
+        assert!(!shown.contains("aVerySecretTokenThatMustNeverLeak"));
+    }
+
+    #[test]
+    fn a_url_without_a_scheme_still_hides_the_path() {
+        let url = WebhookUrl::new("not a url at all/aVerySecretTokenThatMustNeverLeak");
+        let shown = format!("{url}");
+        assert!(
+            !shown.contains("aVerySecretTokenThatMustNeverLeak"),
+            "leaked: {shown}"
+        );
+    }
 
     #[test]
     fn event_type_wire_strings() {

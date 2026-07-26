@@ -22,7 +22,10 @@ pub(crate) struct WebhookPatchReq {
 #[derive(Serialize)]
 pub(crate) struct WebhookRow {
     id: u64,
-    url: String,
+    /// Kept as `WebhookUrl` rather than unwrapped to `String`: `serde` is
+    /// transparent, so the panel keeps receiving the raw URL it needs to show,
+    /// while a stray `{:?}` on this row cannot print the token.
+    url: WebhookUrl,
     events: Vec<EventType>,
     active: bool,
     created: u64,
@@ -247,7 +250,7 @@ pub(crate) async fn admin_webhooks_create(
     };
     let sub = WebhookSubscription {
         id,
-        url: req.url,
+        url: WebhookUrl::new(req.url),
         events: req.events,
         secret: secret.clone(),
         active: req.active.unwrap_or(true),
@@ -288,7 +291,7 @@ pub(crate) async fn admin_webhooks_patch(
         if let Err((status, msg)) = validate_webhook_url(&url) {
             return (status, msg).into_response();
         }
-        sub.url = url;
+        sub.url = WebhookUrl::new(url);
     }
     if let Some(events) = req.events {
         sub.events = events;
@@ -593,7 +596,7 @@ pub(crate) async fn send_test_event_guarded(
     // still an operator-supplied URL, and this endpoint fires synchronously
     // instead of through the queue's own guard (see
     // `webhooks::delivery::deliver_to_matching_guarded`).
-    let host = match extract_host(&sub.url) {
+    let host = match extract_host(sub.url.expose()) {
         Some(h) => h,
         None => {
             return (
@@ -651,7 +654,7 @@ pub(crate) async fn send_test_event_guarded(
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR.into_response(), None),
     };
     let mut builder = client
-        .post(&sub.url)
+        .post(sub.url.expose())
         .header("content-type", "application/json");
     for (name, value) in &req.extra_headers {
         builder = builder.header(*name, value);

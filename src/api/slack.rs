@@ -157,7 +157,7 @@ pub(crate) async fn slack_callback(
         .map(|idx| &existing[idx]);
     if let Some(dup) = dup {
         let updated = WebhookSubscription {
-            url: url.clone(),
+            url: WebhookUrl::new(url.clone()),
             label: label.clone().or_else(|| dup.label.clone()),
             external_id: channel_id.clone().or_else(|| dup.external_id.clone()),
             connector_id: Some("slack".to_string()),
@@ -185,7 +185,7 @@ pub(crate) async fn slack_callback(
     };
     let sub = WebhookSubscription {
         id,
-        url,
+        url: WebhookUrl::new(url),
         events: all_events(),
         secret: String::new(),
         active: true,
@@ -230,7 +230,7 @@ fn slack_dup_index(
         s.kind == SubscriptionKind::Slack
             && ((channel_id.is_some() && s.external_id.as_deref() == channel_id)
                 || (channel_id.is_none() && label.is_some() && s.label.as_deref() == label)
-                || s.url == url)
+                || s.url.expose() == url)
     })
 }
 
@@ -258,7 +258,7 @@ mod tests {
     ) -> WebhookSubscription {
         WebhookSubscription {
             id,
-            url: url.to_string(),
+            url: url.into(),
             events: vec![],
             secret: String::new(),
             active: true,

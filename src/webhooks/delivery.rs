@@ -306,7 +306,7 @@ async fn deliver_to_matching_guarded(
         return;
     };
     for sub in tenant_subs.iter().filter(|s| matches(s, &ev.event_type)) {
-        let host = match extract_host(&sub.url) {
+        let host = match extract_host(sub.url.expose()) {
             Some(h) => h,
             None => {
                 tracing::warn!(url = %sub.url, "webhook destination url is invalid");
@@ -409,7 +409,7 @@ async fn deliver_one(
     let mut outcome = crate::health::HealthStatus::Error("no attempt".into());
     for attempt in 0..DELIVERY_ATTEMPTS {
         let mut builder = client
-            .post(&sub.url)
+            .post(sub.url.expose())
             .header("content-type", "application/json");
         for (name, value) in &req.extra_headers {
             builder = builder.header(*name, value);
@@ -626,7 +626,7 @@ async fn deliver_claimed(
         },
     };
 
-    let host = match extract_host(&sub.url) {
+    let host = match extract_host(sub.url.expose()) {
         Some(h) => h,
         None => {
             tracing::warn!(url = %sub.url, "relayed webhook url is invalid");
@@ -713,7 +713,7 @@ async fn post_once(
     req: &OutgoingRequest,
 ) -> bool {
     let mut builder = client
-        .post(&sub.url)
+        .post(sub.url.expose())
         .header("content-type", "application/json");
     for (name, value) in &req.extra_headers {
         builder = builder.header(*name, value);
@@ -1607,7 +1607,7 @@ mod tests {
     ) -> WebhookSubscription {
         WebhookSubscription {
             id,
-            url: url.to_string(),
+            url: url.into(),
             events,
             secret: secret.to_string(),
             active,

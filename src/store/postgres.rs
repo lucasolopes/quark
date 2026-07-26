@@ -12,7 +12,7 @@ use crate::store::{
     AlertRule, LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant,
 };
 use crate::tenant::{Membership, Role, Tenant, TenantId, User};
-use crate::webhooks::{SubscriptionKind, WebhookSubscription};
+use crate::webhooks::{SubscriptionKind, WebhookSubscription, WebhookUrl};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{AssertSqlSafe, PgPool, Row};
 
@@ -388,7 +388,7 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
         .map_err(StoreError::backend)?;
     Ok(WebhookSubscription {
         id: id as u64,
-        url,
+        url: WebhookUrl::new(url),
         events: serde_json::from_value(events)?,
         secret,
         active,
@@ -1484,7 +1484,7 @@ impl Store for PostgresStore {
                  ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6, kind=$7, tenant_id=$8, label=$9, connector_id=$10, external_id=$11, last_delivery_at=$12, last_delivery_status=$13",
             )
             .bind(sub.id as i64)
-            .bind(&sub.url)
+            .bind(sub.url.expose())
             .bind(&events)
             .bind(&sub.secret)
             .bind(sub.active)

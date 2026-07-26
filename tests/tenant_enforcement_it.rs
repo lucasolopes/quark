@@ -127,7 +127,7 @@ async fn cloud_analytics_and_outbox_accessors_survive_force_rls() {
     let sub_id = t1.next_webhook_id().await.unwrap();
     let sub = WebhookSubscription {
         id: sub_id,
-        url: "https://enforcement.example/hook".to_string(),
+        url: "https://enforcement.example/hook".into(),
         events: vec![EventType::LinkCreated],
         secret: "whsec_test".to_string(),
         active: true,

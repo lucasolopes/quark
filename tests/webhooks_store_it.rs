@@ -49,7 +49,8 @@ async fn webhook_crud_round_trip_pg() {
             .await
             .unwrap()
             .unwrap()
-            .url,
+            .url
+            .expose(),
         "https://e.com"
     );
     assert_eq!(
@@ -119,7 +120,7 @@ async fn record_webhook_health_updates_only_health_fields_pg() {
     );
     // Campos nao-health preservados.
     assert_eq!(got.connector_id.as_deref(), Some("zapier"));
-    assert_eq!(got.url, "https://h/x");
+    assert_eq!(got.url.expose(), "https://h/x");
     assert!(got.active);
 }
 
