@@ -380,6 +380,16 @@ retry assume: um deploy que serve `404` por alguns segundos não custa a sua
 assinatura. Se a segunda tentativa também responder `404` ou `410`, o quark
 para de retentar e desliga a assinatura, gravando o motivo.
 
+Essa tentativa de confirmação é garantida no worker em memória, que mantém a
+sequência inteira de retry dentro de uma chamada só e consegue distinguir uma
+sequência de respostas permanentes de uma resposta isolada. Já o relay durável
+(Postgres) só tem o contador `attempts` persistido, que conta todas as falhas e
+não as consecutivas, então lá a segunda resposta permanente não precisa ser a
+segunda tentativa: uma entrega que levou um `503` e depois um `404` é desligada
+nesse único `404`. Para um destino que responde `404` desde a primeira
+tentativa, que é o caso para o qual isso existe, os dois caminhos se comportam
+igual.
+
 `400` e `422` ficam de fora de propósito. Um `422` geralmente quer dizer que o
 payload do quark está errado, e não que o endpoint sumiu, e derrubar uma
 integração que funciona por causa de um bug nosso é o pior resultado possível.

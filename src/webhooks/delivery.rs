@@ -518,6 +518,9 @@ async fn deliver_one(
         }
     }
 
+    let confirmed_permanent =
+        permanent_status.filter(|_| permanent_streak >= PERMANENT_DELIVERY_ATTEMPTS);
+
     if !matches!(outcome, crate::health::HealthStatus::Ok) {
         // `webhook-id` is only present for `Generic` (Standard Webhooks
         // signing); channel kinds have no per-attempt id to report.
@@ -526,18 +529,41 @@ async fn deliver_one(
             .iter()
             .find(|(name, _)| *name == "webhook-id")
             .map(|(_, value)| value.as_str());
-        tracing::warn!(
-            webhook_id = sub.id,
-            url = %sub.url,
-            msg_id,
-            "webhook delivery budget exhausted"
-        );
+        // Two distinct exits, two distinct messages: the loop either burned the
+        // whole transient budget (an unstable destination) or stopped early on a
+        // confirmed permanent answer (a dead destination, budget shortened to
+        // `PERMANENT_DELIVERY_ATTEMPTS` on purpose). Grepping for one must not
+        // count the other.
+        if confirmed_permanent.is_some() {
+            tracing::warn!(
+                webhook_id = sub.id,
+                url = %sub.url,
+                msg_id,
+                "webhook delivery stopped early on a confirmed permanent failure"
+            );
+        } else {
+            tracing::warn!(
+                webhook_id = sub.id,
+                url = %sub.url,
+                msg_id,
+                "webhook delivery budget exhausted"
+            );
+        }
     }
 
-    // Health passive recording AND the permanent-failure disable, both off the
-    // redirect hot path: `link.clicked` must never touch the store from here
-    // (that event is emitted on the synchronous redirect path). Best-effort:
-    // log and swallow any error.
+    // Only the health record is excluded for `link.clicked`, and the reason is
+    // volume, not latency: that event fires on every redirect, so recording
+    // health here would be one store write per click. Neither write is on the
+    // redirect's synchronous path (delivery runs in the worker task, reached
+    // through a `try_send`).
+    //
+    // The disable does not have the volume problem: it happens once, only on a
+    // confirmed permanent failure, and after it the subscription stops being
+    // delivered to at all. Excluding `link.clicked` from it was the bug LUC-141
+    // set out to fix, because a Slack or Discord connection created by OAuth
+    // subscribes to every event, so a tenant that only generates clicks would
+    // keep posting to a revoked endpoint forever. Best-effort on both: log and
+    // swallow any error.
     if ev.event_type != EventType::LinkClicked {
         if let Err(e) = store
             .record_webhook_health(ev.tenant_id, sub.id, crate::now(), outcome)
@@ -545,20 +571,18 @@ async fn deliver_one(
         {
             tracing::warn!(error = %e, "webhook health record write failed");
         }
+    }
 
-        if let Some(code) =
-            permanent_status.filter(|_| permanent_streak >= PERMANENT_DELIVERY_ATTEMPTS)
-        {
-            let reason = format!("status {code}");
-            tracing::warn!(
-                webhook_id = sub.id,
-                status = code,
-                url = %sub.url,
-                "webhook destination is gone, disabling the subscription"
-            );
-            if let Err(e) = store.disable_webhook(ev.tenant_id, sub.id, &reason).await {
-                tracing::warn!(error = %e, webhook_id = sub.id, "webhook disable write failed");
-            }
+    if let Some(code) = confirmed_permanent {
+        let reason = format!("status {code}");
+        tracing::warn!(
+            webhook_id = sub.id,
+            status = code,
+            url = %sub.url,
+            "webhook destination is gone, disabling the subscription"
+        );
+        if let Err(e) = store.disable_webhook(ev.tenant_id, sub.id, &reason).await {
+            tracing::warn!(error = %e, webhook_id = sub.id, "webhook disable write failed");
         }
     }
 }
@@ -753,8 +777,8 @@ async fn deliver_claimed(
         if let Err(e) = store.mark_delivered(delivery.id).await {
             tracing::warn!(error = %e, "webhook relay mark-delivered failed");
         }
-        // Health passive recording, off the redirect hot path (see
-        // `deliver_one`'s comment): `link.clicked` never records here either.
+        // Health is one write per click for `link.clicked` (see `deliver_one`'s
+        // comment), so that event is excluded here too.
         if !matches!(event_type, EventType::LinkClicked) {
             let _ = store
                 .record_webhook_health(
@@ -790,12 +814,12 @@ async fn deliver_claimed(
         _ => MAX_DELIVERY_ATTEMPTS,
     };
     if attempts >= budget {
-        // Same redirect hot path exclusion as the health recording above:
-        // `link.clicked` never writes to the store from a delivery path.
-        if let (AttemptOutcome::Permanent(code), false) = (
-            attempt_outcome,
-            matches!(event_type, EventType::LinkClicked),
-        ) {
+        // Unlike the health record above, the disable applies to every event
+        // type including `link.clicked`: it is a single write on a confirmed
+        // permanent failure, not one per click, and skipping it would leave an
+        // OAuth-created Slack or Discord connection posting to a revoked
+        // endpoint forever (see `deliver_one`'s comment).
+        if let AttemptOutcome::Permanent(code) = attempt_outcome {
             let reason = format!("status {code}");
             tracing::warn!(
                 webhook_id = sub.id,
@@ -2552,8 +2576,8 @@ mod tests {
             );
         }
         assert_eq!(
-            checked, 12,
-            "expected 12 url log sites in delivery.rs, found {checked}"
+            checked, 13,
+            "expected 13 url log sites in delivery.rs, found {checked}"
         );
     }
 
@@ -2778,21 +2802,66 @@ mod tests {
         );
     }
 
-    /// The redirect hot path invariant: `link.clicked` is emitted on the
-    /// synchronous redirect, so it must not gain a store write, not even when
-    /// the destination is permanently gone.
+    /// `link.clicked` is the main case for LUC-141: a Slack/Discord connection
+    /// created by OAuth subscribes to every event, and a tenant that only
+    /// generates clicks would keep posting to a revoked endpoint forever if
+    /// this event were excluded from the disable. The disable happens once, on
+    /// a confirmed permanent failure, and it is not on the redirect's
+    /// synchronous path (delivery runs in the worker task). The health record
+    /// stays excluded because that one is a write per click.
     #[tokio::test]
-    async fn link_clicked_never_writes_to_the_store_on_a_permanent_status() {
+    async fn link_clicked_disables_on_a_permanent_status_but_never_records_health() {
         let (state, stub) = deliver_against(vec![410], EventType::LinkClicked).await;
 
         assert_eq!(hits(&state), 2, "the classification itself still applies");
-        assert!(
-            store_disable_calls(&stub).is_empty(),
-            "link.clicked must never write to the store (redirect hot path)"
+        let calls = store_disable_calls(&stub);
+        assert_eq!(
+            calls.len(),
+            1,
+            "a confirmed 410 must disable even for link.clicked: {calls:?}"
         );
+        assert_eq!(calls[0].1, 1);
+        assert_eq!(calls[0].2, "status 410");
         assert!(
             store_health_calls(&stub).is_empty(),
-            "link.clicked must never record health either"
+            "link.clicked must never record health: that is a write per click"
+        );
+    }
+
+    /// The loop has two ways out and an operator greps for the difference: a
+    /// destination that burned the whole transient budget is unstable, one that
+    /// stopped on a confirmed 404/410 is dead. Reporting "budget exhausted" for
+    /// the permanent exit is a lie, because the budget was shortened to
+    /// `PERMANENT_DELIVERY_ATTEMPTS` on purpose, and it makes the two counts
+    /// impossible to tell apart.
+    #[tokio::test]
+    async fn the_permanent_exit_and_the_exhausted_budget_log_different_messages() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let captured = CapturedText::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        deliver_against(vec![410], EventType::LinkCreated).await;
+        let permanent = captured.contents();
+        assert!(
+            permanent.contains("webhook delivery stopped early on a confirmed permanent failure"),
+            "the permanent exit needs its own message:\n{permanent}"
+        );
+        assert!(
+            !permanent.contains("webhook delivery budget exhausted"),
+            "the permanent exit must not claim the budget ran out:\n{permanent}"
+        );
+
+        let captured = CapturedText::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        deliver_against(vec![503], EventType::LinkCreated).await;
+        let transient = captured.contents();
+        assert!(
+            transient.contains("webhook delivery budget exhausted"),
+            "a destination that really burned the budget still says so:\n{transient}"
         );
     }
 
@@ -2890,17 +2959,23 @@ mod tests {
         }));
     }
 
-    /// Same hot path invariant on the relay: the exclusion that already
-    /// guards health recording has to guard the disable write too.
+    /// Same rule on the relay: the disable applies to `link.clicked` too, and
+    /// the health record still does not.
     #[tokio::test]
-    async fn relay_link_clicked_never_writes_the_disable() {
+    async fn relay_link_clicked_disables_but_never_records_health() {
         let (state, stub) = relay_attempts(vec![410], EventType::LinkClicked, 8).await;
 
         assert_eq!(hits(&state), 2);
-        assert!(
-            store_disable_calls(&stub).is_empty(),
-            "link.clicked must never write to the store (redirect hot path)"
+        let calls = store_disable_calls(&stub);
+        assert_eq!(
+            calls.len(),
+            1,
+            "a confirmed 410 must disable even for link.clicked: {calls:?}"
         );
-        assert!(store_health_calls(&stub).is_empty());
+        assert_eq!(calls[0].2, "status 410");
+        assert!(
+            store_health_calls(&stub).is_empty(),
+            "link.clicked must never record health: that is a write per click"
+        );
     }
 }
