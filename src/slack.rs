@@ -94,7 +94,7 @@ pub async fn exchange_code(
     client: &reqwest::Client,
     cfg: &SlackConfig,
     code: &str,
-) -> Result<OAuthAccess, String> {
+) -> Result<OAuthAccess, SlackError> {
     let resp = client
         .post(TOKEN_ENDPOINT)
         .form(&[
@@ -105,11 +105,27 @@ pub async fn exchange_code(
         ])
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(SlackError::Transport)?;
     if !resp.status().is_success() {
-        return Err(format!("slack oauth exchange failed: {}", resp.status()));
+        return Err(SlackError::Status(resp.status()));
     }
-    resp.json::<OAuthAccess>().await.map_err(|e| e.to_string())
+    resp.json::<OAuthAccess>()
+        .await
+        .map_err(SlackError::Malformed)
+}
+
+/// Why the Slack OAuth exchange failed. The handler maps every variant to the
+/// same 502, but the split keeps a transport failure (worth a retry) apart from
+/// a rejection by Slack, and keeps the cause attached for the log.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum SlackError {
+    #[error("could not reach the slack oauth endpoint")]
+    Transport(#[source] reqwest::Error),
+    #[error("slack rejected the oauth exchange with status {0}")]
+    Status(reqwest::StatusCode),
+    #[error("the slack oauth response could not be parsed")]
+    Malformed(#[source] reqwest::Error),
 }
 
 #[cfg(test)]

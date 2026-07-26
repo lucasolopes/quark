@@ -110,7 +110,10 @@ pub(crate) async fn slack_callback(
     };
     let access = match crate::slack::exchange_code(&reqwest_client(), cfg, &code).await {
         Ok(a) => a,
-        Err(_) => return (StatusCode::BAD_GATEWAY, "slack oauth exchange failed").into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "slack oauth exchange failed");
+            return (StatusCode::BAD_GATEWAY, "slack oauth exchange failed").into_response();
+        }
     };
     if !access.ok {
         return (StatusCode::BAD_GATEWAY, "slack rejected the install").into_response();
