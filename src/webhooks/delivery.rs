@@ -728,7 +728,17 @@ async fn deliver_claimed(
                 );
                 let next =
                     now.saturating_add(relay_backoff_secs(delivery.attempts.saturating_add(1)));
-                let _ = store.mark_retry(delivery.id, next, delivery.attempts).await;
+                // No POST happened, so the permanent streak is carried over
+                // untouched: a lookup failure is not an answer from the
+                // destination and must not reset or advance it.
+                let _ = store
+                    .mark_retry(
+                        delivery.id,
+                        next,
+                        delivery.attempts,
+                        delivery.permanent_streak,
+                    )
+                    .await;
                 return;
             }
         },
@@ -804,22 +814,30 @@ async fn deliver_claimed(
     }
 
     let attempts = delivery.attempts.saturating_add(1);
-    // The relay carries no per-attempt history other than the persisted
-    // `attempts` counter, so the permanent budget is compared against the total
-    // rather than against a streak (which the in-memory path can track because
-    // its retries live inside one call). The effect is the same for the case
-    // that matters, a destination answering 404/410 from the first attempt.
-    let budget = match attempt_outcome {
-        AttemptOutcome::Permanent(_) => PERMANENT_DELIVERY_ATTEMPTS,
-        _ => MAX_DELIVERY_ATTEMPTS,
+    // The durable twin of `deliver_one`'s local `permanent_streak`: the relay's
+    // attempts are spread across polls and nodes, so the run of consecutive
+    // permanent answers has to live in the row. The total in `attempts` cannot
+    // stand in for it, because on a `503` followed by a `404` the total reaches
+    // `PERMANENT_DELIVERY_ATTEMPTS` with a single 404 ever observed, which is
+    // exactly the false positive the confirmation attempt exists to prevent.
+    // Any other failure outcome resets the run, same as in memory.
+    let permanent_streak = match attempt_outcome {
+        AttemptOutcome::Permanent(_) => delivery.permanent_streak.saturating_add(1),
+        _ => 0,
     };
-    if attempts >= budget {
+    let confirmed_permanent = match attempt_outcome {
+        AttemptOutcome::Permanent(code) if permanent_streak >= PERMANENT_DELIVERY_ATTEMPTS => {
+            Some(code)
+        }
+        _ => None,
+    };
+    if confirmed_permanent.is_some() || attempts >= MAX_DELIVERY_ATTEMPTS {
         // Unlike the health record above, the disable applies to every event
         // type including `link.clicked`: it is a single write on a confirmed
         // permanent failure, not one per click, and skipping it would leave an
         // OAuth-created Slack or Discord connection posting to a revoked
         // endpoint forever (see `deliver_one`'s comment).
-        if let AttemptOutcome::Permanent(code) = attempt_outcome {
+        if let Some(code) = confirmed_permanent {
             let reason = format!("status {code}");
             tracing::warn!(
                 webhook_id = sub.id,
@@ -844,7 +862,7 @@ async fn deliver_claimed(
     }
     let next_attempt_at = now.saturating_add(relay_backoff_secs(attempts));
     if let Err(e) = store
-        .mark_retry(delivery.id, next_attempt_at, attempts)
+        .mark_retry(delivery.id, next_attempt_at, attempts, permanent_streak)
         .await
     {
         tracing::warn!(error = %e, "webhook relay mark-retry failed");
@@ -1057,8 +1075,13 @@ mod tests {
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum MarkCall {
         Delivered,
-        Retry { attempts: u32 },
-        Dead { attempts: u32 },
+        Retry {
+            attempts: u32,
+            permanent_streak: u32,
+        },
+        Dead {
+            attempts: u32,
+        },
     }
 
     impl StubStore {
@@ -1782,11 +1805,12 @@ mod tests {
             _id: i64,
             _next_attempt_at: u64,
             attempts: u32,
+            permanent_streak: u32,
         ) -> Result<(), StoreError> {
-            self.mark_calls
-                .lock()
-                .unwrap()
-                .push(MarkCall::Retry { attempts });
+            self.mark_calls.lock().unwrap().push(MarkCall::Retry {
+                attempts,
+                permanent_streak,
+            });
             Ok(())
         }
         async fn mark_dead(&self, _id: i64, attempts: u32) -> Result<(), StoreError> {
@@ -2866,7 +2890,12 @@ mod tests {
     }
 
     /// Builds a claimed outbox row for the relay tests.
-    fn claimed_row(sub_id: u64, attempts: u32, event_type: EventType) -> OutboxDelivery {
+    fn claimed_row(
+        sub_id: u64,
+        attempts: u32,
+        permanent_streak: u32,
+        event_type: EventType,
+    ) -> OutboxDelivery {
         OutboxDelivery {
             id: 1,
             delivery_key: format!("evt_test.{sub_id}"),
@@ -2874,13 +2903,15 @@ mod tests {
             event_type: event_type.as_str().to_string(),
             payload: r#"{"id":"evt_test"}"#.to_string(),
             attempts,
+            permanent_streak,
             tenant_id: crate::tenant::DEFAULT_TENANT,
         }
     }
 
     /// Drives `n` relay attempts of the same row against a server replying
-    /// `responses` in order, threading `attempts` forward exactly like the
-    /// persisted schedule does across polls.
+    /// `responses` in order, feeding each round the `attempts` and
+    /// `permanent_streak` the previous `mark_retry` persisted, exactly like a
+    /// re-claim of the row on a later poll would.
     async fn relay_attempts(
         responses: Vec<u16>,
         event_type: EventType,
@@ -2893,14 +2924,21 @@ mod tests {
         let subs = vec![webhook_sub];
         let client = reqwest::Client::new();
 
-        for attempt in 0..rounds {
-            let delivery = claimed_row(1, attempt, event_type);
+        let mut attempts = 0u32;
+        let mut streak = 0u32;
+        for _ in 0..rounds {
+            let delivery = claimed_row(1, attempts, streak, event_type);
             deliver_claimed(&store, &client, &subs, &delivery, |_| false, 0).await;
-            if store_mark_calls(&stub)
-                .iter()
-                .any(|c| matches!(c, MarkCall::Delivered | MarkCall::Dead { .. }))
-            {
-                break;
+            match store_mark_calls(&stub).last() {
+                Some(&MarkCall::Retry {
+                    attempts: a,
+                    permanent_streak: s,
+                }) => {
+                    attempts = a;
+                    streak = s;
+                }
+                // Delivered or dead-lettered: the row is terminal, no re-claim.
+                _ => break,
             }
         }
 
@@ -2942,6 +2980,37 @@ mod tests {
             "a 404 that recovers on the confirmation must not disable"
         );
         assert!(store_mark_calls(&stub).contains(&MarkCall::Delivered));
+    }
+
+    /// The relay's version of the false positive the confirmation attempt
+    /// exists to prevent: one `503` followed by one `404` is a single permanent
+    /// answer, not a confirmed one. Counting the total attempts instead of the
+    /// consecutive permanent ones used to disable the subscription right here.
+    #[tokio::test]
+    async fn relay_503_then_404_does_not_disable_on_a_single_404() {
+        let (state, stub) = relay_attempts(vec![503, 404], EventType::LinkCreated, 2).await;
+
+        assert_eq!(hits(&state), 2);
+        assert!(
+            store_disable_calls(&stub).is_empty(),
+            "one 404 after a 503 is not a confirmed permanent failure: {:?}",
+            store_disable_calls(&stub)
+        );
+    }
+
+    /// A transient answer between two permanent ones resets the streak, exactly
+    /// like the in-memory worker: the second `404` here is again a first
+    /// observation, so it only earns a confirmation attempt.
+    #[tokio::test]
+    async fn relay_404_then_503_then_404_does_not_disable() {
+        let (state, stub) = relay_attempts(vec![404, 503, 404], EventType::LinkCreated, 3).await;
+
+        assert_eq!(hits(&state), 3);
+        assert!(
+            store_disable_calls(&stub).is_empty(),
+            "the 503 in the middle reset the streak: {:?}",
+            store_disable_calls(&stub)
+        );
     }
 
     #[tokio::test]

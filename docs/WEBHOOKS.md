@@ -370,14 +370,13 @@ over: a deploy that briefly serves `404` does not cost you the subscription. If
 the second attempt also answers `404` or `410`, quark stops retrying and turns
 the subscription off, recording why.
 
-The confirmation attempt is guaranteed on the in-memory worker, which keeps the
-whole retry sequence inside one call and can tell a streak of permanent answers
-from an isolated one. The durable relay (Postgres) only has the persisted
-`attempts` counter, which counts every failure rather than the consecutive ones,
-so there the second permanent answer does not have to be the second attempt: a
-delivery that first got a `503` and then a `404` is disabled on that single
-`404`. A destination that answers `404` from the very first attempt, which is
-the case this exists for, behaves the same on both paths.
+What counts is a run of permanent answers, not a total of failures. Anything
+else in between resets the count: a delivery that got a `503` and then a `404`
+has seen one `404`, so it earns a confirmation attempt like any other first
+`404`. Both delivery paths behave this way. The in-memory worker keeps the run
+in the call that owns the retry sequence; the durable relay (Postgres) persists
+it on the delivery row, because its attempts are spread across polls and nodes
+and there is nothing else to hold the state in.
 
 `400` and `422` are deliberately left out. A `422` usually means quark's payload
 is wrong rather than the endpoint being gone, and disabling a working

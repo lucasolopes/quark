@@ -417,6 +417,7 @@ fn row_to_delivery(r: &PgRow) -> Result<OutboxDelivery, StoreError> {
     let event_type: String = r.try_get("event_type").map_err(StoreError::backend)?;
     let payload: String = r.try_get("payload").map_err(StoreError::backend)?;
     let attempts: i32 = r.try_get("attempts").map_err(StoreError::backend)?;
+    let permanent_streak: i32 = r.try_get("permanent_streak").map_err(StoreError::backend)?;
     let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
     Ok(OutboxDelivery {
         id,
@@ -425,6 +426,7 @@ fn row_to_delivery(r: &PgRow) -> Result<OutboxDelivery, StoreError> {
         event_type,
         payload,
         attempts: attempts as u32,
+        permanent_streak: permanent_streak as u32,
         tenant_id: TenantId(tenant_id as u64),
     })
 }
@@ -768,6 +770,12 @@ impl PostgresStore {
                 // (dead, delivered_at, next_attempt_at), hence the index.
                 "CREATE TABLE IF NOT EXISTS webhook_deliveries (id BIGSERIAL PRIMARY KEY, delivery_key TEXT UNIQUE NOT NULL, subscription_id BIGINT NOT NULL, event_type TEXT NOT NULL, payload TEXT NOT NULL, created BIGINT NOT NULL, attempts INT NOT NULL DEFAULT 0, next_attempt_at BIGINT NOT NULL, delivered_at BIGINT, dead BOOLEAN NOT NULL DEFAULT FALSE)",
                 "CREATE INDEX IF NOT EXISTS webhook_deliveries_poll_idx ON webhook_deliveries (dead, delivered_at, next_attempt_at)",
+                // LUC-141: consecutive permanent (404/410) answers, so the relay
+                // can require a real confirmation attempt instead of reading the
+                // total in `attempts`. Rows written before this column existed
+                // come back with 0, which is exactly right: they have never
+                // failed permanently as far as this counter is concerned.
+                "ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS permanent_streak INT NOT NULL DEFAULT 0",
                 // Sheets connector (roadmap: Google Sheets). A single connection
                 // row (single-tenant OSS), plus a lease mirroring `health_lease`
                 // so only one node runs the scheduled sync at a time.
@@ -3244,7 +3252,7 @@ impl Store for PostgresStore {
                  FOR UPDATE SKIP LOCKED \
                  LIMIT $3 \
              ) \
-             RETURNING id, delivery_key, subscription_id, event_type, payload, attempts, tenant_id",
+             RETURNING id, delivery_key, subscription_id, event_type, payload, attempts, permanent_streak, tenant_id",
         )
         .bind(lease_until as i64)
         .bind(now as i64)
@@ -3270,12 +3278,14 @@ impl Store for PostgresStore {
         id: i64,
         next_attempt_at: u64,
         attempts: u32,
+        permanent_streak: u32,
     ) -> Result<(), StoreError> {
         sqlx::query(
-            "UPDATE webhook_deliveries SET next_attempt_at = $1, attempts = $2 WHERE id = $3",
+            "UPDATE webhook_deliveries SET next_attempt_at = $1, attempts = $2, permanent_streak = $3 WHERE id = $4",
         )
         .bind(next_attempt_at as i64)
         .bind(attempts as i32)
+        .bind(permanent_streak as i32)
         .bind(id)
         .execute(&self.write)
         .await

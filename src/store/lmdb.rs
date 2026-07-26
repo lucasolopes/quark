@@ -1431,6 +1431,7 @@ impl Store for LmdbStore {
         _id: i64,
         _next_attempt_at: u64,
         _attempts: u32,
+        _permanent_streak: u32,
     ) -> Result<(), StoreError> {
         Ok(())
     }

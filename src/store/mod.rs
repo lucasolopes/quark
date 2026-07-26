@@ -253,6 +253,13 @@ pub struct OutboxDelivery {
     pub event_type: String,
     pub payload: String,
     pub attempts: u32,
+    /// Count of CONSECUTIVE permanent (404/410) answers this row has collected,
+    /// the durable twin of the in-memory worker's local `permanent_streak`. The
+    /// total in `attempts` cannot stand in for it: on a `503` then a `404` the
+    /// total reaches the permanent budget with a single 404 observed, which is
+    /// the false positive the confirmation attempt exists to prevent. Any other
+    /// failure outcome resets it to 0.
+    pub permanent_streak: u32,
     /// The tenant that owns the subscription (carried from the `OutboxRow`
     /// that was enqueued). The relay uses this to resolve the subscription
     /// within the right tenant instead of assuming `DEFAULT_TENANT`.
@@ -855,14 +862,19 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<Vec<OutboxDelivery>, StoreError>;
     /// Marks a delivery delivered (sets `delivered_at`). LMDB: no-op.
     async fn mark_delivered(&self, id: i64) -> Result<(), StoreError>;
-    /// Reschedules a failed delivery: persists the incremented `attempts` and
-    /// the next `next_attempt_at` (exponential backoff, survives restart).
-    /// LMDB: no-op.
+    /// Reschedules a failed delivery: persists the incremented `attempts`, the
+    /// next `next_attempt_at` (exponential backoff, survives restart) and the
+    /// run of consecutive permanent answers in `permanent_streak` (incremented
+    /// on a 404/410, reset to 0 on any other failure outcome). The streak is
+    /// persisted because the relay's attempts are spread across polls and
+    /// nodes, so it is the only place the "one confirmation attempt before
+    /// disabling" rule can keep its state. LMDB: no-op.
     async fn mark_retry(
         &self,
         id: i64,
         next_attempt_at: u64,
         attempts: u32,
+        permanent_streak: u32,
     ) -> Result<(), StoreError>;
     /// Dead-letters a delivery (`dead = true`): it stops being claimed. Used
     /// after `MAX_DELIVERY_ATTEMPTS`, or when the subscription no longer exists
