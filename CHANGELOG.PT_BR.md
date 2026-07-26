@@ -21,6 +21,11 @@ tabelas do ClickHouse não estão cobertos.
 
 ## [Não lançado]
 
+## [0.3.1] - 2026-07-25
+
+### Corrigido
+- O login OIDC não derruba mais o servidor: o upgrade do `jsonwebtoken` 10 saiu sem backend de crypto, então validar qualquer id_token panicava e reiniciava o processo. A feature `rust_crypto` agora está fixada e um teste canário exercita uma operação JWT real no CI, para essa classe de regressão quebrar o build em vez da produção.
+
 ## [0.3.0] - 2026-07-25
 
 ### Adicionado
@@ -89,6 +94,7 @@ virou instalável.
 - Núcleo AGPL-3.0-only com um CLA coletado em cada pull request.
 - Relato privado de vulnerabilidade e política de segurança escrita.
 
-[Não lançado]: https://github.com/lucasolopes/quark/compare/v0.3.0...HEAD
+[Não lançado]: https://github.com/lucasolopes/quark/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/lucasolopes/quark/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/lucasolopes/quark/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lucasolopes/quark/releases/tag/v0.2.0
