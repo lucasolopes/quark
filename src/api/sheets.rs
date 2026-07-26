@@ -39,7 +39,7 @@ pub(crate) async fn sheets_connect(
         st.signing_key.expose_secret(),
         &state,
         &p.tenant.0.to_string(),
-        "",
+        None,
         None,
     );
     let url = crate::sheets::connect_url(cfg, &state);

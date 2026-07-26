@@ -106,7 +106,7 @@ pub(crate) async fn oidc_login(
         st.signing_key.expose_secret(),
         &state,
         &verifier,
-        &nonce,
+        Some(&nonce),
         tenant,
     );
     let secure = if request_is_https(&headers) {

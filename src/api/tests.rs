@@ -354,7 +354,7 @@ async fn callback_tenant_from_cookie_but_config_gone_is_400_not_global() {
         st.signing_key.expose_secret(),
         "st8",
         "verif",
-        "nnc",
+        Some("nnc"),
         Some(tenant_id),
     );
     let mut headers = ReqHeaderMap::new();
@@ -390,7 +390,7 @@ async fn callback_tampered_tenant_in_cookie_is_rejected() {
         st.signing_key.expose_secret(),
         "st8",
         "verif",
-        "nnc",
+        Some("nnc"),
         Some(real_tenant),
     );
     let tampered = cookie_value.replacen(".1.", ".2.", 1);

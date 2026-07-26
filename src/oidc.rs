@@ -902,13 +902,20 @@ impl Default for TenantOidcCache {
 /// substituted in transit. Value: `"state.verifier.nonce.tenant.mac"` (tenant
 /// empty when absent, still covered by the MAC), back-compat with the old
 /// 3-field callers via `None`.
+///
+/// `nonce` is the OIDC anti-replay nonce, so it is `Some` only on the OIDC
+/// login flow. The OAuth flows that reuse this cookie (Sheets, Slack) have no
+/// nonce of their own and pass `None`, which serializes to the same empty field
+/// the payload always carried - a cookie signed before this signature existed
+/// still verifies.
 pub fn sign_login_state(
     key: &[u8],
     state: &str,
     verifier: &str,
-    nonce: &str,
+    nonce: Option<&str>,
     tenant: Option<TenantId>,
 ) -> String {
+    let nonce = nonce.unwrap_or("");
     let tenant_field = tenant.map(|t| t.0.to_string()).unwrap_or_default();
     let payload = format!("{state}.{verifier}.{nonce}.{tenant_field}");
     #[expect(
@@ -1075,9 +1082,21 @@ mod tests {
     }
 
     #[test]
+    fn absent_nonce_signs_the_same_payload_as_the_old_empty_string() {
+        // Sheets and Slack used to pass "" for the nonce; they now pass None.
+        // Both must produce byte-identical cookies, otherwise every in-flight
+        // OAuth cookie would fail verification the moment this deploys.
+        let key = b"login-state-signing-key-0123456789";
+        assert_eq!(
+            sign_login_state(key, "st8", "verif", None, None),
+            sign_login_state(key, "st8", "verif", Some(""), None),
+        );
+    }
+
+    #[test]
     fn login_state_cookie_round_trip_and_tamper() {
         let key = b"login-state-signing-key-0123456789";
-        let cookie = sign_login_state(key, "st8", "verif", "nnc", None);
+        let cookie = sign_login_state(key, "st8", "verif", Some("nnc"), None);
         assert_eq!(
             verify_login_state(key, &cookie),
             Some(("st8".into(), "verif".into(), "nnc".into(), None))
@@ -1095,14 +1114,14 @@ mod tests {
     fn login_state_cookie_carries_tenant_and_tamper_is_rejected() {
         let key = b"login-state-signing-key-0123456789";
         let tenant = TenantId(42);
-        let cookie = sign_login_state(key, "st8", "verif", "nnc", Some(tenant));
+        let cookie = sign_login_state(key, "st8", "verif", Some("nnc"), Some(tenant));
         assert_eq!(
             verify_login_state(key, &cookie),
             Some(("st8".into(), "verif".into(), "nnc".into(), Some(tenant)))
         );
 
         // Absent tenant (global login) round-trips as None.
-        let global_cookie = sign_login_state(key, "st8", "verif", "nnc", None);
+        let global_cookie = sign_login_state(key, "st8", "verif", Some("nnc"), None);
         assert_eq!(
             verify_login_state(key, &global_cookie).unwrap().3,
             None,

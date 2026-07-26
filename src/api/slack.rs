@@ -24,7 +24,7 @@ pub(crate) async fn slack_connect(State(st): State<Arc<AppState>>, headers: Head
         st.signing_key.expose_secret(),
         &state,
         &p.tenant.0.to_string(),
-        "",
+        None,
         None,
     );
     let url = crate::slack::connect_url(cfg, &state);
