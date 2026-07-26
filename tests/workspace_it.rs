@@ -1826,3 +1826,537 @@ async fn delete_tenant_frees_the_slug_pg() {
         "the slug must be free to use again after the delete"
     );
 }
+
+// --- DELETE /admin/tenants/:id (LUC-138) ---
+
+/// Seeds a tenant plus `user_id`'s membership on it, bypassing the create
+/// handler so no Keycloak provisioning call is recorded (the deletion tests
+/// assert on the mock's call list, which must contain only what the DELETE
+/// itself does).
+async fn seed_workspace(
+    store: &PostgresStore,
+    user_id: u64,
+    slug: &str,
+    role: quark::tenant::Role,
+) -> TenantId {
+    let id = TenantId(store.next_tenant_id().await.unwrap());
+    store
+        .put_tenant(&quark::tenant::Tenant {
+            id,
+            name: slug.to_string(),
+            slug: slug.to_string(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    store
+        .put_membership(&quark::tenant::Membership {
+            user_id,
+            tenant_id: id,
+            role,
+            created: 0,
+        })
+        .await
+        .unwrap();
+    id
+}
+
+fn delete_req(tenant: TenantId, raw: Option<&str>) -> Request<Body> {
+    let req = Request::delete(format!("/admin/tenants/{}", tenant.0));
+    match raw {
+        Some(raw) => req.header("cookie", format!("qk_session={raw}")),
+        None => req,
+    }
+    .body(Body::empty())
+    .unwrap()
+}
+
+/// In OSS the route does not exist: 404, and the check runs before any
+/// credential is looked at (none is presented here). Parity with
+/// `oss_workspace_endpoints_are_404`. Runs over LMDB, never gated on Postgres.
+#[tokio::test]
+async fn delete_tenant_is_404_in_oss() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, sink) = open_backends(dir.path(), false).await.unwrap();
+    let app = app_over(store, sink, false);
+
+    let resp = app.oneshot(delete_req(TenantId(1), None)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// No session cookie -> 401, not 404: in cloud the endpoint exists, the caller
+/// just is not authenticated.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_requires_session() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (user_id, _raw) = seed_session(&store, "delete-nosession-subject").await;
+    let target = seed_workspace(&store, user_id, "del-nosession", quark::tenant::Role::Owner).await;
+
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+    let resp = app.oneshot(delete_req(target, None)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        store.get_tenant(target).await.unwrap().is_some(),
+        "an unauthenticated delete must not touch the tenant"
+    );
+}
+
+/// Owner-only. `Admin` is refused too, even though `role_scopes` gives it the
+/// same scopes as `Owner`: the Admin role comes from an IdP claim group, so
+/// whoever controls Keycloak could otherwise hand themselves the workspace's
+/// destruction.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_rejects_non_owner() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (user_id, raw) = seed_session(&store, "delete-nonowner-subject").await;
+    let as_member =
+        seed_workspace(&store, user_id, "del-member", quark::tenant::Role::Member).await;
+    let as_admin = seed_workspace(&store, user_id, "del-admin", quark::tenant::Role::Admin).await;
+    let as_viewer =
+        seed_workspace(&store, user_id, "del-viewer", quark::tenant::Role::Viewer).await;
+
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+    for target in [as_member, as_admin, as_viewer] {
+        let resp = app
+            .clone()
+            .oneshot(delete_req(target, Some(&raw)))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "only Owner may delete a workspace (tenant {})",
+            target.0
+        );
+        assert!(
+            store.get_tenant(target).await.unwrap().is_some(),
+            "a refused delete must leave the tenant standing"
+        );
+    }
+}
+
+/// A tenant the caller is not a member of answers 404, byte for byte the same
+/// as an id that never existed. A 403 there would confirm the workspace exists,
+/// which is customer enumeration in a multi-tenant product.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_hides_foreign_tenants() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (user_id, raw) = seed_session(&store, "delete-foreign-subject").await;
+    let (other_id, _other_raw) = seed_session(&store, "delete-foreign-other-subject").await;
+    // The caller owns one workspace of their own, so they are a legitimate,
+    // fully authorized Owner somewhere: what is being probed is the OTHER
+    // tenant.
+    seed_workspace(
+        &store,
+        user_id,
+        "del-foreign-mine",
+        quark::tenant::Role::Owner,
+    )
+    .await;
+    let foreign = seed_workspace(
+        &store,
+        other_id,
+        "del-foreign-theirs",
+        quark::tenant::Role::Owner,
+    )
+    .await;
+
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+
+    let existing = app
+        .clone()
+        .oneshot(delete_req(foreign, Some(&raw)))
+        .await
+        .unwrap();
+    assert_eq!(existing.status(), StatusCode::NOT_FOUND);
+    let existing_body = axum::body::to_bytes(existing.into_body(), usize::MAX)
+        .await
+        .unwrap();
+
+    let absent = app
+        .clone()
+        .oneshot(delete_req(TenantId(9_999_999), Some(&raw)))
+        .await
+        .unwrap();
+    assert_eq!(absent.status(), StatusCode::NOT_FOUND);
+    let absent_body = axum::body::to_bytes(absent.into_body(), usize::MAX)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        existing_body, absent_body,
+        "an existing foreign tenant and a nonexistent id must be indistinguishable"
+    );
+    assert!(
+        store.get_tenant(foreign).await.unwrap().is_some(),
+        "the foreign tenant must be untouched"
+    );
+}
+
+/// The last workspace cannot go: 409, and the tenant is still there. The user
+/// is never left with nowhere to land.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_refuses_the_last_workspace() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (user_id, raw) = seed_session(&store, "delete-last-subject").await;
+    let only = seed_workspace(&store, user_id, "del-last", quark::tenant::Role::Owner).await;
+
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+    let resp = app.oneshot(delete_req(only, Some(&raw))).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert!(
+        store.get_tenant(only).await.unwrap().is_some(),
+        "the last workspace must survive the refusal"
+    );
+    assert!(
+        store.get_membership(user_id, only).await.unwrap().is_some(),
+        "the membership must survive too"
+    );
+}
+
+/// The happy path: an Owner with two workspaces deletes one, gets 204, the
+/// tenant and its membership are gone, and `/admin/me` now lists only the
+/// other one.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_succeeds_for_the_owner() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (user_id, raw) = seed_session(&store, "delete-happy-subject").await;
+    let doomed = seed_workspace(
+        &store,
+        user_id,
+        "del-happy-doomed",
+        quark::tenant::Role::Owner,
+    )
+    .await;
+    let keeper = seed_workspace(
+        &store,
+        user_id,
+        "del-happy-keeper",
+        quark::tenant::Role::Owner,
+    )
+    .await;
+
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+    let resp = app
+        .clone()
+        .oneshot(delete_req(doomed, Some(&raw)))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    assert!(store.get_tenant(doomed).await.unwrap().is_none(), "tenant");
+    assert!(
+        store
+            .get_membership(user_id, doomed)
+            .await
+            .unwrap()
+            .is_none(),
+        "membership"
+    );
+    assert!(
+        store.get_tenant(keeper).await.unwrap().is_some(),
+        "the other workspace must be untouched"
+    );
+
+    let resp = app
+        .oneshot(
+            Request::get("/admin/me")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let me: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let memberships = me["memberships"].as_array().unwrap();
+    assert_eq!(
+        memberships.len(),
+        1,
+        "only the surviving workspace is listed"
+    );
+    assert_eq!(memberships[0]["tenant_id"], keeper.0);
+}
+
+/// The Keycloak side effect is exactly one `delete_realm`, naming the deleted
+/// workspace's slug and nothing else. The other workspace's realm must never
+/// appear.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_deletes_only_its_own_realm() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (user_id, raw) = seed_session(&store, "delete-realm-subject").await;
+    let doomed = seed_workspace(
+        &store,
+        user_id,
+        "del-realm-doomed",
+        quark::tenant::Role::Owner,
+    )
+    .await;
+    seed_workspace(
+        &store,
+        user_id,
+        "del-realm-keeper",
+        quark::tenant::Role::Owner,
+    )
+    .await;
+
+    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let app = app_over_with_keycloak(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some("https://kc.example.com".to_string()),
+    );
+    let resp = app.oneshot(delete_req(doomed, Some(&raw))).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    assert_eq!(
+        mock.calls(),
+        vec!["delete_realm(del-realm-doomed)".to_string()],
+        "the delete must remove exactly the doomed workspace's realm"
+    );
+}
+
+/// Deleting the workspace the session is currently in must not log the user
+/// out. `sessions` is tenant-owned, so the session row goes down with the
+/// tenant; the handler re-issues it against a remaining workspace, and the very
+/// next request works.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_keeps_the_session_alive_on_another_workspace() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (user_id, raw) = seed_session(&store, "delete-session-subject").await;
+    let doomed = seed_workspace(
+        &store,
+        user_id,
+        "del-sess-doomed",
+        quark::tenant::Role::Owner,
+    )
+    .await;
+    let keeper = seed_workspace(
+        &store,
+        user_id,
+        "del-sess-keeper",
+        quark::tenant::Role::Owner,
+    )
+    .await;
+
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+
+    // Put the session INTO the workspace about to be deleted, which is what the
+    // panel does right after creating one.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/admin/workspace/switch")
+                .header("content-type", "application/json")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::from(format!(r#"{{"tenant_id":{}}}"#, doomed.0)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(delete_req(doomed, Some(&raw)))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Same cookie, next request: still authenticated, now pointing at the
+    // workspace that is left.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/admin/me")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let me: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        me["authenticated"], true,
+        "the delete must not log the user out"
+    );
+    assert_eq!(me["current_tenant"], keeper.0);
+
+    // And a guarded endpoint (which re-resolves membership in the session's
+    // current tenant) answers, rather than 401/403.
+    let resp = app
+        .oneshot(
+            Request::get("/admin/links")
+                .header("cookie", format!("qk_session={raw}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "the re-issued session must authorize the guarded surface"
+    );
+}
+
+/// Best-effort Keycloak: `delete_realm` failing must NOT undo the deletion nor
+/// surface an error. The tenant is already gone (the store transaction
+/// committed first, deliberately), the answer is still 204, and the orphaned
+/// realm is only a `warn!`. Mirrors
+/// `create_tenant_survives_ensure_realm_failure` on the creation side.
+struct DeleteRealmFailsKeycloakAdmin;
+
+#[async_trait::async_trait]
+impl quark::keycloak::KeycloakAdmin for DeleteRealmFailsKeycloakAdmin {
+    async fn ensure_realm(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+        unreachable!("this fake only exercises the deletion path")
+    }
+    async fn ensure_client(
+        &self,
+        _slug: &str,
+        _redirect_uri: &str,
+    ) -> Result<(), quark::keycloak::KcError> {
+        unreachable!("this fake only exercises the deletion path")
+    }
+    async fn ensure_groups_and_mapper(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+        unreachable!("this fake only exercises the deletion path")
+    }
+    async fn ensure_user(
+        &self,
+        _slug: &str,
+        _email: &str,
+        _group: &str,
+    ) -> Result<String, quark::keycloak::KcError> {
+        unreachable!("this fake only exercises the deletion path")
+    }
+    async fn send_set_password_email(
+        &self,
+        _slug: &str,
+        _user_id: &str,
+    ) -> Result<(), quark::keycloak::KcError> {
+        unreachable!("this fake only exercises the deletion path")
+    }
+    async fn delete_realm(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+        Err(quark::keycloak::KcError("delete_realm unavailable".into()))
+    }
+}
+
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_survives_delete_realm_failure() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let (user_id, raw) = seed_session(&store, "delete-kcfail-subject").await;
+    let doomed = seed_workspace(
+        &store,
+        user_id,
+        "del-kcfail-doomed",
+        quark::tenant::Role::Owner,
+    )
+    .await;
+    seed_workspace(
+        &store,
+        user_id,
+        "del-kcfail-keeper",
+        quark::tenant::Role::Owner,
+    )
+    .await;
+
+    let app = app_over_with_keycloak(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+        Some(Arc::new(DeleteRealmFailsKeycloakAdmin) as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some("https://kc.example.com".to_string()),
+    );
+    let resp = app.oneshot(delete_req(doomed, Some(&raw))).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NO_CONTENT,
+        "a Keycloak failure must never fail (or undo) the deletion"
+    );
+    assert!(
+        store.get_tenant(doomed).await.unwrap().is_none(),
+        "the tenant is gone regardless; only the realm is orphaned"
+    );
+    assert!(
+        store
+            .get_membership(user_id, doomed)
+            .await
+            .unwrap()
+            .is_none(),
+        "the membership is gone too"
+    );
+}

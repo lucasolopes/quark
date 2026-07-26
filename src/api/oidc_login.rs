@@ -545,17 +545,29 @@ pub(crate) async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap
 /// session branch, so disabling OIDC immediately stops leftover session
 /// cookies from resolving a user here too.
 pub(crate) async fn session_user_id(st: &AppState, headers: &HeaderMap) -> Option<u64> {
+    Some(current_session(st, headers).await?.user_id)
+}
+
+/// The whole session row behind the request's cookie, on the same terms
+/// `session_user_id` resolves the user id (it is the thin wrapper over this).
+/// Callers that need more than the user id use this: `admin_tenants_delete`
+/// needs the session's CURRENT workspace, to know whether the workspace being
+/// deleted is the one the caller is sitting in, and needs the row itself
+/// captured before the delete, since `sessions` is tenant-owned and the row
+/// goes down with the tenant.
+pub(crate) async fn current_session(
+    st: &AppState,
+    headers: &HeaderMap,
+) -> Option<crate::auth::Session> {
     if !st.oidc_configured {
         return None;
     }
     let raw = cookie_value(headers, SESSION_COOKIE)?;
-    let session = st
-        .store
+    st.store
         .get_session_by_hash(&hash_token(raw), now())
         .await
         .ok()
-        .flatten()?;
-    Some(session.user_id)
+        .flatten()
 }
 
 /// Re-points the current session at `tenant` (the workspace just created),
