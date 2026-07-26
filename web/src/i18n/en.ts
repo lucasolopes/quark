@@ -76,6 +76,18 @@ export const en = {
     createError: "Could not create the workspace. Try again.",
     switchError: "Could not switch workspaces. Try again.",
   },
+  workspaceDelete: {
+    menuItem: "Delete workspace",
+    title: "Delete {name}?",
+    description:
+      "This erases the workspace and everything in it: links, clicks, analytics, webhooks, domains and invites. Short links that point here will stop working. There is no undo.",
+    confirmLabel: "Type {slug} to confirm",
+    confirm: "Delete workspace",
+    deleting: "Deleting…",
+    lastWorkspace: "This is your last workspace, so it cannot be deleted. Create another one first.",
+    notOwner: "Only the workspace owner can delete it.",
+    error: "Could not delete the workspace. Try again.",
+  },
   links: {
     heading: "Links",
     subtitle: "All short links created in the system.",
