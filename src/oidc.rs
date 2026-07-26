@@ -1425,4 +1425,45 @@ mod tests {
         assert_eq!(val.iss, Some(["https://idp.example".to_string()].into()));
         assert_eq!(val.aud, Some(["client-123".to_string()].into()));
     }
+
+    // Canary for the 2026-07-24 incident: jsonwebtoken 10 made its crypto
+    // backend opt-in (exactly one of the `rust_crypto`/`aws_lc_rs` features),
+    // and a Dependabot bump to 10 landed with neither enabled. No compile
+    // error resulted -- the crate builds fine either way -- but the first JWT
+    // operation at runtime panicked ("Could not automatically determine the
+    // process-level CryptoProvider"), and with `panic = "abort"` that took
+    // down the whole process on every OIDC login. CI never caught it because
+    // nothing in the test suite actually encoded/decoded a token. This test
+    // does, so a repeat of the same silent feature drop fails here instead of
+    // in production.
+    #[test]
+    fn jsonwebtoken_crypto_backend_is_linked() {
+        use jsonwebtoken::{encode, EncodingKey, Header};
+
+        #[derive(Serialize, Deserialize)]
+        struct Claims {
+            sub: String,
+            exp: usize,
+        }
+
+        let claims = Claims {
+            sub: "canary".into(),
+            // Far future so this test never starts failing on its own.
+            exp: 4_102_444_800, // 2100-01-01T00:00:00Z
+        };
+        let key = b"canary-test-secret";
+
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(key),
+        )
+        .expect("encode must succeed with a crypto backend linked");
+
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.set_required_spec_claims(&["exp"]);
+        let decoded = decode::<Claims>(&token, &DecodingKey::from_secret(key), &validation)
+            .expect("decode must succeed with a crypto backend linked");
+        assert_eq!(decoded.claims.sub, "canary");
+    }
 }
