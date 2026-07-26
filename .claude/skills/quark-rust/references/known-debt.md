@@ -23,7 +23,7 @@ Epic **LUC-124**:
 | LUC-133 | test-suite hygiene |
 | LUC-134 | docs debt and the remaining magic values |
 | LUC-135 | CI: `deploy-backend` does not wait for the `web` job; no `cargo-deny` |
-| LUC-136 | dependency updates (axum 0.7 is end of line) |
+| LUC-136 | dependency updates. axum 0.8 done; redis 1.x, heed 0.22 and sqlx 0.9 pending |
 
 Already tracked elsewhere: **LUC-103** covers the silent analytics drop.
 

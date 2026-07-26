@@ -54,17 +54,15 @@ Never fabricate download numbers. If you did not verify it, write "not verified"
 
 ## What is deliberately hand-rolled - do not replace casually
 
-The first four rows are struck through: they were *not* deliberate and are on the
-required list above. The rest genuinely stay.
+These genuinely stay. (The error enums, the `eprintln!` logging, the hand-rolled
+access log and the bare key arrays used to be on this list; they were never
+deliberate and have since been replaced by `thiserror`, `tracing`, `TraceLayer`
+and `secrecy`.)
 
 | In the repo | Instead of | Why it stays |
 |---|---|---|
 | `constant_time_eq` (`src/api/router.rs:3-12`) + `mac.verify_slice` | `subtle`, `constant_time_eq` crate | 10 lines, and `hmac` already compares MACs in constant time |
 | `getrandom::fill` | `rand` | `src/password.rs:1-8` documents avoiding the `rand` tree just for a salt |
-| ~~10 hand-written error enums~~ | `thiserror` | **not deliberate - being replaced** |
-| ~~`eprintln!` + `serde_json::json!`~~ | `tracing` | **not deliberate - being replaced** |
-| ~~`access_log_line` + `from_fn` middleware~~ | `tower-http` `trace` | **not deliberate - being replaced** |
-| ~~bare `[u8; 32]` keys~~ | `secrecy` + `zeroize` | **not deliberate - being replaced** |
 | `permute` Feistel + base62 `u64` ids | `uuid` | this *is* the product: short, non-sequential codes. `uuid` would work against the thesis. Do not adopt. |
 | `civil_from_days` (Hinnant algorithm, `src/analytics/mod.rs:315`) | `jiff` / `chrono` / `time` | 10 tested lines, UTC only, no parsing. The trigger to adopt a date crate is weekly/monthly buckets, per-tenant timezones, or parsing date ranges from the API - then reimplementing means reimplementing tzdata, which never pays. |
 | `device_from_ua` / `os_from_ua` substring heuristics | `uaparser` | the doc comment states the choice ("no external dep"); hundreds of runtime regexes conflict with redirect latency. Trigger to reconsider: the product asking for browser version or bot classification. Cheap win without a crate: lowercase once and pass `&str` to all three functions instead of allocating three Strings per event. |
@@ -81,7 +79,7 @@ advisory database. Re-verify before acting - these numbers age.
 |---|---|---|---|---|---|
 | `tracing` | 0.1.44 | 2025-12-18 | org tokio-rs | MIT | **required**; `>= 0.1.40` (RUSTSEC-2023-0078, unsound) |
 | `tracing-subscriber` | 0.3.23 | 2026-03-13 | org tokio-rs | MIT | **required**; `>= 0.3.20` (RUSTSEC-2025-0055, ANSI injection) |
-| `tower-http` | 0.7.0 (repo on 0.6) | 2026-06-15 | org tower-rs | MIT | **required** for the `trace` feature; `timeout`/`limit` also worth it |
+| `tower-http` | 0.7.0 (repo on 0.6 with `cors` + `trace`) | 2026-06-15 | org tower-rs | MIT | in use; `timeout`/`limit` still worth adding |
 | `thiserror` | 2.0.19 | 2026-07-18 | dtolnay | MIT/Apache-2.0 | **required**; most-downloaded of the list, zero advisories ever |
 | `anyhow` | 1.0.104 | 2026-07-18 | dtolnay | MIT/Apache-2.0 | **required, binaries and tests only**; `>= 1.0.103` (RUSTSEC-2026-0190) |
 | `config` | 0.15.25 | 2026-06-26 | org rust-cli | MIT/Apache-2.0 | adopt if a config crate is ever wanted |
@@ -121,11 +119,10 @@ Verified 2026-07-24. Useful when someone asks "are we behind?".
   0.11, so they move together. Their MSRV is 1.85, which is therefore the
   project's practical floor - and enough to enable edition 2024.
 - **`argon2` is still 0.6.0-rc.8.** Stay on 0.5.3.
-- **`axum` 0.7.9 is end of line** - no release since 2024-11-16, while 0.8.9 is
-  current. Migrating is the highest-value maintenance item and it is a dedicated
-  task: route params change from `/:id` to `/{id}` across all ~60 routes, `Host`
-  moves to axum-extra, handlers require `Sync`, `Option<Path<T>>` changes meaning.
-  Skip 0.8.2 (yanked). No RustSec advisory on either line.
+- **`axum` is on 0.8.9** (migrated in LUC-136; 0.7 had been end of line for 20
+  months). Two things bit: the `/:id` to `/{id}` param syntax across every route,
+  and `Option<ConnectInfo>` losing its blanket impl - see http-layer.md for the
+  `MaybeConnectInfo` replacement. 0.8.2 is yanked; do not pin it.
 - **`redis` 0.27 -> 1.4.1**: the crate left 0.x in Dec 2025. BSD-3-Clause (the
   driver, not the server's RSAL/SSPL - no AGPL conflict).
 - **`heed` 0.20 -> 0.22.1**: two majors behind. The `read-txn-no-tls` feature the

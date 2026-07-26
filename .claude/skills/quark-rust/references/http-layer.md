@@ -189,18 +189,22 @@ Validation helpers used by several handlers return
 
 ```rust
 Router::new()
-    .route("/:code", get(redirect))
+    .route("/{code}", get(redirect))
     .route("/admin/links", get(admin_links_list).post(admin_link_create))
-    .route("/admin/links/:code", axum::routing::delete(admin_link_delete))
+    .route("/admin/links/{code}", axum::routing::delete(admin_link_delete))
     // ... one single chain
     .with_state(state)   // exactly once, at the end
 ```
 
 - All routes in one chain, `.with_state(state)` once at the end
   (`src/api/router.rs:206`), `.layer(...)` only after that.
-- **Path params are `:code`, not `{code}`.** This is axum 0.7. `{}` syntax
-  panics at startup here. Migrating to 0.8 is a dedicated task (Host moves to
-  axum-extra, handlers require `Sync`, `Option<Path<T>>` changes meaning).
+- **Path params are `{code}`, not `:code`.** The repo is on axum 0.8; the old
+  `:param` form panics at startup.
+- **`Option<Extractor>` no longer works by blanket impl.** axum 0.8 requires
+  `T: OptionalFromRequestParts`, which only `Path` and `MatchedPath` have. For
+  the client socket address use `MaybeConnectInfo` (`src/api/mod.rs`), which
+  reads the request extension and hands back an `Option`. It has to stay
+  optional: `ConnectInfo` is absent under `oneshot` in the tests.
 - Verbs beyond `get`/`post` use the full path: `axum::routing::delete(...)`,
   `.patch(...)` (`src/api/router.rs:96-99`).
 - Optional layers use shadowing: `let app = if cond { app.layer(..) } else { app };`
@@ -234,7 +238,7 @@ with axum's re-exported `Response`); `Row` / `Info` / `View` for read shapes;
 `ListParams` for query structs. Handlers are `admin_<resource>_<verb>`
 (`admin_links_list`, `admin_domains_verify`). Routes are kebab-case and plural
 (`/admin/sso-domains`), sub-actions as a final segment
-(`/admin/domains/:id/verify`).
+(`/admin/domains/{id}/verify`).
 
 `#[serde(skip_serializing_if = "Option::is_none")]` on every `Option` is what
 justifies the `?` optional fields in `web/src/lib/types.ts`. There is no type

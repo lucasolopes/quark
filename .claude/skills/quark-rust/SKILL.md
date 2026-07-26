@@ -7,7 +7,7 @@ description: Use when writing, reviewing, or debugging Rust in this repo (src/**
 
 ## Overview
 
-quark is a single-binary URL shortener: axum 0.7 + tokio, pluggable backends
+quark is a single-binary URL shortener: axum 0.8 + tokio, pluggable backends
 (LMDB embedded by default, opt-in Postgres / Valkey / ClickHouse), 29k lines of
 Rust in `src/`. It has strong, unusual, and *deliberate* conventions that a
 generic "idiomatic Rust" reflex will break.
@@ -106,7 +106,7 @@ On this machine cargo is **not on PATH**. Use the full path.
 | Runtime log | `tracing::error!(error = %e, url = %u, "delivery failed")` | `eprintln!`, `println!` |
 | Access log | `tower_http::trace::TraceLayer` | hand-rolled timing middleware |
 | Key material in a struct | `secrecy::SecretBox<[u8; 32]>` | bare `[u8; 32]`, `String` |
-| Route param | `"/admin/links/:code"` (axum 0.7) | `"/{code}"` (that is 0.8) |
+| Route param | `"/admin/links/{code}"` (axum 0.8) | `"/:code"` (that was 0.7) |
 | Backend injection | `Arc<dyn Store>` in `AppState` | generics on handler/state |
 | Hot-path event | `try_send` | `send().await` |
 | Short lock | `std::sync::Mutex`, guard dropped before `await` | `tokio::sync::Mutex` |
@@ -164,8 +164,8 @@ Read the one that matches what you are touching. Do not read all of them.
 - **Slowing the redirect path to improve something else.** Per-request spans,
   extra allocations, a blocking-pool hop on a point read: measure with
   `benches/redirect_bench.rs` or do not ship it.
-- **Writing `"/{code}"` in a route.** That is axum 0.8 syntax and panics at
-  startup here. This repo is 0.7 and uses `"/:code"`.
+- **Writing `"/:code"` in a route.** That was axum 0.7. The repo is on 0.8, where
+  the param syntax is `"/{code}"` and the old form panics at startup.
 - **Running `cargo clippy` without `--all-targets`** and then claiming green.
 - **Adding an env var without touching `docs/CONFIGURATION.md` and its
   `.PT_BR.md` twin.** That page declares itself complete.
