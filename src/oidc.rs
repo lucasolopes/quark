@@ -20,6 +20,44 @@ type HmacSha256 = Hmac<Sha256>;
 /// the browser.
 const OIDC_HTTP_TIMEOUT_SECS: u64 = 10;
 
+/// Why an OIDC setup or login step failed.
+///
+/// Separate from [`VerifyError`], which classifies id_token verification alone
+/// and carries the retry decision (a bad signature is worth one JWKS refetch, a
+/// rejection is not). This one covers everything around it: discovery, the JWKS
+/// fetch, key selection, and the code exchange.
+///
+/// Typed rather than a `String` because the variants have genuinely different
+/// operational meanings: `Http`/`Status` mean the IdP is unreachable or unhappy
+/// (transient, worth retrying a login), while `NoMatchingKey` and
+/// `MissingIdToken` mean the IdP answered with something unusable
+/// (a configuration problem, retrying will not help).
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum OidcError {
+    #[error("{operation} could not reach the identity provider")]
+    Http {
+        operation: &'static str,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[error("{operation} returned status {status}")]
+    Status {
+        operation: &'static str,
+        status: reqwest::StatusCode,
+    },
+    #[error("no matching jwk for the token kid")]
+    NoMatchingKey,
+    #[error("the jwk could not be turned into a decoding key")]
+    InvalidJwk(#[source] jsonwebtoken::errors::Error),
+    #[error("the token response had no id_token")]
+    MissingIdToken,
+    #[error("building the http client failed")]
+    Client(#[source] reqwest::Error),
+    #[error(transparent)]
+    Verify(#[from] VerifyError),
+}
+
 /// OIDC settings read once from the environment. `from_env` returns `None` when
 /// `QUARK_OIDC_ISSUER` is unset, which keeps OIDC fully off by default.
 #[derive(Debug, Clone)]
@@ -163,16 +201,25 @@ pub struct Discovery {
 }
 
 /// Fetches the IdP discovery document.
-pub async fn discover(client: &reqwest::Client, issuer: &str) -> Result<Discovery, String> {
+pub async fn discover(client: &reqwest::Client, issuer: &str) -> Result<Discovery, OidcError> {
     let url = format!(
         "{}/.well-known/openid-configuration",
         issuer.trim_end_matches('/')
     );
-    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let resp = client.get(&url).send().await.map_err(|e| OidcError::Http {
+        operation: "discovery",
+        source: e,
+    })?;
     if !resp.status().is_success() {
-        return Err(format!("discovery HTTP {}", resp.status()));
+        return Err(OidcError::Status {
+            operation: "discovery",
+            status: resp.status(),
+        });
     }
-    resp.json::<Discovery>().await.map_err(|e| e.to_string())
+    resp.json::<Discovery>().await.map_err(|e| OidcError::Http {
+        operation: "discovery",
+        source: e,
+    })
 }
 
 /// A single RSA JWK (the only key type quark verifies).
@@ -189,16 +236,25 @@ pub struct Jwks {
 }
 
 /// Fetches the IdP JWKS (RSA signing keys).
-pub async fn fetch_jwks(client: &reqwest::Client, jwks_uri: &str) -> Result<Jwks, String> {
+pub async fn fetch_jwks(client: &reqwest::Client, jwks_uri: &str) -> Result<Jwks, OidcError> {
     let resp = client
         .get(jwks_uri)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| OidcError::Http {
+            operation: "jwks fetch",
+            source: e,
+        })?;
     if !resp.status().is_success() {
-        return Err(format!("jwks HTTP {}", resp.status()));
+        return Err(OidcError::Status {
+            operation: "jwks fetch",
+            status: resp.status(),
+        });
     }
-    resp.json::<Jwks>().await.map_err(|e| e.to_string())
+    resp.json::<Jwks>().await.map_err(|e| OidcError::Http {
+        operation: "jwks fetch",
+        source: e,
+    })
 }
 
 /// Reads the `kid` (key id) from a JWT header, so the caller can pick the right
@@ -221,14 +277,14 @@ pub fn token_issuer(id_token: &str) -> Option<String> {
 
 /// Builds a verification key for the JWT's `kid` from a JWKS. When the token
 /// carries no `kid` and there is exactly one key, that key is used.
-pub fn select_key(jwks: &Jwks, kid: Option<&str>) -> Result<DecodingKey, String> {
+pub fn select_key(jwks: &Jwks, kid: Option<&str>) -> Result<DecodingKey, OidcError> {
     let jwk = match kid {
         Some(kid) => jwks.keys.iter().find(|k| k.kid.as_deref() == Some(kid)),
         None if jwks.keys.len() == 1 => jwks.keys.first(),
         None => None,
     }
-    .ok_or_else(|| "no matching JWK for token kid".to_string())?;
-    DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(|e| e.to_string())
+    .ok_or(OidcError::NoMatchingKey)?;
+    DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(OidcError::InvalidJwk)
 }
 
 /// A random PKCE verifier and its S256 challenge (base64url, no pad).
@@ -309,7 +365,7 @@ pub async fn exchange_code(
     disco: &Discovery,
     code: &str,
     verifier: &str,
-) -> Result<String, String> {
+) -> Result<String, OidcError> {
     #[derive(Deserialize)]
     struct TokenResp {
         id_token: Option<String>,
@@ -327,13 +383,24 @@ pub async fn exchange_code(
         .form(&params)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| OidcError::Http {
+            operation: "token exchange",
+            source: e,
+        })?;
     if !resp.status().is_success() {
-        return Err(format!("token endpoint HTTP {}", resp.status()));
+        return Err(OidcError::Status {
+            operation: "token exchange",
+            status: resp.status(),
+        });
     }
-    let body = resp.json::<TokenResp>().await.map_err(|e| e.to_string())?;
-    body.id_token
-        .ok_or_else(|| "token response missing id_token".to_string())
+    let body = resp
+        .json::<TokenResp>()
+        .await
+        .map_err(|e| OidcError::Http {
+            operation: "token exchange",
+            source: e,
+        })?;
+    body.id_token.ok_or(OidcError::MissingIdToken)
 }
 
 /// The claims quark reads out of a verified id_token.
@@ -609,7 +676,7 @@ pub struct OidcRuntime {
 
 impl OidcRuntime {
     /// Resolves discovery and the initial JWKS for `config`.
-    pub async fn init(config: OidcConfig) -> Result<OidcRuntime, String> {
+    pub async fn init(config: OidcConfig) -> Result<OidcRuntime, OidcError> {
         Self::build(config).await
     }
 
@@ -620,7 +687,7 @@ impl OidcRuntime {
     /// same `/admin/callback` route, which resolves the tenant from the
     /// signed login-state cookie rather than from a per-tenant redirect
     /// URI — so it still comes from `QUARK_OIDC_REDIRECT_URL`.
-    pub async fn from_config(cfg: &TenantOidcConfig) -> Result<OidcRuntime, String> {
+    pub async fn from_config(cfg: &TenantOidcConfig) -> Result<OidcRuntime, OidcError> {
         let config = OidcConfig {
             issuer: cfg.issuer.trim_end_matches('/').to_string(),
             client_id: cfg.client_id.clone(),
@@ -646,14 +713,14 @@ impl OidcRuntime {
         Self::build(config).await
     }
 
-    async fn build(config: OidcConfig) -> Result<OidcRuntime, String> {
+    async fn build(config: OidcConfig) -> Result<OidcRuntime, OidcError> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(OIDC_HTTP_TIMEOUT_SECS))
             .connect_timeout(std::time::Duration::from_secs(
                 crate::HTTP_CONNECT_TIMEOUT_SECS,
             ))
             .build()
-            .map_err(|e| e.to_string())?;
+            .map_err(OidcError::Client)?;
         let discovery = discover(&client, &config.issuer).await?;
         let jwks = fetch_jwks(&client, &discovery.jwks_uri).await?;
         Ok(OidcRuntime {
@@ -700,7 +767,7 @@ impl OidcRuntime {
     }
 
     /// Exchanges a callback code for the id_token.
-    pub async fn exchange_code(&self, code: &str, verifier: &str) -> Result<String, String> {
+    pub async fn exchange_code(&self, code: &str, verifier: &str) -> Result<String, OidcError> {
         exchange_code(&self.client, &self.config, &self.discovery, code, verifier).await
     }
 
@@ -709,7 +776,7 @@ impl OidcRuntime {
     /// not verify (both signal IdP key rotation). Definitive rejections
     /// (expiry, issuer/audience, azp/nonce/claims) return immediately without a
     /// refetch, so a burst of bad logins can't hammer the provider's jwks_uri.
-    pub async fn verify(&self, id_token: &str, nonce: &str) -> Result<Claims, String> {
+    pub async fn verify(&self, id_token: &str, nonce: &str) -> Result<Claims, OidcError> {
         let kid = token_kid(id_token);
         {
             let jwks = self.jwks.read().await;
@@ -723,7 +790,7 @@ impl OidcRuntime {
                 ) {
                     Ok(claims) => return Ok(claims),
                     // Definitive: a fresh key set cannot change the outcome.
-                    Err(e) if !e.retryable() => return Err(e.message().to_string()),
+                    Err(e) if !e.retryable() => return Err(e.into()),
                     // Signature mismatch: fall through to refetch and retry.
                     Err(_) => {}
                 }
@@ -737,8 +804,7 @@ impl OidcRuntime {
             &self.config.issuer,
             &self.config.client_id,
             nonce,
-        )
-        .map_err(|e| e.message().to_string())?;
+        )?;
         *self.jwks.write().await = fresh;
         Ok(claims)
     }
@@ -774,7 +840,7 @@ impl TenantOidcCache {
         &self,
         tenant: TenantId,
         cfg: &TenantOidcConfig,
-    ) -> Result<Arc<OidcRuntime>, String> {
+    ) -> Result<Arc<OidcRuntime>, OidcError> {
         if let Some(rt) = self.cache.get(&tenant).await {
             return Ok(rt);
         }
