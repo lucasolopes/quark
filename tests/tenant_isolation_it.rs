@@ -575,22 +575,22 @@ async fn pg_wellknown_and_sheets_pks_are_tenant_correct() {
 
 // --- Workspace deletion (LUC-138): the neighbor must survive ---
 
-/// Writes one row of every tenant-owned entity for `tenant`, salting the ids
+/// Writes one row of every tenant-owned entity for `tenant`, offsetting the ids
 /// and names so two tenants seeded through this never collide on a
 /// tenant-less key (the shared alias namespace, the token hash).
-async fn seed_one_of_each(store: &Arc<dyn Store>, tenant: TenantId, salt: u64) {
+async fn seed_one_of_each(store: &Arc<dyn Store>, tenant: TenantId, nth: u64) {
     let s = store.clone().for_tenant(tenant);
     let r = rec("https://example.com/delete-sweep");
-    let link_id = 9100 + salt;
+    let link_id = 9100 + nth;
     s.put_link(link_id, &r).await.unwrap();
     // The alias namespace is per-domain, not per-tenant: both tenants write
     // into the shared domain, exactly the arrangement in which a deletion that
     // keys off the wrong prefix would take the neighbor's alias with it.
-    s.put_alias_and_link(0, &format!("delete-sweep-{salt}"), link_id, &r)
+    s.put_alias_and_link(0, &format!("delete-sweep-{nth}"), link_id, &r)
         .await
         .unwrap();
     s.put_webhook(&quark::webhooks::WebhookSubscription {
-        id: 9200 + salt,
+        id: 9200 + nth,
         url: "https://hooks.example.com/delete-sweep".into(),
         events: vec![quark::webhooks::EventType::LinkCreated],
         secret: "shh".into(),
@@ -607,9 +607,9 @@ async fn seed_one_of_each(store: &Arc<dyn Store>, tenant: TenantId, salt: u64) {
     .await
     .unwrap();
     s.put_api_token(&quark::auth::ApiToken {
-        id: 9300 + salt,
-        name: format!("delete-sweep-{salt}"),
-        token_hash: format!("delete-sweep-hash-{salt}"),
+        id: 9300 + nth,
+        name: format!("delete-sweep-{nth}"),
+        token_hash: format!("delete-sweep-hash-{nth}"),
         scopes: vec![quark::auth::Scope::Full],
         rate_limit_per_min: None,
         created: 0,
@@ -618,7 +618,7 @@ async fn seed_one_of_each(store: &Arc<dyn Store>, tenant: TenantId, salt: u64) {
     .await
     .unwrap();
     s.put_pixel(&quark::pixel::PixelConfig {
-        id: 9400 + salt,
+        id: 9400 + nth,
         provider: quark::pixel::Provider::Ga4,
         credentials: quark::pixel::PixelCredentials::default(),
         active: true,
@@ -643,8 +643,8 @@ async fn seed_one_of_each(store: &Arc<dyn Store>, tenant: TenantId, salt: u64) {
     .unwrap();
     s.bump_visits(link_id).await.unwrap();
     s.put_sheets_connection(&quark::sheets::SheetsConnection {
-        refresh_token: format!("delete-sweep-refresh-{salt}"),
-        email: format!("owner{salt}@delete-sweep.example.com"),
+        refresh_token: format!("delete-sweep-refresh-{nth}"),
+        email: format!("owner{nth}@delete-sweep.example.com"),
         spreadsheet_id: None,
         last_sync: None,
         last_status: quark::sheets::SyncStatus::Never,
@@ -665,19 +665,19 @@ async fn seed_one_of_each(store: &Arc<dyn Store>, tenant: TenantId, salt: u64) {
     store
         .put_tenant(&quark::tenant::Tenant {
             id: tenant,
-            slug: format!("delete-sweep-{salt}"),
-            name: format!("Delete Sweep {salt}"),
+            slug: format!("delete-sweep-{nth}"),
+            name: format!("Delete Sweep {nth}"),
             created: 0,
         })
         .await
         .unwrap();
-    let user_id = 9500 + salt;
+    let user_id = 9500 + nth;
     store
         .put_user(&quark::tenant::User {
             id: user_id,
-            subject: format!("oidc|delete-sweep-{salt}"),
-            email: format!("owner{salt}@delete-sweep.example.com"),
-            display: format!("Owner {salt}"),
+            subject: format!("oidc|delete-sweep-{nth}"),
+            email: format!("owner{nth}@delete-sweep.example.com"),
+            display: format!("Owner {nth}"),
             created: 0,
         })
         .await
@@ -694,12 +694,12 @@ async fn seed_one_of_each(store: &Arc<dyn Store>, tenant: TenantId, salt: u64) {
 }
 
 /// Every row seeded by `seed_one_of_each` is still readable.
-async fn assert_still_has_everything(store: &Arc<dyn Store>, tenant: TenantId, salt: u64) {
+async fn assert_still_has_everything(store: &Arc<dyn Store>, tenant: TenantId, nth: u64) {
     let s = store.clone().for_tenant(tenant);
-    let link_id = 9100 + salt;
+    let link_id = 9100 + nth;
     assert!(s.get_link(link_id).await.unwrap().is_some(), "link");
     assert!(
-        s.get_alias(0, &format!("delete-sweep-{salt}"))
+        s.get_alias(0, &format!("delete-sweep-{nth}"))
             .await
             .unwrap()
             .is_some(),
@@ -729,7 +729,7 @@ async fn assert_still_has_everything(store: &Arc<dyn Store>, tenant: TenantId, s
     assert!(store.get_tenant(tenant).await.unwrap().is_some(), "tenant");
     assert!(
         store
-            .get_membership(9500 + salt, tenant)
+            .get_membership(9500 + nth, tenant)
             .await
             .unwrap()
             .is_some(),
@@ -738,12 +738,12 @@ async fn assert_still_has_everything(store: &Arc<dyn Store>, tenant: TenantId, s
 }
 
 /// Nothing seeded by `seed_one_of_each` is readable any more.
-async fn assert_has_nothing_left(store: &Arc<dyn Store>, tenant: TenantId, salt: u64) {
+async fn assert_has_nothing_left(store: &Arc<dyn Store>, tenant: TenantId, nth: u64) {
     let s = store.clone().for_tenant(tenant);
-    let link_id = 9100 + salt;
+    let link_id = 9100 + nth;
     assert!(s.get_link(link_id).await.unwrap().is_none(), "link");
     assert!(
-        s.get_alias(0, &format!("delete-sweep-{salt}"))
+        s.get_alias(0, &format!("delete-sweep-{nth}"))
             .await
             .unwrap()
             .is_none(),
@@ -775,7 +775,7 @@ async fn assert_has_nothing_left(store: &Arc<dyn Store>, tenant: TenantId, salt:
     assert!(store.get_tenant(tenant).await.unwrap().is_none(), "tenant");
     assert!(
         store
-            .get_membership(9500 + salt, tenant)
+            .get_membership(9500 + nth, tenant)
             .await
             .unwrap()
             .is_none(),

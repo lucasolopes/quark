@@ -1450,7 +1450,7 @@ fn rec(url: &str) -> quark::store::Record {
 /// (`domains`, `invites`, `oidc_configs`, `sso_email_domains`), the session,
 /// the analytics rows and an outbox delivery. Returns the raw session token
 /// so the caller can look the session back up by hash.
-async fn seed_cloud_only_rows(store: &PostgresStore, tenant: TenantId, salt: u64) -> String {
+async fn seed_cloud_only_rows(store: &PostgresStore, tenant: TenantId, nth: u64) -> String {
     // A link plus its alias in the SHARED domain namespace (`domain_id = 0`),
     // where both tenants' aliases sit side by side in one namespace. That is
     // the one place a tenant-scoped delete can reach across and take a
@@ -1459,9 +1459,9 @@ async fn seed_cloud_only_rows(store: &PostgresStore, tenant: TenantId, salt: u64
         .put_alias_and_link(
             tenant,
             quark::domain::SHARED_DOMAIN_ID,
-            &format!("wipe-alias-{salt}"),
-            7600 + salt,
-            &rec(&format!("https://alias-{salt}.example.com")),
+            &format!("wipe-alias-{nth}"),
+            7600 + nth,
+            &rec(&format!("https://alias-{nth}.example.com")),
         )
         .await
         .unwrap();
@@ -1471,13 +1471,13 @@ async fn seed_cloud_only_rows(store: &PostgresStore, tenant: TenantId, salt: u64
             tenant,
             &Session {
                 token_hash: hash_token(&raw),
-                subject: format!("wipe-subject-{salt}"),
-                display: format!("Wipe {salt}"),
+                subject: format!("wipe-subject-{nth}"),
+                display: format!("Wipe {nth}"),
                 scopes: vec![],
                 created: 0,
                 expires: quark::now() + 3600,
                 tenant_id: tenant,
-                user_id: 7000 + salt,
+                user_id: 7000 + nth,
                 id_token: None,
             },
         )
@@ -1485,10 +1485,10 @@ async fn seed_cloud_only_rows(store: &PostgresStore, tenant: TenantId, salt: u64
         .unwrap();
     store
         .put_domain(&quark::domain::Domain {
-            id: 7100 + salt,
+            id: 7100 + nth,
             tenant_id: tenant,
-            host: format!("wipe-{salt}.example.com"),
-            token: format!("token-{salt}"),
+            host: format!("wipe-{nth}.example.com"),
+            token: format!("token-{nth}"),
             status: quark::domain::DomainStatus::Pending,
             created: 0,
             verified_at: None,
@@ -1497,12 +1497,12 @@ async fn seed_cloud_only_rows(store: &PostgresStore, tenant: TenantId, salt: u64
         .unwrap();
     store
         .create_invite(&quark::invite::Invite {
-            id: 7200 + salt,
+            id: 7200 + nth,
             tenant_id: tenant,
-            email: format!("invited{salt}@example.com"),
+            email: format!("invited{nth}@example.com"),
             role: quark::tenant::Role::Member,
-            token_hash: format!("invite-hash-{salt}"),
-            invited_by: 7000 + salt,
+            token_hash: format!("invite-hash-{nth}"),
+            invited_by: 7000 + nth,
             created: 0,
             expires: quark::now() + 3600,
             accepted_at: None,
@@ -1513,7 +1513,7 @@ async fn seed_cloud_only_rows(store: &PostgresStore, tenant: TenantId, salt: u64
     store
         .put_oidc_config(&quark::oidc::TenantOidcConfig {
             tenant_id: tenant,
-            issuer: format!("https://kc.example.com/realms/wipe-{salt}"),
+            issuer: format!("https://kc.example.com/realms/wipe-{nth}"),
             client_id: "quark".to_string(),
             client_secret: String::new(),
             scopes: vec!["openid".to_string()],
@@ -1529,10 +1529,10 @@ async fn seed_cloud_only_rows(store: &PostgresStore, tenant: TenantId, salt: u64
         .unwrap();
     store
         .put_sso_domain(&quark::sso::SsoEmailDomain {
-            id: 7300 + salt,
+            id: 7300 + nth,
             tenant_id: tenant,
-            domain: format!("wipe-sso-{salt}.example.com"),
-            token: format!("sso-token-{salt}"),
+            domain: format!("wipe-sso-{nth}.example.com"),
+            token: format!("sso-token-{nth}"),
             status: quark::domain::DomainStatus::Pending,
             created: 0,
             verified_at: None,
@@ -1541,8 +1541,8 @@ async fn seed_cloud_only_rows(store: &PostgresStore, tenant: TenantId, salt: u64
         .unwrap();
     store
         .enqueue_deliveries(&[quark::store::OutboxRow {
-            delivery_key: format!("wipe-delivery-{salt}"),
-            subscription_id: 7400 + salt,
+            delivery_key: format!("wipe-delivery-{nth}"),
+            subscription_id: 7400 + nth,
             event_type: "link.created".to_string(),
             payload: "{}".to_string(),
             created: 0,
@@ -1554,7 +1554,7 @@ async fn seed_cloud_only_rows(store: &PostgresStore, tenant: TenantId, salt: u64
         .await
         .unwrap();
     let click = quark::analytics::ClickEvent {
-        id: 7500 + salt,
+        id: 7500 + nth,
         event_id: String::new(),
         ts: 1_752_300_000,
         referer: None,
@@ -1601,29 +1601,29 @@ async fn delete_tenant_removes_every_owned_row_pg() {
     };
     let doomed = TenantId(51);
     let neighbor = TenantId(52);
-    for (tenant, salt) in [(doomed, 1u64), (neighbor, 2u64)] {
+    for (tenant, nth) in [(doomed, 1u64), (neighbor, 2u64)] {
         store
             .put_tenant(&quark::tenant::Tenant {
                 id: tenant,
-                name: format!("Wipe {salt}"),
-                slug: format!("wipe-{salt}"),
+                name: format!("Wipe {nth}"),
+                slug: format!("wipe-{nth}"),
                 created: 0,
             })
             .await
             .unwrap();
         store
             .put_user(&User {
-                id: 7000 + salt,
-                subject: format!("wipe-subject-{salt}"),
-                email: format!("owner{salt}@example.com"),
-                display: format!("Owner {salt}"),
+                id: 7000 + nth,
+                subject: format!("wipe-subject-{nth}"),
+                email: format!("owner{nth}@example.com"),
+                display: format!("Owner {nth}"),
                 created: 0,
             })
             .await
             .unwrap();
         store
             .put_membership(&quark::tenant::Membership {
-                user_id: 7000 + salt,
+                user_id: 7000 + nth,
                 tenant_id: tenant,
                 role: quark::tenant::Role::Owner,
                 created: 0,
@@ -2209,6 +2209,24 @@ async fn delete_tenant_aborts_when_the_domain_list_fails() {
         .connect(&url)
         .await
         .unwrap();
+    // A superuser ignores GRANT and REVOKE entirely, so the seam below would be
+    // a no-op: `list_domains` would succeed, the delete would go through, and
+    // the test would report a 204 that proves nothing. CI still connects as
+    // `postgres` (LUC-143), so skip loudly there instead of failing on a
+    // property of the role rather than of the code.
+    let is_superuser: bool =
+        sqlx::query_scalar("SELECT usesuper FROM pg_user WHERE usename = CURRENT_USER")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    if is_superuser {
+        eprintln!(
+            "skip: QUARK_TEST_DATABASE_URL connects as a superuser, which ignores REVOKE, \
+             so this test cannot make the domain read fail (see LUC-143)"
+        );
+        return;
+    }
+
     let store = Arc::new(store);
     let (user_id, raw) = seed_session(&store, "delete-domfail-subject").await;
     let doomed = seed_workspace(
