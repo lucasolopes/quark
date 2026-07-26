@@ -40,7 +40,7 @@ escalou linear até 1k VUs, gargalo medido = geografia/RTT, não o servidor).
   - **ClickHouse** (`QUARK_CLICKHOUSE_URL`): sink de analytics OLAP (analytics-only).
 - **Analytics de cliques**: captura fire-and-forget no 302 (~180ns) → worker → sink;
   `GET /:code/stats` (agregados + últimos N eventos).
-- **Observabilidade**: log de acesso JSON por request, opt-in (`QUARK_ACCESS_LOG`).
+- **Observabilidade**: `tracing` no projeto todo, log de acesso por request vindo do tower-http em `DEBUG` (`RUST_LOG=tower_http=debug`), saída JSON via `QUARK_LOG_FORMAT=json`.
 - **Edge/CDN**: `Cache-Control` no redirect respeitando o TTL (guia em `docs/EDGE.md`).
 - **Escala horizontal**: réplicas stateless sobre Postgres compartilhado; `QUARK_NODE_ID`
   particiona o espaço de id no LMDB (guarda defensiva). Doc: `docs/SCALING.md`.

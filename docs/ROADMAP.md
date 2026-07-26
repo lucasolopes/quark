@@ -40,7 +40,7 @@ bottleneck being geography/RTT, not the server).
   - **ClickHouse** (`QUARK_CLICKHOUSE_URL`): OLAP analytics sink (analytics-only).
 - **Click analytics**: fire-and-forget capture on the 302 (~180ns) → worker → sink;
   `GET /:code/stats` (aggregates + last N events).
-- **Observability**: opt-in per-request JSON access log (`QUARK_ACCESS_LOG`).
+- **Observability**: `tracing` throughout, per-request access log from tower-http at `DEBUG` (`RUST_LOG=tower_http=debug`), JSON output via `QUARK_LOG_FORMAT=json`.
 - **Edge/CDN**: TTL-aware `Cache-Control` on redirects (guide in `docs/EDGE.md`).
 - **Horizontal scaling**: stateless replicas over a shared Postgres; `QUARK_NODE_ID`
   partitions the id space in LMDB (defensive guard). Doc: `docs/SCALING.md`.

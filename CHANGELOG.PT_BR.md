@@ -21,6 +21,50 @@ tabelas do ClickHouse não estão cobertos.
 
 ## [Não lançado]
 
+## [0.4.0] - 2026-07-26
+
+### Alterado
+
+- **BREAKING: `QUARK_ACCESS_LOG` deixou de existir.** O log de acesso por
+  requisição agora vem do `TraceLayer` do tower-http e sai em `DEBUG`, ou seja,
+  fica desligado sob o filtro `info` padrão e liga com
+  `RUST_LOG=tower_http=debug`. Um deploy que ainda define `QUARK_ACCESS_LOG` não
+  quebra, mas para de produzir log de acesso. A nova `QUARK_LOG_FORMAT=json`
+  passa todo evento de log a sair como um objeto JSON por linha, que é o que um
+  pipeline de logs espera.
+- Os erros passam a ser tipados com `thiserror` no crate inteiro, e o log vai
+  por `tracing` no lugar de `eprintln!`. Nada muda no contrato HTTP: os handlers
+  devolvem os mesmos status e os mesmos corpos curtos de erro.
+- As chaves de assinatura ficam em `secrecy::SecretBox`, então são zeradas no
+  drop e não podem ser impressas por acidente.
+- Dependências: axum 0.7 para 0.8, heed 0.20 para 0.22, redis 0.27 para 1.x,
+  sqlx 0.8 para 0.9. Nenhuma delas muda formato em disco, migração ou formato
+  de fio.
+
+### Corrigido
+
+- **SSRF: `[::127.0.0.1]` era aceito como destino.** A checagem de endereço
+  interno existia em duas cópias que tinham divergido, e a da criação de link
+  não rejeitava endereços IPv6 compatíveis com IPv4. Agora existe um único
+  `is_internal_ip`, que cobre IPv6 mapeado e compatível com IPv4, CGNAT
+  (100.64/10), `0.0.0.0/8`, multicast e as faixas de documentação.
+- O `state` do login OIDC passa a ser comparado em tempo constante.
+- O `POST /admin/logout` usa o guard de CSRF compartilhado no lugar da checagem
+  própria de header, então aceita as mesmas provas que todo outro endpoint que
+  muda estado.
+- Um evento de clique descartado (canal de analytics cheio) passa a ser contado
+  e logado em vez de sumir, deixando a saturação visível. O contador só roda no
+  caminho de descarte, então um redirect saudável não paga nada por ele.
+- A configuração de OIDC lê cada variável obrigatória uma vez e carrega o valor,
+  em vez de validar a variável e reler depois.
+
+### Segurança
+
+- `unsafe_code = "deny"` e uma política de clippy (`unwrap_used`, `expect_used`,
+  `panic`, `await_holding_lock`, `let_underscore_future`) são obrigatórias no
+  CI. Os 28 `expect()` que restam em `src/` carregam, cada um, uma justificativa
+  escrita.
+
 ## [0.3.1] - 2026-07-25
 
 ### Corrigido
@@ -94,7 +138,8 @@ virou instalável.
 - Núcleo AGPL-3.0-only com um CLA coletado em cada pull request.
 - Relato privado de vulnerabilidade e política de segurança escrita.
 
-[Não lançado]: https://github.com/lucasolopes/quark/compare/v0.3.1...HEAD
+[Não lançado]: https://github.com/lucasolopes/quark/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/lucasolopes/quark/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/lucasolopes/quark/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/lucasolopes/quark/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lucasolopes/quark/releases/tag/v0.2.0

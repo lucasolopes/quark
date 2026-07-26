@@ -20,6 +20,46 @@ layout are not covered.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-26
+
+### Changed
+
+- **BREAKING: `QUARK_ACCESS_LOG` is gone.** The per-request access log now comes
+  from tower-http's `TraceLayer` and is emitted at `DEBUG`, so it is off under
+  the default `info` filter and turned on with `RUST_LOG=tower_http=debug`. A
+  deployment that still sets `QUARK_ACCESS_LOG` will not fail, but it will no
+  longer produce an access log. The new `QUARK_LOG_FORMAT=json` switches every
+  log event to one JSON object per line, which is what a log pipeline wants.
+- Errors are typed with `thiserror` across the crate, and logging goes through
+  `tracing` instead of `eprintln!`. Nothing about the HTTP contract changes:
+  handlers return the same statuses and the same short error bodies.
+- Signing keys are held in `secrecy::SecretBox` so they are zeroized on drop and
+  cannot be printed by accident.
+- Dependencies: axum 0.7 to 0.8, heed 0.20 to 0.22, redis 0.27 to 1.x, sqlx 0.8
+  to 0.9. No on-disk format, migration or wire format changes with them.
+
+### Fixed
+
+- **SSRF: `[::127.0.0.1]` was accepted as a destination.** The internal-address
+  check existed in two copies that had drifted apart, and the link-creation one
+  did not reject IPv4-compatible IPv6 addresses. There is now a single
+  `is_internal_ip` covering IPv4-mapped and IPv4-compatible IPv6, CGNAT
+  (100.64/10), `0.0.0.0/8`, multicast and the documentation ranges.
+- The OIDC login `state` is compared in constant time.
+- `POST /admin/logout` uses the shared CSRF guard instead of its own header
+  check, so it accepts the same proofs every other state-changing endpoint does.
+- A dropped click event (analytics channel full) is counted and logged instead
+  of vanishing, so saturation is visible. The counter only runs on the drop
+  path, so a healthy redirect pays nothing for it.
+- OIDC configuration reads each required variable once and carries the value,
+  rather than validating the variable and reading it again.
+
+### Security
+
+- `unsafe_code = "deny"` and a clippy policy (`unwrap_used`, `expect_used`,
+  `panic`, `await_holding_lock`, `let_underscore_future`) are enforced in CI.
+  The 28 remaining `expect()` in `src/` each carry a written justification.
+
 ## [0.3.1] - 2026-07-25
 
 ### Fixed
@@ -90,7 +130,8 @@ became installable.
 - AGPL-3.0-only core with a CLA collected on every pull request.
 - Private vulnerability reporting and a written security policy.
 
-[Unreleased]: https://github.com/lucasolopes/quark/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/lucasolopes/quark/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/lucasolopes/quark/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/lucasolopes/quark/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/lucasolopes/quark/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/lucasolopes/quark/releases/tag/v0.2.0
