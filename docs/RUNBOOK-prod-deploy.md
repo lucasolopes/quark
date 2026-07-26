@@ -38,7 +38,7 @@ fly deploy -a quark-prod
 Core: `QUARK_KEY`, `QUARK_SIGNING_KEY`, `QUARK_DATABASE_URL` (MPG),
 `QUARK_VALKEY_URL` (self-hosted Valkey, internal), `QUARK_CORS_ORIGINS`
 (must include `https://app.quarkus.com.br` for the panel), `QUARK_RATELIMIT_PER_MIN`,
-`QUARK_ACCESS_LOG`.
+`QUARK_LOG_FORMAT` (`json` in production).
 
 Cloud: `QUARK_MULTI_TENANT=1`, `QUARK_ENCRYPTION_KEY` (base64 32 bytes; secret-at-rest
 for OIDC client secrets and Sheets refresh tokens; **back it up**, losing it means the
