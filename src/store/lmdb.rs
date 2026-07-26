@@ -9,7 +9,7 @@ use crate::tenant::{Membership, Tenant, TenantId, User, DEFAULT_TENANT};
 use crate::webhooks::WebhookSubscription;
 use heed::byteorder::BigEndian;
 use heed::types::{Bytes, Str, U64};
-use heed::{Database, Env, EnvOpenOptions};
+use heed::{Database, Env, EnvOpenOptions, WithoutTls};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -123,7 +123,7 @@ fn compose_id(node_id: Option<u8>, counter: u64) -> Result<u64, StoreError> {
 }
 
 pub struct LmdbStore {
-    env: Env,
+    env: Env<WithoutTls>,
     // Tenant-owned sub-dbs: keys are `tkey(tenant, original_key)` (Bytes), so
     // each tenant occupies a disjoint contiguous range.
     links: Database<Bytes, Bytes>,
@@ -171,6 +171,11 @@ impl LmdbStore {
         )]
         let env = unsafe {
             EnvOpenOptions::new()
+                // Read transactions must be Send (they cross await points in the
+                // async Store impl), which is what no-TLS buys. Was the
+                // read-txn-no-tls Cargo feature until heed 0.22 turned it into a
+                // builder method that types the Env.
+                .read_txn_without_tls()
                 .map_size(MAP_SIZE_BYTES)
                 .max_dbs(MAX_DBS)
                 .open(path)?

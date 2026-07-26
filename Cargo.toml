@@ -26,7 +26,9 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
-heed = { version = "0.20", features = ["read-txn-no-tls"] }
+# 0.22 trocou a feature read-txn-no-tls pelo metodo read_txn_without_tls() no
+# builder, que tipa o Env como Env<WithoutTls>.
+heed = "0.22"
 moka = { version = "0.12", features = ["sync", "future"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
