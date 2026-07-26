@@ -309,12 +309,20 @@ async fn deliver_to_matching_guarded(
         let host = match extract_host(sub.url.expose()) {
             Some(h) => h,
             None => {
-                tracing::warn!(url = %sub.url, "webhook destination url is invalid");
+                tracing::warn!(
+                    webhook_id = sub.id,
+                    url = %sub.url,
+                    "webhook destination url is invalid"
+                );
                 continue;
             }
         };
         if is_blocked(&host) {
-            tracing::warn!(url = %sub.url, "webhook destination blocked by the ssrf guard");
+            tracing::warn!(
+                webhook_id = sub.id,
+                url = %sub.url,
+                "webhook destination blocked by the ssrf guard"
+            );
             continue;
         }
         deliver_one(client, store, sub, ev).await;
@@ -362,7 +370,12 @@ pub(crate) fn build_outgoing_request(
             let signature = match sign(&sub.secret, &msg_id, ts, &ev.body) {
                 Ok(sig) => sig,
                 Err(e) => {
-                    tracing::error!(error = %e, url = %sub.url, "webhook signing failed");
+                    tracing::error!(
+                        error = %e,
+                        webhook_id = sub.id,
+                        url = %sub.url,
+                        "webhook signing failed"
+                    );
                     return None;
                 }
             };
@@ -428,6 +441,7 @@ async fn deliver_one(
                 ));
                 tracing::warn!(
                     status = resp.status().as_u16(),
+                    webhook_id = sub.id,
                     url = %sub.url,
                     attempt = attempt + 1,
                     "webhook delivery returned a non-2xx status"
@@ -442,6 +456,7 @@ async fn deliver_one(
                 // need it), then redact only for the persisted health detail.
                 tracing::warn!(
                     error = %e,
+                    webhook_id = sub.id,
                     url = %sub.url,
                     attempt = attempt + 1,
                     "webhook delivery failed"
@@ -463,7 +478,12 @@ async fn deliver_one(
             .iter()
             .find(|(name, _)| *name == "webhook-id")
             .map(|(_, value)| value.as_str());
-        tracing::warn!(url = %sub.url, msg_id, "webhook delivery budget exhausted");
+        tracing::warn!(
+            webhook_id = sub.id,
+            url = %sub.url,
+            msg_id,
+            "webhook delivery budget exhausted"
+        );
     }
 
     // Health passive recording, off the redirect hot path: `link.clicked`
@@ -629,13 +649,21 @@ async fn deliver_claimed(
     let host = match extract_host(sub.url.expose()) {
         Some(h) => h,
         None => {
-            tracing::warn!(url = %sub.url, "relayed webhook url is invalid");
+            tracing::warn!(
+                webhook_id = sub.id,
+                url = %sub.url,
+                "relayed webhook url is invalid"
+            );
             mark_dead_logged(store, delivery.id, delivery.attempts).await;
             return;
         }
     };
     if is_blocked(&host) {
-        tracing::warn!(url = %sub.url, "relayed webhook blocked by the ssrf guard");
+        tracing::warn!(
+            webhook_id = sub.id,
+            url = %sub.url,
+            "relayed webhook blocked by the ssrf guard"
+        );
         mark_dead_logged(store, delivery.id, delivery.attempts).await;
         return;
     }
@@ -723,13 +751,19 @@ async fn post_once(
         Ok(resp) => {
             tracing::warn!(
                 status = resp.status().as_u16(),
+                webhook_id = sub.id,
                 url = %sub.url,
                 "relayed webhook returned a non-2xx status"
             );
             false
         }
         Err(e) => {
-            tracing::warn!(error = %e, url = %sub.url, "relayed webhook delivery failed");
+            tracing::warn!(
+                error = %e,
+                webhook_id = sub.id,
+                url = %sub.url,
+                "relayed webhook delivery failed"
+            );
             false
         }
     }
@@ -2270,5 +2304,113 @@ mod tests {
         dispatcher.emit_if_in_memory(ev);
         let got = rx.try_recv().expect("emit_if_in_memory emits on LMDB");
         assert_eq!(got.event_type, EventType::LinkCreated);
+    }
+
+    /// Collects the field names of every `tracing` event emitted while it is
+    /// installed, so a test can assert on the shape of a log line.
+    #[derive(Clone, Default)]
+    struct CapturedEvents(Arc<Mutex<Vec<Vec<String>>>>);
+
+    struct FieldNames(Vec<String>);
+
+    impl tracing::field::Visit for FieldNames {
+        fn record_debug(&mut self, field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {
+            self.0.push(field.name().to_string());
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedEvents {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut names = FieldNames(Vec::new());
+            event.record(&mut names);
+            self.0.lock().unwrap().push(names.0);
+        }
+    }
+
+    /// Every destination of a given kind shares one host (`hooks.slack.com`,
+    /// `discord.com`), so a redacted `url` field alone makes 20 Slack
+    /// subscriptions produce 20 indistinguishable lines. The subscription id
+    /// has to ride along or the operator cannot find the row.
+    #[tokio::test]
+    async fn delivery_warnings_carry_the_subscription_id() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let captured = CapturedEvents::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let subs = vec![(
+            crate::tenant::DEFAULT_TENANT,
+            vec![
+                // Does not parse as a URL: hits the "destination url is
+                // invalid" warn.
+                sub(
+                    41,
+                    "https://host.example%2FSECRETTOK",
+                    vec![EventType::LinkCreated],
+                    true,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                ),
+                // Parses fine, blocked by the injected SSRF predicate.
+                sub(
+                    42,
+                    "https://hooks.example.com/services/SECRETTOK",
+                    vec![EventType::LinkCreated],
+                    true,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                ),
+            ],
+        )];
+        let ev = test_event(EventType::LinkCreated, crate::tenant::DEFAULT_TENANT);
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![]));
+
+        deliver_to_matching_guarded(&reqwest::Client::new(), &store, &subs, &ev, |_| true).await;
+
+        let events = captured.0.lock().unwrap().clone();
+        let with_url: Vec<_> = events
+            .iter()
+            .filter(|fields| fields.iter().any(|f| f == "url"))
+            .collect();
+        assert_eq!(with_url.len(), 2, "expected both warns: {events:?}");
+        for fields in with_url {
+            assert!(
+                fields.iter().any(|f| f == "webhook_id"),
+                "log line has no subscription id to find the row with: {fields:?}"
+            );
+        }
+    }
+
+    /// The behavioral test above can only reach the two warns on the in-memory
+    /// path. The relay sites (`deliver_claimed`, `post_once`) need a Postgres
+    /// outbox, so this checks the same invariant statically instead: any
+    /// `tracing` call that prints the destination url must also print the
+    /// subscription id.
+    #[test]
+    fn every_url_log_site_also_logs_the_subscription_id() {
+        let src = include_str!("delivery.rs");
+        let mut checked = 0;
+        for (offset, _) in src.match_indices("tracing::") {
+            let rest = &src[offset..];
+            // A `tracing` macro call ends at the first `);`; no field
+            // expression in this file contains one.
+            let end = rest.find(");").map(|i| i + 2).unwrap_or(rest.len());
+            let call = &rest[..end];
+            if !call.contains("url = %sub.url") {
+                continue;
+            }
+            checked += 1;
+            assert!(
+                call.contains("webhook_id"),
+                "log site prints the url without the subscription id: {call}"
+            );
+        }
+        assert_eq!(
+            checked, 10,
+            "expected 10 url log sites in delivery.rs, found {checked}"
+        );
     }
 }
