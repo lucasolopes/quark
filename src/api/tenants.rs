@@ -366,6 +366,16 @@ pub(crate) async fn admin_tenants_create(
 /// inverse would leave a live workspace whose realm is gone, which nobody can
 /// log into. A failed `delete_realm` orphans a realm and logs; there is no
 /// reaper, and that cost is accepted in the design doc.
+///
+/// No `csrf_guard` here, unlike `oidc_logout`. The session cookie is
+/// `SameSite=None; Secure`, so a cross-site caller does carry it, but a `DELETE`
+/// is never a CORS simple request: the browser always preflights it, and the
+/// preflight is answered only for the configured origin allowlist (`router.rs`
+/// builds the CORS layer without `Any` and with credentials allowed). A
+/// cross-site page therefore never gets to send this request at all. The guard
+/// exists for `oidc_logout` because a `POST` with a simple content type IS sent
+/// without a preflight. Keep the allowlist strict: it is what protects this
+/// endpoint.
 pub(crate) async fn admin_tenants_delete(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -404,14 +414,18 @@ pub(crate) async fn admin_tenants_delete(
         Ok(None) => None,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    let hosts: Vec<String> = st
-        .store
-        .list_domains(target)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|d| d.host)
-        .collect();
+    // Not best-effort: this read happens BEFORE the delete, and a swallowed
+    // error would hand the loop at the bottom an empty host list, so not even
+    // the node serving this request would evict its own router cache and the
+    // deleted workspace's links would keep redirecting until the TTL expires.
+    // Failing here costs nothing, the workspace is still intact.
+    let hosts: Vec<String> = match st.store.list_domains(target).await {
+        Ok(domains) => domains.into_iter().map(|d| d.host).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, tenant_id = id, "workspace delete aborted: domain list failed");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
 
     if let Err(e) = st.store.delete_tenant(target).await {
         // The whole delete is one transaction, so nothing was removed and the

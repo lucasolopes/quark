@@ -113,6 +113,25 @@ retention or deletion commitments are written in terms of storage rather than
 access. On the Postgres and LMDB backends there is no lag: the click rows go
 inside the same transaction as everything else.
 
+### On other replicas the links can keep redirecting for up to five minutes
+
+The node that handled the deletion evicts the workspace's hosts from its route
+cache as part of the request, so there the links stop resolving as soon as the
+API answers `204`. Other replicas only learn about it through the cross-node
+invalidation channel, and that channel exists only when `QUARK_VALKEY_URL` is
+configured. Without it, each replica keeps serving its own cached route until
+the entry expires, which is five minutes.
+
+Inside that window a replica that never got the message still answers `302` for
+a link of the deleted workspace. The redirect decodes the short code without
+reading the alias table, so the deleted rows are not what stops it: the route
+cache is. A single-node deployment never sees this, because the node that
+deleted the workspace is the same one serving the redirect.
+
+If you run more than one replica, set `QUARK_VALKEY_URL`. The invalidation is
+published the moment the deletion commits and the other replicas drop the route
+right away, which closes the window to the time the message takes to arrive.
+
 ### The Keycloak realm is deleted, and can be orphaned
 
 After the transaction commits, quark deletes the workspace's Keycloak realm.

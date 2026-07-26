@@ -12,6 +12,7 @@ use quark::cache::Cache;
 use quark::store::{open_backends, postgres::PostgresStore, Store};
 use quark::tenant::{TenantId, User};
 use serial_test::file_serial;
+use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -1424,12 +1425,46 @@ async fn delete_realm_is_called_with_the_tenant_slug() {
 
 // --- Workspace deletion, Postgres arm (LUC-138) ---
 
+/// A link record, minimal: the deletion battery only cares that the row exists
+/// and which tenant owns it.
+fn rec(url: &str) -> quark::store::Record {
+    quark::store::Record {
+        url: url.into(),
+        expiry: None,
+        created: 0,
+        tags: Vec::new(),
+        max_visits: None,
+        rules: Vec::new(),
+        variants: Vec::new(),
+        app_ios: None,
+        app_android: None,
+        folder: None,
+        fallback_url: None,
+        password_hash: None,
+        tenant_id: quark::tenant::DEFAULT_TENANT,
+    }
+}
+
 /// Seeds the tenant-owned rows the cross-backend battery in
 /// `tests/tenant_isolation_it.rs` cannot reach: the cloud-only tables
 /// (`domains`, `invites`, `oidc_configs`, `sso_email_domains`), the session,
 /// the analytics rows and an outbox delivery. Returns the raw session token
 /// so the caller can look the session back up by hash.
 async fn seed_cloud_only_rows(store: &PostgresStore, tenant: TenantId, salt: u64) -> String {
+    // A link plus its alias in the SHARED domain namespace (`domain_id = 0`),
+    // where both tenants' aliases sit side by side in one namespace. That is
+    // the one place a tenant-scoped delete can reach across and take a
+    // neighbor's row with it, so both tenants get one.
+    store
+        .put_alias_and_link(
+            tenant,
+            quark::domain::SHARED_DOMAIN_ID,
+            &format!("wipe-alias-{salt}"),
+            7600 + salt,
+            &rec(&format!("https://alias-{salt}.example.com")),
+        )
+        .await
+        .unwrap();
     let raw = generate_token();
     store
         .put_session(
@@ -1645,6 +1680,18 @@ async fn delete_tenant_removes_every_owned_row_pg() {
         0,
         "click rows"
     );
+    assert!(
+        store.get_link(doomed, 7601).await.unwrap().is_none(),
+        "link"
+    );
+    assert!(
+        store
+            .get_alias(quark::domain::SHARED_DOMAIN_ID, "wipe-alias-1")
+            .await
+            .unwrap()
+            .is_none(),
+        "alias"
+    );
 
     // --- the neighbor keeps everything (the assertion that matters) ---
     assert!(
@@ -1703,6 +1750,21 @@ async fn delete_tenant_removes_every_owned_row_pg() {
         1,
         "neighbor click rows"
     );
+    assert!(
+        store.get_link(neighbor, 7602).await.unwrap().is_some(),
+        "neighbor link"
+    );
+    // The assertion the shared alias namespace exists for: the two tenants'
+    // aliases live under `domain_id = 0` together, and deleting one tenant
+    // must not reach into the other's entry.
+    assert_eq!(
+        store
+            .get_alias(quark::domain::SHARED_DOMAIN_ID, "wipe-alias-2")
+            .await
+            .unwrap(),
+        Some(7602),
+        "the neighbor's alias in the shared namespace must survive"
+    );
 
     // `users` is global and is never touched: the deleted tenant's owner can
     // be a member of other workspaces.
@@ -1712,12 +1774,13 @@ async fn delete_tenant_removes_every_owned_row_pg() {
     );
 }
 
-/// Deleting a tenant id that does not exist is a no-op and not an error: the
-/// whole thing is one transaction, so there is no half-deleted state to be
-/// left in, and nobody else's rows move.
+/// Deleting a tenant id that does not exist is a no-op and not an error, and
+/// nobody else's rows move. This is idempotency, not atomicity: the store has
+/// no seam to fail a statement in the middle of the transaction, so the
+/// rollback path is not what is under test here.
 #[tokio::test]
 #[file_serial]
-async fn delete_tenant_is_atomic_pg() {
+async fn delete_tenant_of_an_unknown_id_is_a_no_op_pg() {
     let Some(store) = fresh().await else {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
@@ -2124,6 +2187,91 @@ async fn delete_tenant_succeeds_for_the_owner() {
         "only the surviving workspace is listed"
     );
     assert_eq!(memberships[0]["tenant_id"], keeper.0);
+}
+
+/// A pre-delete read that fails must abort with `503` and delete nothing.
+/// `list_domains` is read before the transaction because its hosts drive the
+/// router-cache invalidation at the end of the handler: swallowing its error
+/// would delete the workspace and leave even the node serving this request
+/// still resolving the deleted workspace's hosts until the route TTL runs out.
+/// The seam is a permission revoke on `domains`, which is what makes exactly
+/// that one read fail while every read before it keeps working.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_aborts_when_the_domain_list_fails() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let url = std::env::var("QUARK_TEST_DATABASE_URL").unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .unwrap();
+    let store = Arc::new(store);
+    let (user_id, raw) = seed_session(&store, "delete-domfail-subject").await;
+    let doomed = seed_workspace(
+        &store,
+        user_id,
+        "del-domfail-doomed",
+        quark::tenant::Role::Owner,
+    )
+    .await;
+    seed_workspace(
+        &store,
+        user_id,
+        "del-domfail-keeper",
+        quark::tenant::Role::Owner,
+    )
+    .await;
+
+    // Column-level, not table-level: `list_domains` reads `host` and fails,
+    // while `DELETE FROM domains WHERE tenant_id = $1` only reads `tenant_id`
+    // and would still go through. Revoking the whole table would break the
+    // delete too, and then the `503` would prove nothing about the read.
+    sqlx::query("REVOKE SELECT ON domains FROM CURRENT_USER")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("GRANT SELECT (tenant_id) ON domains TO CURRENT_USER")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let app = app_over(
+        store.clone() as Arc<dyn Store>,
+        store.clone() as Arc<dyn AnalyticsSink>,
+        true,
+    );
+    let status = app
+        .oneshot(delete_req(doomed, Some(&raw)))
+        .await
+        .unwrap()
+        .status();
+    // Put the privilege back before asserting: a panic above this line would
+    // leave `domains` unreadable for every test that follows in this binary.
+    sqlx::query("GRANT SELECT ON domains TO CURRENT_USER")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a failed domain list must not fall through to the delete"
+    );
+    assert!(
+        store.get_tenant(doomed).await.unwrap().is_some(),
+        "the workspace must still be there after a failed pre-delete read"
+    );
+    assert!(
+        store
+            .get_membership(user_id, doomed)
+            .await
+            .unwrap()
+            .is_some(),
+        "the membership must still be there too"
+    );
 }
 
 /// The Keycloak side effect is exactly one `delete_realm`, naming the deleted

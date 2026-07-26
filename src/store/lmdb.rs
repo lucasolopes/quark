@@ -1095,6 +1095,16 @@ impl Store for LmdbStore {
         // domain id). Deleting the `tprefix` range there would key off a
         // domain id that happens to equal this tenant id, which is another
         // tenant's data. Matching on the link the alias points at is exact.
+        //
+        // Known divergence from the Postgres backend, left in on purpose: an
+        // ORPHAN alias (its link was already deleted) matches no link of this
+        // tenant, so it survives here, while Postgres takes it out with
+        // `DELETE ... WHERE tenant_id`. Fixing it would mean putting the tenant
+        // on the alias row, a schema change, and the LMDB path is unreachable
+        // in practice: workspace deletion is cloud-only (`404` in OSS) and
+        // cloud runs Postgres, so this code is exercised by tests only. If a
+        // future change makes LMDB serve multi-tenant traffic, this is the
+        // first thing to revisit.
         let mut own_links = std::collections::HashSet::new();
         for item in self.links.prefix_iter(&wtxn, prefix.as_slice())? {
             let (key, _) = item?;
@@ -1115,7 +1125,12 @@ impl Store for LmdbStore {
         // `remap_data_type` gives one `Database<Bytes, Bytes>` view per sub-db
         // so the value types (BeU64, Str, Bytes) do not each need their own
         // copy of this loop.
-        for db in [
+        //
+        // The array length is tied to `TENANT_OWNED_DBS` (minus `aliases`,
+        // swept above) so a new tenant-owned sub-db cannot be added to that
+        // constant and silently skip this delete: the mismatch is a compile
+        // error. When it breaks, add the sub-db's handle to the list below.
+        let swept: [Database<Bytes, Bytes>; TENANT_OWNED_DBS.len() - 1] = [
             self.links.remap_data_type::<Bytes>(),
             self.stats.remap_data_type::<Bytes>(),
             self.events.remap_data_type::<Bytes>(),
@@ -1127,7 +1142,8 @@ impl Store for LmdbStore {
             self.health.remap_data_type::<Bytes>(),
             self.sheets.remap_data_type::<Bytes>(),
             self.alert_rules.remap_data_type::<Bytes>(),
-        ] {
+        ];
+        for db in swept {
             // Keys are collected first: the prefix iterator borrows the
             // transaction, and deleting through it needs the transaction
             // mutably.

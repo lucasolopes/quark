@@ -113,6 +113,25 @@ exclusão de dado estiver escrito em termos de armazenamento, e não de acesso.
 Nos backends Postgres e LMDB não existe esse atraso: os cliques saem na mesma
 transação que o resto.
 
+### Nas outras réplicas os links podem continuar redirecionando por até cinco minutos
+
+O nó que atendeu a exclusão tira os hosts do workspace do cache de rotas dele
+ainda dentro da requisição, então ali os links param de resolver assim que a API
+responde `204`. As outras réplicas só ficam sabendo pelo canal de invalidação
+entre nós, e esse canal só existe quando `QUARK_VALKEY_URL` está configurado.
+Sem ele, cada réplica continua servindo a rota que tem em cache até a entrada
+expirar, o que leva cinco minutos.
+
+Dentro dessa janela, uma réplica que não recebeu o aviso ainda responde `302`
+para um link do workspace excluído. O redirect decodifica o código curto sem ler
+a tabela de aliases, então não são as linhas apagadas que interrompem isso: é o
+cache de rotas. Numa instalação de um nó só isso nunca aparece, porque o nó que
+excluiu o workspace é o mesmo que serve o redirect.
+
+Se você roda mais de uma réplica, configure `QUARK_VALKEY_URL`. A invalidação é
+publicada no momento em que a exclusão comita e as outras réplicas descartam a
+rota na hora, o que reduz a janela ao tempo de a mensagem chegar.
+
 ### O realm do Keycloak é apagado, e pode ficar órfão
 
 Depois que a transação comita, o quark apaga o realm do workspace no Keycloak.
