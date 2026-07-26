@@ -21,7 +21,11 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 unmaintained = "workspace"
 ignore = [
-  # { id = "RUSTSEC-0000-0000", reason = "no fixed release yet; not reachable from our code paths" },
+  # Marvin Attack: timing side channel in RSA private-key operations. No fixed
+  # release exists. quark only verifies OIDC id_token signatures with the
+  # provider's public key (jsonwebtoken -> rsa); it never signs or decrypts
+  # with an RSA private key, so the vulnerable path is unreachable.
+  { id = "RUSTSEC-2023-0071", reason = "no fixed release yet; private-key timing leak, quark only does public-key verification" },
 ]
 
 [licenses]
