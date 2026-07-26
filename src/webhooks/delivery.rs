@@ -448,20 +448,24 @@ async fn deliver_one(
                 );
             }
             Err(e) => {
-                // The health detail is persisted (LMDB/Postgres) and returned by
-                // `GET /admin/webhooks`, so it must never carry the request URL:
-                // for channel webhooks (Slack/Discord/Telegram/...) the secret
+                // For channel webhooks (Slack/Discord/Telegram/...) the secret
                 // token lives in the URL itself, and reqwest's `Display`
-                // includes it by default. Log the full error first (operators
-                // need it), then redact only for the persisted health detail.
+                // includes the full request URL by default. So the URL has to
+                // be stripped in both places: the health detail (persisted in
+                // LMDB/Postgres and returned by `GET /admin/webhooks`) and the
+                // log line. The redacted `url` field plus `webhook_id` already
+                // give the operator the host and the row to look up, which is
+                // everything the URL ever contributed to diagnosis; the rest of
+                // it was only the credential.
+                let redacted = e.without_url();
                 tracing::warn!(
-                    error = %e,
+                    error = %redacted,
                     webhook_id = sub.id,
                     url = %sub.url,
                     attempt = attempt + 1,
                     "webhook delivery failed"
                 );
-                outcome = crate::health::HealthStatus::Error(e.without_url().to_string());
+                outcome = crate::health::HealthStatus::Error(redacted.to_string());
             }
         }
 
@@ -758,8 +762,11 @@ async fn post_once(
             false
         }
         Err(e) => {
+            // `without_url` for the same reason as in `deliver_one`: reqwest's
+            // `Display` embeds the full request URL, which for channel kinds is
+            // the credential.
             tracing::warn!(
-                error = %e,
+                error = %e.without_url(),
                 webhook_id = sub.id,
                 url = %sub.url,
                 "relayed webhook delivery failed"
@@ -2411,6 +2418,134 @@ mod tests {
         assert_eq!(
             checked, 10,
             "expected 10 url log sites in delivery.rs, found {checked}"
+        );
+    }
+
+    /// Renders every field of every `tracing` event emitted while installed,
+    /// so a test can assert on the values a log line actually prints (not
+    /// just on its field names, which `CapturedEvents` covers).
+    #[derive(Clone, Default)]
+    struct CapturedText(Arc<Mutex<String>>);
+
+    impl CapturedText {
+        fn contents(&self) -> String {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    struct FieldValues(String);
+
+    impl tracing::field::Visit for FieldValues {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            use std::fmt::Write as _;
+            let _ = write!(self.0, " {}={value:?}", field.name());
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedText {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut values = FieldValues(String::new());
+            event.record(&mut values);
+            let mut out = self.0.lock().unwrap();
+            out.push_str(&values.0);
+            out.push('\n');
+        }
+    }
+
+    /// Binds an ephemeral port and immediately drops the listener, so the
+    /// address is guaranteed to refuse the connection. That is the only
+    /// deterministic way to build a real `reqwest::Error`: a server replying
+    /// 500 is a valid HTTP response and lands in the `Ok(resp)` arm, which
+    /// never constructs the error whose `Display` embeds the full url.
+    async fn closed_port_url(token: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("http://{addr}/hook/{token}")
+    }
+
+    const URL_TOKEN: &str = "aVerySecretTokenThatMustNeverLeak";
+
+    /// The `WebhookUrl` newtype redacts `url = %sub.url`, but it cannot reach
+    /// `error = %e`: `reqwest::Error`'s `Display` embeds the full request url,
+    /// token and all. This drives a real transport failure through the
+    /// in-memory path and asserts the token never reaches the subscriber.
+    #[tokio::test]
+    async fn transport_failure_never_logs_the_url_token() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let url = closed_port_url(URL_TOKEN).await;
+        let captured = CapturedText::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let subs = vec![(
+            crate::tenant::DEFAULT_TENANT,
+            vec![sub(
+                7,
+                &url,
+                vec![EventType::LinkCreated],
+                true,
+                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            )],
+        )];
+        let ev = test_event(EventType::LinkCreated, crate::tenant::DEFAULT_TENANT);
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![]));
+
+        deliver_to_matching_guarded(&reqwest::Client::new(), &store, &subs, &ev, |_| false).await;
+
+        let log = captured.contents();
+        assert!(
+            log.contains("webhook delivery failed"),
+            "the transport-error arm was never reached, so this test proves nothing:\n{log}"
+        );
+        assert!(!log.contains(URL_TOKEN), "the url token leaked:\n{log}");
+        assert!(
+            log.contains("127.0.0.1"),
+            "the log lost the host and is useless for diagnosis:\n{log}"
+        );
+    }
+
+    /// Same invariant for the relay path. `post_once` is called directly: the
+    /// full `deliver_claimed` needs a Postgres outbox, and the leaking site is
+    /// `post_once`'s own transport-error arm.
+    #[tokio::test]
+    async fn relay_transport_failure_never_logs_the_url_token() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let url = closed_port_url(URL_TOKEN).await;
+        let captured = CapturedText::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let subscription = sub(
+            9,
+            &url,
+            vec![EventType::LinkCreated],
+            true,
+            "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+        );
+        let req = OutgoingRequest {
+            body: r#"{"test":1}"#.to_string(),
+            extra_headers: Vec::new(),
+        };
+
+        let delivered = post_once(&reqwest::Client::new(), &subscription, &req).await;
+
+        assert!(!delivered, "a closed port cannot report a successful post");
+        let log = captured.contents();
+        assert!(
+            log.contains("relayed webhook delivery failed"),
+            "the transport-error arm was never reached, so this test proves nothing:\n{log}"
+        );
+        assert!(!log.contains(URL_TOKEN), "the url token leaked:\n{log}");
+        assert!(
+            log.contains("127.0.0.1"),
+            "the log lost the host and is useless for diagnosis:\n{log}"
         );
     }
 }
