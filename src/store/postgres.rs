@@ -3610,6 +3610,15 @@ impl AnalyticsSink for PostgresStore {
         agg.last_ts = last_ts.unwrap_or(0) as u64;
         Ok(agg)
     }
+
+    /// Deliberate no-op, not an oversight: `click_counters`, `stats_meta` and
+    /// `click_events` are all in `TENANT_OWNED_TABLES`, so `delete_tenant`
+    /// already removes them inside the single deletion transaction. Repeating
+    /// the work here would run outside that transaction and could only ever
+    /// delete rows that no longer exist.
+    async fn delete_tenant_data(&self, _tenant: u64) -> Result<(), AnalyticsError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -375,6 +375,16 @@ pub trait AnalyticsSink: Send + Sync + 'static {
     /// with no limit). Ids with no clicks are omitted (callers default to 0).
     /// Default is per-id via `stats`; backends with a cheap aggregate (Postgres
     /// `click_counters`) override it with a single batched query.
+    /// Deletes every click event belonging to `tenant` (LUC-138, workspace
+    /// deletion). On ClickHouse this is an `ALTER TABLE ... DELETE`, which is
+    /// an ASYNCHRONOUS mutation: the call returns when the mutation has been
+    /// accepted, not when it has finished, so the removal is eventual and the
+    /// user-facing docs say so.
+    ///
+    /// No default body on purpose: a sink that silently kept a deleted
+    /// tenant's clicks would be a data-retention bug nobody would notice.
+    async fn delete_tenant_data(&self, tenant: u64) -> Result<(), AnalyticsError>;
+
     async fn click_totals(
         &self,
         ids: &[u64],

@@ -1543,6 +1543,16 @@ impl AnalyticsSink for LmdbStore {
     async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, AnalyticsError> {
         Ok(self.stats_for_tenant_inner(tenant).await?)
     }
+
+    /// Deliberate no-op, not an oversight: on this backend the sink and the
+    /// store are the same object, and the click data lives in the
+    /// tenant-prefixed `stats`/`events`/`visits` sub-dbs that
+    /// `Store::delete_tenant` already drops in one write transaction. Doing it
+    /// again here would be a second pass over rows that are already gone,
+    /// outside that transaction.
+    async fn delete_tenant_data(&self, _tenant: u64) -> Result<(), AnalyticsError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

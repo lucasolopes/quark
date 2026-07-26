@@ -96,3 +96,27 @@ async fn stats_for_tenant_non_default_tenant_is_empty_even_with_data() {
     );
     assert!(agg.per_country.is_empty());
 }
+
+/// `delete_tenant_data` on the embedded LMDB sink is a documented no-op:
+/// this backend stores clicks in the tenant-prefixed `stats`/`events`/`visits`
+/// sub-dbs, which `Store::delete_tenant` already drops in a single write
+/// transaction. Calling the sink must therefore never remove anything on its
+/// own — and above all it must never wipe the clicks of a tenant that was not
+/// asked for, which is the assertion that matters here.
+#[tokio::test]
+async fn delete_tenant_data_is_a_no_op_and_spares_other_tenants_lmdb() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_store, sink) = open_backends(dir.path(), false).await.unwrap();
+    sink.record_batch(&[ev(1, 1_752_300_000), ev(1, 1_752_300_050)])
+        .await
+        .unwrap();
+
+    sink.delete_tenant_data(7).await.unwrap();
+
+    let agg = sink.stats_for_tenant(0).await.unwrap();
+    assert_eq!(
+        agg.total, 2,
+        "deleting tenant 7 must not touch the clicks recorded under tenant 0"
+    );
+    assert_eq!(sink.stats(1).await.unwrap().unwrap().aggregates.total, 2);
+}

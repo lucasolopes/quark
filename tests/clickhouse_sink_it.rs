@@ -210,3 +210,47 @@ async fn per_variant_aggregates_and_recent_ch() {
     assert!(variants.contains(&Some(1)));
     assert!(variants.contains(&None));
 }
+
+/// `delete_tenant_data` on ClickHouse is `ALTER TABLE clicks DELETE`, an
+/// asynchronous mutation: the call returns once the mutation is accepted, not
+/// once it has run. The test polls for the eventual result instead of assuming
+/// it is visible on the next read.
+///
+/// The second assertion is the one that matters: the mutation's `WHERE` must
+/// pin it to one tenant, so the other tenant's clicks are still all there
+/// after the mutation has finished.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_data_removes_only_that_tenants_clicks_ch() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_CLICKHOUSE_URL not set");
+        return;
+    };
+    let mut a1 = ev(1, 1_752_300_000, "BR", "iPhone");
+    a1.tenant_id = 10;
+    let mut a2 = ev(2, 1_752_300_050, "BR", "iPhone");
+    a2.tenant_id = 10;
+    let mut b1 = ev(3, 1_752_300_100, "JP", "iPhone");
+    b1.tenant_id = 11;
+    s.record_batch(&[a1, a2, b1]).await.unwrap();
+    assert_eq!(s.stats_for_tenant(10).await.unwrap().total, 2);
+
+    s.delete_tenant_data(10).await.unwrap();
+
+    // The mutation is accepted, not finished; poll for it rather than sleeping
+    // a fixed amount and hoping.
+    let mut remaining = u64::MAX;
+    for _ in 0..100 {
+        remaining = s.stats_for_tenant(10).await.unwrap().total;
+        if remaining == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(remaining, 0, "tenant 10's clicks must eventually be gone");
+    assert_eq!(
+        s.stats_for_tenant(11).await.unwrap().total,
+        1,
+        "tenant 11's clicks must survive a deletion aimed at tenant 10"
+    );
+}

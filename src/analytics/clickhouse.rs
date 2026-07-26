@@ -517,6 +517,25 @@ impl AnalyticsSink for ClickHouseSink {
 
         Ok(agg)
     }
+
+    /// Workspace deletion (LUC-138). `ALTER TABLE ... DELETE` is a ClickHouse
+    /// mutation: accepted now, executed in the background. So this returns
+    /// success while the rows are still readable for a while, and the
+    /// user-facing docs describe the removal as eventual rather than
+    /// immediate.
+    ///
+    /// The `WHERE` is what keeps the mutation on one tenant; the whole clicks
+    /// table shares a single table, so a missing predicate here would wipe
+    /// every tenant's analytics.
+    async fn delete_tenant_data(&self, tenant: u64) -> Result<(), AnalyticsError> {
+        self.client
+            .query("ALTER TABLE clicks DELETE WHERE tenant_id = ?")
+            .bind(tenant)
+            .execute()
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
