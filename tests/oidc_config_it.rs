@@ -657,7 +657,7 @@ async fn oidc_config_endpoints_404_in_oss_without_postgres() {
 /// Postgres and without any global env OIDC configured — the same ungated
 /// OSS shape as `oidc_config_endpoints_404_in_oss_without_postgres`, but for
 /// the login/callback surface rather than the CRUD one. This is the router
-/// path (not the direct-handler-call path the `api.rs` unit tests use), so it
+/// path (not the direct-handler-call path the `src/api/` unit tests use), so it
 /// proves the actual routes wired into `router()` carry the gate, not just
 /// the functions behind them.
 #[tokio::test]
@@ -702,7 +702,7 @@ async fn oss_login_and_callback_404_without_oidc_configured_or_postgres() {
 
 /// A `?org=` login against an OSS deployment (`multi_tenant: false`) is also
 /// `404`, at the router level, mirroring `org_login_requires_multi_tenant_mode`
-/// in the `api.rs` unit tests (which calls the handler directly) but through
+/// in the `src/api/` unit tests (which calls the handler directly) but through
 /// the actual route.
 #[tokio::test]
 #[file_serial]

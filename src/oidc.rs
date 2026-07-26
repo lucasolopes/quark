@@ -1,6 +1,6 @@
 //! OIDC login (stage 1): configuration, discovery, PKCE, code exchange, and
 //! id_token verification. Opt-in via `QUARK_OIDC_ISSUER`; the flow is driven by
-//! the `/admin/login` and `/admin/callback` routes in `api.rs`. The panel admin
+//! the `/admin/login` and `/admin/callback` routes in `api/oidc_login.rs`. The panel admin
 //! token stays a break-glass path regardless.
 
 use crate::auth::Scope;
@@ -101,14 +101,18 @@ impl OidcConfig {
         // the project's fail-open rule for an optional feature, and it keeps the
         // admin token working as the break-glass path. A hard boot failure would
         // take the whole service down over a login-only misconfiguration.
+        // Each required value is read ONCE and carried through, so the config
+        // cannot be built from a var that changed between the check and the read.
         let mut missing = Vec::new();
+        let mut required = Vec::new();
         for var in [
             "QUARK_OIDC_CLIENT_ID",
             "QUARK_OIDC_CLIENT_SECRET",
             "QUARK_OIDC_REDIRECT_URL",
         ] {
-            if std::env::var(var).ok().filter(|s| !s.is_empty()).is_none() {
-                missing.push(var);
+            match std::env::var(var).ok().filter(|s| !s.is_empty()) {
+                Some(v) => required.push(v),
+                None => missing.push(var),
             }
         }
         if !missing.is_empty() {
@@ -119,11 +123,12 @@ impl OidcConfig {
             );
             return None;
         }
+        let [client_id, client_secret, redirect_url] = <[String; 3]>::try_from(required).ok()?;
         Some(OidcConfig {
             issuer: issuer.trim_end_matches('/').to_string(),
-            client_id: std::env::var("QUARK_OIDC_CLIENT_ID").unwrap_or_default(),
-            client_secret: std::env::var("QUARK_OIDC_CLIENT_SECRET").unwrap_or_default(),
-            redirect_url: std::env::var("QUARK_OIDC_REDIRECT_URL").unwrap_or_default(),
+            client_id,
+            client_secret,
+            redirect_url,
             scopes: std::env::var("QUARK_OIDC_SCOPES")
                 .unwrap_or_else(|_| "openid profile email".to_string()),
             admin_claim: std::env::var("QUARK_OIDC_ADMIN_CLAIM")
@@ -290,6 +295,10 @@ pub fn select_key(jwks: &Jwks, kid: Option<&str>) -> Result<DecodingKey, OidcErr
 /// A random PKCE verifier and its S256 challenge (base64url, no pad).
 pub fn pkce_pair() -> (String, String) {
     let mut raw = [0u8; 32];
+    #[expect(
+        clippy::expect_used,
+        reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+    )]
     getrandom::fill(&mut raw).expect("system RNG must be available");
     let verifier = b64url.encode(raw);
     let challenge = b64url.encode(Sha256::digest(verifier.as_bytes()));
@@ -299,6 +308,10 @@ pub fn pkce_pair() -> (String, String) {
 /// A random opaque value (state / nonce), base64url.
 pub fn random_token() -> String {
     let mut raw = [0u8; 24];
+    #[expect(
+        clippy::expect_used,
+        reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+    )]
     getrandom::fill(&mut raw).expect("system RNG must be available");
     b64url.encode(raw)
 }
@@ -898,6 +911,10 @@ pub fn sign_login_state(
 ) -> String {
     let tenant_field = tenant.map(|t| t.0.to_string()).unwrap_or_default();
     let payload = format!("{state}.{verifier}.{nonce}.{tenant_field}");
+    #[expect(
+        clippy::expect_used,
+        reason = "HMAC-SHA256 accepts a key of any length, so this never errors"
+    )]
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     format!("{payload}.{}", b64url.encode(mac.finalize().into_bytes()))
@@ -920,6 +937,10 @@ pub fn verify_login_state(
         (parts[0], parts[1], parts[2], parts[3], parts[4]);
     let provided = b64url.decode(mac_b64).ok()?;
     let payload = format!("{state}.{verifier}.{nonce}.{tenant_field}");
+    #[expect(
+        clippy::expect_used,
+        reason = "HMAC-SHA256 accepts a key of any length, so this never errors"
+    )]
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     mac.verify_slice(&provided).ok()?;

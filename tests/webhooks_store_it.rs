@@ -127,6 +127,7 @@ async fn record_webhook_health_updates_only_health_fields_pg() {
 #[file_serial]
 async fn next_webhook_id_increments_pg() {
     let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let a = store

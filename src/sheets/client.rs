@@ -3,7 +3,6 @@
 //! targets fixed Google hosts, so there is no user-controlled URL and no SSRF
 //! surface.
 
-use async_trait::async_trait;
 use serde_json::json;
 
 /// Why a Google Sheets API call failed.
@@ -32,8 +31,8 @@ pub enum SheetsApiError {
 
 /// The two Google API operations the sync needs. `access_token` is a short-lived
 /// bearer token obtained from a refresh token.
-#[async_trait]
-pub trait SheetsApi: Send + Sync {
+#[async_trait::async_trait]
+pub trait SheetsApi: Send + Sync + 'static {
     /// Creates a spreadsheet titled `title` and returns its id.
     async fn create_spreadsheet(
         &self,
@@ -61,6 +60,10 @@ const SHEETS_HTTP_TIMEOUT_SECS: u64 = 30;
 
 /// Builds the HTTP client for Google API calls with a request timeout, so a
 /// stalled connection cannot hang a sync (and hold the sync lease) forever.
+#[expect(
+    clippy::expect_used,
+    reason = "a client with only timeouts and a redirect policy always builds"
+)]
 pub fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(SHEETS_HTTP_TIMEOUT_SECS))
@@ -73,7 +76,7 @@ pub fn http_client() -> reqwest::Client {
 
 const SHEETS_BASE: &str = "https://sheets.googleapis.com/v4/spreadsheets";
 
-#[async_trait]
+#[async_trait::async_trait]
 impl SheetsApi for GoogleSheetsApi {
     async fn create_spreadsheet(
         &self,

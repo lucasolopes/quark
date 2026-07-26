@@ -70,7 +70,12 @@ pub enum PixelError {
     #[error("provider returned status {0}")]
     Status(reqwest::StatusCode),
     #[error("invalid pixel provider base host")]
-    InvalidBase,
+    InvalidBase(#[source] url::ParseError),
+    /// The base parsed but is a cannot-be-a-base URL (e.g. `mailto:`), so no
+    /// path can be appended to it. `url` reports this as `()`, so there is no
+    /// cause to carry.
+    #[error("pixel provider base cannot have a path")]
+    BaseCannotHavePath,
 }
 
 /// Fixed production provider hosts, injectable only so tests can point at a
@@ -249,7 +254,7 @@ pub fn meta_payload(events: &[ClickEvent], key: u64, anonymize_ip_flag: bool) ->
 pub fn provider_url(base: &str, config: &PixelConfig) -> Result<String, PixelError> {
     match config.provider {
         Provider::Ga4 => {
-            let mut url = Url::parse(base).map_err(|_| PixelError::InvalidBase)?;
+            let mut url = Url::parse(base).map_err(PixelError::InvalidBase)?;
             url.set_path("/mp/collect");
             url.query_pairs_mut()
                 .append_pair(
@@ -263,9 +268,9 @@ pub fn provider_url(base: &str, config: &PixelConfig) -> Result<String, PixelErr
             Ok(url.to_string())
         }
         Provider::MetaCapi => {
-            let mut url = Url::parse(base).map_err(|_| PixelError::InvalidBase)?;
+            let mut url = Url::parse(base).map_err(PixelError::InvalidBase)?;
             url.path_segments_mut()
-                .map_err(|_| PixelError::InvalidBase)?
+                .map_err(|_| PixelError::BaseCannotHavePath)?
                 .push("v19.0")
                 .push(config.credentials.pixel_id.as_deref().unwrap_or(""))
                 .push("events");
@@ -559,10 +564,10 @@ mod tests {
     #[test]
     fn provider_url_invalid_base_is_an_error_not_a_panic() {
         let err = provider_url("not a url", &ga4_config()).unwrap_err();
-        assert!(matches!(err, PixelError::InvalidBase));
+        assert!(matches!(err, PixelError::InvalidBase(_)));
 
         let err = provider_url("not a url", &meta_config()).unwrap_err();
-        assert!(matches!(err, PixelError::InvalidBase));
+        assert!(matches!(err, PixelError::InvalidBase(_)));
     }
 
     type Captured = Arc<Mutex<Vec<(String, String, Value)>>>;

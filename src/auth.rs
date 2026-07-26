@@ -71,7 +71,11 @@ const TOKEN_BODY_LEN: usize = 32;
 /// `TOKEN_BODY_LEN` cryptographically random base62 characters.
 pub fn generate_token() -> String {
     let mut raw = [0u8; TOKEN_BODY_LEN];
-    getrandom::fill(&mut raw).expect("system randomness source unavailable");
+    #[expect(
+        clippy::expect_used,
+        reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+    )]
+    getrandom::fill(&mut raw).expect("system RNG must be available");
     let mut token = String::with_capacity("qtok_".len() + TOKEN_BODY_LEN);
     token.push_str("qtok_");
     for b in raw {

@@ -303,6 +303,7 @@ async fn link_without_rules_round_trips_to_empty_vec_pg() {
 #[file_serial]
 async fn next_id_increments_pg() {
     let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let a = s.next_id(quark::tenant::DEFAULT_TENANT).await.unwrap();
@@ -314,6 +315,7 @@ async fn next_id_increments_pg() {
 #[file_serial]
 async fn alias_is_atomic_no_orphan_pg() {
     let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let rec = Record {
@@ -368,6 +370,7 @@ async fn alias_is_atomic_no_orphan_pg() {
 #[file_serial]
 async fn tags_round_trip_filter_and_distinct_pg() {
     let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let rec = |u: &str, tags: &[&str]| Record {
@@ -449,6 +452,7 @@ async fn tags_round_trip_filter_and_distinct_pg() {
 #[file_serial]
 async fn folder_round_trip_filter_and_list_pg() {
     let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let rec = |u: &str, folder: Option<&str>| Record {
@@ -705,6 +709,7 @@ async fn variants_round_trip_pg() {
 #[file_serial]
 async fn wellknown_round_trip_pg() {
     let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     assert_eq!(
@@ -775,6 +780,7 @@ async fn put_link_tx_writes_link_and_deliveries_atomically() {
 #[file_serial]
 async fn put_link_tx_with_no_deliveries_upserts_link() {
     let Some((s, pool)) = fresh_with_pool().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let rec = plain_rec("https://only-link.com");
@@ -798,6 +804,7 @@ async fn put_link_tx_with_no_deliveries_upserts_link() {
 #[file_serial]
 async fn put_alias_and_link_tx_writes_all_atomically() {
     let Some((s, pool)) = fresh_with_pool().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let sub = add_sub(&s, "https://e.com/hook").await;
@@ -838,6 +845,7 @@ async fn put_alias_and_link_tx_writes_all_atomically() {
 #[file_serial]
 async fn put_alias_and_link_tx_conflict_rolls_back_link_and_deliveries() {
     let Some((s, pool)) = fresh_with_pool().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let sub = add_sub(&s, "https://e.com/hook").await;
@@ -892,6 +900,7 @@ async fn put_alias_and_link_tx_conflict_rolls_back_link_and_deliveries() {
 #[file_serial]
 async fn delete_link_tx_deletes_link_and_enqueues_deliveries() {
     let Some((s, pool)) = fresh_with_pool().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let sub = add_sub(&s, "https://e.com/hook").await;
@@ -925,6 +934,7 @@ async fn delete_link_tx_deletes_link_and_enqueues_deliveries() {
 #[file_serial]
 async fn put_link_tx_on_conflict_upserts_link_and_keeps_one_delivery() {
     let Some((s, pool)) = fresh_with_pool().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let sub = add_sub(&s, "https://e.com/hook").await;

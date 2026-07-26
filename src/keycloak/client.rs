@@ -7,7 +7,6 @@
 //! creation) is Task 2, not this module.
 
 use super::{KcError, KeycloakAdmin, KeycloakConfig, SmtpConfig};
-use async_trait::async_trait;
 use reqwest::StatusCode;
 use serde_json::json;
 use std::sync::Mutex;
@@ -19,6 +18,10 @@ const KEYCLOAK_HTTP_TIMEOUT_SECS: u64 = 30;
 
 /// Builds the HTTP client for Keycloak admin calls with a request timeout, so
 /// a stalled connection cannot hang tenant provisioning forever.
+#[expect(
+    clippy::expect_used,
+    reason = "a client with only timeouts and a redirect policy always builds"
+)]
 pub fn keycloak_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(KEYCLOAK_HTTP_TIMEOUT_SECS))
@@ -64,6 +67,10 @@ impl HttpKeycloakAdmin {
     /// Returns a cached admin token if it has not yet reached its early-expiry
     /// mark, otherwise fetches a fresh one.
     async fn admin_token(&self) -> Result<String, KcError> {
+        #[expect(
+            clippy::expect_used,
+            reason = "a poisoned mutex is unreachable under panic = abort"
+        )]
         let cached = self
             .token
             .lock()
@@ -111,10 +118,16 @@ impl HttpKeycloakAdmin {
         // Expire the cache a few seconds early so a request never races the
         // token's real expiry mid-flight.
         let expires_at = Instant::now() + Duration::from_secs(ttl_secs.saturating_sub(5).max(1));
-        *self.token.lock().expect("token mutex") = Some(CachedToken {
+        #[expect(
+            clippy::expect_used,
+            reason = "a poisoned mutex is unreachable under panic = abort"
+        )]
+        let mut slot = self.token.lock().expect("token mutex");
+        *slot = Some(CachedToken {
             token: token.clone(),
             expires_at,
         });
+        drop(slot);
         Ok(token)
     }
 
@@ -326,7 +339,7 @@ impl HttpKeycloakAdmin {
 /// role always wins. `ensure_groups_and_mapper` creates all of them.
 const MANAGED_GROUPS: [&str; 3] = ["quark-admins", "quark-members", "quark-readers"];
 
-#[async_trait]
+#[async_trait::async_trait]
 impl KeycloakAdmin for HttpKeycloakAdmin {
     async fn ensure_realm(&self, slug: &str) -> Result<(), KcError> {
         let body = realm_body(slug, &self.smtp, self.login_theme.as_deref());

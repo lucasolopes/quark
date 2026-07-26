@@ -139,6 +139,7 @@ async fn lmdb_identity_round_trips() {
 #[file_serial]
 async fn migration_seeds_default_tenant_and_columns() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let store = quark::store::open_postgres(&url).await.unwrap();
@@ -154,6 +155,7 @@ async fn migration_seeds_default_tenant_and_columns() {
 #[file_serial]
 async fn pg_two_tenants_do_not_see_each_others_links() {
     let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let store = quark::store::open_postgres(&url).await.unwrap();

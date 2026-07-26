@@ -29,6 +29,7 @@ async fn fresh() -> Option<PostgresStore> {
 #[file_serial]
 async fn next_tenant_id_starts_above_default() {
     let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let a = store.next_tenant_id().await.unwrap();

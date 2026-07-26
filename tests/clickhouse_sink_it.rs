@@ -126,6 +126,7 @@ async fn bot_filter_ch() {
 #[file_serial]
 async fn recent_limits_to_n_ch() {
     let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_CLICKHOUSE_URL not set");
         return;
     };
     let evs: Vec<ClickEvent> = (0..1200u64)

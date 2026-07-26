@@ -144,7 +144,6 @@ mod tests {
     use crate::store::{LinkHealth, OutboxDelivery, OutboxRow, Record, StoreError};
     use crate::tenant::{Membership, Tenant, TenantId, User};
     use crate::webhooks::WebhookSubscription;
-    use async_trait::async_trait;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -169,7 +168,7 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl Store for FakeStore {
         async fn next_id(&self, _tenant: TenantId) -> Result<u64, StoreError> {
             unimplemented!()

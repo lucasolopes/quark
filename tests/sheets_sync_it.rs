@@ -3,7 +3,6 @@
 // topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
 #![allow(clippy::unwrap_used)]
 
-use async_trait::async_trait;
 use quark::sheets::client::{SheetsApi, SheetsApiError};
 use quark::sheets::{sync, SheetsConnection, SyncStatus};
 use quark::store::{open_backends, Record};
@@ -14,7 +13,7 @@ struct MockApi {
     rows: Arc<Mutex<Vec<Vec<String>>>>,
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl SheetsApi for MockApi {
     async fn create_spreadsheet(&self, _tok: &str, _title: &str) -> Result<String, SheetsApiError> {
         Ok("sheet-1".to_string())

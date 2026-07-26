@@ -175,6 +175,10 @@ fn outbox_event_id(body: &str) -> String {
 /// shape. On each event it delivers to the cached subscription snapshot
 /// (grouped by tenant, LUC-63); on the ~10s ticker it refreshes that
 /// snapshot and the `clicked`/`expired` gating atomics from the store.
+#[expect(
+    clippy::expect_used,
+    reason = "a client with only timeouts and a redirect policy always builds"
+)]
 pub fn spawn_webhook_worker(
     mut rx: Receiver<WebhookEvent>,
     store: Arc<dyn Store>,
@@ -375,6 +379,10 @@ pub(crate) fn build_outgoing_request(
             let message = format_message(ev.event_type, &ev.body);
             // `channel_payload` only returns `None` for `Generic`, which
             // this branch never sees.
+            #[expect(
+                clippy::expect_used,
+                reason = "channel_payload only returns None for Generic, which this branch never sees"
+            )]
             let body = channel_payload(kind, &message)
                 .expect("channel_payload is Some for non-Generic kinds");
             Some(OutgoingRequest {
@@ -755,6 +763,10 @@ fn relay_backoff_secs(attempts: u32) -> u64 {
 /// `msg_<32 hex chars>` from 16 random bytes.
 fn generate_msg_id() -> String {
     let mut bytes = [0u8; 16];
+    #[expect(
+        clippy::expect_used,
+        reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+    )]
     getrandom::fill(&mut bytes).expect("system RNG must be available");
     let hex = crate::hex(&bytes);
     format!("msg_{hex}")

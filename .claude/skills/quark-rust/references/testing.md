@@ -133,8 +133,8 @@ async fn links_are_isolated_per_tenant() {
 }
 ```
 
-- Print the skip reason. ~155 sites do, 26 do not; the loud form is dominant and
-  correct - a silent skip looks like a pass.
+- Always print the skip reason. A silent skip is indistinguishable from a pass,
+  so a backend that stopped being covered would never show up in the output.
 - Never read production vars (`QUARK_DATABASE_URL`, `QUARK_VALKEY_URL`) in a test,
   and never `set_var`: `open_backends` reads `QUARK_DATABASE_URL`, so setting it
   would swap the backend under the LMDB tests. The separate `QUARK_TEST_` prefix
@@ -148,14 +148,16 @@ async fn links_are_isolated_per_tenant() {
   against the *same* Postgres, and plain `#[serial]` only serializes within one
   binary, so two binaries would race on DDL / `FORCE ROW LEVEL SECURITY` /
   `TRUNCATE`. The `file_locks` feature of `serial_test` gives a cross-process lock.
-  Note `docs/DEVELOPMENT.md:96-98` still documents `#[serial(pg)]` - the doc is
-  stale, follow the code.
-- Three files touch shared Postgres without `#[file_serial]`
-  (`tenant_isolation.rs`, `tenant_enforcement.rs`, `pubsub_invalidation_it.rs`).
-  That is a bug, not a pattern.
+  `docs/DEVELOPMENT.md` documents the same rule.
 - CI sets all three vars against docker services, so a gated test you write does
-  run on the PR. Locally, serialize the binaries:
-  `cargo test -- --test-threads=1` or `cargo test --test <file>`.
+  run on the PR. Locally, `docker compose` brings up the same three backends;
+  serialize the binaries with `cargo test -- --test-threads=1` or
+  `cargo test --test <file>`.
+- If Postgres auth fails with `role "quark" does not exist` while the container
+  is healthy, something native is already listening on 5432. Docker publishes on
+  `::` and a native server on `127.0.0.1` wins the connection, so the test talks
+  to the wrong server. Publish the container on a free port (`55432`) and point
+  `QUARK_TEST_DATABASE_URL` at it rather than debugging the container.
 
 ## Async tests and time
 

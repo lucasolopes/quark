@@ -1,4 +1,6 @@
-use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
+use crate::analytics::{
+    is_bot, Aggregates, AnalyticsError, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX,
+};
 use crate::auth::ApiToken;
 use crate::domain::{Domain, DomainStatus};
 use crate::oidc::TenantOidcConfig;
@@ -240,6 +242,10 @@ impl LmdbStore {
         for name in TENANT_OWNED_DBS {
             // Re-open each sub-db with a raw Bytes/Bytes codec so we can re-key
             // regardless of the value type it normally stores.
+            #[expect(
+                clippy::expect_used,
+                reason = "every TENANT_OWNED_DBS sub-db is created in open()"
+            )]
             let db: Database<Bytes, Bytes> = self
                 .env
                 .open_database(&wtxn, Some(name))?
@@ -1415,9 +1421,12 @@ impl Store for LmdbStore {
     }
 }
 
-#[async_trait::async_trait]
-impl AnalyticsSink for LmdbStore {
-    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), StoreError> {
+/// The analytics work, kept in `StoreError` terms because this backend *is* a
+/// store: heed and serde_json errors convert into it with a plain `?`. The
+/// trait impl below adapts to `AnalyticsError` at the boundary, which is where
+/// the two vocabularies actually meet.
+impl LmdbStore {
+    async fn record_batch_inner(&self, events: &[ClickEvent]) -> Result<(), StoreError> {
         if events.is_empty() {
             return Ok(());
         }
@@ -1458,7 +1467,7 @@ impl AnalyticsSink for LmdbStore {
         Ok(())
     }
 
-    async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError> {
+    async fn stats_inner(&self, id: u64) -> Result<Option<Stats>, StoreError> {
         let rtxn = self.env.read_txn()?;
         let k = tkey_id(DEFAULT_TENANT, id);
         let agg = match self.stats.get(&rtxn, &k)? {
@@ -1486,7 +1495,7 @@ impl AnalyticsSink for LmdbStore {
     /// link's `Aggregates` under that prefix; any other tenant id gets
     /// `Aggregates::default()`, matching OSS semantics (there is no other
     /// tenant's data here to return, so nothing leaks).
-    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError> {
+    async fn stats_for_tenant_inner(&self, tenant: u64) -> Result<Aggregates, StoreError> {
         if tenant != DEFAULT_TENANT.0 {
             return Ok(Aggregates::default());
         }
@@ -1498,6 +1507,21 @@ impl AnalyticsSink for LmdbStore {
             total.merge(&agg);
         }
         Ok(total)
+    }
+}
+
+#[async_trait::async_trait]
+impl AnalyticsSink for LmdbStore {
+    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), AnalyticsError> {
+        Ok(self.record_batch_inner(events).await?)
+    }
+
+    async fn stats(&self, id: u64) -> Result<Option<Stats>, AnalyticsError> {
+        Ok(self.stats_inner(id).await?)
+    }
+
+    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, AnalyticsError> {
+        Ok(self.stats_for_tenant_inner(tenant).await?)
     }
 }
 

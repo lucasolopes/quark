@@ -81,10 +81,12 @@ Never `unwrap()`/`expect()` on the *value* of an env var. The one deliberate
 fail-fast is `parse_node_id`, which returns a `StoreError` explaining the
 expected range (`src/store/lmdb.rs:155-170`).
 
-`std::env::var(SECRET).unwrap_or_default()` is an anti-pattern present in
-`src/oidc.rs:56-58` and `src/keycloak/mod.rs:82-143`: it turns missing config
-into a silent empty string. For a new required value, validate and exit like
-`cluster_preflight` does (`src/main.rs:51-61`).
+Never `std::env::var(SECRET).unwrap_or_default()`: it turns missing config into
+a silent empty string that fails much later, at first use. A required value for
+an OPTIONAL feature warns and leaves the feature off (`OidcConfig::from_env`,
+`KeycloakConfig::from_env`); a required value for the SERVICE returns an
+`anyhow` error from `main` (`cluster_preflight`). Read each value once and carry
+it, rather than checking the var and reading it again.
 
 Hosts that will be compared are normalized at the entry point:
 `.trim().trim_end_matches('.').to_ascii_lowercase()` (`src/main.rs:284-289`).
@@ -143,10 +145,8 @@ match secs {
   continue (fail open). A security feature disabled by absence always warns.
 - Config that makes the service unserviceable: return
   `Err(anyhow::anyhow!(..))` from `main` with `.context(..)`, which prints the
-  chain and exits non-zero. The legacy form
-  `eprintln!("FATAL: {msg}"); std::process::exit(1);` (only `cluster_preflight`
-  does it today) is being retired. Never `process::exit` outside startup, never
-  panic in a handler.
+  chain and exits non-zero (`cluster_preflight`). There is no `process::exit` in
+  `src/` - do not add one, and never panic in a handler.
 
 ## Backend selection
 

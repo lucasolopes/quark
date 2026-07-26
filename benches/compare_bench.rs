@@ -1,7 +1,7 @@
-// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
-// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
-// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
-#![allow(clippy::unwrap_used)]
+// Benchmark setup panics on failure by design: a broken fixture is the signal,
+// not something to recover from. clippy.toml covers items under
+// #[test]/#[cfg(test)], which a bench crate is not.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 //! Head-to-head: quark's ARX-Feistel short-code generation vs three real
 //! competitor approaches, all pure-Rust crates, benched on the same machine

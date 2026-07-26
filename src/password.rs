@@ -24,6 +24,10 @@ pub const UNLOCK_TTL_SECS: u64 = 12 * 3600;
 /// invalidates every outstanding unlock token; binding the code and expiry means
 /// a token cannot be replayed for another link or after it lapses.
 fn sign_unlock(key: &[u8], code: &str, expiry: u64, password_hash: &str) -> Vec<u8> {
+    #[expect(
+        clippy::expect_used,
+        reason = "HMAC-SHA256 accepts a key of any length, so this never errors"
+    )]
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(code.as_bytes());
     mac.update(b".");
@@ -65,6 +69,10 @@ pub fn unlock_token_valid(
     let Ok(provided) = b64.decode(mac_b64) else {
         return false;
     };
+    #[expect(
+        clippy::expect_used,
+        reason = "HMAC-SHA256 accepts a key of any length, so this never errors"
+    )]
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(code.as_bytes());
     mac.update(b".");
@@ -78,6 +86,10 @@ pub fn unlock_token_valid(
 /// storing in `Record.password_hash`. The plaintext is never persisted.
 pub fn hash_password(plaintext: &str) -> Result<String, Error> {
     let mut salt_bytes = [0u8; 16];
+    #[expect(
+        clippy::expect_used,
+        reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+    )]
     getrandom::fill(&mut salt_bytes).expect("system RNG must be available");
     let salt = SaltString::encode_b64(&salt_bytes)?;
     let hash = Argon2::default().hash_password(plaintext.as_bytes(), &salt)?;

@@ -1,12 +1,12 @@
-// Codigo de teste pode entrar em panico: a falha e o proprio sinal. O
-// clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
-// topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
+// Test code may panic: the failure IS the signal. clippy.toml covers items
+// under #[test]/#[cfg(test)], but not the file-level helpers (fixtures,
+// builders), which are most of what this file holds.
 #![allow(clippy::unwrap_used)]
 
 use quark::analytics::AnalyticsSink;
 use quark::api::AppState;
 use quark::cache::Cache;
-use quark::invalidate::{spawn_invalidation_subscriber, Invalidator};
+use quark::invalidate::{spawn_invalidation_subscriber, Invalidator, INVALIDATION_CHANNEL};
 use quark::store::postgres::PostgresStore;
 use quark::store::{open_backends, Record, Store};
 use serial_test::file_serial;
@@ -21,6 +21,32 @@ mod common;
 /// They cover the cross-node path end to end: node A's request-path
 /// `invalidate` publishes on `quark:invalidate`, node B's dedicated subscriber
 /// receives it and drops B's stale L1.
+/// Blocks until Valkey reports at least one subscriber on the invalidation
+/// channel, so a publish from node A cannot race the subscriber's connect and
+/// be dropped. Polls `PUBSUB NUMSUB` rather than sleeping a guessed interval:
+/// the subscriber count is the condition the test actually depends on.
+async fn wait_for_subscriber(url: &str) {
+    let client = redis::Client::open(url).unwrap();
+    let mut conn = client.get_multiplexed_async_connection().await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (_channel, count): (String, u64) = redis::cmd("PUBSUB")
+            .arg("NUMSUB")
+            .arg(INVALIDATION_CHANNEL)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        if count >= 1 {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no subscriber on {INVALIDATION_CHANNEL} within the deadline"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 fn rec(url: &str) -> Record {
     Record {
         url: url.into(),
@@ -130,7 +156,7 @@ async fn cache_invalidation_propagates_to_other_node() {
     let node_a = node(store.clone(), sink.clone(), &url).await;
     let node_b = node(store.clone(), sink.clone(), &url).await;
     let _sub = spawn_invalidation_subscriber(url.clone(), node_b.clone());
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_for_subscriber(&url).await;
 
     assert_eq!(
         node_b
@@ -206,7 +232,7 @@ async fn host_invalidation_propagates_to_other_node() {
     let node_a = node_with_host_invalidator(store.clone(), sink.clone(), &url).await;
     let node_b = node_with_host_invalidator(store.clone(), sink.clone(), &url).await;
     let _sub = spawn_invalidation_subscriber(url.clone(), node_b.clone());
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_for_subscriber(&url).await;
 
     assert_eq!(
         node_b.host_router.resolve(host).await.map(|r| r.domain_id),

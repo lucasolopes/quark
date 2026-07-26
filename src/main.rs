@@ -136,6 +136,7 @@ async fn main() -> anyhow::Result<()> {
                  across nodes. Set QUARK_SIGNING_KEY for multi-node or persistent deployments."
             );
             let mut k = [0u8; 32];
+            #[expect(clippy::expect_used, reason = "the OS RNG being unavailable is not a recoverable condition for a security path")]
             getrandom::fill(&mut k).expect("system RNG must be available");
             k
         });
@@ -574,166 +575,11 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Scheduled Sheets sync (opt-in via QUARK_SHEETS_SYNC_SECS). Lease-coordinated
-    // like the link checker so it is safe on every replica; on the single-node
-    // LMDB backend the lease is always granted. Never logs the token.
-    if let (Some(cfg), Some(api)) = (state.sheets.clone(), state.sheets_api.clone()) {
-        // The scheduled sync has no request to read a Host from, so it needs
-        // QUARK_PUBLIC_HOST to build correct short URLs. Without it, skip the
-        // schedule (on-demand sync still works, using the request Host) rather
-        // than write "https://localhost/<code>" links into the sheet.
-        if cfg.sync_secs.is_some() && state.public_host.is_none() {
-            tracing::info!(
-                "sheets sync: scheduled sync disabled (set QUARK_PUBLIC_HOST so short URLs are correct; on-demand sync still works)"
-            );
-        }
-        if let (Some(secs), Some(public_host)) = (cfg.sync_secs, state.public_host.clone()) {
-            let store = state.store.clone();
-            let sink = state.sink.clone();
-            let key = state.key;
-            let base_url = format!("https://{public_host}");
-            // Per-process holder id for the sync lease (mirrors the health checker).
-            let mut hb = [0u8; 8];
-            let _ = getrandom::fill(&mut hb);
-            let holder: String = format!("sheets_{}", quark::hex(&hb));
-            // Lease TTL is a crash-safety cap only: the tick RELEASES the lease
-            // when done (see end of loop), so it never stays held between ticks
-            // and block the on-demand "Sync now". Capped at 300s (and at the
-            // interval) so even a missed release frees it before the next tick.
-            let ttl = secs.min(SHEETS_LEASE_TTL_CAP_SECS);
-            tokio::spawn(async move {
-                let client = quark::sheets::client::http_client();
-                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
-                loop {
-                    ticker.tick().await;
-                    if !store
-                        .try_acquire_sheets_lease(&holder, ttl)
-                        .await
-                        .unwrap_or(false)
-                    {
-                        continue;
-                    }
-                    let tenants = match store.list_tenants().await {
-                        Ok(t) => t,
-                        Err(e) => {
-                            tracing::info!(
-                                "{}",
-                                serde_json::json!({ "sheets_sync_list_tenants_error": e.to_string() })
-                            );
-                            continue;
-                        }
-                    };
-                    for t in tenants {
-                        let Ok(Some(mut conn)) = store.get_sheets_connection(t.id).await else {
-                            continue;
-                        };
-                        let outcome = match quark::sheets::refresh_access_token(
-                            &client,
-                            &cfg,
-                            &conn.refresh_token,
-                        )
-                        .await
-                        {
-                            Ok(token) => {
-                                quark::sheets::sync(
-                                    &store,
-                                    api.as_ref(),
-                                    sink.as_ref(),
-                                    key,
-                                    &base_url,
-                                    &mut conn,
-                                    &token,
-                                    quark::now(),
-                                    t.id,
-                                )
-                                .await
-                            }
-                            Err(e) => Err(e),
-                        };
-                        if let Err(e) = &outcome {
-                            conn.last_status = quark::sheets::SyncStatus::Error(e.to_string());
-                            tracing::warn!(error = %e, tenant = t.id.0, "sheets sync failed");
-                        } else {
-                            tracing::info!(tenant = t.id.0, "sheets sync completed");
-                        }
-                        if let Err(e) = store.put_sheets_connection(t.id, &conn).await {
-                            tracing::info!(
-                                "{}",
-                                serde_json::json!({ "sheets_sync_persist_error": e.to_string(), "tenant": t.id.0 })
-                            );
-                        }
-                    }
-                    // Release the lease now that this tick finished so it is not
-                    // held between ticks and does not block the on-demand sync.
-                    let _ = store.release_sheets_lease(&holder).await;
-                }
-            });
-        }
-    }
+    spawn_sheets_sync(&state);
 
-    // Garbage-collect expired OIDC login sessions hourly (only when OIDC is on).
-    if state.oidc.is_some() {
-        let store = state.store.clone();
-        tokio::spawn(async move {
-            let mut ticker =
-                tokio::time::interval(std::time::Duration::from_secs(HOUSEKEEPING_INTERVAL_SECS));
-            loop {
-                ticker.tick().await;
-                if let Err(e) = store.gc_sessions(quark::now()).await {
-                    tracing::info!(
-                        "{}",
-                        serde_json::json!({ "session_gc_error": e.to_string() })
-                    );
-                }
-            }
-        });
-    }
+    spawn_session_gc(&state);
 
-    // Analytics retention purge (LUC-65, GDPR). Retention window:
-    // `QUARK_ANALYTICS_RETENTION_DAYS` (days -> seconds) wins when set and
-    // valid; otherwise cloud (`multi_tenant`) defaults to 365 days and
-    // OSS/self-host is unlimited. `None` = unlimited => the purge task is NOT
-    // spawned. An env value that is SET but fails to parse as a `u64` falls
-    // back to the mode default rather than silently disabling retention (see
-    // `retention_secs_from`) — only an ABSENT env uses the default directly.
-    let retention_env = std::env::var("QUARK_ANALYTICS_RETENTION_DAYS").ok();
-    if let Some(v) = &retention_env {
-        if v.trim().parse::<u64>().is_err() {
-            tracing::warn!(
-                "QUARK_ANALYTICS_RETENTION_DAYS={v:?} is not a valid non-negative integer; falling back to the mode default instead of disabling retention"
-            );
-        }
-    }
-    let retention_secs: Option<u64> = retention_secs_from(retention_env.as_deref(), multi_tenant);
-    if let Some(retention) = retention_secs {
-        tracing::info!(
-            "{}",
-            serde_json::json!({ "analytics_retention_secs": retention })
-        );
-        // Hourly purge task (mirrors the session GC above), fail-open: a purge
-        // error is only logged and never blocks serving.
-        let store = state.store.clone();
-        tokio::spawn(async move {
-            let mut ticker =
-                tokio::time::interval(std::time::Duration::from_secs(HOUSEKEEPING_INTERVAL_SECS));
-            loop {
-                ticker.tick().await;
-                let cutoff = quark::now().saturating_sub(retention);
-                match store.purge_click_events_before(cutoff).await {
-                    Ok(n) => tracing::info!(
-                        "{}",
-                        serde_json::json!({ "analytics_purge_deleted": n, "cutoff_ts": cutoff })
-                    ),
-                    Err(e) => tracing::info!(
-                        "{}",
-                        serde_json::json!({ "analytics_purge_error": e.to_string() })
-                    ),
-                }
-            }
-        });
-    } else {
-        tracing::info!("analytics retention: unlimited (no purge)");
-    }
+    spawn_analytics_purge(&state, multi_tenant);
 
     let app = router(state);
 
@@ -830,6 +676,179 @@ async fn drain_workers(
             timeout_secs = DRAIN_TIMEOUT_SECS,
             "workers did not drain in time, exiting anyway"
         ),
+    }
+}
+
+/// Spawns the scheduled Google Sheets sync when it is configured. Opt-in via
+/// `QUARK_SHEETS_SYNC_SECS`; lease-coordinated so it is safe on every replica.
+fn spawn_sheets_sync(state: &std::sync::Arc<AppState>) {
+    // Scheduled Sheets sync (opt-in via QUARK_SHEETS_SYNC_SECS). Lease-coordinated
+    // like the link checker so it is safe on every replica; on the single-node
+    // LMDB backend the lease is always granted. Never logs the token.
+    if let (Some(cfg), Some(api)) = (state.sheets.clone(), state.sheets_api.clone()) {
+        // The scheduled sync has no request to read a Host from, so it needs
+        // QUARK_PUBLIC_HOST to build correct short URLs. Without it, skip the
+        // schedule (on-demand sync still works, using the request Host) rather
+        // than write "https://localhost/<code>" links into the sheet.
+        if cfg.sync_secs.is_some() && state.public_host.is_none() {
+            tracing::info!(
+                "sheets sync: scheduled sync disabled (set QUARK_PUBLIC_HOST so short URLs are correct; on-demand sync still works)"
+            );
+        }
+        if let (Some(secs), Some(public_host)) = (cfg.sync_secs, state.public_host.clone()) {
+            let store = state.store.clone();
+            let sink = state.sink.clone();
+            let key = state.key;
+            let base_url = format!("https://{public_host}");
+            // Per-process holder id for the sync lease (mirrors the health checker).
+            let mut hb = [0u8; 8];
+            let _ = getrandom::fill(&mut hb);
+            let holder: String = format!("sheets_{}", quark::hex(&hb));
+            // Lease TTL is a crash-safety cap only: the tick RELEASES the lease
+            // when done (see end of loop), so it never stays held between ticks
+            // and block the on-demand "Sync now". Capped at 300s (and at the
+            // interval) so even a missed release frees it before the next tick.
+            let ttl = secs.min(SHEETS_LEASE_TTL_CAP_SECS);
+            tokio::spawn(async move {
+                let client = quark::sheets::client::http_client();
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
+                loop {
+                    ticker.tick().await;
+                    if !store
+                        .try_acquire_sheets_lease(&holder, ttl)
+                        .await
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
+                    let tenants = match store.list_tenants().await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            tracing::info!(
+                                "{}",
+                                serde_json::json!({ "sheets_sync_list_tenants_error": e.to_string() })
+                            );
+                            continue;
+                        }
+                    };
+                    for t in tenants {
+                        let Ok(Some(mut conn)) = store.get_sheets_connection(t.id).await else {
+                            continue;
+                        };
+                        let outcome = match quark::sheets::refresh_access_token(
+                            &client,
+                            &cfg,
+                            &conn.refresh_token,
+                        )
+                        .await
+                        {
+                            Ok(token) => {
+                                quark::sheets::sync(
+                                    &store,
+                                    api.as_ref(),
+                                    sink.as_ref(),
+                                    key,
+                                    &base_url,
+                                    &mut conn,
+                                    &token,
+                                    quark::now(),
+                                    t.id,
+                                )
+                                .await
+                            }
+                            Err(e) => Err(e),
+                        };
+                        if let Err(e) = &outcome {
+                            conn.last_status = quark::sheets::SyncStatus::Error(e.to_string());
+                            tracing::warn!(error = %e, tenant = t.id.0, "sheets sync failed");
+                        } else {
+                            tracing::info!(tenant = t.id.0, "sheets sync completed");
+                        }
+                        if let Err(e) = store.put_sheets_connection(t.id, &conn).await {
+                            tracing::info!(
+                                "{}",
+                                serde_json::json!({ "sheets_sync_persist_error": e.to_string(), "tenant": t.id.0 })
+                            );
+                        }
+                    }
+                    // Release the lease now that this tick finished so it is not
+                    // held between ticks and does not block the on-demand sync.
+                    let _ = store.release_sheets_lease(&holder).await;
+                }
+            });
+        }
+    }
+}
+
+/// Spawns the hourly garbage collection of expired OIDC login sessions.
+/// No-op when OIDC is off, since there are no sessions to collect.
+fn spawn_session_gc(state: &std::sync::Arc<AppState>) {
+    // Garbage-collect expired OIDC login sessions hourly (only when OIDC is on).
+    if state.oidc.is_some() {
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_secs(HOUSEKEEPING_INTERVAL_SECS));
+            loop {
+                ticker.tick().await;
+                if let Err(e) = store.gc_sessions(quark::now()).await {
+                    tracing::info!(
+                        "{}",
+                        serde_json::json!({ "session_gc_error": e.to_string() })
+                    );
+                }
+            }
+        });
+    }
+}
+
+/// Spawns the hourly analytics retention purge (LUC-65, GDPR) when a retention
+/// window is configured. Unlimited retention spawns nothing.
+fn spawn_analytics_purge(state: &std::sync::Arc<AppState>, multi_tenant: bool) {
+    // Analytics retention purge (LUC-65, GDPR). Retention window:
+    // `QUARK_ANALYTICS_RETENTION_DAYS` (days -> seconds) wins when set and
+    // valid; otherwise cloud (`multi_tenant`) defaults to 365 days and
+    // OSS/self-host is unlimited. `None` = unlimited => the purge task is NOT
+    // spawned. An env value that is SET but fails to parse as a `u64` falls
+    // back to the mode default rather than silently disabling retention (see
+    // `retention_secs_from`) — only an ABSENT env uses the default directly.
+    let retention_env = std::env::var("QUARK_ANALYTICS_RETENTION_DAYS").ok();
+    if let Some(v) = &retention_env {
+        if v.trim().parse::<u64>().is_err() {
+            tracing::warn!(
+                "QUARK_ANALYTICS_RETENTION_DAYS={v:?} is not a valid non-negative integer; falling back to the mode default instead of disabling retention"
+            );
+        }
+    }
+    let retention_secs: Option<u64> = retention_secs_from(retention_env.as_deref(), multi_tenant);
+    if let Some(retention) = retention_secs {
+        tracing::info!(
+            "{}",
+            serde_json::json!({ "analytics_retention_secs": retention })
+        );
+        // Hourly purge task (mirrors the session GC above), fail-open: a purge
+        // error is only logged and never blocks serving.
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_secs(HOUSEKEEPING_INTERVAL_SECS));
+            loop {
+                ticker.tick().await;
+                let cutoff = quark::now().saturating_sub(retention);
+                match store.purge_click_events_before(cutoff).await {
+                    Ok(n) => tracing::info!(
+                        "{}",
+                        serde_json::json!({ "analytics_purge_deleted": n, "cutoff_ts": cutoff })
+                    ),
+                    Err(e) => tracing::info!(
+                        "{}",
+                        serde_json::json!({ "analytics_purge_error": e.to_string() })
+                    ),
+                }
+            }
+        });
+    } else {
+        tracing::info!("analytics retention: unlimited (no purge)");
     }
 }
 

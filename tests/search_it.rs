@@ -105,6 +105,7 @@ async fn search_matches_url_and_alias() {
 #[file_serial]
 async fn search_escapes_wildcards() {
     let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     seed_links(
@@ -142,6 +143,7 @@ async fn search_escapes_wildcards() {
 #[file_serial]
 async fn search_is_case_insensitive() {
     let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let ids = seed_links(
@@ -179,6 +181,7 @@ async fn search_is_case_insensitive() {
 #[file_serial]
 async fn search_keyset_pagination() {
     let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let ids = seed_links(

@@ -269,6 +269,10 @@ pub async fn sync(
             .await?;
         conn.spreadsheet_id = Some(id);
     }
+    #[expect(
+        clippy::expect_used,
+        reason = "the branch above assigns spreadsheet_id when it was None"
+    )]
     let sid = conn
         .spreadsheet_id
         .clone()

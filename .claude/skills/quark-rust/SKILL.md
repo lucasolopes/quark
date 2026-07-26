@@ -27,9 +27,7 @@ Two categories, and you must not confuse them:
   `thiserror`, `tracing`, `anyhow` (binaries only) and `secrecy` instead. See
   [references/errors-and-observability.md](references/errors-and-observability.md).
 
-Everything still open is tracked in
-[references/known-debt.md](references/known-debt.md), with the Linear issue for
-each item. One constraint governs all of it: **nothing may slow the redirect hot
+One constraint governs every conversion: **nothing may slow the redirect hot
 path.** Where a fix touches `GET /:code`, the cache, or the store read path,
 measure with `benches/redirect_bench.rs` before and after, and say so in the PR.
 
@@ -145,8 +143,6 @@ Read the one that matches what you are touching. Do not read all of them.
 - [references/recipes.md](references/recipes.md) - end-to-end checklists: new
   admin endpoint (8 files), new persisted field, new env var, new worker, new
   Store method, new bench.
-- [references/known-debt.md](references/known-debt.md) - real internal
-  inconsistencies and what the dominant side is, so you copy the right one.
 
 ## Common mistakes
 

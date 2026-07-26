@@ -54,10 +54,9 @@ Never fabricate download numbers. If you did not verify it, write "not verified"
 
 ## What is deliberately hand-rolled - do not replace casually
 
-These genuinely stay. (The error enums, the `eprintln!` logging, the hand-rolled
+These genuinely stay. The error enums, the `eprintln!` logging, the hand-rolled
 access log and the bare key arrays used to be on this list; they were never
-deliberate and have since been replaced by `thiserror`, `tracing`, `TraceLayer`
-and `secrecy`.)
+deliberate, and `thiserror`, `tracing`, `TraceLayer` and `secrecy` replaced them.
 
 | In the repo | Instead of | Why it stays |
 |---|---|---|

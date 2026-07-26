@@ -2,7 +2,7 @@
 //!
 //! Accepts either a JSON array of link objects or a CSV export (Bitly /
 //! Kutt / YOURLS style) and normalizes both into `ImportRow`. Pure parsing:
-//! no store access, no HTTP; `src/api.rs` drives each row through
+//! no store access, no HTTP; `src/api/links.rs` drives each row through
 //! `create_link_core`.
 
 use serde::Deserialize;
@@ -54,12 +54,12 @@ pub fn detect_format(content_type: Option<&str>, body: &[u8]) -> ImportFormat {
 /// Why parsing an import body failed. Kept coarse: the caller only needs to
 /// map this to a 400 response, not surface fine-grained detail.
 #[non_exhaustive]
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum ParseError {
     #[error("body is not valid json")]
-    InvalidJson,
+    InvalidJson(#[source] serde_json::Error),
     #[error("body is not valid csv")]
-    InvalidCsv,
+    InvalidCsv(#[source] csv::Error),
     #[error("csv has no url column")]
     MissingUrlColumn,
 }
@@ -68,7 +68,7 @@ pub enum ParseError {
 pub fn import_rows(bytes: &[u8], format: ImportFormat) -> Result<Vec<ImportRow>, ParseError> {
     match format {
         ImportFormat::Json => {
-            serde_json::from_slice::<Vec<ImportRow>>(bytes).map_err(|_| ParseError::InvalidJson)
+            serde_json::from_slice::<Vec<ImportRow>>(bytes).map_err(ParseError::InvalidJson)
         }
         ImportFormat::Csv => parse_csv(bytes),
     }
@@ -88,17 +88,14 @@ fn find_column(headers: &csv::StringRecord, names: &[&str]) -> Option<usize> {
 
 fn parse_csv(bytes: &[u8]) -> Result<Vec<ImportRow>, ParseError> {
     let mut reader = csv::ReaderBuilder::new().flexible(true).from_reader(bytes);
-    let headers = reader
-        .headers()
-        .map_err(|_| ParseError::InvalidCsv)?
-        .clone();
+    let headers = reader.headers().map_err(ParseError::InvalidCsv)?.clone();
     let url_idx = find_column(&headers, URL_COLUMNS).ok_or(ParseError::MissingUrlColumn)?;
     let alias_idx = find_column(&headers, ALIAS_COLUMNS);
     let ttl_idx = find_column(&headers, TTL_COLUMNS);
 
     let mut rows = Vec::new();
     for result in reader.records() {
-        let record = result.map_err(|_| ParseError::InvalidCsv)?;
+        let record = result.map_err(ParseError::InvalidCsv)?;
         let url = record.get(url_idx).unwrap_or("").trim().to_string();
         let alias = alias_idx
             .and_then(|i| record.get(i))
@@ -179,17 +176,17 @@ mod tests {
     #[test]
     fn csv_without_url_column_is_an_error() {
         let body = b"alias\npromo\n";
-        assert_eq!(
+        assert!(matches!(
             import_rows(body, ImportFormat::Csv),
             Err(ParseError::MissingUrlColumn)
-        );
+        ));
     }
 
     #[test]
     fn invalid_json_is_an_error() {
-        assert_eq!(
+        assert!(matches!(
             import_rows(b"not json", ImportFormat::Json),
-            Err(ParseError::InvalidJson)
-        );
+            Err(ParseError::InvalidJson(_))
+        ));
     }
 }

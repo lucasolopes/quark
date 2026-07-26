@@ -324,16 +324,51 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Why an analytics sink call failed.
+///
+/// Separate from `StoreError` because a sink is not necessarily a store: two of
+/// the three implementations happen to be (`LmdbStore`, `PostgresStore`) but
+/// `ClickHouseSink` is not, and it was returning a store error for something
+/// with no store involved. `From<StoreError>` keeps the store-backed impls a
+/// plain `?`.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum AnalyticsError {
+    #[error("analytics backend failure: {0}")]
+    Backend(String),
+    /// The sink does not implement this query (e.g. a per-tenant aggregate on a
+    /// backend that only keeps per-link counters).
+    #[error("operation not supported by this analytics sink")]
+    Unsupported,
+}
+
+impl AnalyticsError {
+    /// Builds a `Backend` from any displayable error, mirroring
+    /// `StoreError::backend`.
+    pub fn backend<E: std::fmt::Display>(e: E) -> AnalyticsError {
+        AnalyticsError::Backend(e.to_string())
+    }
+}
+
+impl From<StoreError> for AnalyticsError {
+    fn from(e: StoreError) -> Self {
+        match e {
+            StoreError::Unsupported => AnalyticsError::Unsupported,
+            other => AnalyticsError::Backend(other.to_string()),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait AnalyticsSink: Send + Sync + 'static {
-    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), StoreError>;
-    async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError>;
+    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), AnalyticsError>;
+    async fn stats(&self, id: u64) -> Result<Option<Stats>, AnalyticsError>;
     /// Aggregate analytics across every link owned by `tenant` — the "all my
     /// links" view behind `GET /admin/stats` (multi-tenancy P4a). Unlike
     /// `stats`, there's no single link to key `recent` off of, so this
     /// returns aggregates only, and it never returns `None`: a tenant with no
     /// clicks yet gets `Aggregates::default()`, not a missing-record signal.
-    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError>;
+    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, AnalyticsError>;
     /// Total real clicks per link id (LUC-89): the number the panel's "Visitas"
     /// column and the Sheets mirror show, so they match the Analytics view
     /// instead of the `max_visits` enforcement counter (which is 0 for links
@@ -343,7 +378,7 @@ pub trait AnalyticsSink: Send + Sync + 'static {
     async fn click_totals(
         &self,
         ids: &[u64],
-    ) -> Result<std::collections::HashMap<u64, u64>, StoreError> {
+    ) -> Result<std::collections::HashMap<u64, u64>, AnalyticsError> {
         let mut out = std::collections::HashMap::new();
         for &id in ids {
             if let Some(s) = self.stats(id).await? {
@@ -475,6 +510,10 @@ impl AlertCounter {
 /// the shape `api::webhook_event_payload` uses for lifecycle events.
 fn generate_alert_event_id() -> String {
     let mut bytes = [0u8; 16];
+    #[expect(
+        clippy::expect_used,
+        reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+    )]
     getrandom::fill(&mut bytes).expect("system RNG must be available");
     let hex = crate::hex(&bytes);
     format!("evt_{hex}")

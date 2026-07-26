@@ -41,10 +41,9 @@ Rules:
 - The five production workers are `analytics::spawn_worker`,
   `webhooks::delivery::spawn_webhook_worker`, `spawn_webhook_relay`,
   `health::spawn_link_checker`, `invalidate::spawn_invalidation_subscriber`.
-  Three periodic loops are still inline `tokio::spawn` blocks in `main.rs`
-  (sheets sync ~70 lines, OIDC session GC, retention purge) - that is the
-  minority and untestable. A new periodic loop goes in the owning module as a
-  named `spawn_*`.
+  `main.rs` adds three more as named `spawn_*` functions (`spawn_sheets_sync`,
+  `spawn_session_gc`, `spawn_analytics_purge`). A new periodic loop follows the
+  same shape: a named function, never an inline `tokio::spawn` block in `main`.
 - Never panic in a worker: log JSON and continue. The `JoinHandle` is bound to
   `let _worker = ...` (deliberate discard), so a panicking task dies silently -
   and with `panic = "abort"` in release the whole process dies.
@@ -255,11 +254,10 @@ every fail-open degradation, `error!` for something that needs attention, `info!
 for boot and lifecycle. Instrument each worker loop with a span so a delivery
 error can be tied back to what produced it.
 
-The repo still has 119 `eprintln!` and 123 `println!`; 56 of them use a
-hand-built `serde_json::json!` line. That is legacy being replaced, not a
-convention to copy. See
-[errors-and-observability.md](errors-and-observability.md) for the conversion
-table and the module-at-a-time rule.
+`src/` has no `eprintln!` left. The only `println!` are CLI output, not logs:
+`--version` in `main.rs` (before the subscriber is installed) and the table
+`src/bin/calibrate.rs` prints. Everything operational goes through `tracing`.
+See [errors-and-observability.md](errors-and-observability.md) for the table.
 
 One thing does not change: **no per-request event on the redirect path.** Handler
 store errors stay discarded and mapped to a status.

@@ -1,6 +1,6 @@
 use crate::analytics::{
-    browser_from_ua, device_from_ua, is_bot, os_from_ua, referer_host, Aggregates, AnalyticsSink,
-    ClickEvent, Stats, EVENTS_MAX,
+    browser_from_ua, device_from_ua, is_bot, os_from_ua, referer_host, Aggregates, AnalyticsError,
+    AnalyticsSink, ClickEvent, Stats, EVENTS_MAX,
 };
 use crate::store::StoreError;
 use clickhouse::Row;
@@ -166,7 +166,7 @@ impl ClickHouseSink {
 
 #[async_trait::async_trait]
 impl AnalyticsSink for ClickHouseSink {
-    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), StoreError> {
+    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), AnalyticsError> {
         if events.is_empty() {
             return Ok(());
         }
@@ -203,7 +203,7 @@ impl AnalyticsSink for ClickHouseSink {
         Ok(())
     }
 
-    async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError> {
+    async fn stats(&self, id: u64) -> Result<Option<Stats>, AnalyticsError> {
         let totals: Totals = self
             .client
             .query(
@@ -386,7 +386,7 @@ impl AnalyticsSink for ClickHouseSink {
     /// `stats(id)` isolates one link's. Not exercised against a live server
     /// yet — see `tests/clickhouse_sink_it.rs`, gated on
     /// `QUARK_TEST_CLICKHOUSE_URL`.
-    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError> {
+    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, AnalyticsError> {
         let totals: Totals = self
             .client
             .query(

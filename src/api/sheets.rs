@@ -355,6 +355,10 @@ pub(crate) fn sheets_base_host(st: &AppState, headers: &HeaderMap) -> String {
 
 /// A short-lived reqwest client for the Sheets OAuth token calls (fixed Google
 /// hosts, no redirect following).
+#[expect(
+    clippy::expect_used,
+    reason = "a client with only timeouts and a redirect policy always builds"
+)]
 pub(crate) fn reqwest_client() -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())

@@ -10,7 +10,7 @@
 //! and pixel delivery health tracking.
 
 use crate::abuse::{extract_host, is_internal_host, is_internal_ip};
-use crate::store::{LinkHealth, Record, Store};
+use crate::store::{LinkHealth, Record, Store, StoreError};
 use crate::webhooks::delivery::WebhookDispatcher;
 use crate::webhooks::{EventType, WebhookEvent};
 use crate::{codec, permute};
@@ -42,6 +42,10 @@ pub fn classify(status: Option<u16>) -> bool {
 
 /// The reqwest client the checker uses: bounded timeout, no redirect following
 /// (a `3xx` is treated as alive, and not following avoids SSRF via redirect).
+#[expect(
+    clippy::expect_used,
+    reason = "a client with only timeouts and a redirect policy always builds"
+)]
 pub fn build_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(PROBE_TIMEOUT_SECS))
@@ -145,7 +149,7 @@ pub async fn sweep<P, F, R, RF>(
     key: u64,
     renew: R,
     prober: P,
-) -> Result<(usize, bool), String>
+) -> Result<(usize, bool), StoreError>
 where
     P: Fn(String) -> F,
     F: Future<Output = Option<LinkHealth>>,
@@ -154,8 +158,7 @@ where
 {
     let prev: HashMap<u64, LinkHealth> = store
         .list_link_health(crate::tenant::DEFAULT_TENANT)
-        .await
-        .map_err(|e| e.to_string())?
+        .await?
         .into_iter()
         .collect();
     let mut after: Option<u64> = None;
@@ -173,8 +176,7 @@ where
                 None,
                 false,
             )
-            .await
-            .map_err(|e| e.to_string())?;
+            .await?;
         let n = page.len();
         if n == 0 {
             break;
@@ -236,8 +238,7 @@ where
                 }
                 store
                     .put_link_health(crate::tenant::DEFAULT_TENANT, id, &health)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                    .await?;
             }
         }
         if n < LIST_PAGE {

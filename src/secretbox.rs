@@ -182,8 +182,16 @@ impl SecretBox {
         }
         let entry = &self.keys[self.primary];
         let mut nonce_bytes = [0u8; NONCE_LEN];
-        getrandom::fill(&mut nonce_bytes).expect("system randomness source unavailable");
+        #[expect(
+            clippy::expect_used,
+            reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+        )]
+        getrandom::fill(&mut nonce_bytes).expect("system RNG must be available");
         let nonce = XNonce::from(nonce_bytes);
+        #[expect(
+            clippy::expect_used,
+            reason = "XChaCha20-Poly1305 has no input-dependent failure mode for in-memory buffers"
+        )]
         let ciphertext = entry
             .cipher
             .encrypt(

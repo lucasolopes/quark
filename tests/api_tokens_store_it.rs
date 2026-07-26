@@ -63,6 +63,7 @@ async fn api_token_crud_round_trip_pg() {
 #[file_serial]
 async fn delete_api_token_returns_false_when_missing_pg() {
     let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     assert!(!store
@@ -75,6 +76,7 @@ async fn delete_api_token_returns_false_when_missing_pg() {
 #[file_serial]
 async fn next_api_token_id_increments_pg() {
     let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     };
     let a = store

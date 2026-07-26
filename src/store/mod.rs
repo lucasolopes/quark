@@ -861,6 +861,8 @@ pub trait Store: Send + Sync + 'static {
 
 /// A tenant-scoped view over a `Store`. Its methods mirror the tenant-owned
 /// `Store` methods but capture the tenant, so a call site cannot forget it.
+/// `tests/tenant_isolation_it.rs` drives the isolation suite through it: two
+/// handles on the same store must never see each other's rows.
 pub struct ScopedStore {
     inner: Arc<dyn Store>,
     tenant: TenantId,

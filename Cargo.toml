@@ -105,11 +105,10 @@ harness = false
 unsafe_code = "deny"
 
 [lints.clippy]
-# Anti-panico. expect_used fica de fora por ora: os ~26 sitios de expect no
-# crate sao o idioma de invariante documentada do projeto (RNG do sistema,
-# client reqwest que sempre constroi), cada um precisa de um #[expect] com
-# reason propria, e isso e uma passada separada.
+# Anti-panico. Cada excecao carrega um #[expect(..., reason = ...)], que volta
+# a avisar quando deixar de ser necessaria.
 unwrap_used = "warn"
+expect_used = "warn"
 panic = "warn"
 # Seguranca async: o projeto usa std::sync::Mutex em pontos de producao
 # justamente porque as secoes criticas sao curtas; um guard cruzando await

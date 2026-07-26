@@ -1,4 +1,6 @@
-use crate::analytics::{is_bot, Aggregates, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX};
+use crate::analytics::{
+    is_bot, Aggregates, AnalyticsError, AnalyticsSink, ClickEvent, Stats, EVENTS_MAX,
+};
 use crate::auth::ApiToken;
 use crate::domain::{Domain, DomainStatus};
 use crate::invite::Invite;
@@ -298,6 +300,10 @@ struct OidcConfigBlob {
     post_logout_url: Option<String>,
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "OidcConfigBlob is a plain struct of String/Option<String>, which always serializes"
+)]
 fn oidc_config_blob(cfg: &TenantOidcConfig, sb: &Option<SecretBox>) -> serde_json::Value {
     serde_json::to_value(OidcConfigBlob {
         client_id: cfg.client_id.clone(),
@@ -3290,7 +3296,7 @@ fn counter_rows(agg: &Aggregates) -> Vec<(&'static str, String, i64)> {
 
 #[async_trait::async_trait]
 impl AnalyticsSink for PostgresStore {
-    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), StoreError> {
+    async fn record_batch(&self, events: &[ClickEvent]) -> Result<(), AnalyticsError> {
         if events.is_empty() {
             return Ok(());
         }
@@ -3365,7 +3371,7 @@ impl AnalyticsSink for PostgresStore {
         Ok(())
     }
 
-    async fn stats(&self, id: u64) -> Result<Option<Stats>, StoreError> {
+    async fn stats(&self, id: u64) -> Result<Option<Stats>, AnalyticsError> {
         let counter_rows =
             sqlx::query("SELECT dimension, bucket, count FROM click_counters WHERE id=$1")
                 .bind(id as i64)
@@ -3465,7 +3471,7 @@ impl AnalyticsSink for PostgresStore {
     async fn click_totals(
         &self,
         ids: &[u64],
-    ) -> Result<std::collections::HashMap<u64, u64>, StoreError> {
+    ) -> Result<std::collections::HashMap<u64, u64>, AnalyticsError> {
         if ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
@@ -3500,7 +3506,7 @@ impl AnalyticsSink for PostgresStore {
     /// — `WHERE tenant_id = $1` on both queries is the ONLY isolation this
     /// aggregate has. Dropping it from either query would leak every
     /// tenant's clicks into every other tenant's `/admin/stats`.
-    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, StoreError> {
+    async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, AnalyticsError> {
         let tenant = tenant as i64;
         let counter_rows = sqlx::query(
             "SELECT dimension, bucket, SUM(count)::BIGINT AS count FROM click_counters \

@@ -189,6 +189,10 @@ pub enum SignError {
 /// encoding of 32 cryptographically random bytes.
 pub fn generate_secret() -> String {
     let mut bytes = [0u8; 32];
+    #[expect(
+        clippy::expect_used,
+        reason = "the OS RNG being unavailable is not a recoverable condition for a security path"
+    )]
     getrandom::fill(&mut bytes).expect("system RNG must be available");
     format!("whsec_{}", base64_engine.encode(bytes))
 }
@@ -208,6 +212,8 @@ pub fn sign(secret: &str, msg_id: &str, timestamp: i64, body: &str) -> Result<St
     };
     let key = base64_engine
         .decode(encoded_key)
+        // The cause is dropped on purpose: base64's error names the offending
+        // byte and its offset, which is positional information about a secret.
         .map_err(|_| SignError::InvalidSecretEncoding)?;
     if key.is_empty() {
         return Err(SignError::EmptyOrMalformedSecret);
