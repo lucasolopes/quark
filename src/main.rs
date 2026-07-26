@@ -90,13 +90,12 @@ async fn main() -> anyhow::Result<()> {
     let strict_cluster = std::env::var("QUARK_STRICT_CLUSTER")
         .map(|v| !v.is_empty())
         .unwrap_or(false);
-    if let Err(msg) = quark::cluster::cluster_preflight(
+    quark::cluster::cluster_preflight(
         strict_cluster,
         std::env::var("QUARK_DATABASE_URL").is_ok(),
         std::env::var("QUARK_VALKEY_URL").is_ok(),
-    ) {
-        anyhow::bail!(msg);
-    }
+    )
+    .context("cluster preflight")?;
     let path = std::env::var("QUARK_DATA").unwrap_or_else(|_| "./data".into());
     let key = std::env::var("QUARK_KEY")
         .ok()
