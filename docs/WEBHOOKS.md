@@ -354,6 +354,44 @@ Pixel health follows the conversion forward path in
 the redirect hot path in the analytics worker; the write there is
 best-effort and never blocks that worker's next batch.
 
+## Permanent failures
+
+Most delivery failures are worth retrying: a timeout, a `5xx`, a `429`, a
+refused connection. A `404` or a `410` is not. `410 Gone` is the code for "this
+was removed and is not coming back", and a `404` on a webhook URL almost always
+means the same thing: the Zap was deleted, the Slack channel was disconnected,
+the endpoint was renamed. Retrying those on the normal schedule burns attempts
+for days against a destination that will never answer.
+
+quark treats `404` and `410` as permanent. When one comes back, the delivery is
+retried once more right away to confirm it. If that second attempt succeeds, or
+comes back with anything else, nothing happens and the normal retry policy takes
+over: a deploy that briefly serves `404` does not cost you the subscription. If
+the second attempt also answers `404` or `410`, quark stops retrying and turns
+the subscription off, recording why.
+
+What counts is a run of permanent answers, not a total of failures. Anything
+else in between resets the count: a delivery that got a `503` and then a `404`
+has seen one `404`, so it earns a confirmation attempt like any other first
+`404`. Both delivery paths behave this way. The in-memory worker keeps the run
+in the call that owns the retry sequence; the durable relay (Postgres) persists
+it on the delivery row, because its attempts are spread across polls and nodes
+and there is nothing else to hold the state in.
+
+`400` and `422` are deliberately left out. A `422` usually means quark's payload
+is wrong rather than the endpoint being gone, and disabling a working
+integration over a bug on our side is the worst possible outcome.
+
+A subscription turned off this way comes back as `active: false` with a
+`disabled_reason` string (for example `"status 410"`) on `GET /admin/webhooks`.
+The panel shows it as **Disabled** with the reason next to the row, which is
+what tells it apart from a subscription you paused yourself: a manual pause has
+`disabled_reason: null`.
+
+Nothing is reactivated automatically. Fix the endpoint, then flip the Active
+switch on the row back on (or `PATCH /admin/webhooks/:id` with
+`{"active": true}`). That clears `disabled_reason` and deliveries resume.
+
 ## Click-threshold alerts
 
 A link can carry an alert rule: fire `link.threshold_reached` when it is

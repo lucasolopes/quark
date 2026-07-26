@@ -307,6 +307,14 @@ mod tests {
         ) -> Result<(), StoreError> {
             Ok(())
         }
+        async fn disable_webhook(
+            &self,
+            _tenant: TenantId,
+            _id: u64,
+            _reason: &str,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
         async fn put_alert_rule(
             &self,
             _tenant: TenantId,
@@ -738,6 +746,7 @@ mod tests {
             _id: i64,
             _next_attempt_at: u64,
             _attempts: u32,
+            _permanent_streak: u32,
         ) -> Result<(), StoreError> {
             unimplemented!()
         }

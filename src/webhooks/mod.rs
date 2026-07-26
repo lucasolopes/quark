@@ -114,11 +114,108 @@ impl SubscriptionKind {
     }
 }
 
+/// Placeholder printed when the destination has no host to show, either
+/// because the string is not a URL at all or because the authority part is
+/// empty. Never contains anything derived from the value itself.
+const NO_HOST: &str = "<invalid url>";
+
+/// A webhook destination URL. For Slack, Discord, Telegram and most of the
+/// generic connectors (Make, Zapier, n8n) **the URL is the credential**: the
+/// token lives in the path, and whoever holds the URL can post to the channel.
+/// That is why `Display` and `Debug` are redacted: any
+/// `tracing::warn!(url = %sub.url, ...)` prints the host and nothing else.
+///
+/// The raw value only comes out of `expose()`, mirroring `ExposeSecret` from
+/// `secrecy`. `reqwest` does not implement `IntoUrl` for this type, so every
+/// site that builds the outbound request needs an explicit `expose()` and
+/// reintroducing the leak becomes a compile error instead of a review habit.
+///
+/// `serde` is transparent: the value persisted in LMDB and Postgres, and the
+/// one returned by `GET /admin/webhooks`, stay the raw string. There is no data
+/// migration and no API contract change.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WebhookUrl(String);
+
+impl WebhookUrl {
+    pub fn new(raw: impl Into<String>) -> Self {
+        Self(raw.into())
+    }
+
+    /// The raw value. Use only where the URL really has to go on the wire.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    /// The destination host, with the port when there is one, and nothing
+    /// else. `None` when the value does not parse as a URL or has no host.
+    ///
+    /// Parsed with `url::Url`, the SAME parser that decides where the request
+    /// actually goes: `reqwest` uses it through `IntoUrl` and
+    /// `abuse::extract_host` uses it to validate the destination. Slicing the
+    /// authority by hand diverges from it, and the divergence leaks: the `url`
+    /// crate follows WHATWG and treats `\` as `/` in special schemes, so
+    /// `https://hooks.example.com\services/T000/SECRET` passes validation, is
+    /// delivered with the backslash normalized, and a split on `['/', '?',
+    /// '#']` finds no separator and prints the token.
+    ///
+    /// It allocates, which is fine: nothing here runs on the redirect hot
+    /// path. `WebhookDispatcher::try_emit` hands the event to the worker with
+    /// `try_send`, and every site that formats a `WebhookUrl` is inside that
+    /// worker or the relay.
+    fn host_and_port(&self) -> Option<String> {
+        let parsed = url::Url::parse(&self.0).ok()?;
+        // `Host`'s `Display` brackets IPv6 literals, so `[::1]:8443` comes
+        // back the way it went in.
+        let host = parsed.host()?;
+        Some(match parsed.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_string(),
+        })
+    }
+}
+
+impl std::fmt::Display for WebhookUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.host_and_port() {
+            Some(host) => write!(f, "{host}/\u{2026}"),
+            // Nothing derived from the value: a string that does not parse is
+            // exactly the case where the "host" would be the credential.
+            None => f.write_str(NO_HOST),
+        }
+    }
+}
+
+impl std::fmt::Debug for WebhookUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WebhookUrl({self})")
+    }
+}
+
+impl From<String> for WebhookUrl {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for WebhookUrl {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
 /// A registered outbound webhook subscription.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Debug` is written by hand (see below) because the derive printed `secret`,
+/// the Standard Webhooks signing key, in full. The URL got a newtype instead
+/// because it is passed to `reqwest` from several call sites and the newtype
+/// turns each of them into an explicit `expose()`; the secret has a single
+/// consumer (`sign`), so its only leak surface was `Debug` and closing that one
+/// needs no change to serde, to the persisted blob, or to the store shape.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WebhookSubscription {
     pub id: u64,
-    pub url: String,
+    pub url: WebhookUrl,
     pub events: Vec<EventType>,
     pub secret: String,
     pub active: bool,
@@ -148,6 +245,45 @@ pub struct WebhookSubscription {
     /// Resultado da ultima entrega registrada (health passivo).
     #[serde(default)]
     pub last_delivery_status: crate::health::HealthStatus,
+    /// Why the system disabled this subscription; `None` when `active` reflects
+    /// a user choice. Set when a destination answers permanently (404/410) and
+    /// the confirmation attempt fails too. This is what lets the panel tell "I
+    /// paused it" apart from "the system disabled it": deriving that from
+    /// `!active && status == error` would lie when the user manually pauses a
+    /// webhook that was already failing.
+    #[serde(default)]
+    pub disabled_reason: Option<String>,
+}
+
+impl std::fmt::Debug for WebhookSubscription {
+    /// Mirrors the derive field for field, except `secret`, which is replaced
+    /// by a fixed marker. Whether the field is set is still visible, since an
+    /// empty secret on a `Generic` subscription is a real misconfiguration
+    /// (see `SignError::EmptyOrMalformedSecret`); its value is not.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebhookSubscription")
+            .field("id", &self.id)
+            .field("url", &self.url)
+            .field("events", &self.events)
+            .field(
+                "secret",
+                &if self.secret.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field("active", &self.active)
+            .field("created", &self.created)
+            .field("kind", &self.kind)
+            .field("label", &self.label)
+            .field("connector_id", &self.connector_id)
+            .field("external_id", &self.external_id)
+            .field("last_delivery_at", &self.last_delivery_at)
+            .field("last_delivery_status", &self.last_delivery_status)
+            .field("disabled_reason", &self.disabled_reason)
+            .finish()
+    }
 }
 
 /// A concrete event ready to be delivered: the event kind plus the exact
@@ -284,6 +420,197 @@ pub fn channel_payload(kind: SubscriptionKind, message: &str) -> Option<String> 
 mod tests {
     use super::*;
 
+    /// A Discord incoming webhook: everything after the id is the credential.
+    const DISCORD: &str =
+        "https://discord.com/api/webhooks/1234567890/aVerySecretTokenThatMustNeverLeak";
+
+    #[test]
+    fn display_redacts_the_token_and_keeps_the_host() {
+        let url = WebhookUrl::new(DISCORD);
+        let shown = format!("{url}");
+        assert!(
+            !shown.contains("aVerySecretTokenThatMustNeverLeak"),
+            "leaked: {shown}"
+        );
+        assert!(
+            shown.contains("discord.com"),
+            "no host left to diagnose with: {shown}"
+        );
+    }
+
+    #[test]
+    fn debug_redacts_the_token_too() {
+        let url = WebhookUrl::new(DISCORD);
+        let shown = format!("{url:?}");
+        assert!(
+            !shown.contains("aVerySecretTokenThatMustNeverLeak"),
+            "leaked: {shown}"
+        );
+    }
+
+    /// A subscription is `Debug`, and `{:?}` on the whole struct must not be a
+    /// way around the newtype.
+    #[test]
+    fn subscription_debug_does_not_leak_the_url() {
+        let sub = WebhookSubscription {
+            id: 1,
+            url: WebhookUrl::new(DISCORD),
+            events: vec![EventType::LinkCreated],
+            secret: "whsec_x".into(),
+            active: true,
+            created: 0,
+            kind: SubscriptionKind::Generic,
+            label: None,
+            connector_id: None,
+            external_id: None,
+            last_delivery_at: None,
+            last_delivery_status: Default::default(),
+            disabled_reason: None,
+        };
+        let shown = format!("{sub:?}");
+        assert!(
+            !shown.contains("aVerySecretTokenThatMustNeverLeak"),
+            "leaked: {shown}"
+        );
+    }
+
+    #[test]
+    fn userinfo_is_not_printed_either() {
+        let url = WebhookUrl::new("https://user:hunter2@hooks.example.com/services/abc");
+        let shown = format!("{url}");
+        assert!(!shown.contains("hunter2"), "leaked credentials: {shown}");
+        assert!(shown.contains("hooks.example.com"), "no host: {shown}");
+    }
+
+    #[test]
+    fn a_query_string_is_not_printed_either() {
+        let url = WebhookUrl::new("https://hooks.example.com?token=hunter2");
+        let shown = format!("{url}");
+        assert!(!shown.contains("hunter2"), "leaked query: {shown}");
+    }
+
+    #[test]
+    fn expose_returns_the_raw_url() {
+        assert_eq!(WebhookUrl::new(DISCORD).expose(), DISCORD);
+    }
+
+    #[test]
+    fn serde_is_transparent_so_persisted_blobs_do_not_change() {
+        let url = WebhookUrl::new(DISCORD);
+        assert_eq!(
+            serde_json::to_string(&url).unwrap(),
+            format!("\"{DISCORD}\"")
+        );
+        let back: WebhookUrl = serde_json::from_str(&format!("\"{DISCORD}\"")).unwrap();
+        assert_eq!(back.expose(), DISCORD);
+    }
+
+    #[test]
+    fn legacy_subscription_blob_still_deserializes() {
+        let legacy = r#"{"id":7,"url":"https://h/x","events":["link.created"],"secret":"s","active":true,"created":0}"#;
+        let sub: WebhookSubscription = serde_json::from_str(legacy).unwrap();
+        assert_eq!(sub.url.expose(), "https://h/x");
+    }
+
+    #[test]
+    fn a_url_without_a_scheme_still_hides_the_path() {
+        let url = WebhookUrl::new("not a url at all/aVerySecretTokenThatMustNeverLeak");
+        let shown = format!("{url}");
+        assert!(
+            !shown.contains("aVerySecretTokenThatMustNeverLeak"),
+            "leaked: {shown}"
+        );
+    }
+
+    /// The `url` crate follows WHATWG and treats `\` as `/` in special
+    /// schemes, so this value passes `validate_webhook_url` (its
+    /// `extract_host` returns `hooks.example.com`) and `reqwest` delivers it
+    /// with the backslash normalized to a slash. A hand-rolled split on
+    /// `['/', '?', '#']` does not know that and printed the whole token.
+    #[test]
+    fn a_backslash_authority_does_not_leak_the_path() {
+        let raw = "https://hooks.example.com\\services/T000/B000/SUPERSECRETTOKEN";
+        // The parser that decides where the request goes agrees on the host.
+        assert_eq!(
+            crate::abuse::extract_host(raw).as_deref(),
+            Some("hooks.example.com")
+        );
+        let shown = format!("{}", WebhookUrl::new(raw));
+        assert!(!shown.contains("SUPERSECRETTOKEN"), "leaked: {shown}");
+        assert_eq!(shown, "hooks.example.com/\u{2026}");
+    }
+
+    /// A percent-encoded slash in the authority does not parse as a URL at
+    /// all, which is exactly the value that reaches the "destination url is
+    /// invalid" warn in `delivery.rs`. Reachable through a legacy LMDB blob or
+    /// an import, not through `POST /admin/webhooks`.
+    #[test]
+    fn a_percent_encoded_authority_prints_only_the_placeholder() {
+        let raw = "https://host.example%2FSECRETTOK";
+        assert_eq!(crate::abuse::extract_host(raw), None);
+        let shown = format!("{}", WebhookUrl::new(raw));
+        assert!(!shown.contains("SECRETTOK"), "leaked: {shown}");
+        assert_eq!(shown, NO_HOST);
+    }
+
+    /// A value with no scheme and none of `/?#` has no authority to cut on, so
+    /// the hand-rolled slicing printed it whole.
+    #[test]
+    fn a_bare_token_prints_only_the_placeholder() {
+        let shown = format!("{}", WebhookUrl::new("SECRETTOK"));
+        assert!(!shown.contains("SECRETTOK"), "leaked: {shown}");
+        assert_eq!(shown, NO_HOST);
+    }
+
+    #[test]
+    fn a_fragment_is_not_printed_either() {
+        let url = WebhookUrl::new("https://hooks.example.com#hunter2");
+        let shown = format!("{url}");
+        assert!(!shown.contains("hunter2"), "leaked fragment: {shown}");
+        assert!(shown.contains("hooks.example.com"), "no host: {shown}");
+    }
+
+    #[test]
+    fn an_ipv6_host_keeps_its_brackets_and_port() {
+        let url = WebhookUrl::new("https://[2001:db8::1]:8443/hook/SECRETTOK");
+        let shown = format!("{url}");
+        assert!(!shown.contains("SECRETTOK"), "leaked: {shown}");
+        assert_eq!(shown, "[2001:db8::1]:8443/\u{2026}");
+    }
+
+    #[test]
+    fn an_empty_value_prints_only_the_placeholder() {
+        assert_eq!(format!("{}", WebhookUrl::new("")), NO_HOST);
+    }
+
+    /// The signing secret is the other credential on this struct, and `{:?}`
+    /// on the whole subscription must not be a way to print it.
+    #[test]
+    fn subscription_debug_does_not_leak_the_secret() {
+        let sub = WebhookSubscription {
+            id: 1,
+            url: WebhookUrl::new(DISCORD),
+            events: vec![EventType::LinkCreated],
+            secret: "whsec_aVerySecretSigningKey".into(),
+            active: true,
+            created: 0,
+            kind: SubscriptionKind::Generic,
+            label: None,
+            connector_id: None,
+            external_id: None,
+            last_delivery_at: None,
+            last_delivery_status: Default::default(),
+            disabled_reason: None,
+        };
+        let shown = format!("{sub:?}");
+        assert!(
+            !shown.contains("aVerySecretSigningKey"),
+            "leaked the signing secret: {shown}"
+        );
+        // The rest of the struct is still useful for diagnosis.
+        assert!(shown.contains("id: 1"), "not diagnosable anymore: {shown}");
+    }
+
     #[test]
     fn event_type_wire_strings() {
         assert_eq!(EventType::LinkCreated.as_str(), "link.created");
@@ -367,6 +694,7 @@ mod tests {
             external_id: None,
             last_delivery_at: None,
             last_delivery_status: Default::default(),
+            disabled_reason: None,
         };
         assert!(matches(&sub, &EventType::LinkCreated));
         assert!(!matches(&sub, &EventType::LinkClicked));

@@ -252,6 +252,7 @@ async fn assert_full_isolation(store: Arc<dyn Store>) {
         external_id: None,
         last_delivery_at: None,
         last_delivery_status: Default::default(),
+        disabled_reason: None,
     };
     a.put_webhook(&webhook).await.unwrap();
     assert!(

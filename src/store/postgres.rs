@@ -12,7 +12,7 @@ use crate::store::{
     AlertRule, LinkHealth, OutboxDelivery, OutboxRow, Record, Store, StoreError, Variant,
 };
 use crate::tenant::{Membership, Role, Tenant, TenantId, User};
-use crate::webhooks::{SubscriptionKind, WebhookSubscription};
+use crate::webhooks::{SubscriptionKind, WebhookSubscription, WebhookUrl};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::{AssertSqlSafe, PgPool, Row};
 
@@ -386,9 +386,11 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
     let last_delivery_status: Option<serde_json::Value> = r
         .try_get("last_delivery_status")
         .map_err(StoreError::backend)?;
+    let disabled_reason: Option<String> =
+        r.try_get("disabled_reason").map_err(StoreError::backend)?;
     Ok(WebhookSubscription {
         id: id as u64,
-        url,
+        url: WebhookUrl::new(url),
         events: serde_json::from_value(events)?,
         secret,
         active,
@@ -402,6 +404,7 @@ fn row_to_webhook(r: &PgRow) -> Result<WebhookSubscription, StoreError> {
             Some(v) => serde_json::from_value(v)?,
             None => crate::health::HealthStatus::Never,
         },
+        disabled_reason,
     })
 }
 
@@ -414,6 +417,7 @@ fn row_to_delivery(r: &PgRow) -> Result<OutboxDelivery, StoreError> {
     let event_type: String = r.try_get("event_type").map_err(StoreError::backend)?;
     let payload: String = r.try_get("payload").map_err(StoreError::backend)?;
     let attempts: i32 = r.try_get("attempts").map_err(StoreError::backend)?;
+    let permanent_streak: i32 = r.try_get("permanent_streak").map_err(StoreError::backend)?;
     let tenant_id: i64 = r.try_get("tenant_id").map_err(StoreError::backend)?;
     Ok(OutboxDelivery {
         id,
@@ -422,6 +426,7 @@ fn row_to_delivery(r: &PgRow) -> Result<OutboxDelivery, StoreError> {
         event_type,
         payload,
         attempts: attempts as u32,
+        permanent_streak: permanent_streak as u32,
         tenant_id: TenantId(tenant_id as u64),
     })
 }
@@ -728,6 +733,11 @@ impl PostgresStore {
                 "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS external_id TEXT",
                 "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS last_delivery_at BIGINT",
                 "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS last_delivery_status JSONB",
+                // Motivo de desativacao automatica (LUC-141): distingue
+                // "usuario pausou" de "o sistema desativou por destino morto".
+                // Nullable; linhas pre-existentes ficam NULL, que e o mesmo que
+                // "nunca foi desativado pelo sistema".
+                "ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS disabled_reason TEXT",
                 "CREATE TABLE IF NOT EXISTS api_tokens (id BIGINT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL, scopes JSONB NOT NULL, rate_limit_per_min BIGINT, created BIGINT NOT NULL)",
                 "CREATE INDEX IF NOT EXISTS api_tokens_token_hash_idx ON api_tokens (token_hash)",
                 // Idempotent migrations for pre-existing `links` tables (max-visits feature).
@@ -760,6 +770,12 @@ impl PostgresStore {
                 // (dead, delivered_at, next_attempt_at), hence the index.
                 "CREATE TABLE IF NOT EXISTS webhook_deliveries (id BIGSERIAL PRIMARY KEY, delivery_key TEXT UNIQUE NOT NULL, subscription_id BIGINT NOT NULL, event_type TEXT NOT NULL, payload TEXT NOT NULL, created BIGINT NOT NULL, attempts INT NOT NULL DEFAULT 0, next_attempt_at BIGINT NOT NULL, delivered_at BIGINT, dead BOOLEAN NOT NULL DEFAULT FALSE)",
                 "CREATE INDEX IF NOT EXISTS webhook_deliveries_poll_idx ON webhook_deliveries (dead, delivered_at, next_attempt_at)",
+                // LUC-141: consecutive permanent (404/410) answers, so the relay
+                // can require a real confirmation attempt instead of reading the
+                // total in `attempts`. Rows written before this column existed
+                // come back with 0, which is exactly right: they have never
+                // failed permanently as far as this counter is concerned.
+                "ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS permanent_streak INT NOT NULL DEFAULT 0",
                 // Sheets connector (roadmap: Google Sheets). A single connection
                 // row (single-tenant OSS), plus a lease mirroring `health_lease`
                 // so only one node runs the scheduled sync at a time.
@@ -1441,7 +1457,7 @@ impl Store for PostgresStore {
     ) -> Result<Vec<WebhookSubscription>, StoreError> {
         let rows = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, url, events, secret, active, created, kind, label, connector_id, external_id, last_delivery_at, last_delivery_status FROM webhooks WHERE tenant_id = $1 ORDER BY id",
+                "SELECT id, url, events, secret, active, created, kind, label, connector_id, external_id, last_delivery_at, last_delivery_status, disabled_reason FROM webhooks WHERE tenant_id = $1 ORDER BY id",
             )
             .bind(tenant.0 as i64)
             .fetch_all(&mut *c)
@@ -1457,7 +1473,7 @@ impl Store for PostgresStore {
     ) -> Result<Option<WebhookSubscription>, StoreError> {
         let row = with_read!(self, tenant, |c| {
             sqlx::query(
-                "SELECT id, url, events, secret, active, created, kind, label, connector_id, external_id, last_delivery_at, last_delivery_status FROM webhooks WHERE tenant_id = $1 AND id = $2",
+                "SELECT id, url, events, secret, active, created, kind, label, connector_id, external_id, last_delivery_at, last_delivery_status, disabled_reason FROM webhooks WHERE tenant_id = $1 AND id = $2",
             )
             .bind(tenant.0 as i64)
             .bind(id as i64)
@@ -1479,12 +1495,15 @@ impl Store for PostgresStore {
         let last_delivery_status = serde_json::to_value(&sub.last_delivery_status)?;
         with_write!(self, tenant, |c| {
             sqlx::query(
-                "INSERT INTO webhooks (id, url, events, secret, active, created, kind, tenant_id, label, connector_id, external_id, last_delivery_at, last_delivery_status) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) \
-                 ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6, kind=$7, tenant_id=$8, label=$9, connector_id=$10, external_id=$11, last_delivery_at=$12, last_delivery_status=$13",
+                // `disabled_reason` entra no upsert de proposito: reativar uma
+                // subscription pelo painel manda `disabled_reason: None` e tem
+                // que limpar o motivo gravado pela desativacao automatica.
+                "INSERT INTO webhooks (id, url, events, secret, active, created, kind, tenant_id, label, connector_id, external_id, last_delivery_at, last_delivery_status, disabled_reason) \
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) \
+                 ON CONFLICT (id) DO UPDATE SET url=$2, events=$3, secret=$4, active=$5, created=$6, kind=$7, tenant_id=$8, label=$9, connector_id=$10, external_id=$11, last_delivery_at=$12, last_delivery_status=$13, disabled_reason=$14",
             )
             .bind(sub.id as i64)
-            .bind(&sub.url)
+            .bind(sub.url.expose())
             .bind(&events)
             .bind(&sub.secret)
             .bind(sub.active)
@@ -1496,6 +1515,7 @@ impl Store for PostgresStore {
             .bind(&sub.external_id)
             .bind(sub.last_delivery_at.map(|v| v as i64))
             .bind(&last_delivery_status)
+            .bind(&sub.disabled_reason)
             .execute(&mut *c)
             .await
         });
@@ -1537,6 +1557,25 @@ impl Store for PostgresStore {
             )
             .bind(at as i64)
             .bind(&status)
+            .bind(tenant.0 as i64)
+            .bind(id as i64)
+            .execute(&mut *c)
+            .await
+        });
+        Ok(())
+    }
+
+    async fn disable_webhook(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        reason: &str,
+    ) -> Result<(), StoreError> {
+        with_write!(self, tenant, |c| {
+            sqlx::query(
+                "UPDATE webhooks SET active=false, disabled_reason=$1 WHERE tenant_id=$2 AND id=$3",
+            )
+            .bind(reason)
             .bind(tenant.0 as i64)
             .bind(id as i64)
             .execute(&mut *c)
@@ -3213,7 +3252,7 @@ impl Store for PostgresStore {
                  FOR UPDATE SKIP LOCKED \
                  LIMIT $3 \
              ) \
-             RETURNING id, delivery_key, subscription_id, event_type, payload, attempts, tenant_id",
+             RETURNING id, delivery_key, subscription_id, event_type, payload, attempts, permanent_streak, tenant_id",
         )
         .bind(lease_until as i64)
         .bind(now as i64)
@@ -3239,12 +3278,14 @@ impl Store for PostgresStore {
         id: i64,
         next_attempt_at: u64,
         attempts: u32,
+        permanent_streak: u32,
     ) -> Result<(), StoreError> {
         sqlx::query(
-            "UPDATE webhook_deliveries SET next_attempt_at = $1, attempts = $2 WHERE id = $3",
+            "UPDATE webhook_deliveries SET next_attempt_at = $1, attempts = $2, permanent_streak = $3 WHERE id = $4",
         )
         .bind(next_attempt_at as i64)
         .bind(attempts as i32)
+        .bind(permanent_streak as i32)
         .bind(id)
         .execute(&self.write)
         .await

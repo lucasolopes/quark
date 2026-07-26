@@ -24,6 +24,30 @@ pub const WEBHOOK_CHANNEL_CAPACITY: usize = 1024;
 pub const DELIVERY_ATTEMPTS: u32 = 3;
 /// Per-request timeout for outbound webhook POSTs.
 pub const DELIVERY_TIMEOUT_SECS: u64 = 5;
+/// Attempt budget for a destination answering permanently: the original
+/// attempt plus one confirmation. Not 1, because a momentary 404 from a deploy
+/// window or a proxy must not kill the customer's integration; not the full
+/// budget, because a destination that was really removed never comes back, and
+/// retrying it is the loop this exists to end.
+pub const PERMANENT_DELIVERY_ATTEMPTS: u32 = 2;
+
+/// `404` and `410` mean the destination is gone: `410 Gone` is literally the
+/// code for "this was removed and is not coming back". `400` and `422` are left
+/// out on purpose: a `422` usually says *our* payload is wrong, and disabling
+/// the customer's integration over a bug of ours is the worst outcome
+/// available. `429`, `5xx`, timeouts and transport errors stay transient.
+pub(crate) fn is_permanent(status: u16) -> bool {
+    matches!(status, 404 | 410)
+}
+
+/// Outcome of one delivery attempt. `Permanent` carries the status so it can
+/// become both the disable reason and the shorter budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AttemptOutcome {
+    Success,
+    Permanent(u16),
+    Transient,
+}
 
 /// How often the worker refreshes its subscription snapshot and the
 /// `clicked`/`expired` gating atomics off the ticker branch.
@@ -306,15 +330,23 @@ async fn deliver_to_matching_guarded(
         return;
     };
     for sub in tenant_subs.iter().filter(|s| matches(s, &ev.event_type)) {
-        let host = match extract_host(&sub.url) {
+        let host = match extract_host(sub.url.expose()) {
             Some(h) => h,
             None => {
-                tracing::warn!(url = %sub.url, "webhook destination url is invalid");
+                tracing::warn!(
+                    webhook_id = sub.id,
+                    url = %sub.url,
+                    "webhook destination url is invalid"
+                );
                 continue;
             }
         };
         if is_blocked(&host) {
-            tracing::warn!(url = %sub.url, "webhook destination blocked by the ssrf guard");
+            tracing::warn!(
+                webhook_id = sub.id,
+                url = %sub.url,
+                "webhook destination blocked by the ssrf guard"
+            );
             continue;
         }
         deliver_one(client, store, sub, ev).await;
@@ -362,7 +394,12 @@ pub(crate) fn build_outgoing_request(
             let signature = match sign(&sub.secret, &msg_id, ts, &ev.body) {
                 Ok(sig) => sig,
                 Err(e) => {
-                    tracing::error!(error = %e, url = %sub.url, "webhook signing failed");
+                    tracing::error!(
+                        error = %e,
+                        webhook_id = sub.id,
+                        url = %sub.url,
+                        "webhook signing failed"
+                    );
                     return None;
                 }
             };
@@ -407,9 +444,16 @@ async fn deliver_one(
     };
 
     let mut outcome = crate::health::HealthStatus::Error("no attempt".into());
-    for attempt in 0..DELIVERY_ATTEMPTS {
+    // Consecutive permanent (404/410) responses. The streak, rather than a
+    // one-shot flag, is what makes the confirmation attempt real: a transient
+    // failure in between resets it, so a destination is only ever declared dead
+    // on `PERMANENT_DELIVERY_ATTEMPTS` permanent answers in a row.
+    let mut permanent_streak = 0u32;
+    let mut permanent_status: Option<u16> = None;
+    let mut attempt = 0;
+    while attempt < DELIVERY_ATTEMPTS {
         let mut builder = client
-            .post(&sub.url)
+            .post(sub.url.expose())
             .header("content-type", "application/json");
         for (name, value) in &req.extra_headers {
             builder = builder.header(*name, value);
@@ -419,41 +463,63 @@ async fn deliver_one(
         match res {
             Ok(resp) if resp.status().is_success() => {
                 outcome = crate::health::HealthStatus::Ok;
+                permanent_streak = 0;
+                permanent_status = None;
                 break;
             }
             Ok(resp) => {
-                outcome = crate::health::HealthStatus::Error(format!(
-                    "status {}",
-                    resp.status().as_u16()
-                ));
+                let code = resp.status().as_u16();
+                outcome = crate::health::HealthStatus::Error(format!("status {code}"));
+                if is_permanent(code) {
+                    permanent_streak += 1;
+                    permanent_status = Some(code);
+                } else {
+                    permanent_streak = 0;
+                    permanent_status = None;
+                }
                 tracing::warn!(
-                    status = resp.status().as_u16(),
+                    status = code,
+                    webhook_id = sub.id,
                     url = %sub.url,
                     attempt = attempt + 1,
                     "webhook delivery returned a non-2xx status"
                 );
             }
             Err(e) => {
-                // The health detail is persisted (LMDB/Postgres) and returned by
-                // `GET /admin/webhooks`, so it must never carry the request URL:
-                // for channel webhooks (Slack/Discord/Telegram/...) the secret
+                // For channel webhooks (Slack/Discord/Telegram/...) the secret
                 // token lives in the URL itself, and reqwest's `Display`
-                // includes it by default. Log the full error first (operators
-                // need it), then redact only for the persisted health detail.
+                // includes the full request URL by default. So the URL has to
+                // be stripped in both places: the health detail (persisted in
+                // LMDB/Postgres and returned by `GET /admin/webhooks`) and the
+                // log line. The redacted `url` field plus `webhook_id` already
+                // give the operator the host and the row to look up, which is
+                // everything the URL ever contributed to diagnosis; the rest of
+                // it was only the credential.
+                let redacted = e.without_url();
                 tracing::warn!(
-                    error = %e,
+                    error = %redacted,
+                    webhook_id = sub.id,
                     url = %sub.url,
                     attempt = attempt + 1,
                     "webhook delivery failed"
                 );
-                outcome = crate::health::HealthStatus::Error(e.without_url().to_string());
+                outcome = crate::health::HealthStatus::Error(redacted.to_string());
+                permanent_streak = 0;
+                permanent_status = None;
             }
         }
 
-        if attempt + 1 < DELIVERY_ATTEMPTS {
-            tokio::time::sleep(backoff_with_jitter(attempt)).await;
+        attempt += 1;
+        if permanent_streak >= PERMANENT_DELIVERY_ATTEMPTS {
+            break;
+        }
+        if attempt < DELIVERY_ATTEMPTS {
+            tokio::time::sleep(backoff_with_jitter(attempt - 1)).await;
         }
     }
+
+    let confirmed_permanent =
+        permanent_status.filter(|_| permanent_streak >= PERMANENT_DELIVERY_ATTEMPTS);
 
     if !matches!(outcome, crate::health::HealthStatus::Ok) {
         // `webhook-id` is only present for `Generic` (Standard Webhooks
@@ -463,18 +529,60 @@ async fn deliver_one(
             .iter()
             .find(|(name, _)| *name == "webhook-id")
             .map(|(_, value)| value.as_str());
-        tracing::warn!(url = %sub.url, msg_id, "webhook delivery budget exhausted");
+        // Two distinct exits, two distinct messages: the loop either burned the
+        // whole transient budget (an unstable destination) or stopped early on a
+        // confirmed permanent answer (a dead destination, budget shortened to
+        // `PERMANENT_DELIVERY_ATTEMPTS` on purpose). Grepping for one must not
+        // count the other.
+        if confirmed_permanent.is_some() {
+            tracing::warn!(
+                webhook_id = sub.id,
+                url = %sub.url,
+                msg_id,
+                "webhook delivery stopped early on a confirmed permanent failure"
+            );
+        } else {
+            tracing::warn!(
+                webhook_id = sub.id,
+                url = %sub.url,
+                msg_id,
+                "webhook delivery budget exhausted"
+            );
+        }
     }
 
-    // Health passive recording, off the redirect hot path: `link.clicked`
-    // must never touch the store from here (that event is emitted on the
-    // synchronous redirect path). Best-effort: log and swallow any error.
+    // Only the health record is excluded for `link.clicked`, and the reason is
+    // volume, not latency: that event fires on every redirect, so recording
+    // health here would be one store write per click. Neither write is on the
+    // redirect's synchronous path (delivery runs in the worker task, reached
+    // through a `try_send`).
+    //
+    // The disable does not have the volume problem: it happens once, only on a
+    // confirmed permanent failure, and after it the subscription stops being
+    // delivered to at all. Excluding `link.clicked` from it was the bug LUC-141
+    // set out to fix, because a Slack or Discord connection created by OAuth
+    // subscribes to every event, so a tenant that only generates clicks would
+    // keep posting to a revoked endpoint forever. Best-effort on both: log and
+    // swallow any error.
     if ev.event_type != EventType::LinkClicked {
         if let Err(e) = store
             .record_webhook_health(ev.tenant_id, sub.id, crate::now(), outcome)
             .await
         {
             tracing::warn!(error = %e, "webhook health record write failed");
+        }
+    }
+
+    if let Some(code) = confirmed_permanent {
+        let reason = format!("status {code}");
+        tracing::warn!(
+            webhook_id = sub.id,
+            status = code,
+            url = %sub.url,
+            "webhook destination is gone, disabling the subscription"
+        );
+        if let Err(e) = store.disable_webhook(ev.tenant_id, sub.id, &reason).await {
+            tracing::warn!(error = %e, webhook_id = sub.id, "webhook disable write failed");
         }
     }
 }
@@ -620,22 +728,40 @@ async fn deliver_claimed(
                 );
                 let next =
                     now.saturating_add(relay_backoff_secs(delivery.attempts.saturating_add(1)));
-                let _ = store.mark_retry(delivery.id, next, delivery.attempts).await;
+                // No POST happened, so the permanent streak is carried over
+                // untouched: a lookup failure is not an answer from the
+                // destination and must not reset or advance it.
+                let _ = store
+                    .mark_retry(
+                        delivery.id,
+                        next,
+                        delivery.attempts,
+                        delivery.permanent_streak,
+                    )
+                    .await;
                 return;
             }
         },
     };
 
-    let host = match extract_host(&sub.url) {
+    let host = match extract_host(sub.url.expose()) {
         Some(h) => h,
         None => {
-            tracing::warn!(url = %sub.url, "relayed webhook url is invalid");
+            tracing::warn!(
+                webhook_id = sub.id,
+                url = %sub.url,
+                "relayed webhook url is invalid"
+            );
             mark_dead_logged(store, delivery.id, delivery.attempts).await;
             return;
         }
     };
     if is_blocked(&host) {
-        tracing::warn!(url = %sub.url, "relayed webhook blocked by the ssrf guard");
+        tracing::warn!(
+            webhook_id = sub.id,
+            url = %sub.url,
+            "relayed webhook blocked by the ssrf guard"
+        );
         mark_dead_logged(store, delivery.id, delivery.attempts).await;
         return;
     }
@@ -656,12 +782,13 @@ async fn deliver_claimed(
         return;
     };
 
-    if post_once(client, sub, &req).await {
+    let attempt_outcome = post_once(client, sub, &req).await;
+    if matches!(attempt_outcome, AttemptOutcome::Success) {
         if let Err(e) = store.mark_delivered(delivery.id).await {
             tracing::warn!(error = %e, "webhook relay mark-delivered failed");
         }
-        // Health passive recording, off the redirect hot path (see
-        // `deliver_one`'s comment): `link.clicked` never records here either.
+        // Health is one write per click for `link.clicked` (see `deliver_one`'s
+        // comment), so that event is excluded here too.
         if !matches!(event_type, EventType::LinkClicked) {
             let _ = store
                 .record_webhook_health(
@@ -687,7 +814,56 @@ async fn deliver_claimed(
     }
 
     let attempts = delivery.attempts.saturating_add(1);
-    if attempts >= MAX_DELIVERY_ATTEMPTS {
+    // The durable twin of `deliver_one`'s local `permanent_streak`: the relay's
+    // attempts are spread across polls and nodes, so the run of consecutive
+    // permanent answers has to live in the row. The total in `attempts` cannot
+    // stand in for it, because on a `503` followed by a `404` the total reaches
+    // `PERMANENT_DELIVERY_ATTEMPTS` with a single 404 ever observed, which is
+    // exactly the false positive the confirmation attempt exists to prevent.
+    // Any other failure outcome resets the run, same as in memory.
+    let permanent_streak = match attempt_outcome {
+        AttemptOutcome::Permanent(_) => delivery.permanent_streak.saturating_add(1),
+        _ => 0,
+    };
+    let confirmed_permanent = match attempt_outcome {
+        AttemptOutcome::Permanent(code) if permanent_streak >= PERMANENT_DELIVERY_ATTEMPTS => {
+            Some(code)
+        }
+        _ => None,
+    };
+    if confirmed_permanent.is_some() || attempts >= MAX_DELIVERY_ATTEMPTS {
+        // Unlike the health record above, the disable applies to every event
+        // type including `link.clicked`: it is a single write on a confirmed
+        // permanent failure, not one per click, and skipping it would leave an
+        // OAuth-created Slack or Discord connection posting to a revoked
+        // endpoint forever (see `deliver_one`'s comment).
+        if let Some(code) = confirmed_permanent {
+            let reason = format!("status {code}");
+            tracing::warn!(
+                webhook_id = sub.id,
+                status = code,
+                url = %sub.url,
+                "relayed webhook destination is gone, disabling the subscription"
+            );
+            if let Err(e) = store
+                .disable_webhook(delivery.tenant_id, sub.id, &reason)
+                .await
+            {
+                tracing::warn!(error = %e, webhook_id = sub.id, "webhook disable write failed");
+            }
+        }
+        // Two different outcomes reach this line, and an operator grepping for
+        // an unstable destination must not have to count dead ones alongside
+        // it. `deliver_one` splits the same pair of messages.
+        if confirmed_permanent.is_some() {
+            tracing::error!(
+                delivery_key = %delivery.delivery_key,
+                attempts,
+                "relayed webhook dead-lettered on a confirmed permanent failure"
+            );
+            mark_dead_logged(store, delivery.id, attempts).await;
+            return;
+        }
         tracing::error!(
             delivery_key = %delivery.delivery_key,
             attempts,
@@ -698,7 +874,7 @@ async fn deliver_claimed(
     }
     let next_attempt_at = now.saturating_add(relay_backoff_secs(attempts));
     if let Err(e) = store
-        .mark_retry(delivery.id, next_attempt_at, attempts)
+        .mark_retry(delivery.id, next_attempt_at, attempts, permanent_streak)
         .await
     {
         tracing::warn!(error = %e, "webhook relay mark-retry failed");
@@ -706,31 +882,46 @@ async fn deliver_claimed(
 }
 
 /// Sends `req` once (no in-attempt retry: the persisted schedule owns retry).
-/// Returns `true` on a 2xx, `false` on a non-2xx or transport error.
+/// Classifies the answer so the caller can shorten the budget and disable a
+/// destination that is gone.
 async fn post_once(
     client: &reqwest::Client,
     sub: &WebhookSubscription,
     req: &OutgoingRequest,
-) -> bool {
+) -> AttemptOutcome {
     let mut builder = client
-        .post(&sub.url)
+        .post(sub.url.expose())
         .header("content-type", "application/json");
     for (name, value) in &req.extra_headers {
         builder = builder.header(*name, value);
     }
     match builder.body(req.body.clone()).send().await {
-        Ok(resp) if resp.status().is_success() => true,
+        Ok(resp) if resp.status().is_success() => AttemptOutcome::Success,
         Ok(resp) => {
+            let code = resp.status().as_u16();
             tracing::warn!(
-                status = resp.status().as_u16(),
+                status = code,
+                webhook_id = sub.id,
                 url = %sub.url,
                 "relayed webhook returned a non-2xx status"
             );
-            false
+            if is_permanent(code) {
+                AttemptOutcome::Permanent(code)
+            } else {
+                AttemptOutcome::Transient
+            }
         }
         Err(e) => {
-            tracing::warn!(error = %e, url = %sub.url, "relayed webhook delivery failed");
-            false
+            // `without_url` for the same reason as in `deliver_one`: reqwest's
+            // `Display` embeds the full request URL, which for channel kinds is
+            // the credential.
+            tracing::warn!(
+                error = %e.without_url(),
+                webhook_id = sub.id,
+                url = %sub.url,
+                "relayed webhook delivery failed"
+            );
+            AttemptOutcome::Transient
         }
     }
 }
@@ -882,6 +1073,27 @@ mod tests {
                 crate::health::HealthStatus,
             )>,
         >,
+        /// Captures every `disable_webhook` call (LUC-141), same pattern as
+        /// `health_calls`: the permanent-failure tests assert the write
+        /// happened, with the right reason, and that `link.clicked` never
+        /// produces one.
+        disable_calls: std::sync::Mutex<Vec<(crate::tenant::TenantId, u64, String)>>,
+        /// Captures the relay's terminal bookkeeping so the relay tests can
+        /// assert dead-lettering without a Postgres round-trip.
+        mark_calls: std::sync::Mutex<Vec<MarkCall>>,
+    }
+
+    /// What the relay did with a claimed row after one attempt.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum MarkCall {
+        Delivered,
+        Retry {
+            attempts: u32,
+            permanent_streak: u32,
+        },
+        Dead {
+            attempts: u32,
+        },
     }
 
     impl StubStore {
@@ -900,6 +1112,8 @@ mod tests {
                 seen_tenant: std::sync::Mutex::new(None),
                 fail: std::sync::atomic::AtomicBool::new(false),
                 health_calls: std::sync::Mutex::new(Vec::new()),
+                disable_calls: std::sync::Mutex::new(Vec::new()),
+                mark_calls: std::sync::Mutex::new(Vec::new()),
             }
         }
 
@@ -1084,6 +1298,18 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((tenant, id, at, status));
+            Ok(())
+        }
+        async fn disable_webhook(
+            &self,
+            tenant: crate::tenant::TenantId,
+            id: u64,
+            reason: &str,
+        ) -> Result<(), StoreError> {
+            self.disable_calls
+                .lock()
+                .unwrap()
+                .push((tenant, id, reason.to_string()));
             Ok(())
         }
         async fn put_alert_rule(
@@ -1583,18 +1809,28 @@ mod tests {
             unimplemented!()
         }
         async fn mark_delivered(&self, _id: i64) -> Result<(), StoreError> {
-            unimplemented!()
+            self.mark_calls.lock().unwrap().push(MarkCall::Delivered);
+            Ok(())
         }
         async fn mark_retry(
             &self,
             _id: i64,
             _next_attempt_at: u64,
-            _attempts: u32,
+            attempts: u32,
+            permanent_streak: u32,
         ) -> Result<(), StoreError> {
-            unimplemented!()
+            self.mark_calls.lock().unwrap().push(MarkCall::Retry {
+                attempts,
+                permanent_streak,
+            });
+            Ok(())
         }
-        async fn mark_dead(&self, _id: i64, _attempts: u32) -> Result<(), StoreError> {
-            unimplemented!()
+        async fn mark_dead(&self, _id: i64, attempts: u32) -> Result<(), StoreError> {
+            self.mark_calls
+                .lock()
+                .unwrap()
+                .push(MarkCall::Dead { attempts });
+            Ok(())
         }
     }
 
@@ -1607,7 +1843,7 @@ mod tests {
     ) -> WebhookSubscription {
         WebhookSubscription {
             id,
-            url: url.to_string(),
+            url: url.into(),
             events,
             secret: secret.to_string(),
             active,
@@ -1618,6 +1854,7 @@ mod tests {
             external_id: None,
             last_delivery_at: None,
             last_delivery_status: Default::default(),
+            disabled_reason: None,
         }
     }
 
@@ -2270,5 +2507,556 @@ mod tests {
         dispatcher.emit_if_in_memory(ev);
         let got = rx.try_recv().expect("emit_if_in_memory emits on LMDB");
         assert_eq!(got.event_type, EventType::LinkCreated);
+    }
+
+    /// Collects the field names of every `tracing` event emitted while it is
+    /// installed, so a test can assert on the shape of a log line.
+    #[derive(Clone, Default)]
+    struct CapturedEvents(Arc<Mutex<Vec<Vec<String>>>>);
+
+    struct FieldNames(Vec<String>);
+
+    impl tracing::field::Visit for FieldNames {
+        fn record_debug(&mut self, field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {
+            self.0.push(field.name().to_string());
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedEvents {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut names = FieldNames(Vec::new());
+            event.record(&mut names);
+            self.0.lock().unwrap().push(names.0);
+        }
+    }
+
+    /// Every destination of a given kind shares one host (`hooks.slack.com`,
+    /// `discord.com`), so a redacted `url` field alone makes 20 Slack
+    /// subscriptions produce 20 indistinguishable lines. The subscription id
+    /// has to ride along or the operator cannot find the row.
+    #[tokio::test]
+    async fn delivery_warnings_carry_the_subscription_id() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let captured = CapturedEvents::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let subs = vec![(
+            crate::tenant::DEFAULT_TENANT,
+            vec![
+                // Does not parse as a URL: hits the "destination url is
+                // invalid" warn.
+                sub(
+                    41,
+                    "https://host.example%2FSECRETTOK",
+                    vec![EventType::LinkCreated],
+                    true,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                ),
+                // Parses fine, blocked by the injected SSRF predicate.
+                sub(
+                    42,
+                    "https://hooks.example.com/services/SECRETTOK",
+                    vec![EventType::LinkCreated],
+                    true,
+                    "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+                ),
+            ],
+        )];
+        let ev = test_event(EventType::LinkCreated, crate::tenant::DEFAULT_TENANT);
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![]));
+
+        deliver_to_matching_guarded(&reqwest::Client::new(), &store, &subs, &ev, |_| true).await;
+
+        let events = captured.0.lock().unwrap().clone();
+        let with_url: Vec<_> = events
+            .iter()
+            .filter(|fields| fields.iter().any(|f| f == "url"))
+            .collect();
+        assert_eq!(with_url.len(), 2, "expected both warns: {events:?}");
+        for fields in with_url {
+            assert!(
+                fields.iter().any(|f| f == "webhook_id"),
+                "log line has no subscription id to find the row with: {fields:?}"
+            );
+        }
+    }
+
+    /// The behavioral test above can only reach the two warns on the in-memory
+    /// path. The relay sites (`deliver_claimed`, `post_once`) need a Postgres
+    /// outbox, so this checks the same invariant statically instead: any
+    /// `tracing` call that prints the destination url must also print the
+    /// subscription id.
+    #[test]
+    fn every_url_log_site_also_logs_the_subscription_id() {
+        let src = include_str!("delivery.rs");
+        let mut checked = 0;
+        for (offset, _) in src.match_indices("tracing::") {
+            let rest = &src[offset..];
+            // A `tracing` macro call ends at the first `);`; no field
+            // expression in this file contains one.
+            let end = rest.find(");").map(|i| i + 2).unwrap_or(rest.len());
+            let call = &rest[..end];
+            if !call.contains("url = %sub.url") {
+                continue;
+            }
+            checked += 1;
+            assert!(
+                call.contains("webhook_id"),
+                "log site prints the url without the subscription id: {call}"
+            );
+        }
+        assert_eq!(
+            checked, 13,
+            "expected 13 url log sites in delivery.rs, found {checked}"
+        );
+    }
+
+    /// Renders every field of every `tracing` event emitted while installed,
+    /// so a test can assert on the values a log line actually prints (not
+    /// just on its field names, which `CapturedEvents` covers).
+    #[derive(Clone, Default)]
+    struct CapturedText(Arc<Mutex<String>>);
+
+    impl CapturedText {
+        fn contents(&self) -> String {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    struct FieldValues(String);
+
+    impl tracing::field::Visit for FieldValues {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            use std::fmt::Write as _;
+            let _ = write!(self.0, " {}={value:?}", field.name());
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedText {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut values = FieldValues(String::new());
+            event.record(&mut values);
+            let mut out = self.0.lock().unwrap();
+            out.push_str(&values.0);
+            out.push('\n');
+        }
+    }
+
+    /// Binds an ephemeral port and immediately drops the listener, so the
+    /// address is guaranteed to refuse the connection. That is the only
+    /// deterministic way to build a real `reqwest::Error`: a server replying
+    /// 500 is a valid HTTP response and lands in the `Ok(resp)` arm, which
+    /// never constructs the error whose `Display` embeds the full url.
+    async fn closed_port_url(token: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("http://{addr}/hook/{token}")
+    }
+
+    const URL_TOKEN: &str = "aVerySecretTokenThatMustNeverLeak";
+
+    /// The `WebhookUrl` newtype redacts `url = %sub.url`, but it cannot reach
+    /// `error = %e`: `reqwest::Error`'s `Display` embeds the full request url,
+    /// token and all. This drives a real transport failure through the
+    /// in-memory path and asserts the token never reaches the subscriber.
+    #[tokio::test]
+    async fn transport_failure_never_logs_the_url_token() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let url = closed_port_url(URL_TOKEN).await;
+        let captured = CapturedText::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let subs = vec![(
+            crate::tenant::DEFAULT_TENANT,
+            vec![sub(
+                7,
+                &url,
+                vec![EventType::LinkCreated],
+                true,
+                "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+            )],
+        )];
+        let ev = test_event(EventType::LinkCreated, crate::tenant::DEFAULT_TENANT);
+        let store: Arc<dyn Store> = Arc::new(StubStore::new(vec![]));
+
+        deliver_to_matching_guarded(&reqwest::Client::new(), &store, &subs, &ev, |_| false).await;
+
+        let log = captured.contents();
+        assert!(
+            log.contains("webhook delivery failed"),
+            "the transport-error arm was never reached, so this test proves nothing:\n{log}"
+        );
+        assert!(!log.contains(URL_TOKEN), "the url token leaked:\n{log}");
+        assert!(
+            log.contains("127.0.0.1"),
+            "the log lost the host and is useless for diagnosis:\n{log}"
+        );
+    }
+
+    /// Same invariant for the relay path. `post_once` is called directly: the
+    /// full `deliver_claimed` needs a Postgres outbox, and the leaking site is
+    /// `post_once`'s own transport-error arm.
+    #[tokio::test]
+    async fn relay_transport_failure_never_logs_the_url_token() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let url = closed_port_url(URL_TOKEN).await;
+        let captured = CapturedText::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let subscription = sub(
+            9,
+            &url,
+            vec![EventType::LinkCreated],
+            true,
+            "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+        );
+        let req = OutgoingRequest {
+            body: r#"{"test":1}"#.to_string(),
+            extra_headers: Vec::new(),
+        };
+
+        let delivered = post_once(&reqwest::Client::new(), &subscription, &req).await;
+
+        assert_eq!(
+            delivered,
+            AttemptOutcome::Transient,
+            "a closed port is a transport failure, never a permanent verdict"
+        );
+        let log = captured.contents();
+        assert!(
+            log.contains("relayed webhook delivery failed"),
+            "the transport-error arm was never reached, so this test proves nothing:\n{log}"
+        );
+        assert!(!log.contains(URL_TOKEN), "the url token leaked:\n{log}");
+        assert!(
+            log.contains("127.0.0.1"),
+            "the log lost the host and is useless for diagnosis:\n{log}"
+        );
+    }
+
+    // --- LUC-141: permanent failure classification -----------------------
+
+    /// Clones the captured `disable_webhook` calls off a concrete `StubStore`,
+    /// the same way `store_health_calls` does for health.
+    fn store_disable_calls(store: &Arc<StubStore>) -> Vec<(crate::tenant::TenantId, u64, String)> {
+        store.disable_calls.lock().unwrap().clone()
+    }
+
+    fn store_mark_calls(store: &Arc<StubStore>) -> Vec<MarkCall> {
+        store.mark_calls.lock().unwrap().clone()
+    }
+
+    /// Number of POSTs the test server actually received.
+    fn hits(state: &Arc<ServerState>) -> usize {
+        state.captured.lock().unwrap().len()
+    }
+
+    /// Drives one in-memory delivery of `event_type` against a server that
+    /// replies `responses` in order, and hands back the server state plus the
+    /// stub store so the test can assert both the request count and the writes.
+    async fn deliver_against(
+        responses: Vec<u16>,
+        event_type: EventType,
+    ) -> (Arc<ServerState>, Arc<StubStore>) {
+        let (url, state) = spawn_test_server(responses).await;
+        let webhook_sub = test_sub(1, &url, SubscriptionKind::Generic, vec![event_type]);
+        let stub = Arc::new(StubStore::new(vec![webhook_sub.clone()]));
+        let store: Arc<dyn Store> = stub.clone();
+        let subs = vec![(crate::tenant::DEFAULT_TENANT, vec![webhook_sub])];
+        let ev = test_event(event_type, crate::tenant::DEFAULT_TENANT);
+
+        deliver_to_matching_guarded(&reqwest::Client::new(), &store, &subs, &ev, |_| false).await;
+
+        (state, stub)
+    }
+
+    /// `410 Gone` is the code for "this was removed and is not coming back":
+    /// one confirmation attempt, then the subscription is disabled.
+    #[tokio::test]
+    async fn a_410_destination_is_confirmed_once_then_disabled() {
+        let (state, stub) = deliver_against(vec![410], EventType::LinkCreated).await;
+
+        assert_eq!(
+            hits(&state),
+            2,
+            "410 gets the original attempt plus one confirmation, never the full budget"
+        );
+        let calls = store_disable_calls(&stub);
+        assert_eq!(calls.len(), 1, "a confirmed 410 must disable: {calls:?}");
+        assert_eq!(calls[0].1, 1);
+        assert_eq!(calls[0].2, "status 410");
+    }
+
+    #[tokio::test]
+    async fn a_404_destination_is_confirmed_once_then_disabled() {
+        let (state, stub) = deliver_against(vec![404], EventType::LinkCreated).await;
+
+        assert_eq!(hits(&state), 2);
+        let calls = store_disable_calls(&stub);
+        assert_eq!(calls.len(), 1, "a confirmed 404 must disable: {calls:?}");
+        assert_eq!(calls[0].2, "status 404");
+    }
+
+    /// The test that makes the confirmation attempt worth its cost: a 404 from
+    /// a deploy window must not kill the customer's integration.
+    #[tokio::test]
+    async fn a_404_that_recovers_on_the_confirmation_attempt_is_not_disabled() {
+        let (state, stub) = deliver_against(vec![404, 200], EventType::LinkCreated).await;
+
+        assert_eq!(hits(&state), 2);
+        assert!(
+            store_disable_calls(&stub).is_empty(),
+            "a 404 that recovers on the confirmation must not disable"
+        );
+    }
+
+    /// 5xx is transient: it keeps today's budget and never disables, because
+    /// the destination can come back.
+    #[tokio::test]
+    async fn a_503_destination_keeps_the_full_transient_budget_and_is_not_disabled() {
+        let (state, stub) = deliver_against(vec![503], EventType::LinkCreated).await;
+
+        assert_eq!(hits(&state), DELIVERY_ATTEMPTS as usize);
+        assert!(
+            store_disable_calls(&stub).is_empty(),
+            "5xx never disables: the destination may come back"
+        );
+    }
+
+    /// `link.clicked` is the main case for LUC-141: a Slack/Discord connection
+    /// created by OAuth subscribes to every event, and a tenant that only
+    /// generates clicks would keep posting to a revoked endpoint forever if
+    /// this event were excluded from the disable. The disable happens once, on
+    /// a confirmed permanent failure, and it is not on the redirect's
+    /// synchronous path (delivery runs in the worker task). The health record
+    /// stays excluded because that one is a write per click.
+    #[tokio::test]
+    async fn link_clicked_disables_on_a_permanent_status_but_never_records_health() {
+        let (state, stub) = deliver_against(vec![410], EventType::LinkClicked).await;
+
+        assert_eq!(hits(&state), 2, "the classification itself still applies");
+        let calls = store_disable_calls(&stub);
+        assert_eq!(
+            calls.len(),
+            1,
+            "a confirmed 410 must disable even for link.clicked: {calls:?}"
+        );
+        assert_eq!(calls[0].1, 1);
+        assert_eq!(calls[0].2, "status 410");
+        assert!(
+            store_health_calls(&stub).is_empty(),
+            "link.clicked must never record health: that is a write per click"
+        );
+    }
+
+    /// The loop has two ways out and an operator greps for the difference: a
+    /// destination that burned the whole transient budget is unstable, one that
+    /// stopped on a confirmed 404/410 is dead. Reporting "budget exhausted" for
+    /// the permanent exit is a lie, because the budget was shortened to
+    /// `PERMANENT_DELIVERY_ATTEMPTS` on purpose, and it makes the two counts
+    /// impossible to tell apart.
+    #[tokio::test]
+    async fn the_permanent_exit_and_the_exhausted_budget_log_different_messages() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let captured = CapturedText::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        deliver_against(vec![410], EventType::LinkCreated).await;
+        let permanent = captured.contents();
+        assert!(
+            permanent.contains("webhook delivery stopped early on a confirmed permanent failure"),
+            "the permanent exit needs its own message:\n{permanent}"
+        );
+        assert!(
+            !permanent.contains("webhook delivery budget exhausted"),
+            "the permanent exit must not claim the budget ran out:\n{permanent}"
+        );
+
+        let captured = CapturedText::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        deliver_against(vec![503], EventType::LinkCreated).await;
+        let transient = captured.contents();
+        assert!(
+            transient.contains("webhook delivery budget exhausted"),
+            "a destination that really burned the budget still says so:\n{transient}"
+        );
+    }
+
+    /// Builds a claimed outbox row for the relay tests.
+    fn claimed_row(
+        sub_id: u64,
+        attempts: u32,
+        permanent_streak: u32,
+        event_type: EventType,
+    ) -> OutboxDelivery {
+        OutboxDelivery {
+            id: 1,
+            delivery_key: format!("evt_test.{sub_id}"),
+            subscription_id: sub_id,
+            event_type: event_type.as_str().to_string(),
+            payload: r#"{"id":"evt_test"}"#.to_string(),
+            attempts,
+            permanent_streak,
+            tenant_id: crate::tenant::DEFAULT_TENANT,
+        }
+    }
+
+    /// Drives `n` relay attempts of the same row against a server replying
+    /// `responses` in order, feeding each round the `attempts` and
+    /// `permanent_streak` the previous `mark_retry` persisted, exactly like a
+    /// re-claim of the row on a later poll would.
+    async fn relay_attempts(
+        responses: Vec<u16>,
+        event_type: EventType,
+        rounds: u32,
+    ) -> (Arc<ServerState>, Arc<StubStore>) {
+        let (url, state) = spawn_test_server(responses).await;
+        let webhook_sub = test_sub(1, &url, SubscriptionKind::Generic, vec![event_type]);
+        let stub = Arc::new(StubStore::new(vec![webhook_sub.clone()]));
+        let store: Arc<dyn Store> = stub.clone();
+        let subs = vec![webhook_sub];
+        let client = reqwest::Client::new();
+
+        let mut attempts = 0u32;
+        let mut streak = 0u32;
+        for _ in 0..rounds {
+            let delivery = claimed_row(1, attempts, streak, event_type);
+            deliver_claimed(&store, &client, &subs, &delivery, |_| false, 0).await;
+            match store_mark_calls(&stub).last() {
+                Some(&MarkCall::Retry {
+                    attempts: a,
+                    permanent_streak: s,
+                }) => {
+                    attempts = a;
+                    streak = s;
+                }
+                // Delivered or dead-lettered: the row is terminal, no re-claim.
+                _ => break,
+            }
+        }
+
+        (state, stub)
+    }
+
+    #[tokio::test]
+    async fn relay_410_is_confirmed_once_then_disabled() {
+        let (state, stub) = relay_attempts(vec![410], EventType::LinkCreated, 8).await;
+
+        assert_eq!(hits(&state), 2, "the relay also confirms exactly once");
+        let calls = store_disable_calls(&stub);
+        assert_eq!(calls.len(), 1, "a confirmed 410 must disable: {calls:?}");
+        assert_eq!(calls[0].2, "status 410");
+        assert!(
+            store_mark_calls(&stub).contains(&MarkCall::Dead { attempts: 2 }),
+            "the row must also be dead-lettered: {:?}",
+            store_mark_calls(&stub)
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_404_is_confirmed_once_then_disabled() {
+        let (state, stub) = relay_attempts(vec![404], EventType::LinkCreated, 8).await;
+
+        assert_eq!(hits(&state), 2);
+        let calls = store_disable_calls(&stub);
+        assert_eq!(calls.len(), 1, "a confirmed 404 must disable: {calls:?}");
+        assert_eq!(calls[0].2, "status 404");
+    }
+
+    #[tokio::test]
+    async fn relay_404_that_recovers_on_the_confirmation_is_not_disabled() {
+        let (state, stub) = relay_attempts(vec![404, 200], EventType::LinkCreated, 8).await;
+
+        assert_eq!(hits(&state), 2);
+        assert!(
+            store_disable_calls(&stub).is_empty(),
+            "a 404 that recovers on the confirmation must not disable"
+        );
+        assert!(store_mark_calls(&stub).contains(&MarkCall::Delivered));
+    }
+
+    /// The relay's version of the false positive the confirmation attempt
+    /// exists to prevent: one `503` followed by one `404` is a single permanent
+    /// answer, not a confirmed one. Counting the total attempts instead of the
+    /// consecutive permanent ones used to disable the subscription right here.
+    #[tokio::test]
+    async fn relay_503_then_404_does_not_disable_on_a_single_404() {
+        let (state, stub) = relay_attempts(vec![503, 404], EventType::LinkCreated, 2).await;
+
+        assert_eq!(hits(&state), 2);
+        assert!(
+            store_disable_calls(&stub).is_empty(),
+            "one 404 after a 503 is not a confirmed permanent failure: {:?}",
+            store_disable_calls(&stub)
+        );
+    }
+
+    /// A transient answer between two permanent ones resets the streak, exactly
+    /// like the in-memory worker: the second `404` here is again a first
+    /// observation, so it only earns a confirmation attempt.
+    #[tokio::test]
+    async fn relay_404_then_503_then_404_does_not_disable() {
+        let (state, stub) = relay_attempts(vec![404, 503, 404], EventType::LinkCreated, 3).await;
+
+        assert_eq!(hits(&state), 3);
+        assert!(
+            store_disable_calls(&stub).is_empty(),
+            "the 503 in the middle reset the streak: {:?}",
+            store_disable_calls(&stub)
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_503_keeps_the_full_transient_budget_and_is_not_disabled() {
+        let (state, stub) =
+            relay_attempts(vec![503], EventType::LinkCreated, MAX_DELIVERY_ATTEMPTS).await;
+
+        assert_eq!(hits(&state), MAX_DELIVERY_ATTEMPTS as usize);
+        assert!(
+            store_disable_calls(&stub).is_empty(),
+            "5xx never disables on the relay either"
+        );
+        assert!(store_mark_calls(&stub).contains(&MarkCall::Dead {
+            attempts: MAX_DELIVERY_ATTEMPTS
+        }));
+    }
+
+    /// Same rule on the relay: the disable applies to `link.clicked` too, and
+    /// the health record still does not.
+    #[tokio::test]
+    async fn relay_link_clicked_disables_but_never_records_health() {
+        let (state, stub) = relay_attempts(vec![410], EventType::LinkClicked, 8).await;
+
+        assert_eq!(hits(&state), 2);
+        let calls = store_disable_calls(&stub);
+        assert_eq!(
+            calls.len(),
+            1,
+            "a confirmed 410 must disable even for link.clicked: {calls:?}"
+        );
+        assert_eq!(calls[0].2, "status 410");
+        assert!(
+            store_health_calls(&stub).is_empty(),
+            "link.clicked must never record health: that is a write per click"
+        );
     }
 }

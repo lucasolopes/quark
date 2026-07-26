@@ -22,7 +22,10 @@ pub(crate) struct WebhookPatchReq {
 #[derive(Serialize)]
 pub(crate) struct WebhookRow {
     id: u64,
-    url: String,
+    /// Kept as `WebhookUrl` rather than unwrapped to `String`: `serde` is
+    /// transparent, so the panel keeps receiving the raw URL it needs to show,
+    /// while a stray `{:?}` on this row cannot print the token.
+    url: WebhookUrl,
     events: Vec<EventType>,
     active: bool,
     created: u64,
@@ -34,6 +37,11 @@ pub(crate) struct WebhookRow {
     connector_id: Option<String>,
     last_delivery_at: Option<u64>,
     last_delivery_status: crate::health::HealthStatus,
+    /// Why the delivery worker turned this subscription off (see
+    /// `Store::disable_webhook`). `None` when the subscription is on, or when
+    /// the user paused it by hand: the panel needs to tell the two apart to
+    /// show "disabled" instead of "paused".
+    disabled_reason: Option<String>,
 }
 
 pub(crate) async fn admin_webhooks_list(
@@ -60,6 +68,7 @@ pub(crate) async fn admin_webhooks_list(
                     connector_id: s.connector_id,
                     last_delivery_at: s.last_delivery_at,
                     last_delivery_status: s.last_delivery_status,
+                    disabled_reason: s.disabled_reason,
                 })
                 .collect();
             Json(serde_json::json!({ "webhooks": rows })).into_response()
@@ -247,7 +256,7 @@ pub(crate) async fn admin_webhooks_create(
     };
     let sub = WebhookSubscription {
         id,
-        url: req.url,
+        url: WebhookUrl::new(req.url),
         events: req.events,
         secret: secret.clone(),
         active: req.active.unwrap_or(true),
@@ -258,6 +267,7 @@ pub(crate) async fn admin_webhooks_create(
         external_id: None,
         last_delivery_at: None,
         last_delivery_status: Default::default(),
+        disabled_reason: None,
     };
     if st.store.put_webhook(p.tenant, &sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -288,13 +298,18 @@ pub(crate) async fn admin_webhooks_patch(
         if let Err((status, msg)) = validate_webhook_url(&url) {
             return (status, msg).into_response();
         }
-        sub.url = url;
+        sub.url = WebhookUrl::new(url);
     }
     if let Some(events) = req.events {
         sub.events = events;
     }
     if let Some(active) = req.active {
         sub.active = active;
+        // Flipping the switch is user intent either way, so it clears an
+        // automatic disable: reactivating is the documented way back from a
+        // 404/410, and pausing by hand must not inherit a stale reason and
+        // keep reporting itself as "disabled by quark" in the panel.
+        sub.disabled_reason = None;
     }
     if let Some(kind) = req.kind {
         sub.kind = kind;
@@ -593,7 +608,7 @@ pub(crate) async fn send_test_event_guarded(
     // still an operator-supplied URL, and this endpoint fires synchronously
     // instead of through the queue's own guard (see
     // `webhooks::delivery::deliver_to_matching_guarded`).
-    let host = match extract_host(&sub.url) {
+    let host = match extract_host(sub.url.expose()) {
         Some(h) => h,
         None => {
             return (
@@ -651,7 +666,7 @@ pub(crate) async fn send_test_event_guarded(
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR.into_response(), None),
     };
     let mut builder = client
-        .post(&sub.url)
+        .post(sub.url.expose())
         .header("content-type", "application/json");
     for (name, value) in &req.extra_headers {
         builder = builder.header(*name, value);

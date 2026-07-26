@@ -55,7 +55,7 @@ async fn add_sub(store: &PostgresStore, url: &str) -> WebhookSubscription {
         .unwrap();
     let sub = WebhookSubscription {
         id,
-        url: url.to_string(),
+        url: url.into(),
         events: vec![EventType::LinkCreated],
         secret: "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw".to_string(),
         active: true,
@@ -66,6 +66,7 @@ async fn add_sub(store: &PostgresStore, url: &str) -> WebhookSubscription {
         external_id: None,
         last_delivery_at: None,
         last_delivery_status: Default::default(),
+        disabled_reason: None,
     };
     store
         .put_webhook(quark::tenant::DEFAULT_TENANT, &sub)

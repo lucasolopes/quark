@@ -572,6 +572,25 @@ impl Store for LmdbStore {
         Ok(())
     }
 
+    async fn disable_webhook(
+        &self,
+        tenant: TenantId,
+        id: u64,
+        reason: &str,
+    ) -> Result<(), StoreError> {
+        let mut wtxn = self.env.write_txn()?;
+        let key = tkey_id(tenant, id);
+        if let Some(bytes) = self.webhooks.get(&wtxn, &key)? {
+            let mut sub: WebhookSubscription = serde_json::from_slice(bytes)?;
+            sub.active = false;
+            sub.disabled_reason = Some(reason.to_string());
+            let out = serde_json::to_vec(&sub)?;
+            self.webhooks.put(&mut wtxn, &key, &out)?;
+            wtxn.commit()?;
+        }
+        Ok(())
+    }
+
     async fn put_alert_rule(
         &self,
         tenant: TenantId,
@@ -1412,6 +1431,7 @@ impl Store for LmdbStore {
         _id: i64,
         _next_attempt_at: u64,
         _attempts: u32,
+        _permanent_streak: u32,
     ) -> Result<(), StoreError> {
         Ok(())
     }
@@ -1879,6 +1899,7 @@ mod tests {
             external_id: None,
             last_delivery_at: None,
             last_delivery_status: Default::default(),
+            disabled_reason: None,
         };
         store
             .put_webhook(crate::tenant::DEFAULT_TENANT, &sub)
@@ -1890,7 +1911,8 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap()
-                .url,
+                .url
+                .expose(),
             "https://e.com"
         );
         assert_eq!(
@@ -1929,6 +1951,7 @@ mod tests {
             external_id: None,
             last_delivery_at: None,
             last_delivery_status: crate::health::HealthStatus::Never,
+            disabled_reason: None,
         };
         s.put_webhook(crate::tenant::DEFAULT_TENANT, &sub)
             .await
@@ -1955,8 +1978,91 @@ mod tests {
         );
         // Campos nao-health preservados.
         assert_eq!(got.connector_id.as_deref(), Some("zapier"));
-        assert_eq!(got.url, "https://h/x");
+        assert_eq!(got.url.expose(), "https://h/x");
         assert!(got.active);
+    }
+
+    #[tokio::test]
+    async fn disable_webhook_sets_inactive_with_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let sub = WebhookSubscription {
+            id: 1,
+            url: "https://example.com/hook".into(),
+            events: vec![crate::webhooks::EventType::LinkCreated],
+            secret: String::new(),
+            active: true,
+            created: 10,
+            kind: crate::webhooks::SubscriptionKind::Generic,
+            label: None,
+            connector_id: Some("zapier".into()),
+            external_id: None,
+            last_delivery_at: None,
+            last_delivery_status: crate::health::HealthStatus::Never,
+            disabled_reason: None,
+        };
+        s.put_webhook(crate::tenant::DEFAULT_TENANT, &sub)
+            .await
+            .unwrap();
+
+        s.disable_webhook(crate::tenant::DEFAULT_TENANT, 1, "status 410")
+            .await
+            .unwrap();
+
+        let got = s
+            .get_webhook(crate::tenant::DEFAULT_TENANT, 1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!got.active, "a subscription deveria ter sido desativada");
+        assert_eq!(got.disabled_reason.as_deref(), Some("status 410"));
+        // Os outros campos seguem intactos.
+        assert_eq!(got.connector_id.as_deref(), Some("zapier"));
+        assert_eq!(got.url.expose(), "https://example.com/hook");
+    }
+
+    #[tokio::test]
+    async fn reactivating_clears_the_disabled_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let mut sub = WebhookSubscription {
+            id: 2,
+            url: "https://example.com/hook".into(),
+            events: vec![crate::webhooks::EventType::LinkCreated],
+            secret: String::new(),
+            active: true,
+            created: 10,
+            kind: crate::webhooks::SubscriptionKind::Generic,
+            label: None,
+            connector_id: None,
+            external_id: None,
+            last_delivery_at: None,
+            last_delivery_status: crate::health::HealthStatus::Never,
+            disabled_reason: None,
+        };
+        s.put_webhook(crate::tenant::DEFAULT_TENANT, &sub)
+            .await
+            .unwrap();
+        s.disable_webhook(crate::tenant::DEFAULT_TENANT, 2, "status 404")
+            .await
+            .unwrap();
+
+        sub.active = true;
+        sub.disabled_reason = None;
+        s.put_webhook(crate::tenant::DEFAULT_TENANT, &sub)
+            .await
+            .unwrap();
+
+        let got = s
+            .get_webhook(crate::tenant::DEFAULT_TENANT, 2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(got.active);
+        assert_eq!(
+            got.disabled_reason, None,
+            "reativar tem que limpar o motivo"
+        );
     }
 
     #[tokio::test]

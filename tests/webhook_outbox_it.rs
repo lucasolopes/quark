@@ -109,7 +109,7 @@ async fn add_sub(store: &Arc<dyn Store>, url: &str) -> WebhookSubscription {
         .unwrap();
     let sub = WebhookSubscription {
         id,
-        url: url.to_string(),
+        url: url.into(),
         events: vec![EventType::LinkCreated],
         secret: TEST_SECRET.to_string(),
         active: true,
@@ -120,6 +120,7 @@ async fn add_sub(store: &Arc<dyn Store>, url: &str) -> WebhookSubscription {
         external_id: None,
         last_delivery_at: None,
         last_delivery_status: Default::default(),
+        disabled_reason: None,
     };
     store
         .put_webhook(quark::tenant::DEFAULT_TENANT, &sub)
@@ -165,6 +166,16 @@ async fn row_state(pool: &PgPool, key: &str) -> (i32, i64, Option<i64>, bool) {
         r.try_get("delivered_at").unwrap(),
         r.try_get("dead").unwrap(),
     )
+}
+
+/// The persisted run of consecutive permanent (404/410) answers for a row.
+async fn streak_of(pool: &PgPool, key: &str) -> i32 {
+    let r = sqlx::query("SELECT permanent_streak FROM webhook_deliveries WHERE delivery_key=$1")
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    r.try_get("permanent_streak").unwrap()
 }
 
 async fn count_rows(pool: &PgPool, key: &str) -> i64 {
@@ -393,6 +404,157 @@ async fn duplicate_enqueue_inserts_one_row() {
         .await
         .unwrap();
     assert_eq!(count_rows(&pool, &key).await, 1);
+}
+
+/// The rule is one confirmation attempt before a destination is declared dead,
+/// and it has to survive the relay's attempts being spread across polls. A `503`
+/// followed by a `404` is a single permanent answer: the total in `attempts`
+/// reaches the permanent budget, but the streak does not, so the subscription
+/// stays on.
+#[tokio::test]
+#[file_serial]
+async fn a_503_then_a_404_across_polls_does_not_disable_the_subscription() {
+    let Some((store, pool)) = setup().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let (url, mock) = spawn_mock(vec![503, 404]).await;
+    let sub = add_sub(&store, &url).await;
+    let key = format!("evt_test.{}", sub.id);
+    let base = quark::now();
+    store
+        .enqueue_deliveries(&[row(&key, sub.id, base)])
+        .await
+        .unwrap();
+    let subs = store
+        .list_webhooks(quark::tenant::DEFAULT_TENANT)
+        .await
+        .unwrap();
+    let client = relay_client();
+
+    poll_once(&store, &client, &subs, base, RELAY_BATCH, |_| false).await;
+    assert_eq!(
+        streak_of(&pool, &key).await,
+        0,
+        "a 503 leaves the streak at 0"
+    );
+
+    poll_once(
+        &store,
+        &client,
+        &subs,
+        base + 100_000_000,
+        RELAY_BATCH,
+        |_| false,
+    )
+    .await;
+
+    assert_eq!(mock.captured.lock().unwrap().len(), 2);
+    let (attempts, _next, _delivered, dead) = row_state(&pool, &key).await;
+    assert_eq!(
+        attempts, 2,
+        "the total attempts did reach the permanent budget"
+    );
+    assert_eq!(streak_of(&pool, &key).await, 1, "but only one 404 was seen");
+    assert!(!dead, "a first 404 still gets its confirmation attempt");
+    let after = store
+        .get_webhook(quark::tenant::DEFAULT_TENANT, sub.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        after.active && after.disabled_reason.is_none(),
+        "a single 404 must not disable the subscription: {after:?}"
+    );
+}
+
+/// Two `404`s in a row across polls is the confirmed case: the streak reaches
+/// the permanent budget, the subscription is disabled with the status as the
+/// reason, and the row is dead-lettered instead of burning the transient budget.
+#[tokio::test]
+#[file_serial]
+async fn two_404s_across_polls_confirm_and_disable() {
+    let Some((store, pool)) = setup().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let (url, mock) = spawn_mock(vec![404]).await;
+    let sub = add_sub(&store, &url).await;
+    let key = format!("evt_test.{}", sub.id);
+    let base = quark::now();
+    store
+        .enqueue_deliveries(&[row(&key, sub.id, base)])
+        .await
+        .unwrap();
+    let subs = store
+        .list_webhooks(quark::tenant::DEFAULT_TENANT)
+        .await
+        .unwrap();
+    let client = relay_client();
+
+    poll_once(&store, &client, &subs, base, RELAY_BATCH, |_| false).await;
+    poll_once(
+        &store,
+        &client,
+        &subs,
+        base + 100_000_000,
+        RELAY_BATCH,
+        |_| false,
+    )
+    .await;
+
+    assert_eq!(mock.captured.lock().unwrap().len(), 2);
+    let (attempts, _next, _delivered, dead) = row_state(&pool, &key).await;
+    assert_eq!(attempts, 2);
+    assert!(dead, "a confirmed permanent failure stops the row");
+    let after = store
+        .get_webhook(quark::tenant::DEFAULT_TENANT, sub.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!after.active);
+    assert_eq!(after.disabled_reason.as_deref(), Some("status 404"));
+}
+
+/// Schema compatibility: a row written before `permanent_streak` existed must
+/// stay readable and claimable, with the streak at 0 (it has never failed
+/// permanently as far as this counter goes). Proven the hard way: the column is
+/// dropped with the row already in the table, then the store is reopened so the
+/// inline migration re-adds it.
+#[tokio::test]
+#[file_serial]
+async fn a_row_written_before_the_column_existed_is_still_claimable() {
+    let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let Some((store, pool)) = setup().await else {
+        return;
+    };
+    let sub = add_sub(&store, "https://e.com/hook").await;
+    let key = format!("evt_legacy.{}", sub.id);
+    let now = quark::now();
+    store
+        .enqueue_deliveries(&[row(&key, sub.id, now)])
+        .await
+        .unwrap();
+
+    sqlx::query("ALTER TABLE webhook_deliveries DROP COLUMN permanent_streak")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let reopened: Arc<dyn Store> = Arc::new(PostgresStore::open(&url, false).await.unwrap());
+    let claimed = reopened.claim_due_deliveries(now, 10).await.unwrap();
+    let d = claimed
+        .iter()
+        .find(|d| d.delivery_key == key)
+        .expect("the pre-migration row must still be claimable");
+    assert_eq!(d.attempts, 0);
+    assert_eq!(
+        d.permanent_streak, 0,
+        "a row that predates the column has never failed permanently"
+    );
 }
 
 /// `claim_due_deliveries` must hand back the `tenant_id` a row was enqueued

@@ -166,6 +166,55 @@ describe("Webhooks", () => {
     expect(within(pausedCard).getByTestId("webhook-status-dot")).toHaveClass("bg-muted-foreground");
   });
 
+  it("shows the reason when the system disabled the webhook", async () => {
+    const disabled = {
+      ...SAMPLE_WEBHOOK,
+      id: 20,
+      url: "https://dead.example.com/hook",
+      active: false,
+      disabled_reason: "status 410",
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ webhooks: [disabled] }));
+
+    render(withProviders(<Webhooks />, { withRouter: false }));
+
+    expect(await screen.findByText(/status 410/)).toBeInTheDocument();
+    expect(screen.getByTestId("webhook-status-dot")).toHaveAttribute("aria-label", "Disabled");
+  });
+
+  it("tells a user pause apart from an automatic disable", async () => {
+    const paused = {
+      ...SAMPLE_WEBHOOK,
+      id: 21,
+      url: "https://paused.example.com/hook",
+      active: false,
+      disabled_reason: null,
+    };
+    const disabled = {
+      ...SAMPLE_WEBHOOK,
+      id: 22,
+      url: "https://dead.example.com/hook",
+      active: false,
+      disabled_reason: "status 404",
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ webhooks: [paused, disabled] }));
+
+    render(withProviders(<Webhooks />, { withRouter: false }));
+
+    const cards = await screen.findAllByTestId("webhook-card");
+    const pausedCard = cards.find((c) => within(c).queryByText("https://paused.example.com/hook"));
+    const disabledCard = cards.find((c) => within(c).queryByText("https://dead.example.com/hook"));
+    if (!pausedCard || !disabledCard) throw new Error("expected one card per webhook");
+
+    expect(within(pausedCard).getByTestId("webhook-status-dot")).toHaveClass("bg-muted-foreground");
+    expect(within(pausedCard).getByTestId("webhook-status-dot")).toHaveAttribute("aria-label", "Paused");
+    expect(within(pausedCard).queryByText(/disabled by quark/i)).not.toBeInTheDocument();
+
+    expect(within(disabledCard).getByTestId("webhook-status-dot")).not.toHaveClass("bg-muted-foreground");
+    expect(within(disabledCard).getByTestId("webhook-status-dot")).toHaveAttribute("aria-label", "Disabled");
+    expect(within(disabledCard).getByText(/status 404/)).toBeInTheDocument();
+  });
+
   it("toggles the active state via the switch and calls the API", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
       const method = init?.method ?? "GET";

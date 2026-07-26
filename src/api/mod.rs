@@ -12,7 +12,7 @@ pub(crate) use crate::store::{
 };
 pub(crate) use crate::webhooks::delivery::WebhookDispatcher;
 pub(crate) use crate::webhooks::{
-    self, EventType, SubscriptionKind, WebhookEvent, WebhookSubscription,
+    self, EventType, SubscriptionKind, WebhookEvent, WebhookSubscription, WebhookUrl,
 };
 pub(crate) use crate::{codec, now, permute};
 pub(crate) use axum::body::Bytes;

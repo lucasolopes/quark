@@ -156,13 +156,7 @@ pub(crate) async fn slack_callback(
     let dup = slack_dup_index(&existing, channel_id.as_deref(), label_ref, &url)
         .map(|idx| &existing[idx]);
     if let Some(dup) = dup {
-        let updated = WebhookSubscription {
-            url: url.clone(),
-            label: label.clone().or_else(|| dup.label.clone()),
-            external_id: channel_id.clone().or_else(|| dup.external_id.clone()),
-            connector_id: Some("slack".to_string()),
-            ..dup.clone()
-        };
+        let updated = slack_reinstall_merge(dup, &url, label.as_deref(), channel_id.as_deref());
         let _ = st.store.put_webhook(tenant, &updated).await;
         let clear = format!("{SLACK_STATE_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
         return (
@@ -185,7 +179,7 @@ pub(crate) async fn slack_callback(
     };
     let sub = WebhookSubscription {
         id,
-        url,
+        url: WebhookUrl::new(url),
         events: all_events(),
         secret: String::new(),
         active: true,
@@ -196,6 +190,7 @@ pub(crate) async fn slack_callback(
         external_id: channel_id,
         last_delivery_at: None,
         last_delivery_status: Default::default(),
+        disabled_reason: None,
     };
     if st.store.put_webhook(tenant, &sub).await.is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -210,6 +205,37 @@ pub(crate) async fn slack_callback(
         ],
     )
         .into_response()
+}
+
+/// Builds the row a re-install writes over an existing Slack subscription:
+/// the freshly minted URL, the channel name and id Slack just reported (each
+/// falling back to what was already stored), and the `slack` connector tag.
+/// Everything else is carried over from `dup`. Pure and unit-testable in
+/// isolation from the store/HTTP plumbing above.
+///
+/// The merge also forces `active: true` and clears `disabled_reason`. Since
+/// LUC-141 an `active: false` can come from quark itself, when a destination
+/// answers 404/410 and the subscription is turned off. Reconnecting Slack is
+/// the natural reaction to that, and completing the OAuth flow is as explicit
+/// as flipping the toggle in the panel: inheriting the old verdict would store
+/// the new URL and still deliver nothing.
+fn slack_reinstall_merge(
+    dup: &WebhookSubscription,
+    url: &str,
+    label: Option<&str>,
+    channel_id: Option<&str>,
+) -> WebhookSubscription {
+    WebhookSubscription {
+        url: WebhookUrl::new(url.to_string()),
+        label: label.map(str::to_string).or_else(|| dup.label.clone()),
+        external_id: channel_id
+            .map(str::to_string)
+            .or_else(|| dup.external_id.clone()),
+        connector_id: Some("slack".to_string()),
+        active: true,
+        disabled_reason: None,
+        ..dup.clone()
+    }
 }
 
 /// Finds the index of the existing Slack subscription (if any) that a fresh
@@ -230,7 +256,7 @@ fn slack_dup_index(
         s.kind == SubscriptionKind::Slack
             && ((channel_id.is_some() && s.external_id.as_deref() == channel_id)
                 || (channel_id.is_none() && label.is_some() && s.label.as_deref() == label)
-                || s.url == url)
+                || s.url.expose() == url)
     })
 }
 
@@ -258,7 +284,7 @@ mod tests {
     ) -> WebhookSubscription {
         WebhookSubscription {
             id,
-            url: url.to_string(),
+            url: url.into(),
             events: vec![],
             secret: String::new(),
             active: true,
@@ -269,7 +295,61 @@ mod tests {
             external_id: external_id.map(str::to_string),
             last_delivery_at: None,
             last_delivery_status: Default::default(),
+            disabled_reason: None,
         }
+    }
+
+    /// Reconnecting Slack is the natural reaction to a connection that stopped
+    /// working, and it is an explicit user action, the same as flipping the
+    /// toggle in the panel. So a re-install over a subscription the permanent
+    /// failure logic turned off has to clear that verdict; otherwise the panel
+    /// keeps saying "disabled" and nothing is delivered even though the new URL
+    /// was stored.
+    #[test]
+    fn reinstall_over_a_disabled_subscription_reactivates_it() {
+        let mut dup = slack_sub(
+            1,
+            Some("C012"),
+            Some("#general"),
+            "https://hooks.slack.com/services/T/B/old",
+        );
+        dup.active = false;
+        dup.disabled_reason = Some("status 404".to_string());
+
+        let updated = slack_reinstall_merge(
+            &dup,
+            "https://hooks.slack.com/services/T/B/new",
+            Some("#general"),
+            Some("C012"),
+        );
+
+        assert_eq!(
+            updated.url.expose(),
+            "https://hooks.slack.com/services/T/B/new"
+        );
+        assert!(updated.active, "concluir o OAuth reativa a assinatura");
+        assert_eq!(updated.disabled_reason, None);
+    }
+
+    /// A re-install over a healthy subscription still only refreshes what the
+    /// install actually reports.
+    #[test]
+    fn reinstall_keeps_the_stored_label_and_id_when_slack_reports_none() {
+        let dup = slack_sub(
+            7,
+            Some("C012"),
+            Some("#general"),
+            "https://hooks.slack.com/services/T/B/old",
+        );
+
+        let updated =
+            slack_reinstall_merge(&dup, "https://hooks.slack.com/services/T/B/new", None, None);
+
+        assert_eq!(updated.id, 7);
+        assert_eq!(updated.label.as_deref(), Some("#general"));
+        assert_eq!(updated.external_id.as_deref(), Some("C012"));
+        assert_eq!(updated.connector_id.as_deref(), Some("slack"));
+        assert!(updated.active);
     }
 
     #[test]
