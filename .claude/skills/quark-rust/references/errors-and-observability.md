@@ -1,9 +1,10 @@
 # Errors and observability: the required standard
 
-The repo currently has **no error crate and no logging crate**: 10 hand-written
-error enums, ~20 `Result<_, String>` signatures, 119 `eprintln!` and 123
-`println!`, and key material held as bare `[u8; 32]`. That is legacy, not the
-convention. It is being replaced.
+This is the standard, and the repo is fully on it: every error is a `thiserror`
+enum, every log line is a `tracing` event, `anyhow` covers the binary, and key
+material is wrapped in `secrecy`. There is no `eprintln!` and no
+`Result<_, String>` left in `src/` - if you are about to write either, you are
+reintroducing something that was deliberately removed.
 
 **Rules for any code you write or touch:**
 

@@ -11,12 +11,10 @@ and after go in the PR.
 Epic **LUC-124**. Most of it shipped; what is left is listed under "Still open"
 below.
 
-Done: LUC-125 (one internal-IP classifier), LUC-126 (`secrecy` + `zeroize`),
-LUC-127 (`[lints]` + `clippy.toml`), LUC-128 (graceful shutdown), LUC-129 part 1
-(`thiserror` on the ten enums), LUC-130 (`tracing` + `TraceLayer`, zero
-`eprintln!` left in `src/`), LUC-131 (`anyhow` in the binary), LUC-132
-(`connect_timeout`), LUC-133 (test hygiene), LUC-134 (docs and magic values),
-LUC-135 (CI gates), LUC-136 axum 0.8.
+All 13 shipped. Highlights worth remembering: **zero `eprintln!` and zero
+`Result<_, String>` left in `src/`**; every error is a `thiserror` enum;
+`tracing` + `TraceLayer` replaced the hand-rolled logging; axum 0.8, heed 0.22,
+redis 1.x and sqlx 0.9 are current.
 
 Already tracked elsewhere: **LUC-103** covers the silent analytics drop.
 
@@ -28,7 +26,6 @@ on the redirect path.
 
 | Legacy in the repo | Required instead |
 |---|---|
-| ~17 `Result<_, String>` signatures (`oidc.rs`, `sheets/`, `slack.rs`, `cluster.rs`, `health.rs`, `links_admin.rs`) | a module-level typed enum. `anyhow` is not an option here: it is restricted to the binary |
 | `StoreError` used as the `AnalyticsSink` error | its own error type |
 | 10 `env::var(..).unwrap_or_default()` in `keycloak/mod.rs:82-143` | warn and stay off, like `OidcConfig::from_env` now does |
 | ~26 `expect()` sites | keep, but each needs `#[expect(clippy::expect_used, reason = ..)]` before the lint can be turned on |
