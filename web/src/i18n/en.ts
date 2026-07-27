@@ -72,9 +72,23 @@ export const en = {
     slugHint: "Used in URLs and must be unique. Lowercase letters, numbers and dashes.",
     submit: "Create workspace",
     creating: "Creating…",
+    creatingDetail: "We are setting up the sign-in for your workspace, which lives in a separate system. That part usually takes a few seconds.",
+    creatingSlow: "This is taking longer than usual. Your workspace is already saved, so reloading the page is safe.",
     slugTaken: "That slug is already taken. Pick another.",
     createError: "Could not create the workspace. Try again.",
     switchError: "Could not switch workspaces. Try again.",
+  },
+  workspaceDelete: {
+    menuItem: "Delete workspace",
+    title: "Delete {name}?",
+    description:
+      "This erases the workspace and everything in it: links, clicks, analytics, webhooks, domains and invites. Short links that point here will stop working. There is no undo.",
+    confirmLabel: "Type {slug} to confirm",
+    confirm: "Delete workspace",
+    deleting: "Deleting…",
+    lastWorkspace: "This is your last workspace, so it cannot be deleted. Create another one first.",
+    notOwner: "Only the workspace owner can delete it.",
+    error: "Could not delete the workspace. Try again.",
   },
   links: {
     heading: "Links",

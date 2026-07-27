@@ -2352,6 +2352,49 @@ impl Store for PostgresStore {
         Ok(())
     }
 
+    async fn delete_tenant(&self, id: TenantId) -> Result<(), StoreError> {
+        // One transaction for the whole thing (`begin_write_tx`), which in
+        // cloud mode also does `SET LOCAL app.tenant_id`. That part is not
+        // optional: seven of the tenant-owned tables carry
+        // `FORCE ROW LEVEL SECURITY`, whose policy is
+        // `tenant_id = current_setting('app.tenant_id', true)::bigint`. With
+        // the GUC unset the comparison is NULL, no row matches, and the DELETE
+        // silently removes nothing while reporting success — a half-deleted
+        // workspace with no error to show for it.
+        //
+        // `tenants` and `memberships` have no RLS policy at all (they are not
+        // tenant-owned), so they delete fine inside the same transaction. That
+        // is what keeps the atomicity promise: one transaction, all of it or
+        // none of it.
+        let mut tx = self.begin_write_tx(id).await?;
+        // Driven off the same constant the DDL and the RLS setup use, so a new
+        // tenant-owned table starts being deleted here without anyone
+        // remembering to edit a second list.
+        for table in TENANT_OWNED_TABLES {
+            sqlx::query(AssertSqlSafe(format!(
+                "DELETE FROM {table} WHERE tenant_id = $1"
+            )))
+            .bind(id.0 as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(StoreError::backend)?;
+        }
+        // `memberships` is not in `TENANT_OWNED_TABLES` and needs its own
+        // statement. `users` is global and is deliberately left alone.
+        sqlx::query("DELETE FROM memberships WHERE tenant_id = $1")
+            .bind(id.0 as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(StoreError::backend)?;
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(id.0 as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(StoreError::backend)?;
+        tx.commit().await.map_err(StoreError::backend)?;
+        Ok(())
+    }
+
     async fn get_tenant(&self, id: TenantId) -> Result<Option<Tenant>, StoreError> {
         let row = sqlx::query("SELECT id, name, slug, created FROM tenants WHERE id = $1")
             .bind(id.0 as i64)
@@ -3609,6 +3652,15 @@ impl AnalyticsSink for PostgresStore {
         agg.first_ts = first_ts.unwrap_or(0) as u64;
         agg.last_ts = last_ts.unwrap_or(0) as u64;
         Ok(agg)
+    }
+
+    /// Deliberate no-op, not an oversight: `click_counters`, `stats_meta` and
+    /// `click_events` are all in `TENANT_OWNED_TABLES`, so `delete_tenant`
+    /// already removes them inside the single deletion transaction. Repeating
+    /// the work here would run outside that transaction and could only ever
+    /// delete rows that no longer exist.
+    async fn delete_tenant_data(&self, _tenant: u64) -> Result<(), AnalyticsError> {
+        Ok(())
     }
 }
 

@@ -1335,6 +1335,9 @@ impl quark::keycloak::KeycloakAdmin for FailingKeycloakAdmin {
     ) -> Result<(), quark::keycloak::KcError> {
         Ok(())
     }
+    async fn delete_realm(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+        Ok(())
+    }
 }
 
 /// With `st.keycloak = Some`, accepting an invite must NOT grant membership:

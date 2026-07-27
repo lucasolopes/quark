@@ -572,3 +572,268 @@ async fn pg_wellknown_and_sheets_pks_are_tenant_correct() {
     quark::store::open_postgres(&url).await.unwrap();
     quark::store::open_postgres(&url).await.unwrap();
 }
+
+// --- Workspace deletion (LUC-138): the neighbor must survive ---
+
+/// Writes one row of every tenant-owned entity for `tenant`, offsetting the ids
+/// and names so two tenants seeded through this never collide on a
+/// tenant-less key (the shared alias namespace, the token hash).
+async fn seed_one_of_each(store: &Arc<dyn Store>, tenant: TenantId, nth: u64) {
+    let s = store.clone().for_tenant(tenant);
+    let r = rec("https://example.com/delete-sweep");
+    let link_id = 9100 + nth;
+    s.put_link(link_id, &r).await.unwrap();
+    // The alias namespace is per-domain, not per-tenant: both tenants write
+    // into the shared domain, exactly the arrangement in which a deletion that
+    // keys off the wrong prefix would take the neighbor's alias with it.
+    s.put_alias_and_link(0, &format!("delete-sweep-{nth}"), link_id, &r)
+        .await
+        .unwrap();
+    s.put_webhook(&quark::webhooks::WebhookSubscription {
+        id: 9200 + nth,
+        url: "https://hooks.example.com/delete-sweep".into(),
+        events: vec![quark::webhooks::EventType::LinkCreated],
+        secret: "shh".into(),
+        active: true,
+        created: 0,
+        kind: quark::webhooks::SubscriptionKind::Generic,
+        label: None,
+        connector_id: None,
+        external_id: None,
+        last_delivery_at: None,
+        last_delivery_status: Default::default(),
+        disabled_reason: None,
+    })
+    .await
+    .unwrap();
+    s.put_api_token(&quark::auth::ApiToken {
+        id: 9300 + nth,
+        name: format!("delete-sweep-{nth}"),
+        token_hash: format!("delete-sweep-hash-{nth}"),
+        scopes: vec![quark::auth::Scope::Full],
+        rate_limit_per_min: None,
+        created: 0,
+        tenant_id: tenant,
+    })
+    .await
+    .unwrap();
+    s.put_pixel(&quark::pixel::PixelConfig {
+        id: 9400 + nth,
+        provider: quark::pixel::Provider::Ga4,
+        credentials: quark::pixel::PixelCredentials::default(),
+        active: true,
+        created: 0,
+        last_forward_at: None,
+        last_forward_status: Default::default(),
+    })
+    .await
+    .unwrap();
+    s.put_wellknown("apple-app-site-association", "{\"delete\":\"sweep\"}")
+        .await
+        .unwrap();
+    s.put_link_health(
+        link_id,
+        &quark::store::LinkHealth {
+            checked_at: 1,
+            status: Some(200),
+            healthy: true,
+        },
+    )
+    .await
+    .unwrap();
+    s.bump_visits(link_id).await.unwrap();
+    s.put_sheets_connection(&quark::sheets::SheetsConnection {
+        refresh_token: format!("delete-sweep-refresh-{nth}"),
+        email: format!("owner{nth}@delete-sweep.example.com"),
+        spreadsheet_id: None,
+        last_sync: None,
+        last_status: quark::sheets::SyncStatus::Never,
+    })
+    .await
+    .unwrap();
+    store
+        .put_alert_rule(
+            tenant,
+            link_id,
+            &quark::store::AlertRule {
+                threshold: 10,
+                window_secs: 60,
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .put_tenant(&quark::tenant::Tenant {
+            id: tenant,
+            slug: format!("delete-sweep-{nth}"),
+            name: format!("Delete Sweep {nth}"),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    let user_id = 9500 + nth;
+    store
+        .put_user(&quark::tenant::User {
+            id: user_id,
+            subject: format!("oidc|delete-sweep-{nth}"),
+            email: format!("owner{nth}@delete-sweep.example.com"),
+            display: format!("Owner {nth}"),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    store
+        .put_membership(&quark::tenant::Membership {
+            user_id,
+            tenant_id: tenant,
+            role: quark::tenant::Role::Owner,
+            created: 0,
+        })
+        .await
+        .unwrap();
+}
+
+/// Every row seeded by `seed_one_of_each` is still readable.
+async fn assert_still_has_everything(store: &Arc<dyn Store>, tenant: TenantId, nth: u64) {
+    let s = store.clone().for_tenant(tenant);
+    let link_id = 9100 + nth;
+    assert!(s.get_link(link_id).await.unwrap().is_some(), "link");
+    assert!(
+        s.get_alias(0, &format!("delete-sweep-{nth}"))
+            .await
+            .unwrap()
+            .is_some(),
+        "alias"
+    );
+    assert_eq!(s.list_webhooks().await.unwrap().len(), 1, "webhook");
+    assert_eq!(s.list_api_tokens().await.unwrap().len(), 1, "api token");
+    assert_eq!(s.list_pixels().await.unwrap().len(), 1, "pixel");
+    assert!(
+        s.get_wellknown("apple-app-site-association")
+            .await
+            .unwrap()
+            .is_some(),
+        "wellknown"
+    );
+    assert_eq!(s.list_link_health().await.unwrap().len(), 1, "link health");
+    assert_eq!(s.visits(link_id).await.unwrap(), 1, "visits");
+    assert!(
+        s.get_sheets_connection().await.unwrap().is_some(),
+        "sheets connection"
+    );
+    assert_eq!(
+        store.list_alert_rules(tenant).await.unwrap().len(),
+        1,
+        "alert rule"
+    );
+    assert!(store.get_tenant(tenant).await.unwrap().is_some(), "tenant");
+    assert!(
+        store
+            .get_membership(9500 + nth, tenant)
+            .await
+            .unwrap()
+            .is_some(),
+        "membership"
+    );
+}
+
+/// Nothing seeded by `seed_one_of_each` is readable any more.
+async fn assert_has_nothing_left(store: &Arc<dyn Store>, tenant: TenantId, nth: u64) {
+    let s = store.clone().for_tenant(tenant);
+    let link_id = 9100 + nth;
+    assert!(s.get_link(link_id).await.unwrap().is_none(), "link");
+    assert!(
+        s.get_alias(0, &format!("delete-sweep-{nth}"))
+            .await
+            .unwrap()
+            .is_none(),
+        "alias"
+    );
+    assert!(s.list_webhooks().await.unwrap().is_empty(), "webhook");
+    assert!(s.list_api_tokens().await.unwrap().is_empty(), "api token");
+    assert!(s.list_pixels().await.unwrap().is_empty(), "pixel");
+    assert!(
+        s.get_wellknown("apple-app-site-association")
+            .await
+            .unwrap()
+            .is_none(),
+        "wellknown"
+    );
+    assert!(
+        s.list_link_health().await.unwrap().is_empty(),
+        "link health"
+    );
+    assert_eq!(s.visits(link_id).await.unwrap(), 0, "visits");
+    assert!(
+        s.get_sheets_connection().await.unwrap().is_none(),
+        "sheets connection"
+    );
+    assert!(
+        store.list_alert_rules(tenant).await.unwrap().is_empty(),
+        "alert rule"
+    );
+    assert!(store.get_tenant(tenant).await.unwrap().is_none(), "tenant");
+    assert!(
+        store
+            .get_membership(9500 + nth, tenant)
+            .await
+            .unwrap()
+            .is_none(),
+        "membership"
+    );
+}
+
+/// The battery both backends run: two tenants each hold one of every
+/// tenant-owned entity, one is deleted, and the other must come out of it with
+/// everything still in place. The second half is the assertion that matters —
+/// a `DELETE` with no `WHERE`, or a key range built from the wrong prefix,
+/// passes the first half and fails only here.
+async fn assert_delete_tenant_spares_the_neighbor(store: Arc<dyn Store>) {
+    let doomed = TenantId(31);
+    let neighbor = TenantId(32);
+    seed_one_of_each(&store, doomed, 1).await;
+    seed_one_of_each(&store, neighbor, 2).await;
+
+    store.delete_tenant(doomed).await.unwrap();
+
+    assert_has_nothing_left(&store, doomed, 1).await;
+    assert_still_has_everything(&store, neighbor, 2).await;
+    // `users` is global: a user can be a member of other workspaces, so the
+    // deleted tenant's owner must survive their workspace.
+    assert!(
+        store
+            .get_user_by_subject("oidc|delete-sweep-1")
+            .await
+            .unwrap()
+            .is_some(),
+        "the deleted tenant's owner must keep their global user row"
+    );
+}
+
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_removes_only_that_tenants_data() {
+    // LMDB arm only. The Postgres arm of this battery lives in
+    // `tests/workspace_it.rs`, which runs entirely in cloud mode: the
+    // interesting Postgres failure needs `FORCE ROW LEVEL SECURITY`, which is
+    // only switched on when `multi_tenant` is true, and `ALTER TABLE ... FORCE`
+    // is persistent schema state on the shared test database. Turning it on
+    // from this file would leave every other test in this binary running under
+    // an RLS regime they were not written for.
+    let dir = tempfile::tempdir().unwrap();
+    assert_delete_tenant_spares_the_neighbor(open_store(dir.path()).await.unwrap()).await;
+}
+
+/// Deleting a tenant that does not exist is a no-op, not an error, and above
+/// all not a deletion of somebody else's rows.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_of_an_unknown_id_touches_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_store(dir.path()).await.unwrap();
+    seed_one_of_each(&store, TenantId(41), 3).await;
+
+    store.delete_tenant(TenantId(999)).await.unwrap();
+
+    assert_still_has_everything(&store, TenantId(41), 3).await;
+}

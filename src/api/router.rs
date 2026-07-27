@@ -93,6 +93,10 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route("/admin/logout", post(oidc_logout))
         .route("/admin/me", get(admin_me))
         .route("/admin/tenants", post(admin_tenants_create))
+        .route(
+            "/admin/tenants/{id}",
+            axum::routing::delete(admin_tenants_delete),
+        )
         .route("/admin/workspace/switch", post(admin_workspace_switch))
         .route(
             "/admin/oidc-config",

@@ -481,6 +481,14 @@ impl KeycloakAdmin for HttpKeycloakAdmin {
         self.admin_put_idempotent(&url, &json!(["UPDATE_PASSWORD"]))
             .await
     }
+
+    async fn delete_realm(&self, slug: &str) -> Result<(), KcError> {
+        // `admin_delete` already treats `404` as success, which is exactly the
+        // idempotent contract the trait documents: a realm that is already
+        // gone is a deletion that already happened.
+        self.admin_delete(&format!("{}/admin/realms/{slug}", self.base))
+            .await
+    }
 }
 
 /// Builds the `redirectUris` list for the tenant's `quark` client. Always

@@ -1,4 +1,4 @@
-import { Check, ChevronsUpDown, Plus } from "lucide-react";
+import { Check, ChevronsUpDown, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -7,6 +7,7 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { CreateWorkspaceForm } from "@/components/CreateWorkspaceForm";
+import { DeleteWorkspaceDialog } from "@/components/DeleteWorkspaceDialog";
 import { useT } from "@/i18n";
 import { useMe, useSwitchWorkspace } from "@/lib/queries";
 
@@ -20,11 +21,17 @@ export function WorkspaceSwitcher() {
   const me = useMe();
   const switchWs = useSwitchWorkspace();
   const [createOpen, setCreateOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const memberships = me.data?.memberships;
   const current = me.data?.current_tenant;
   if (!memberships || current == null) return null;
-  const currentName = memberships.find((m) => m.tenant_id === current)?.name ?? "";
+  const currentMembership = memberships.find((m) => m.tenant_id === current);
+  const currentName = currentMembership?.name ?? "";
+  // Roles arrive from `/admin/me` as serde snake_case ("owner", "admin", …);
+  // lowercased here so a serialization change in casing does not silently
+  // hide the item. Only the Owner may delete, and the server enforces it too.
+  const isOwner = currentMembership?.role.toLowerCase() === "owner";
 
   return (
     <>
@@ -64,6 +71,12 @@ export function WorkspaceSwitcher() {
             <Plus className="size-4" aria-hidden="true" />
             {t("shell.createWorkspace")}
           </DropdownMenuItem>
+          {isOwner && (
+            <DropdownMenuItem variant="destructive" onClick={() => setDeleteOpen(true)}>
+              <Trash2 className="size-4" aria-hidden="true" />
+              {t("workspaceDelete.menuItem")}
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -75,6 +88,15 @@ export function WorkspaceSwitcher() {
           <CreateWorkspaceForm onCreated={() => setCreateOpen(false)} />
         </DialogContent>
       </Dialog>
+      {currentMembership && isOwner && (
+        <DeleteWorkspaceDialog
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          tenantId={currentMembership.tenant_id}
+          name={currentMembership.name}
+          slug={currentMembership.slug}
+        />
+      )}
     </>
   );
 }

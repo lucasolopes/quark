@@ -1085,6 +1085,98 @@ impl Store for LmdbStore {
         Ok(())
     }
 
+    async fn delete_tenant(&self, id: TenantId) -> Result<(), StoreError> {
+        let prefix = tprefix(id);
+        let mut wtxn = self.env.write_txn()?;
+
+        // The tenant's link ids, read before the `links` range goes away: the
+        // `aliases` sub-db is the one tenant-owned sub-db NOT keyed by tenant
+        // (P3 made the alias namespace per-domain, so its 8-byte prefix is a
+        // domain id). Deleting the `tprefix` range there would key off a
+        // domain id that happens to equal this tenant id, which is another
+        // tenant's data. Matching on the link the alias points at is exact.
+        //
+        // Known divergence from the Postgres backend, left in on purpose: an
+        // ORPHAN alias (its link was already deleted) matches no link of this
+        // tenant, so it survives here, while Postgres takes it out with
+        // `DELETE ... WHERE tenant_id`. Fixing it would mean putting the tenant
+        // on the alias row, a schema change, and the LMDB path is unreachable
+        // in practice: workspace deletion is cloud-only (`404` in OSS) and
+        // cloud runs Postgres, so this code is exercised by tests only. If a
+        // future change makes LMDB serve multi-tenant traffic, this is the
+        // first thing to revisit.
+        let mut own_links = std::collections::HashSet::new();
+        for item in self.links.prefix_iter(&wtxn, prefix.as_slice())? {
+            let (key, _) = item?;
+            own_links.insert(id_from_tkey(key));
+        }
+        let mut doomed_aliases = Vec::new();
+        for item in self.aliases.iter(&wtxn)? {
+            let (key, link_id) = item?;
+            if own_links.contains(&link_id) {
+                doomed_aliases.push(key.to_vec());
+            }
+        }
+        for key in doomed_aliases {
+            self.aliases.delete(&mut wtxn, &key)?;
+        }
+
+        // Every other tenant-owned sub-db is a contiguous `tprefix` range.
+        // `remap_data_type` gives one `Database<Bytes, Bytes>` view per sub-db
+        // so the value types (BeU64, Str, Bytes) do not each need their own
+        // copy of this loop.
+        //
+        // The array length is tied to `TENANT_OWNED_DBS` (minus `aliases`,
+        // swept above) so a new tenant-owned sub-db cannot be added to that
+        // constant and silently skip this delete: the mismatch is a compile
+        // error. When it breaks, add the sub-db's handle to the list below.
+        let swept: [Database<Bytes, Bytes>; TENANT_OWNED_DBS.len() - 1] = [
+            self.links.remap_data_type::<Bytes>(),
+            self.stats.remap_data_type::<Bytes>(),
+            self.events.remap_data_type::<Bytes>(),
+            self.webhooks.remap_data_type::<Bytes>(),
+            self.api_tokens.remap_data_type::<Bytes>(),
+            self.visits.remap_data_type::<Bytes>(),
+            self.pixels.remap_data_type::<Bytes>(),
+            self.wellknown.remap_data_type::<Bytes>(),
+            self.health.remap_data_type::<Bytes>(),
+            self.sheets.remap_data_type::<Bytes>(),
+            self.alert_rules.remap_data_type::<Bytes>(),
+        ];
+        for db in swept {
+            // Keys are collected first: the prefix iterator borrows the
+            // transaction, and deleting through it needs the transaction
+            // mutably.
+            let mut keys = Vec::new();
+            for item in db.prefix_iter(&wtxn, prefix.as_slice())? {
+                let (key, _) = item?;
+                keys.push(key.to_vec());
+            }
+            for key in keys {
+                db.delete(&mut wtxn, &key)?;
+            }
+        }
+
+        // `memberships` is keyed `user_id || tenant_id`, so the tenant is the
+        // suffix and there is no range to sweep: the whole sub-db is scanned
+        // and only the entries pointing at this tenant go. `users` is global
+        // and is never touched.
+        let mut doomed_memberships = Vec::new();
+        for item in self.memberships.iter(&wtxn)? {
+            let (key, _) = item?;
+            if key.len() == 16 && key[8..16] == prefix {
+                doomed_memberships.push(key.to_vec());
+            }
+        }
+        for key in doomed_memberships {
+            self.memberships.delete(&mut wtxn, &key)?;
+        }
+
+        self.tenants.delete(&mut wtxn, &id.0)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
     async fn get_tenant(&self, id: TenantId) -> Result<Option<Tenant>, StoreError> {
         let rtxn = self.env.read_txn()?;
         match self.tenants.get(&rtxn, &id.0)? {
@@ -1542,6 +1634,16 @@ impl AnalyticsSink for LmdbStore {
 
     async fn stats_for_tenant(&self, tenant: u64) -> Result<Aggregates, AnalyticsError> {
         Ok(self.stats_for_tenant_inner(tenant).await?)
+    }
+
+    /// Deliberate no-op, not an oversight: on this backend the sink and the
+    /// store are the same object, and the click data lives in the
+    /// tenant-prefixed `stats`/`events`/`visits` sub-dbs that
+    /// `Store::delete_tenant` already drops in one write transaction. Doing it
+    /// again here would be a second pass over rows that are already gone,
+    /// outside that transaction.
+    async fn delete_tenant_data(&self, _tenant: u64) -> Result<(), AnalyticsError> {
+        Ok(())
     }
 }
 

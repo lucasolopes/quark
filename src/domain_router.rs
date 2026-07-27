@@ -524,6 +524,9 @@ mod tests {
         async fn put_tenant(&self, _t: &Tenant) -> Result<(), StoreError> {
             unimplemented!()
         }
+        async fn delete_tenant(&self, _id: TenantId) -> Result<(), StoreError> {
+            unimplemented!()
+        }
         async fn get_tenant(&self, _id: TenantId) -> Result<Option<Tenant>, StoreError> {
             unimplemented!()
         }

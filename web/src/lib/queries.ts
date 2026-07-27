@@ -58,6 +58,22 @@ export function useCreateWorkspace() {
   });
 }
 
+/**
+ * Deletes a workspace. `["me"]` must refetch so the switcher and the gate
+ * re-resolve against the remaining memberships, and every per-tenant list has
+ * to reload too: when the deleted workspace was the current one the server
+ * re-points the session at another, so cached links/stats/tokens now belong to
+ * a workspace the session no longer looks at. Same reasoning as
+ * `useSwitchWorkspace`, hence the same blanket invalidation.
+ */
+export function useDeleteWorkspace() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (tenantId: number) => api.deleteWorkspace(tenantId),
+    onSuccess: () => { void client.invalidateQueries(); },
+  });
+}
+
 /** Switches the current workspace; invalidates ALL queries (see `useCreateWorkspace`). */
 export function useSwitchWorkspace() {
   const client = useQueryClient();

@@ -628,6 +628,22 @@ pub trait Store: Send + Sync + 'static {
     async fn put_tenant(&self, t: &Tenant) -> Result<(), StoreError>;
     /// Reads a tenant by id.
     async fn get_tenant(&self, id: TenantId) -> Result<Option<Tenant>, StoreError>;
+    /// Deletes a tenant and EVERY row that belongs to it. Irreversible, and
+    /// idempotent: an id that does not exist deletes nothing and is not an
+    /// error.
+    ///
+    /// Postgres: one transaction over the tables in `TENANT_OWNED_TABLES`,
+    /// plus `memberships` and the `tenants` row. Either all of it goes or none
+    /// of it does, so a failure leaves the workspace whole and the user can
+    /// try again. `users` is global and is never touched: the user may be a
+    /// member of other workspaces.
+    ///
+    /// LMDB: the tenant's key range in each of the `TENANT_OWNED_DBS`, its
+    /// memberships and its `tenants` entry, in a single write transaction.
+    /// `sessions` is NOT tenant-prefixed on this backend, so the session
+    /// outlives the deletion here; it dies on the next request anyway, because
+    /// in cloud mode `admin_guard` re-resolves the membership every time.
+    async fn delete_tenant(&self, id: TenantId) -> Result<(), StoreError>;
     /// Lists every tenant. Cloud-only caller: the boot-time subdomain backfill
     /// (multi-tenancy P3), which needs to ensure every existing tenant has its
     /// `<slug>.<suffix>` `domains` row. Small table, no pagination.

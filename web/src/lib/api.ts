@@ -85,6 +85,17 @@ export const api = {
   async createWorkspace(name: string, slug: string): Promise<{ id: number; name: string; slug: string; created: number }> {
     return jsonOrThrow(await req("/admin/tenants", { method: "POST", body: JSON.stringify({ name, slug }) }));
   },
+  /**
+   * Deletes a workspace and everything in it (cloud only). Irreversible.
+   * 403 when the caller is not the Owner, 409 when it is the caller's last
+   * workspace, 404 when the workspace is not theirs (existence is never
+   * leaked). On success the server re-points the session at a remaining
+   * workspace, so the caller stays signed in.
+   */
+  async deleteWorkspace(tenantId: number): Promise<void> {
+    const res = await req(`/admin/tenants/${tenantId}`, { method: "DELETE" });
+    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  },
   /** Switches the session's current workspace (cloud only). 403 if the user has no membership in `tenantId`. */
   async switchWorkspace(tenantId: number): Promise<void> {
     const res = await req("/admin/workspace/switch", { method: "POST", body: JSON.stringify({ tenant_id: tenantId }) });

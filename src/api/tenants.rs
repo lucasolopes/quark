@@ -339,6 +339,134 @@ pub(crate) async fn admin_tenants_create(
     Json(tenant).into_response()
 }
 
+/// `DELETE /admin/tenants/:id`: workspace deletion (cloud only, LUC-138).
+/// Irreversible: every row the tenant owns goes, the click events are queued
+/// for deletion in the analytics backend, and the tenant's Keycloak realm is
+/// removed.
+///
+/// Authorization, in this order, and every step matters:
+/// 1. OSS answers `404` before any credential is looked at, like the other
+///    workspace endpoints.
+/// 2. A session is required, and an API token is deliberately NOT accepted:
+///    destroying a workspace is not an automation operation. Same session-only
+///    path `admin_tenants_create` takes.
+/// 3. No membership in the target tenant is `404`, NOT `403`. A `403` would
+///    confirm the tenant exists, which is customer enumeration; the answer has
+///    to be indistinguishable from an id that never existed.
+/// 4. Only `Owner`. `Admin` is refused even though `role_scopes` grants it the
+///    same scopes (`src/tenant.rs`): the Admin role is derived from an IdP
+///    claim group, so whoever controls the IdP could otherwise grant themselves
+///    the workspace's destruction. `Owner` only ever comes from creating the
+///    tenant or accepting an invite.
+/// 5. The caller's last workspace is refused with `409`, so nobody deletes
+///    themselves into having nowhere to land.
+///
+/// Order of effects (a spec decision, not an implementation detail): the store
+/// transaction commits FIRST, and Keycloak/analytics follow best-effort. The
+/// inverse would leave a live workspace whose realm is gone, which nobody can
+/// log into. A failed `delete_realm` orphans a realm and logs; there is no
+/// reaper, and that cost is accepted in the design doc.
+///
+/// No `csrf_guard` here, unlike `oidc_logout`. The session cookie is
+/// `SameSite=None; Secure`, so a cross-site caller does carry it, but a `DELETE`
+/// is never a CORS simple request: the browser always preflights it, and the
+/// preflight is answered only for the configured origin allowlist (`router.rs`
+/// builds the CORS layer without `Any` and with credentials allowed). A
+/// cross-site page therefore never gets to send this request at all. The guard
+/// exists for `oidc_logout` because a `POST` with a simple content type IS sent
+/// without a preflight. Keep the allowlist strict: it is what protects this
+/// endpoint.
+pub(crate) async fn admin_tenants_delete(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(session) = current_session(&st, &headers).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let user_id = session.user_id;
+    let target = crate::tenant::TenantId(id);
+    match st.store.get_membership(user_id, target).await {
+        // A tenant the caller has no membership in is reported exactly like a
+        // tenant that does not exist. Do not "improve" this into a 403.
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(Some(m)) if m.role != crate::tenant::Role::Owner => {
+            return StatusCode::FORBIDDEN.into_response()
+        }
+        Ok(Some(_)) => {}
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    let memberships = match st.store.list_memberships_for_user(user_id).await {
+        Ok(m) => m,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if memberships.len() <= 1 {
+        return (StatusCode::CONFLICT, "cannot delete your only workspace").into_response();
+    }
+    // Everything the delete needs to know about the tenant has to be read
+    // BEFORE it: afterwards the rows are gone and there is no slug to name the
+    // realm with, and no host list to evict from the router cache.
+    let slug = match st.store.get_tenant(target).await {
+        Ok(Some(t)) => Some(t.slug),
+        Ok(None) => None,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    // Not best-effort: this read happens BEFORE the delete, and a swallowed
+    // error would hand the loop at the bottom an empty host list, so not even
+    // the node serving this request would evict its own router cache and the
+    // deleted workspace's links would keep redirecting until the TTL expires.
+    // Failing here costs nothing, the workspace is still intact.
+    let hosts: Vec<String> = match st.store.list_domains(target).await {
+        Ok(domains) => domains.into_iter().map(|d| d.host).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, tenant_id = id, "workspace delete aborted: domain list failed");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
+
+    if let Err(e) = st.store.delete_tenant(target).await {
+        // The whole delete is one transaction, so nothing was removed and the
+        // caller can retry against an intact workspace.
+        tracing::warn!(error = %e, tenant_id = id, "workspace delete failed");
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    tracing::info!(tenant_id = id, user_id, "workspace deleted");
+
+    // Best-effort from here down: the workspace is already gone, so none of
+    // these may turn a successful deletion into an error response.
+    if let Err(e) = st.sink.delete_tenant_data(id).await {
+        tracing::warn!(error = %e, tenant_id = id, "tenant analytics delete failed");
+    }
+    if let (Some(kc), Some(slug)) = (&st.keycloak, &slug) {
+        if let Err(e) = kc.delete_realm(slug).await {
+            tracing::warn!(error = %e, slug = %slug, tenant_id = id, "realm delete failed");
+        }
+    }
+
+    // Deleting the workspace the caller is sitting in must not log them out.
+    // `sessions` is tenant-owned, so the row just went down with the tenant;
+    // re-issue it against a workspace they still belong to (step 5 guarantees
+    // one exists). A delete of some OTHER workspace leaves the session alone.
+    if session.tenant_id == target {
+        if let Some(next) = memberships.iter().find(|m| m.tenant_id != target) {
+            let mut session = session;
+            session.tenant_id = next.tenant_id;
+            if let Err(e) = st.store.put_session(next.tenant_id, &session).await {
+                tracing::warn!(error = %e, tenant_id = id, "session reissue after delete failed");
+            }
+        }
+    }
+
+    for host in hosts {
+        st.host_router.invalidate(&host).await;
+    }
+    st.oidc_tenants.invalidate(target).await;
+    StatusCode::NO_CONTENT.into_response()
+}
+
 #[derive(Deserialize)]
 pub(crate) struct SwitchReq {
     tenant_id: u64,

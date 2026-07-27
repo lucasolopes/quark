@@ -8,8 +8,9 @@ function me(body: object) { return new Response(JSON.stringify(body), { status: 
 const cloudMe = {
   authenticated: true, oidc_enabled: true, current_tenant: 1,
   memberships: [
-    { tenant_id: 1, name: "Acme", slug: "acme", role: "Owner" },
-    { tenant_id: 2, name: "Beta", slug: "beta", role: "Member" },
+    // The wire format is serde snake_case, so the server sends lowercase roles.
+    { tenant_id: 1, name: "Acme", slug: "acme", role: "owner" },
+    { tenant_id: 2, name: "Beta", slug: "beta", role: "member" },
   ],
 };
 
@@ -35,5 +36,21 @@ describe("WorkspaceSwitcher", () => {
     await waitFor(() => {
       expect(spy.mock.calls.some((c) => String(c[0]).includes("/admin/workspace/switch") && JSON.parse(String(c[1]?.body)).tenant_id === 2)).toBe(true);
     });
+  });
+
+  it("offers deletion when the current workspace's role is owner", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(me(cloudMe));
+    render(withProviders(<WorkspaceSwitcher />));
+    await userEvent.click(await screen.findByRole("button", { name: /acme/i }));
+    expect(await screen.findByText(/delete workspace/i)).toBeInTheDocument();
+  });
+
+  it("does not offer deletion to a non-owner of the current workspace", async () => {
+    // Same memberships, but the session sits on Beta, where the user is a Member.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(me({ ...cloudMe, current_tenant: 2 }));
+    render(withProviders(<WorkspaceSwitcher />));
+    await userEvent.click(await screen.findByRole("button", { name: /beta/i }));
+    expect(await screen.findByText(/create workspace/i)).toBeInTheDocument();
+    expect(screen.queryByText(/delete workspace/i)).not.toBeInTheDocument();
   });
 });

@@ -74,9 +74,23 @@ export const ptBR: Messages = {
     slugHint: "Usado nas URLs e precisa ser único. Letras minúsculas, números e hífens.",
     submit: "Criar workspace",
     creating: "Criando…",
+    creatingDetail: "Estamos preparando o login do seu workspace, que fica em outro sistema. Essa parte costuma levar alguns segundos.",
+    creatingSlow: "Está demorando mais que o normal. Seu workspace já foi salvo, então pode recarregar a página sem problema.",
     slugTaken: "Esse slug já está em uso. Escolha outro.",
     createError: "Não deu pra criar o workspace. Tente de novo.",
     switchError: "Não deu pra mudar de workspace. Tente de novo.",
+  },
+  workspaceDelete: {
+    menuItem: "Excluir workspace",
+    title: "Excluir {name}?",
+    description:
+      "Isso apaga o workspace e tudo que está dentro dele: links, cliques, analytics, webhooks, domínios e convites. Os links curtos que apontam pra cá param de funcionar. Não tem como desfazer.",
+    confirmLabel: "Digite {slug} para confirmar",
+    confirm: "Excluir workspace",
+    deleting: "Excluindo…",
+    lastWorkspace: "Esse é seu último workspace, então não dá pra excluir. Crie outro antes.",
+    notOwner: "Só o dono do workspace pode excluir.",
+    error: "Não deu pra excluir o workspace. Tente de novo.",
   },
   links: {
     heading: "Links",

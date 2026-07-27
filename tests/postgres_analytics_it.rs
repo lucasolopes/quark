@@ -574,3 +574,47 @@ async fn stats_per_link_unchanged_by_tenant_aggregate_pg() {
     let st_b = s.stats(401).await.unwrap().unwrap();
     assert_eq!(st_b.aggregates.total, 1);
 }
+
+/// `delete_tenant_data` on the Postgres sink is a documented no-op: the click
+/// tables (`click_counters`, `stats_meta`, `click_events`) are all in
+/// `TENANT_OWNED_TABLES`, so `Store::delete_tenant` already removes them
+/// inside the deletion transaction. Deleting them a second time here would be
+/// a second, non-atomic pass over the same rows.
+///
+/// The assertion that matters is tenant B's: whatever this call does, it must
+/// never reach a tenant that was not asked for.
+#[tokio::test]
+#[file_serial]
+async fn delete_tenant_data_is_a_no_op_and_spares_other_tenants_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let tenant_a = TenantId(30);
+    let tenant_b = TenantId(31);
+    s.put_link(tenant_a, 500, &rec_for(tenant_a, "https://example.com/a"))
+        .await
+        .unwrap();
+    s.put_link(tenant_b, 600, &rec_for(tenant_b, "https://example.com/b"))
+        .await
+        .unwrap();
+    let mut a1 = ev(500, 1_752_300_000);
+    a1.tenant_id = tenant_a.0;
+    let mut b1 = ev(600, 1_752_300_100);
+    b1.tenant_id = tenant_b.0;
+    s.record_batch(&[a1]).await.unwrap();
+    s.record_batch(&[b1]).await.unwrap();
+
+    s.delete_tenant_data(tenant_a.0).await.unwrap();
+
+    assert_eq!(
+        s.stats_for_tenant(tenant_b.0).await.unwrap().total,
+        1,
+        "tenant B's clicks must survive a deletion aimed at tenant A"
+    );
+    assert_eq!(
+        s.stats_for_tenant(tenant_a.0).await.unwrap().total,
+        1,
+        "the sink call itself removes nothing: Store::delete_tenant owns the removal"
+    );
+}

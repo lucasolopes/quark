@@ -54,6 +54,11 @@ pub trait KeycloakAdmin: Send + Sync + 'static {
     /// Triggers Keycloak's `UPDATE_PASSWORD` required-action email so the user
     /// sets their own password. quark never sees or stores it.
     async fn send_set_password_email(&self, slug: &str, user_id: &str) -> Result<(), KcError>;
+
+    /// Deletes the tenant's realm. A `404` (the realm is already gone) counts
+    /// as success, for the same reason a `409` counts as success in the
+    /// `ensure_*` calls: the operation is idempotent.
+    async fn delete_realm(&self, slug: &str) -> Result<(), KcError>;
 }
 
 /// SMTP settings for the realms Keycloak provisions, read once from the
@@ -299,6 +304,14 @@ pub mod testing {
                 .lock()
                 .unwrap()
                 .push(format!("send_set_password_email({slug},{user_id})"));
+            Ok(())
+        }
+
+        async fn delete_realm(&self, slug: &str) -> Result<(), KcError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("delete_realm({slug})"));
             Ok(())
         }
     }
