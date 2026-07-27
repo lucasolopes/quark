@@ -72,7 +72,7 @@ serial_test = { version = "3", features = ["file_locks"] }
 tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"
 tower = "0.5"
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
 sqids = "0.4.2"
 harsh = "0.2.2"
 hmac = "0.13.0"
