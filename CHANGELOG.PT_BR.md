@@ -21,6 +21,54 @@ tabelas do ClickHouse não estão cobertos.
 
 ## [Não lançado]
 
+## [0.4.1] - 2026-07-27
+
+### Adicionado
+
+- **Exclusão de workspace.** `DELETE /admin/tenants/{id}` remove o workspace e
+  tudo que pertence a ele, numa transação só, mais os cliques no ClickHouse e o
+  realm no Keycloak. Só o `Owner` exclui, o último workspace não pode ser
+  excluído, e um tenant do qual quem chama não é membro responde `404` e não
+  `403`, para o endpoint não servir de enumeração de workspaces. O painel exige
+  que o slug seja digitado antes de prosseguir. Excluir libera o slug para
+  reuso. O `docs/WORKSPACES.PT_BR.md` detalha o que some na hora e o que some
+  depois.
+- **A criação de workspace explica a espera.** A requisição provisiona realm,
+  client, mapper e usuário no Keycloak, então é legitimamente lenta. O painel
+  passa a dizer que um login está sendo preparado e, passado um limite,
+  acrescenta que está demorando mais que o normal e que recarregar é seguro.
+- `disabled_reason` na representação do webhook em `GET /admin/webhooks`, que
+  permite ao painel distinguir uma subscription que o usuário pausou de uma que
+  o sistema desativou.
+
+### Corrigido
+
+- **A URL de destino dos webhooks não vai mais para o log.** No Discord, no
+  Slack, no Telegram e nos conectores genéricos o token fica no path da URL, ou
+  seja, a URL é a credencial. Ela saía inteira em dez pontos de log. O campo
+  agora é um `WebhookUrl` cujo `Display` imprime só host e porta, e o `reqwest`
+  não aceita esse tipo sem um `expose()` explícito, então reintroduzir o
+  vazamento passa a ser erro de compilação em vez de descuido de revisão. O
+  segredo de assinatura da subscription também era legível pelo `Debug` do
+  struct, e deixou de ser.
+- **Um destino de webhook morto não é mais retentado para sempre.** `404` e
+  `410` significam que o destino não existe mais, mas toda resposta não-2xx era
+  tratada igual, então um endpoint removido gastava o orçamento inteiro de
+  tentativas a cada evento, indefinidamente. Esses dois status passam a ter uma
+  tentativa de confirmação, e o destino que falha nela é desativado com o motivo
+  registrado e visível no painel. `429`, `5xx`, timeout e erro de transporte
+  mantêm o backoff atual. `400` e `422` ficaram de fora de propósito: costumam
+  indicar que o nosso payload está errado, e desativar a integração do cliente
+  por bug nosso é o pior desfecho possível.
+- **Reconectar o Slack por cima de uma subscription desativada agora a
+  reativa.** O merge do OAuth herdava `active: false` e o motivo antigo, então a
+  correção óbvia (reconectar) parecia funcionar e não entregava nada.
+- **Os eventos de log do `main.rs` voltaram a ter campos.** Oito pontos montavam
+  JSON à mão dentro da macro, o que sob `QUARK_LOG_FORMAT=json` produzia um
+  objeto serializado escapado dentro de `message`: os valores viravam texto em
+  vez de campos consultáveis. Seis deles logavam erro em `info`, nível que
+  nenhum alerta baseado em severidade jamais pegaria.
+
 ## [0.4.0] - 2026-07-26
 
 ### Alterado
@@ -138,7 +186,8 @@ virou instalável.
 - Núcleo AGPL-3.0-only com um CLA coletado em cada pull request.
 - Relato privado de vulnerabilidade e política de segurança escrita.
 
-[Não lançado]: https://github.com/lucasolopes/quark/compare/v0.4.0...HEAD
+[Não lançado]: https://github.com/lucasolopes/quark/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/lucasolopes/quark/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/lucasolopes/quark/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/lucasolopes/quark/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/lucasolopes/quark/compare/v0.2.0...v0.3.0

@@ -20,6 +20,53 @@ layout are not covered.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-27
+
+### Added
+
+- **Workspace deletion.** `DELETE /admin/tenants/{id}` removes a workspace and
+  everything scoped to it, in one transaction, plus its ClickHouse click events
+  and its Keycloak realm. Only the `Owner` can delete, the last remaining
+  workspace cannot be deleted, and a tenant the caller is not a member of
+  answers `404` rather than `403` so the endpoint cannot be used to enumerate
+  workspaces. The panel asks for the slug to be typed before it will proceed.
+  Deleting frees the slug for reuse. See `docs/WORKSPACES.md` for what is
+  removed immediately and what is removed eventually.
+- **Workspace creation explains the wait.** The request provisions a realm, a
+  client, a mapper and a user in Keycloak, so it is legitimately slow. The
+  panel now says a sign-in is being prepared, and after a threshold adds that
+  it is taking longer than usual and that reloading is safe.
+- `disabled_reason` on the webhook representation in `GET /admin/webhooks`,
+  which lets the panel tell a subscription the user paused from one the system
+  disabled.
+
+### Fixed
+
+- **Webhook destination URLs no longer reach the logs.** For Discord, Slack,
+  Telegram and the generic connectors the token lives in the URL path, so the
+  URL is the credential. It was printed in full at ten log sites. The field is
+  now a `WebhookUrl` whose `Display` prints host and port only, and `reqwest`
+  does not accept it without an explicit `expose()`, so reintroducing the leak
+  is a compile error rather than a review miss. The subscription's signing
+  secret was also readable through the struct's `Debug`, and no longer is.
+- **A dead webhook destination is no longer retried forever.** `404` and `410`
+  mean the destination is gone, but every non-2xx response was treated the
+  same, so a removed endpoint burned the full attempt budget on every event,
+  indefinitely. Those two statuses now get one confirmation attempt, and a
+  destination that fails it is disabled with the reason recorded and shown in
+  the panel. `429`, `5xx`, timeouts and transport errors keep the existing
+  backoff. `400` and `422` are deliberately not treated as permanent: they
+  usually mean our payload is wrong, and disabling a customer's integration
+  over our own bug is the worst outcome available.
+- **Reconnecting Slack over a disabled subscription reactivates it.** The OAuth
+  merge inherited `active: false` and the old reason, so the obvious fix
+  (reconnect) appeared to work and delivered nothing.
+- **Log events from `main.rs` carry fields again.** Eight sites built JSON by
+  hand inside the log macro, which under `QUARK_LOG_FORMAT=json` produced a
+  serialized object escaped inside `message`, so the values were text rather
+  than queryable fields. Six of them logged errors at `info`, which no alert
+  keyed on severity would ever match.
+
 ## [0.4.0] - 2026-07-26
 
 ### Changed
@@ -130,7 +177,8 @@ became installable.
 - AGPL-3.0-only core with a CLA collected on every pull request.
 - Private vulnerability reporting and a written security policy.
 
-[Unreleased]: https://github.com/lucasolopes/quark/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/lucasolopes/quark/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/lucasolopes/quark/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/lucasolopes/quark/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/lucasolopes/quark/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/lucasolopes/quark/compare/v0.2.0...v0.3.0
