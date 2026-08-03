@@ -114,6 +114,38 @@ async fn business_has_no_domain_ceiling() {
     assert!(require_quota(&st, t, Quota::Domains, 10_000).await.is_ok());
 }
 
+#[tokio::test]
+#[serial_test::file_serial]
+async fn free_tenant_gets_402_on_the_fourth_domain() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let (st, t) = state_with_plan("free").await;
+    // Seed three domains directly through the store: this test is about the
+    // ceiling, not about the create endpoint's own validation.
+    for i in 0..3u64 {
+        let id = st.store.next_domain_id().await.unwrap();
+        st.store
+            .put_domain(&quark::domain::Domain {
+                id,
+                tenant_id: t,
+                host: format!("d{i}.example.com"),
+                token: String::new(),
+                status: quark::domain::DomainStatus::Verified,
+                created: 0,
+                verified_at: None,
+            })
+            .await
+            .unwrap();
+    }
+    let denied =
+        quark::api::entitlement::require_quota(&st, t, quark::api::entitlement::Quota::Domains, 3)
+            .await
+            .unwrap_err();
+    assert_eq!(denied.allowed, Some(3));
+}
+
 /// End-to-end proof that the HTTP handler, not just `require` in isolation,
 /// is wired to the gate: a Free-plan tenant creating a webhook through the
 /// real admin route gets `402`, not `201`.

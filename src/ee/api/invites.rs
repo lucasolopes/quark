@@ -55,6 +55,23 @@ pub(crate) async fn admin_invites_create(
     if email.is_empty() || !email.contains('@') {
         return (StatusCode::BAD_REQUEST, "invalid email").into_response();
     }
+    // A pending invite does not occupy a seat: only accepted memberships count
+    // toward the ceiling, or a declined/expired invite would block the seat
+    // forever.
+    let held = match st.store.count_memberships(p.tenant).await {
+        Ok(n) => n,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if let Err(denied) = crate::api::entitlement::require_quota(
+        &st,
+        p.tenant,
+        crate::api::entitlement::Quota::Members,
+        held,
+    )
+    .await
+    {
+        return denied.into_response();
+    }
     let token = generate_token();
     let id = match st.store.next_invite_id().await {
         Ok(i) => i,
@@ -271,6 +288,11 @@ pub(crate) async fn admin_oidc_config_put(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
+    if let Err(denied) =
+        crate::api::entitlement::require(&st, p.tenant, crate::api::entitlement::Feature::Sso).await
+    {
+        return denied.into_response();
+    }
     let ip = client_ip(&headers, &st.real_ip_header, None);
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();

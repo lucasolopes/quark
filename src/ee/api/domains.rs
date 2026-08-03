@@ -125,6 +125,20 @@ pub(crate) async fn admin_domains_create(
     if is_internal_host(&host) || st.public_host.as_deref() == Some(host.as_str()) {
         return (StatusCode::BAD_REQUEST, "host not allowed").into_response();
     }
+    let held = match st.store.list_domains(p.tenant).await {
+        Ok(d) => d.len() as u64,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if let Err(denied) = crate::api::entitlement::require_quota(
+        &st,
+        p.tenant,
+        crate::api::entitlement::Quota::Domains,
+        held,
+    )
+    .await
+    {
+        return denied.into_response();
+    }
     let id = match st.store.next_domain_id().await {
         Ok(i) => i,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
