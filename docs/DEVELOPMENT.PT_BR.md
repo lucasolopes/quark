@@ -83,9 +83,29 @@ para nunca apontarem para um deploy real por acidente:
 Aponte para os serviços do compose:
 
 ```bash
-export QUARK_TEST_DATABASE_URL=postgres://quark:quark@localhost:5432/quark
+export QUARK_TEST_DATABASE_URL=postgres://quark_test:quark_test@localhost:5432/quark_test
 export QUARK_TEST_VALKEY_URL=redis://localhost:6379
 export QUARK_TEST_CLICKHOUSE_URL=http://localhost:8123
+```
+
+`quark_test` não é a role `quark` do compose, e isso importa. A role `quark` é o
+`POSTGRES_USER` do container, que o Postgres cria como **superusuário**, e
+superusuário fica isento de Row Level Security a menos que a role tenha
+`NOBYPASSRLS`. Como o `FORCE ROW LEVEL SECURITY` é o que isola um tenant do
+outro no modo cloud, rodar a suíte como superusuário testaria só o predicado
+`WHERE tenant_id` da aplicação e todo teste de isolamento passaria à toa. O
+`docker/initdb/10-test-role.sql` cria a `quark_test` (sem superusuário, com
+`NOBYPASSRLS`, dona do próprio banco) no primeiro `docker compose up`, e o CI
+cria a mesma role. Aponte a `QUARK_TEST_DATABASE_URL` para uma role
+não-superusuária ou o teste
+`cloud_force_rls_blocks_raw_sql_without_tenant_predicate` falha de propósito.
+
+Se o volume do compose for anterior a esse script de init, crie a role na mão:
+
+```bash
+docker compose exec postgres psql -U quark -d quark \
+  -c "CREATE ROLE quark_test LOGIN PASSWORD 'quark_test' NOSUPERUSER NOBYPASSRLS NOCREATEROLE;" \
+  -c "CREATE DATABASE quark_test OWNER quark_test;"
 ```
 
 Esses testes compartilham um banco e o resetam entre casos. Todo caso que toca o
@@ -103,6 +123,15 @@ vez:
 cargo test -- --test-threads=1
 # ou rode um arquivo gated só
 cargo test --test postgres_store_it -- --test-threads=1
+```
+
+O `cargo test` é fail-fast: ele para no primeiro binário de teste que falha e
+esconde os demais, então um banco compartilhado quebrado aparece como uma falha
+quando na verdade são dezenas. Use `--no-fail-fast` (como o CI faz) para ver o
+quadro inteiro:
+
+```bash
+cargo test --no-fail-fast
 ```
 
 ## Painel web

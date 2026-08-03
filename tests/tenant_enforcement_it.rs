@@ -25,6 +25,7 @@ use quark::store::{OutboxRow, Record, Store};
 use quark::tenant::{Membership, Role, TenantId};
 use quark::webhooks::{EventType, SubscriptionKind, WebhookSubscription};
 use serial_test::file_serial;
+use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -93,6 +94,96 @@ async fn cloud_force_rls_is_fail_closed() {
             .len(),
         1,
         "owning tenant must list its own link"
+    );
+}
+
+/// The proof that RLS is doing the work, not the app-level `WHERE tenant_id`
+/// predicate: this issues raw SQL with NO tenant predicate at all, so the only
+/// thing between the query and the other tenant's row is the database policy.
+///
+/// Precondition: the connecting role must be non-superuser and `NOBYPASSRLS`,
+/// like production. Postgres exempts superusers from RLS, so running the suite
+/// as `postgres` would make this (and every other isolation test) pass
+/// vacuously. Asserted explicitly so a misconfigured environment fails loudly
+/// instead of silently testing nothing. See `docs/DEVELOPMENT.md`.
+#[tokio::test]
+#[file_serial]
+async fn cloud_force_rls_blocks_raw_sql_without_tenant_predicate() {
+    let Some(url) = std::env::var("QUARK_TEST_DATABASE_URL").ok() else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = PostgresStore::open(&url, true).await.unwrap();
+    store.reset_for_tests().await.unwrap();
+    let bare = Arc::new(store) as Arc<dyn Store>;
+    bare.clone()
+        .for_tenant(TenantId(1))
+        .put_link(900, &rec("https://tenant-one.example/rls"))
+        .await
+        .unwrap();
+    bare.clone()
+        .for_tenant(TenantId(2))
+        .put_link(901, &rec("https://tenant-two.example/rls"))
+        .await
+        .unwrap();
+
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .unwrap();
+
+    let (is_superuser, bypasses_rls): (bool, bool) =
+        sqlx::query_as("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        !is_superuser && !bypasses_rls,
+        "QUARK_TEST_DATABASE_URL must point at a NOSUPERUSER/NOBYPASSRLS role \
+         (superusers bypass RLS, which makes every isolation test pass \
+          vacuously). See docs/DEVELOPMENT.md."
+    );
+
+    // Read side. `SELECT id FROM links` with no predicate whatsoever: under
+    // FORCE RLS the policy narrows it to the tenant in `app.tenant_id`.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('app.tenant_id', '1', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let visible: Vec<i64> = sqlx::query_scalar("SELECT id FROM links ORDER BY id")
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        visible,
+        vec![900],
+        "an unpredicated SELECT must see only the RLS session's tenant"
+    );
+
+    // Write side. A DELETE aimed straight at the other tenant's row matches
+    // nothing: the policy filters it out before the row is touched.
+    let deleted = sqlx::query("DELETE FROM links WHERE id = 901")
+        .execute(&mut *tx)
+        .await
+        .unwrap()
+        .rows_affected();
+    assert_eq!(
+        deleted, 0,
+        "an unpredicated DELETE must not reach another tenant's row"
+    );
+    tx.commit().await.unwrap();
+
+    // And the target row really is still there for its owner.
+    assert!(
+        bare.clone()
+            .for_tenant(TenantId(2))
+            .get_link(901)
+            .await
+            .unwrap()
+            .is_some(),
+        "the other tenant's row must have survived the cross-tenant DELETE"
     );
 }
 
