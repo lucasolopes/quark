@@ -208,6 +208,7 @@ impl TestState {
         });
         let webhooks = self.webhooks.unwrap_or_else(test_webhook_dispatcher);
         Arc::new(AppState {
+            license: Default::default(),
             cache,
             store: self.store,
             key: self.key,
@@ -229,11 +230,11 @@ impl TestState {
             host_router,
             dns: self.dns,
             tenant_domain_suffix: self.tenant_domain_suffix,
-            oidc_tenants: quark::oidc::TenantOidcCache::new(),
             #[cfg(feature = "ee")]
             ee: quark::ee::EeState {
                 keycloak: self.keycloak,
                 keycloak_base_url: self.keycloak_base_url,
+                oidc_tenants: quark::oidc::TenantOidcCache::new(),
             },
         })
     }

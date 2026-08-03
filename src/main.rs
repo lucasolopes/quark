@@ -440,6 +440,10 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(feature = "ee")]
     let ee = quark::ee::boot(&store, multi_tenant, tenant_domain_suffix.as_deref()).await;
 
+    // Edicao em que este processo roda (LUC-146). Resolvido uma vez, sem rede.
+    let license = quark::api::license::LicenseStatus::resolve();
+    tracing::info!(edition = license.edition(), "license resolved");
+
     let state = Arc::new(AppState {
         cache,
         store,
@@ -459,10 +463,10 @@ async fn main() -> anyhow::Result<()> {
         sheets_api: Some(sheets_api),
         slack,
         multi_tenant,
+        license,
         host_router,
         dns,
         tenant_domain_suffix,
-        oidc_tenants: quark::oidc::TenantOidcCache::new(),
         #[cfg(feature = "ee")]
         ee,
     });
