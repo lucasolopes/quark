@@ -10,20 +10,28 @@ use crate::tenant::TenantId;
 
 /// The tenant's plan, through the cache.
 ///
-/// A store error resolves to `Free` rather than failing the request: a blip in
-/// the plan lookup must not take a paying tenant's product down, and `Free` is
-/// the safe direction (it can only deny, never hand out a better plan).
+/// A store error resolves to `Free` for THIS request only, and is not written
+/// to the cache: a blip in the plan lookup must not take a paying tenant's
+/// product down for up to `PLAN_TTL_SECS`, so the next request tries the
+/// store again instead of being stuck denied. `Ok(None)` (no plan row yet) is
+/// a legitimate answer from the store, not an error, so it IS cached as
+/// `Free` like any other resolved plan.
 pub async fn plan_of(st: &AppState, tenant: TenantId) -> Plan {
     if let Some(p) = st.ee.plans.get(tenant).await {
         return p;
     }
-    let p = match st.store.get_tenant_plan(tenant).await {
-        Ok(Some(s)) => Plan::from_stored(&s),
-        Ok(None) => Plan::Free,
+    match st.store.get_tenant_plan(tenant).await {
+        Ok(Some(s)) => {
+            let p = Plan::from_stored(&s);
+            st.ee.plans.put(tenant, p).await;
+            p
+        }
+        Ok(None) => {
+            st.ee.plans.put(tenant, Plan::Free).await;
+            Plan::Free
+        }
         Err(_) => Plan::Free,
-    };
-    st.ee.plans.put(tenant, p).await;
-    p
+    }
 }
 
 pub async fn require(st: &AppState, tenant: TenantId, f: Feature) -> Result<(), Denied> {

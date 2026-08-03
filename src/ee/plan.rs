@@ -271,4 +271,23 @@ mod tests {
             ]
         );
     }
+
+    #[tokio::test]
+    async fn plan_cache_put_then_get_returns_the_stored_plan() {
+        let cache = PlanCache::new();
+        let tenant = crate::tenant::TenantId(1);
+        assert_eq!(cache.get(tenant).await, None);
+        cache.put(tenant, Plan::Business).await;
+        assert_eq!(cache.get(tenant).await, Some(Plan::Business));
+    }
+
+    #[tokio::test]
+    async fn plan_cache_invalidate_makes_the_next_get_return_none() {
+        let cache = PlanCache::new();
+        let tenant = crate::tenant::TenantId(2);
+        cache.put(tenant, Plan::Starter).await;
+        assert_eq!(cache.get(tenant).await, Some(Plan::Starter));
+        cache.invalidate(tenant).await;
+        assert_eq!(cache.get(tenant).await, None);
+    }
 }
