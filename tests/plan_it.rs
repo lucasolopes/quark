@@ -62,6 +62,26 @@ async fn state_with_plan(plan: &str) -> (std::sync::Arc<quark::api::AppState>, T
     (st, t)
 }
 
+/// `POST /admin/domains {host}` through the break-glass token, returning
+/// just the status: the body isn't interesting to the callers below, only
+/// whether the ceiling or the reserved-namespace check fired.
+async fn create_domain(app: &axum::Router, host: &str) -> axum::http::StatusCode {
+    let body = serde_json::json!({ "host": host });
+    app.clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/admin/domains")
+                .header("x-admin-token", ADMIN_TOKEN)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
 #[tokio::test]
 #[serial_test::file_serial]
 async fn free_is_denied_webhooks_and_told_where_to_go() {
@@ -168,22 +188,6 @@ async fn free_tenant_gets_402_on_the_fourth_domain() {
         .unwrap();
 
     let app = quark::api::router(st.clone());
-    async fn create_domain(app: &axum::Router, host: &str) -> axum::http::StatusCode {
-        let body = serde_json::json!({ "host": host });
-        app.clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/admin/domains")
-                    .header("x-admin-token", ADMIN_TOKEN)
-                    .header("content-type", "application/json")
-                    .body(axum::body::Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-            .status()
-    }
 
     // All 3 of Free's slots are available to the caller, even with the
     // automatic subdomain already on file.
@@ -194,6 +198,59 @@ async fn free_tenant_gets_402_on_the_fourth_domain() {
     // The 4th is denied.
     let status = create_domain(&app, "d3.example.com").await;
     assert_eq!(status, axum::http::StatusCode::PAYMENT_REQUIRED);
+}
+
+/// A caller cannot escape the domain ceiling by registering a host inside
+/// our own `tenant_domain_suffix` namespace: that namespace is reserved for
+/// the platform's automatic per-tenant subdomain, so any host equal to or
+/// under it is rejected with `400` before it can ever be created (and
+/// therefore before it could be excluded from the count as if it were the
+/// automatic one). This is the fix for the bypass the first cut of the
+/// exclusion logic introduced: filtering the count by suffix alone, with no
+/// gate on what a caller can register, let a Free tenant create unlimited
+/// `*.{suffix}` hosts that never counted against the ceiling.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn domain_under_the_tenant_suffix_is_rejected_not_silently_exempted() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let url = std::env::var("QUARK_TEST_DATABASE_URL").unwrap();
+    let store = Arc::new(PostgresStore::open(&url, true).await.unwrap());
+    store.reset_for_tests().await.unwrap();
+    store
+        .put_tenant(&Tenant {
+            id: DEFAULT_TENANT,
+            name: "Default".into(),
+            slug: "acme".into(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    store.set_tenant_plan(DEFAULT_TENANT, "free").await.unwrap();
+    let sink: Arc<dyn AnalyticsSink> = store.clone();
+    let suffix = "tenants.example.com";
+    let st = common::TestState::new(store.clone(), sink)
+        .admin_token(Some(ADMIN_TOKEN.into()))
+        .multi_tenant(true)
+        .tenant_domain_suffix(Some(suffix.to_string()))
+        .build();
+    let app = quark::api::router(st.clone());
+
+    // A host inside the reserved namespace is rejected, not accepted-and-
+    // uncounted.
+    let status = create_domain(&app, &format!("evil.{suffix}")).await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    // The suffix itself, with no subdomain, is equally reserved.
+    let status = create_domain(&app, suffix).await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    // Nothing was created: the count-bypass this test guards against would
+    // have left rows here even though they never counted toward the ceiling.
+    assert_eq!(
+        st.store.list_domains(DEFAULT_TENANT).await.unwrap().len(),
+        0
+    );
 }
 
 /// End-to-end proof that the HTTP handler, not just `require` in isolation,
