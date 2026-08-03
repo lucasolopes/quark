@@ -44,7 +44,7 @@ futures-util = "0.3"
 sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "tls-rustls"] }
 clickhouse = "0.15"
 url = "2"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.7", features = ["cors", "trace"] }
 hmac = "0.13.0"
 sha2 = "0.11.0"
 base64 = "0.22.1"
