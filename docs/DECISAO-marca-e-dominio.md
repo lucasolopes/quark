@@ -80,6 +80,18 @@ questão de marca. Os dois argumentos apontam para o mesmo lado.
 **Trocar o domínio antes do lançamento**, e trocar por dois domínios em vez de
 um. Decidido em 2026-08-03.
 
+A execução fica adiada: enquanto não há lançamento, o `quarkus.com.br` continua
+servindo o ambiente de teste e os domínios novos não são comprados. Registrar
+domínio que ninguém acessa é custo parado.
+
+**O gatilho é o lançamento, e ele não é negociável.** O argumento inteiro desta
+decisão é que trocar agora custa quase nada porque não há link em circulação.
+Essa premissa vale exatamente até o primeiro link de usuário real ser emitido em
+`quarkus.com.br`. Depois disso a troca deixa de ser barata e passa a ser
+permanente, porque link curto quebrado não tem migração graciosa. A condição a
+respeitar é simples: **nenhum link de usuário real em `quarkus.com.br`**. O
+adiamento é de execução, não de decisão.
+
 | Papel | Host | Por quê |
 |---|---|---|
 | Painel | `app.quark.sh` | |
