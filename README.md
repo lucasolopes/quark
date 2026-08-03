@@ -318,7 +318,9 @@ Contributions are welcome; see [`CONTRIBUTING.md`](CONTRIBUTING.md). PRs require
 
 quark's core is **AGPL-3.0-only**; see [`LICENSE`](LICENSE). Copyright © 2026 Lucas Olopes.
 
-- **Self-hosting a single-account instance is free and unrestricted.**
+- **Self-hosting quark for your own organization is free and unrestricted.** The whole product is here: redirects, analytics, webhooks, pixels, Sheets, Slack, API tokens, the admin panel, and OIDC sign-in.
 - If you run a **modified** quark as a network service for others, the AGPL requires you to publish your modifications under the same license.
-- The hosted, **multi-tenant cloud edition** (accounts, billing, tenant isolation) is a separate proprietary offering, not part of this AGPL core.
+- Two directories are **not** AGPL: `src/ee/` and `web/src/ee/`, under the [quark Enterprise Edition License](src/ee/LICENSE). They hold what only matters when you operate quark as a service for *other people* (creating workspaces, invites, per-tenant identity, multiple verified domains). They are published as source-available: read and audit freely, production use needs a subscription. Deleting both leaves a complete, buildable, fully AGPL quark, and CI proves it on every push.
 - **Commercial licenses** of the core (to use it without the AGPL's copyleft obligations) are available on request.
+
+Full breakdown, including which build flag produces which edition: [`docs/LICENSING.md`](docs/LICENSING.md).

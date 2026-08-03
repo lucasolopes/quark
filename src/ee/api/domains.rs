@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::{Domain, DomainStatus};
 
 /// Name of the TXT record a caller must publish to prove ownership of a
 /// custom domain.

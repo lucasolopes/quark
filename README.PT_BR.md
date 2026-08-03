@@ -317,7 +317,9 @@ Contribuições são bem-vindas, veja [`CONTRIBUTING.PT_BR.md`](CONTRIBUTING.PT_
 
 O núcleo do quark é **AGPL-3.0-only**, veja [`LICENSE`](LICENSE). Copyright © 2026 Lucas Olopes.
 
-- **Self-hosting de uma instância de conta única é livre e sem restrições.**
+- **Self-hosting do quark para a sua própria organização é livre e sem restrições.** O produto inteiro está aqui: redirects, analytics, webhooks, pixels, Sheets, Slack, tokens de API, o painel e login OIDC.
 - Se você rodar um quark **modificado** como serviço de rede pra outros, a AGPL exige que você publique suas modificações sob a mesma licença.
-- A edição **cloud multi-tenant** hospedada (contas, cobrança, isolamento de tenant) é uma oferta proprietária separada, não parte deste núcleo AGPL.
+- Dois diretórios **não** são AGPL: `src/ee/` e `web/src/ee/`, sob a [quark Enterprise Edition License](src/ee/LICENSE). Neles fica o que só importa para quem opera o quark como serviço para *outras pessoas* (criar workspaces, convites, identidade por tenant, múltiplos domínios verificados). São publicados como source-available: leia e audite à vontade, uso em produção exige assinatura. Apagar os dois deixa um quark completo, que compila e é inteiramente AGPL, e o CI prova isso a cada push.
 - **Licenças comerciais** do núcleo, pra usá-lo sem as obrigações de copyleft da AGPL, estão disponíveis sob solicitação.
+
+Detalhamento completo, incluindo qual flag de build produz cada edição: [`docs/LICENSING.PT_BR.md`](docs/LICENSING.PT_BR.md).

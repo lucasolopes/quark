@@ -6,7 +6,7 @@ import { QuarkMark } from "@/components/brand/QuarkMark";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { MobileNav } from "@/components/MobileNav";
 import { Button } from "@/components/ui/button";
-import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
+import { WorkspaceSwitcher } from "@ee";
 import { useT } from "@/i18n";
 import { api } from "@/lib/api";
 import { clearToken } from "@/lib/auth";

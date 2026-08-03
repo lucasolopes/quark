@@ -354,9 +354,12 @@ Fase 1 é pré-requisito da LUC-41 (billing), que já nasce EE.
 
 ## 8. Riscos e questões em aberto
 
-1. **Isto não é aconselhamento jurídico.** O texto da EE License deve passar por
-   advogado antes de ir para o repo público. O rascunho parte da do Chatwoot,
-   que é curta e testada em produção por outros.
+1. **Texto da EE License: aprovado pelo Lucas em 2026-08-03.** O risco foi
+   levantado e a decisão foi seguir com o texto como está. Ele parte da licença
+   do Chatwoot, que é curta e já roda em produção em outro projeto. Nada aqui é
+   aconselhamento jurídico, e revisar com advogado continua sendo possível a
+   qualquer momento sem mexer no código, já que o arquivo é isolado
+   (`src/ee/LICENSE` e o espelho no painel).
 2. **AGPL sobre o próprio cloud.** O quark cloud roda código AGPL modificado
    servindo terceiros, então a cláusula 13 se aplica ao core. Na prática o
    core do cloud é o mesmo do repo público, o que já satisfaz a obrigação, mas

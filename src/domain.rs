@@ -37,3 +37,15 @@ pub struct DomainRoute {
     pub domain_id: u64,
     pub tenant_id: TenantId,
 }
+
+/// The host of a tenant's automatic subdomain (multi-tenancy P3-completion),
+/// e.g. `subdomain_host("acme", "quarkus.com.br") == "acme.quarkus.com.br"`.
+/// Lowercased so it matches the lookup convention every other host in
+/// `domains` follows (`get_domain_by_host`/`HostRouter` always query lowercase).
+///
+/// Stays in the core rather than `src/ee/` because `api/links.rs` builds the
+/// short URL with it (LUC-19: the hot path wins). Administering the subdomain is
+/// the part that is Enterprise.
+pub fn subdomain_host(slug: &str, suffix: &str) -> String {
+    format!("{slug}.{suffix}").to_ascii_lowercase()
+}

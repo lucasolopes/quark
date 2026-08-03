@@ -92,53 +92,6 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
         .route("/admin/callback", get(oidc_callback))
         .route("/admin/logout", post(oidc_logout))
         .route("/admin/me", get(admin_me))
-        .route("/admin/tenants", post(admin_tenants_create))
-        .route(
-            "/admin/tenants/{id}",
-            axum::routing::delete(admin_tenants_delete),
-        )
-        .route("/admin/workspace/switch", post(admin_workspace_switch))
-        .route(
-            "/admin/oidc-config",
-            get(admin_oidc_config_get)
-                .put(admin_oidc_config_put)
-                .delete(admin_oidc_config_delete),
-        )
-        .route(
-            "/admin/domains",
-            get(admin_domains_list).post(admin_domains_create),
-        )
-        .route(
-            "/admin/domains/{id}",
-            axum::routing::delete(admin_domains_delete),
-        )
-        .route("/admin/domains/{id}/verify", post(admin_domains_verify))
-        .route(
-            "/admin/domains/{id}/primary",
-            post(admin_domains_set_primary),
-        )
-        .route(
-            "/admin/sso-domains",
-            get(admin_sso_domains_list).post(admin_sso_domains_create),
-        )
-        .route(
-            "/admin/sso-domains/{id}",
-            axum::routing::delete(admin_sso_domains_delete),
-        )
-        .route(
-            "/admin/sso-domains/{id}/verify",
-            post(admin_sso_domains_verify),
-        )
-        .route("/admin/sso/discover", get(sso_discover))
-        .route(
-            "/admin/invites",
-            get(admin_invites_list).post(admin_invites_create),
-        )
-        .route(
-            "/admin/invites/{id}",
-            axum::routing::delete(admin_invites_delete),
-        )
-        .route("/admin/invites/{token}/accept", post(admin_invites_accept))
         .route("/admin/integrations/sheets/connect", get(sheets_connect))
         .route("/admin/integrations/sheets/callback", get(sheets_callback))
         .route("/admin/integrations/sheets/sync", post(sheets_sync))
@@ -178,8 +131,20 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
             get(admin_wellknown_get)
                 .put(admin_wellknown_put)
                 .delete(admin_wellknown_delete),
-        )
-        .with_state(state);
+        );
+
+    // The Enterprise edition's single injection point (LUC-19). Workspace,
+    // invite, domain, and per-tenant SSO routes live in `src/ee/`, which is not
+    // AGPL and only enters the binary with `--features ee`. One point rather
+    // than a `cfg` per route: the boundary stays visible, and the Community
+    // build never names a handler that does not exist.
+    //
+    // Has to come before `with_state`, which turns `Router<Arc<AppState>>` into
+    // `Router<()>`.
+    #[cfg(feature = "ee")]
+    let app = crate::ee::api::mount(app);
+
+    let app = app.with_state(state);
 
     // Apply the admin-host gate as an inner layer (runs after CORS, so a
     // preflight is still answered): a `/admin/*` request whose `Host` is not

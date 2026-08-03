@@ -60,6 +60,11 @@ jobs:
       - name: Clippy (deny warnings)
         run: cargo clippy --all-targets -- -D warnings
 
+      # A edicao Enterprise (`src/ee/`) nao entra no build padrao, entao sem um
+      # job proprio ela quebra sem ninguem ver (LUC-19).
+      - name: Clippy Enterprise (deny warnings)
+        run: cargo clippy --all-targets --features ee -- -D warnings
+
       - name: Build
         run: cargo build --release
 
@@ -86,6 +91,13 @@ jobs:
           QUARK_TEST_DATABASE_URL: postgres://quark_test:quark_test@127.0.0.1:5432/quark_test
           QUARK_TEST_CLICKHOUSE_URL: http://127.0.0.1:8123
 
+      - name: Test Enterprise
+        run: cargo test --features ee --no-fail-fast
+        env:
+          QUARK_TEST_VALKEY_URL: redis://127.0.0.1:6379
+          QUARK_TEST_DATABASE_URL: postgres://quark_test:quark_test@127.0.0.1:5432/quark_test
+          QUARK_TEST_CLICKHOUSE_URL: http://127.0.0.1:8123
+
   web:
     runs-on: ubuntu-latest
     defaults:
@@ -102,4 +114,39 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test
+      - run: npm run test:ee
       - run: npm run build
+      - run: npm run build
+        env:
+          VITE_QUARK_EE: "1"
+
+  # A separacao open-core so e real se o core continuar utilizavel sozinho
+  # (LUC-19). Este job apaga as duas pastas Enterprise e exige que tudo passe
+  # sem elas. Se quebrar, `src/ee/` virou dependencia do core e a licenca da
+  # raiz deixou de ser verdade.
+  community-only:
+    name: community build without src/ee
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Delete the Enterprise directories
+        run: rm -rf src/ee web/src/ee
+
+      - name: Build and test the core alone
+        run: cargo build && cargo test --no-fail-fast
+
+      - name: Build the panel alone
+        working-directory: web
+        run: npm ci && npm run typecheck && npm run test && npm run build

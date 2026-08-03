@@ -13,12 +13,15 @@ RUN cargo chef prepare --recipe-path recipe.json
 # A imagem do cargo-chef ja traz gcc/cc, que o heed precisa para compilar o
 # LMDB (C) e linka-lo estaticamente no binario.
 FROM chef AS build
+# Edicao buildada (LUC-19). Vazio produz a Community, que nao contem nada de
+# `src/ee/`; o deploy do cloud passa `--build-arg QUARK_FEATURES=ee`.
+ARG QUARK_FEATURES=""
 COPY --from=planner /app/recipe.json recipe.json
 # Esta camada so invalida quando Cargo.lock/Cargo.toml mudam: e o que separa
 # um release de 12 minutos de um de 3.
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN cargo build --release --bin quark
+RUN cargo build --release ${QUARK_FEATURES:+--features $QUARK_FEATURES} --bin quark
 
 # ---- runtime ----
 # O binario e linkado dinamicamente a glibc (target gnu) e o LMDB vai estatico

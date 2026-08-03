@@ -8,11 +8,12 @@ pub mod codec;
 pub mod dns;
 pub mod domain;
 pub mod domain_router;
+#[cfg(feature = "ee")]
+pub mod ee;
 pub mod health;
 pub mod import;
 pub mod invalidate;
 pub mod invite;
-pub mod keycloak;
 pub mod oidc;
 pub mod password;
 pub mod permute;

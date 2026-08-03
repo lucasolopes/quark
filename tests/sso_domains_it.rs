@@ -6,6 +6,10 @@
 //! Store-level tests for SSO email-domain discovery (LUC-57, Task 1) plus
 //! the admin HTTP endpoints (LUC-57, Task 2). Postgres-gated on
 //! `QUARK_TEST_DATABASE_URL`; skips when unset.
+// Enterprise suite: these routes only exist in the `--features ee` build
+// (LUC-19). Without the feature the binary compiles empty instead of failing.
+#![cfg(feature = "ee")]
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::analytics::AnalyticsSink;

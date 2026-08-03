@@ -2,7 +2,8 @@
   "files": [],
   "compilerOptions": {
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@ee": ["./src/lib/ee-stub.tsx"]
     }
   },
   "references": [

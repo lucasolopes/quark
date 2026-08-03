@@ -470,7 +470,7 @@ pub(crate) async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap
                 "oidc_button_label": oidc_button_label,
                 "multi_tenant": st.multi_tenant,
                 "admin_login_enabled": st.admin_token.is_some(),
-                "sso_provisioning": st.keycloak.is_some(),
+                "sso_provisioning": sso_provisioning(&st),
                 "tenant_domain_suffix": st.tenant_domain_suffix,
                 "public_host": st.public_host,
                 "slack_connect": st.slack.is_some(),
@@ -529,72 +529,10 @@ pub(crate) async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap
         "oidc_button_label": oidc_button_label,
         "multi_tenant": st.multi_tenant,
         "admin_login_enabled": st.admin_token.is_some(),
-        "sso_provisioning": st.keycloak.is_some(),
+        "sso_provisioning": sso_provisioning(&st),
         "tenant_domain_suffix": st.tenant_domain_suffix,
         "public_host": st.public_host,
         "slack_connect": st.slack.is_some(),
     }))
     .into_response()
-}
-
-/// Resolves the session cookie to its `user_id`, independent of scopes. Used
-/// by `/admin/tenants`: creating a first workspace must be reachable by ANY
-/// authenticated OIDC user, including one with zero memberships (so
-/// `admin_guard`'s scope check, which a 0-membership user could never pass,
-/// does not apply here). Gated on `st.oidc_configured`, same as `admin_guard`'s
-/// session branch, so disabling OIDC immediately stops leftover session
-/// cookies from resolving a user here too.
-pub(crate) async fn session_user_id(st: &AppState, headers: &HeaderMap) -> Option<u64> {
-    Some(current_session(st, headers).await?.user_id)
-}
-
-/// The whole session row behind the request's cookie, on the same terms
-/// `session_user_id` resolves the user id (it is the thin wrapper over this).
-/// Callers that need more than the user id use this: `admin_tenants_delete`
-/// needs the session's CURRENT workspace, to know whether the workspace being
-/// deleted is the one the caller is sitting in, and needs the row itself
-/// captured before the delete, since `sessions` is tenant-owned and the row
-/// goes down with the tenant.
-pub(crate) async fn current_session(
-    st: &AppState,
-    headers: &HeaderMap,
-) -> Option<crate::auth::Session> {
-    if !st.oidc_configured {
-        return None;
-    }
-    let raw = cookie_value(headers, SESSION_COOKIE)?;
-    st.store
-        .get_session_by_hash(&hash_token(raw), now())
-        .await
-        .ok()
-        .flatten()
-}
-
-/// Re-points the current session at `tenant` (the workspace just created),
-/// so the next request the browser makes is already scoped to it. A missing
-/// or invalid session is a silent no-op: the caller already authenticated via
-/// `session_user_id` earlier in the same request.
-pub(crate) async fn set_session_tenant(
-    st: &AppState,
-    headers: &HeaderMap,
-    tenant: crate::tenant::TenantId,
-) {
-    let Some(raw) = cookie_value(headers, SESSION_COOKIE) else {
-        return;
-    };
-    let hash = hash_token(raw);
-    if let Ok(Some(mut session)) = st.store.get_session_by_hash(&hash, now()).await {
-        session.tenant_id = tenant;
-        let _ = st.store.put_session(tenant, &session).await;
-    }
-}
-
-/// Maps a `put_tenant` failure to its HTTP status: a duplicate `slug` (unique
-/// violation) is a client-fixable `409`, anything else is a `503` (backend
-/// unavailable).
-pub(crate) fn conflict_or_503(e: StoreError) -> StatusCode {
-    match e {
-        StoreError::UniqueViolation => StatusCode::CONFLICT,
-        _ => StatusCode::SERVICE_UNAVAILABLE,
-    }
 }

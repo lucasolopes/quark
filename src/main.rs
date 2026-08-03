@@ -190,56 +190,6 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => tracing::warn!(error = %e, "secret re-encryption backfill failed"),
         }
     }
-
-    // Auto per-tenant subdomain boot backfill (multi-tenancy P3-completion):
-    // every existing tenant gets its `<slug>.<suffix>` `domains` row, same as
-    // a freshly created one (`admin_tenants_create`). Idempotent (skips
-    // tenants that already have the row) and cheap (few tenants, once per
-    // boot) — safe to run on every replica.
-    if multi_tenant {
-        if let Some(suffix) = &tenant_domain_suffix {
-            match store.list_tenants().await {
-                Ok(tenants) => {
-                    let mut seeded = 0usize;
-                    for t in &tenants {
-                        let host = quark::api::subdomain_host(&t.slug, suffix);
-                        match store.get_domain_by_host(&host).await {
-                            Ok(Some(_)) => {} // already seeded
-                            Ok(None) => {
-                                match quark::api::seed_tenant_subdomain(
-                                    &store, t.id, &t.slug, suffix,
-                                )
-                                .await
-                                {
-                                    Ok(()) => seeded += 1,
-                                    Err(e) => tracing::warn!(
-                                        error = %e,
-                                        tenant_id = t.id.0,
-                                        "tenant subdomain backfill failed"
-                                    ),
-                                }
-                            }
-                            Err(e) => tracing::warn!(
-                                error = %e,
-                                tenant_id = t.id.0,
-                                "tenant subdomain backfill could not look up the domain row"
-                            ),
-                        }
-                    }
-                    tracing::info!(
-                        seeded,
-                        already_present = tenants.len() - seeded,
-                        suffix = %suffix,
-                        "tenant subdomain backfill completed"
-                    );
-                }
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    "tenant subdomain backfill skipped, could not list tenants"
-                ),
-            }
-        }
-    }
     match std::env::var("QUARK_NODE_ID") {
         Ok(n) if !n.is_empty() && std::env::var("QUARK_DATABASE_URL").is_ok() => {
             tracing::warn!(
@@ -483,44 +433,12 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Arc::new(quark::dns::NullDns)
     };
-
-    // Keycloak-hosted auth (multi-tenancy P2e, opt-in via
-    // QUARK_KEYCLOAK_BASE_URL). Foundation only here: the trait + HTTP client +
-    // config. The provisioning flow that calls it on tenant creation is a
-    // later task.
-    let keycloak_config = quark::keycloak::KeycloakConfig::from_env();
-    let keycloak_base_url = keycloak_config.as_ref().map(|c| c.base_url.clone());
-    let keycloak: Option<Arc<dyn quark::keycloak::KeycloakAdmin>> = match keycloak_config {
-        Some(cfg) => {
-            let base = cfg.base_url.clone();
-            tracing::info!(base_url = %base, "keycloak admin enabled");
-            Some(Arc::new(quark::keycloak::client::HttpKeycloakAdmin::new(
-                cfg,
-                quark::keycloak::client::keycloak_client(),
-            )))
-        }
-        None => {
-            tracing::info!("keycloak admin: disabled (set QUARK_KEYCLOAK_BASE_URL to enable)");
-            None
-        }
-    };
-
-    // Keycloak tenant provisioning boot backfill (multi-tenancy P2e Task 2):
-    // every tenant that has no `oidc_config` yet (created before Keycloak was
-    // configured, or whose creation-time attempt only got partway) gets
-    // (re-)provisioned here. Idempotent and cheap, like the subdomain
-    // backfill above — safe to run on every replica.
-    if multi_tenant {
-        if let (Some(kc), Some(base)) = (&keycloak, &keycloak_base_url) {
-            match quark::api::backfill_keycloak_provisioning(&store, kc, base).await {
-                Ok(n) => tracing::info!(provisioned = n, "keycloak tenant backfill completed"),
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    "keycloak tenant backfill skipped, could not list tenants"
-                ),
-            }
-        }
-    }
+    // Enterprise boot (LUC-19): the Keycloak runtime, the provisioning
+    // backfill, and each tenant's automatic subdomain seed. All of it lives in
+    // `src/ee/`, which is not AGPL and only enters the binary with
+    // `--features ee`. One call, rather than `cfg` scattered through startup.
+    #[cfg(feature = "ee")]
+    let ee = quark::ee::boot(&store, multi_tenant, tenant_domain_suffix.as_deref()).await;
 
     let state = Arc::new(AppState {
         cache,
@@ -545,8 +463,8 @@ async fn main() -> anyhow::Result<()> {
         dns,
         tenant_domain_suffix,
         oidc_tenants: quark::oidc::TenantOidcCache::new(),
-        keycloak,
-        keycloak_base_url,
+        #[cfg(feature = "ee")]
+        ee,
     });
     let invalidation_sub = match std::env::var("QUARK_VALKEY_URL").ok() {
         Some(url) => {

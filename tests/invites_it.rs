@@ -6,6 +6,10 @@
 //! P2c Task 1+2: `invites` table + store methods (Task 1), plus the
 //! create/list/revoke HTTP endpoints (Task 2). Mirrors the non-superuser,
 //! PG-gated harness in `tests/domains_it.rs`.
+// Enterprise suite: these routes only exist in the `--features ee` build
+// (LUC-19). Without the feature the binary compiles empty instead of failing.
+#![cfg(feature = "ee")]
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use quark::analytics::AnalyticsSink;
@@ -377,7 +381,7 @@ async fn admin_app_with_scopes_and_keycloak(
     tenant: TenantId,
     token_id: u64,
     scopes: Vec<Scope>,
-    keycloak: Option<Arc<dyn quark::keycloak::KeycloakAdmin>>,
+    keycloak: Option<Arc<dyn quark::ee::keycloak::KeycloakAdmin>>,
 ) -> (axum::Router, String) {
     let raw = format!("qtok_invites_test_{}", token_id);
     store
@@ -712,7 +716,7 @@ fn session_app_over(store: Arc<PostgresStore>, multi_tenant: bool) -> axum::Rout
 fn session_app_over_with_keycloak(
     store: Arc<PostgresStore>,
     multi_tenant: bool,
-    keycloak: Option<Arc<dyn quark::keycloak::KeycloakAdmin>>,
+    keycloak: Option<Arc<dyn quark::ee::keycloak::KeycloakAdmin>>,
 ) -> axum::Router {
     let store_dyn: Arc<dyn Store> = store.clone();
     let sink_dyn: Arc<dyn AnalyticsSink> = store;
@@ -1156,7 +1160,7 @@ async fn create_invite_with_keycloak_provisions_member_into_members_group() {
     };
     let store = Arc::new(store);
     let tenant = make_tenant(&store, "invites-kc-member").await;
-    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let mock = Arc::new(quark::ee::keycloak::testing::MockKeycloakAdmin::default());
     mock.set_next_user_id("kc-user-invite-member");
     let (app, token) = admin_app_with_scopes_and_keycloak(
         store.clone(),
@@ -1164,7 +1168,7 @@ async fn create_invite_with_keycloak_provisions_member_into_members_group() {
         tenant,
         9201,
         vec![Scope::Full],
-        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some(mock.clone() as Arc<dyn quark::ee::keycloak::KeycloakAdmin>),
     )
     .await;
 
@@ -1201,7 +1205,7 @@ async fn create_invite_with_keycloak_provisions_viewer_into_readers_group() {
     };
     let store = Arc::new(store);
     let tenant = make_tenant(&store, "invites-kc-viewer").await;
-    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let mock = Arc::new(quark::ee::keycloak::testing::MockKeycloakAdmin::default());
     mock.set_next_user_id("kc-user-invite-viewer");
     let (app, token) = admin_app_with_scopes_and_keycloak(
         store.clone(),
@@ -1209,7 +1213,7 @@ async fn create_invite_with_keycloak_provisions_viewer_into_readers_group() {
         tenant,
         9202,
         vec![Scope::Full],
-        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some(mock.clone() as Arc<dyn quark::ee::keycloak::KeycloakAdmin>),
     )
     .await;
 
@@ -1236,7 +1240,7 @@ async fn create_invite_with_keycloak_provisions_admin_into_admins_group() {
     };
     let store = Arc::new(store);
     let tenant = make_tenant(&store, "invites-kc-admin").await;
-    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let mock = Arc::new(quark::ee::keycloak::testing::MockKeycloakAdmin::default());
     mock.set_next_user_id("kc-user-invite-admin");
     let (app, token) = admin_app_with_scopes_and_keycloak(
         store.clone(),
@@ -1244,7 +1248,7 @@ async fn create_invite_with_keycloak_provisions_admin_into_admins_group() {
         tenant,
         9203,
         vec![Scope::Full],
-        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some(mock.clone() as Arc<dyn quark::ee::keycloak::KeycloakAdmin>),
     )
     .await;
 
@@ -1281,7 +1285,7 @@ async fn create_invite_with_keycloak_failure_still_stores_the_invite() {
         tenant,
         9204,
         vec![Scope::Full],
-        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some(mock.clone() as Arc<dyn quark::ee::keycloak::KeycloakAdmin>),
     )
     .await;
 
@@ -1304,18 +1308,21 @@ async fn create_invite_with_keycloak_failure_still_stores_the_invite() {
 struct FailingKeycloakAdmin;
 
 #[async_trait::async_trait]
-impl quark::keycloak::KeycloakAdmin for FailingKeycloakAdmin {
-    async fn ensure_realm(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+impl quark::ee::keycloak::KeycloakAdmin for FailingKeycloakAdmin {
+    async fn ensure_realm(&self, _slug: &str) -> Result<(), quark::ee::keycloak::KcError> {
         Ok(())
     }
     async fn ensure_client(
         &self,
         _slug: &str,
         _redirect_uri: &str,
-    ) -> Result<(), quark::keycloak::KcError> {
+    ) -> Result<(), quark::ee::keycloak::KcError> {
         Ok(())
     }
-    async fn ensure_groups_and_mapper(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+    async fn ensure_groups_and_mapper(
+        &self,
+        _slug: &str,
+    ) -> Result<(), quark::ee::keycloak::KcError> {
         Ok(())
     }
     async fn ensure_user(
@@ -1323,8 +1330,8 @@ impl quark::keycloak::KeycloakAdmin for FailingKeycloakAdmin {
         _slug: &str,
         _email: &str,
         _group: &str,
-    ) -> Result<String, quark::keycloak::KcError> {
-        Err(quark::keycloak::KcError(
+    ) -> Result<String, quark::ee::keycloak::KcError> {
+        Err(quark::ee::keycloak::KcError(
             "simulated ensure_user failure".to_string(),
         ))
     }
@@ -1332,10 +1339,10 @@ impl quark::keycloak::KeycloakAdmin for FailingKeycloakAdmin {
         &self,
         _slug: &str,
         _user_id: &str,
-    ) -> Result<(), quark::keycloak::KcError> {
+    ) -> Result<(), quark::ee::keycloak::KcError> {
         Ok(())
     }
-    async fn delete_realm(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+    async fn delete_realm(&self, _slug: &str) -> Result<(), quark::ee::keycloak::KcError> {
         Ok(())
     }
 }
@@ -1363,11 +1370,11 @@ async fn accept_invite_with_keycloak_grants_no_membership() {
     )
     .await;
 
-    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let mock = Arc::new(quark::ee::keycloak::testing::MockKeycloakAdmin::default());
     let app = session_app_over_with_keycloak(
         store.clone(),
         true,
-        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some(mock.clone() as Arc<dyn quark::ee::keycloak::KeycloakAdmin>),
     );
 
     let (status, body) = accept_invite(&app, "raw-kc-accept", Some(&raw)).await;

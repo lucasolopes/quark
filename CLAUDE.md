@@ -43,6 +43,33 @@ with opt-in production backends (Postgres, Valkey/Redis, ClickHouse).
   shape, fluent setters per field) rather than a hand-rolled struct literal.
   Frontend tests are `web/src/**/*.test.tsx` (Vitest).
 
+### Open core (LUC-19)
+- Everything is AGPL-3.0-only EXCEPT `src/ee/` and `web/src/ee/`, which are
+  under the quark Enterprise Edition License (`src/ee/LICENSE`). Deleting both
+  directories must leave a buildable, passing core; CI enforces it in the
+  `community-only` job. Never make core code depend on `src/ee/`.
+- The server side lives behind the non-default cargo feature `ee`
+  (`cargo build --features ee`); the panel behind the `@ee` alias, which
+  `vite.config.ts` points at `web/src/ee/` when `VITE_QUARK_EE=1` and at the
+  inert `web/src/lib/ee-stub.tsx` otherwise. The stub is the type contract the
+  real barrel must satisfy.
+- What belongs in `ee`: administering OTHER people's accounts (workspaces,
+  invites, per-tenant IdP, Keycloak realm provisioning, multiple verified
+  domains, billing). What stays core: anything one organization uses for
+  itself, anything on the redirect hot path, and every type named by the
+  `Store` trait. The full rule and the file-by-file inventory are in
+  `docs/specs/2026-08-03-luc19-open-core-design.md` and
+  `docs/research/2026-08-03-luc19-inventario-oss-ee.md`.
+- Modules in `src/ee/api/` reach the core namespace with `use crate::api::*`
+  (the reexports in `src/api/mod.rs` are `pub(crate)`), then `use super::*` for
+  their siblings. EE routes are mounted at ONE injection point,
+  `crate::ee::api::mount`, called from `router_with_cors`; never scatter
+  `#[cfg(feature = "ee")]` across individual routes. The EE boot is likewise one
+  call, `crate::ee::boot`, from `main.rs`.
+- Gated test binaries that only exercise EE routes carry
+  `#![cfg(feature = "ee")]`; panel tests for EE screens live in `web/src/ee/`
+  and run via `npm run test:ee`.
+
 ### Documentation Format
 - Project docs live in `docs/` as Markdown files.
 - Each user-facing feature has an English doc plus a `.PT_BR.md` twin

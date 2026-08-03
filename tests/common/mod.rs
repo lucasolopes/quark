@@ -15,7 +15,8 @@ use quark::api::{AppState, DEFAULT_REAL_IP_HEADER};
 use quark::cache::Cache;
 use quark::dns::{Dns, NullDns};
 use quark::domain_router::HostRouter;
-use quark::keycloak::KeycloakAdmin;
+#[cfg(feature = "ee")]
+use quark::ee::keycloak::KeycloakAdmin;
 use quark::sheets::SheetsConfig;
 use quark::slack::SlackConfig;
 use quark::store::Store;
@@ -61,7 +62,9 @@ pub struct TestState {
     slack: Option<Arc<SlackConfig>>,
     multi_tenant: bool,
     tenant_domain_suffix: Option<String>,
+    #[cfg(feature = "ee")]
     keycloak: Option<Arc<dyn KeycloakAdmin>>,
+    #[cfg(feature = "ee")]
     keycloak_base_url: Option<String>,
     dns: Arc<dyn Dns>,
 }
@@ -87,7 +90,9 @@ impl TestState {
             slack: None,
             multi_tenant: false,
             tenant_domain_suffix: None,
+            #[cfg(feature = "ee")]
             keycloak: None,
+            #[cfg(feature = "ee")]
             keycloak_base_url: None,
             dns: Arc::new(NullDns),
         }
@@ -173,11 +178,13 @@ impl TestState {
         self
     }
 
+    #[cfg(feature = "ee")]
     pub fn keycloak(mut self, keycloak: Option<Arc<dyn KeycloakAdmin>>) -> Self {
         self.keycloak = keycloak;
         self
     }
 
+    #[cfg(feature = "ee")]
     pub fn keycloak_base_url(mut self, keycloak_base_url: Option<String>) -> Self {
         self.keycloak_base_url = keycloak_base_url;
         self
@@ -223,8 +230,11 @@ impl TestState {
             dns: self.dns,
             tenant_domain_suffix: self.tenant_domain_suffix,
             oidc_tenants: quark::oidc::TenantOidcCache::new(),
-            keycloak: self.keycloak,
-            keycloak_base_url: self.keycloak_base_url,
+            #[cfg(feature = "ee")]
+            ee: quark::ee::EeState {
+                keycloak: self.keycloak,
+                keycloak_base_url: self.keycloak_base_url,
+            },
         })
     }
 }

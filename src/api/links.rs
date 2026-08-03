@@ -505,7 +505,7 @@ pub(crate) async fn default_domain_id(st: &AppState, tenant: crate::tenant::Tena
     let Ok(Some(t)) = st.store.get_tenant(tenant).await else {
         return SHARED_DOMAIN_ID;
     };
-    let host = subdomain_host(&t.slug, suffix);
+    let host = crate::domain::subdomain_host(&t.slug, suffix);
     match st.store.get_domain_by_host(&host).await {
         Ok(Some(domain)) => domain.id,
         _ => SHARED_DOMAIN_ID,
@@ -531,7 +531,7 @@ pub(crate) async fn primary_link_host(
         }
         if let Some(suffix) = st.tenant_domain_suffix.as_deref() {
             if let Ok(Some(t)) = st.store.get_tenant(tenant).await {
-                return Some(subdomain_host(&t.slug, suffix));
+                return Some(crate::domain::subdomain_host(&t.slug, suffix));
             }
         }
     }

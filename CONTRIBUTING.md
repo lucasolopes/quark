@@ -60,6 +60,16 @@ npm run test        # Vitest
 npm run build
 ```
 
+quark is open core: everything is AGPL-3.0-only except `src/ee/` and
+`web/src/ee/`, which are under the quark Enterprise Edition License. A pull
+request touching those two directories is welcome and lands under that license
+instead of the AGPL; everything else is AGPL as usual. Either way you keep
+ownership of your contribution. See [`docs/LICENSING.md`](docs/LICENSING.md).
+
+The Enterprise code is behind a non-default build flag, so run
+`cargo clippy --all-targets --features ee -- -D warnings`,
+`cargo test --features ee` and `npm run test:ee` when you touch it.
+
 Integration tests for Postgres, Valkey and ClickHouse are gated behind
 `QUARK_TEST_DATABASE_URL`, `QUARK_TEST_VALKEY_URL` and
 `QUARK_TEST_CLICKHOUSE_URL`, and are skipped when unset. Most changes do not
