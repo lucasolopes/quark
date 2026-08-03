@@ -202,7 +202,7 @@ E a implementação, ao lado de `set_primary_domain`:
 Confirme o nome da coluna de tenant em `memberships` no DDL do `init_schema`
 antes de rodar; se for diferente de `tenant_id`, ajuste a consulta.
 
-- [ ] **Step 5: implementação inerte no LMDB**
+- [ ] **Step 5: implementação no LMDB**
 
 Em `src/store/lmdb.rs`, ao lado de `get_primary_domain_id`:
 
@@ -217,9 +217,24 @@ Em `src/store/lmdb.rs`, ao lado de `get_primary_domain_id`:
         Err(StoreError::Unsupported)
     }
 
-    // OSS is single-tenant: the implicit tenant always has exactly the operator.
-    async fn count_memberships(&self, _tenant: TenantId) -> Result<u64, StoreError> {
-        Ok(1)
+    // `memberships` is keyed `user_id || tenant_id` (see `membership_key`),
+    // so the tenant is the suffix and there is no range to prefix-scan: the
+    // whole sub-db is walked and only the entries pointing at this tenant are
+    // counted. OSS is usually single-tenant, but `put_membership` is a real
+    // implementation (OIDC login writes one row per user against
+    // `DEFAULT_TENANT`, see `src/oidc.rs`), so this counts for real instead
+    // of assuming a fixed membership count.
+    async fn count_memberships(&self, tenant: TenantId) -> Result<u64, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let suffix = tenant.0.to_be_bytes();
+        let mut n: u64 = 0;
+        for item in self.memberships.iter(&rtxn)? {
+            let (key, _) = item?;
+            if key.len() == 16 && key[8..16] == suffix {
+                n += 1;
+            }
+        }
+        Ok(n)
     }
 ```
 
