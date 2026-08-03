@@ -1244,8 +1244,18 @@ Em `src/ee/api/domains.rs`, dentro de `admin_domains_create`, depois do
 `admin_guard` e da guarda de `multi_tenant`, antes de criar:
 
 ```rust
+    // The tenant's automatic subdomain (`<slug>.<suffix>`, written by
+    // `seed_tenant_subdomain` at workspace creation) is infrastructure we
+    // create, not something the caller asked for, so it must not consume one
+    // of their domain slots.
     let held = match st.store.list_domains(p.tenant).await {
-        Ok(d) => d.len() as u64,
+        Ok(d) => d
+            .iter()
+            .filter(|domain| match &st.tenant_domain_suffix {
+                Some(suffix) => !domain.host.ends_with(&format!(".{suffix}")),
+                None => true,
+            })
+            .count() as u64,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     if let Err(denied) = crate::api::entitlement::require_quota(

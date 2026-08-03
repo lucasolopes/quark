@@ -126,7 +126,20 @@ pub(crate) async fn admin_domains_create(
         return (StatusCode::BAD_REQUEST, "host not allowed").into_response();
     }
     let held = match st.store.list_domains(p.tenant).await {
-        Ok(d) => d.len() as u64,
+        // The tenant's automatic subdomain (`<slug>.<suffix>`, written by
+        // `seed_tenant_subdomain` at workspace creation) is infrastructure we
+        // create, not something the caller asked for — it must not eat one of
+        // their domain slots. A caller can never register a host under our own
+        // `tenant_domain_suffix` (see `is_internal_host`/the reserved-slug
+        // check on tenant creation), so filtering on the suffix only ever
+        // excludes the automatic one, never a real custom domain.
+        Ok(d) => d
+            .iter()
+            .filter(|domain| match &st.tenant_domain_suffix {
+                Some(suffix) => !domain.host.ends_with(&format!(".{suffix}")),
+                None => true,
+            })
+            .count() as u64,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
     if let Err(denied) = crate::api::entitlement::require_quota(

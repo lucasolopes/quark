@@ -114,6 +114,14 @@ async fn business_has_no_domain_ceiling() {
     assert!(require_quota(&st, t, Quota::Domains, 10_000).await.is_ok());
 }
 
+/// End-to-end proof that the HTTP handler, not just `require_quota` in
+/// isolation, is wired to the gate: a Free-plan tenant creating its fourth
+/// custom domain through the real admin route gets `402`, not `200`. Also
+/// covers the entitlement decision that the ceiling counts only
+/// caller-registered domains: the tenant's automatic subdomain (the row
+/// `seed_tenant_subdomain` writes at workspace creation) must not eat one of
+/// the 3 slots Free allows, so all 3 caller domains below are accepted even
+/// though the automatic subdomain already exists.
 #[tokio::test]
 #[serial_test::file_serial]
 async fn free_tenant_gets_402_on_the_fourth_domain() {
@@ -121,29 +129,71 @@ async fn free_tenant_gets_402_on_the_fourth_domain() {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     }
-    let (st, t) = state_with_plan("free").await;
-    // Seed three domains directly through the store: this test is about the
-    // ceiling, not about the create endpoint's own validation.
-    for i in 0..3u64 {
-        let id = st.store.next_domain_id().await.unwrap();
-        st.store
-            .put_domain(&quark::domain::Domain {
-                id,
-                tenant_id: t,
-                host: format!("d{i}.example.com"),
-                token: String::new(),
-                status: quark::domain::DomainStatus::Verified,
-                created: 0,
-                verified_at: None,
-            })
+    let url = std::env::var("QUARK_TEST_DATABASE_URL").unwrap();
+    let store = Arc::new(PostgresStore::open(&url, true).await.unwrap());
+    store.reset_for_tests().await.unwrap();
+    store
+        .put_tenant(&Tenant {
+            id: DEFAULT_TENANT,
+            name: "Default".into(),
+            slug: "acme".into(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    store.set_tenant_plan(DEFAULT_TENANT, "free").await.unwrap();
+    let sink: Arc<dyn AnalyticsSink> = store.clone();
+    let suffix = "tenants.example.com";
+    let st = common::TestState::new(store.clone(), sink)
+        .admin_token(Some(ADMIN_TOKEN.into()))
+        .multi_tenant(true)
+        .tenant_domain_suffix(Some(suffix.to_string()))
+        .build();
+
+    // Seed the automatic subdomain directly, the same shape
+    // `seed_tenant_subdomain` would leave behind. It must not count toward
+    // the ceiling below.
+    let auto_id = st.store.next_domain_id().await.unwrap();
+    st.store
+        .put_domain(&quark::domain::Domain {
+            id: auto_id,
+            tenant_id: DEFAULT_TENANT,
+            host: format!("acme.{suffix}"),
+            token: String::new(),
+            status: quark::domain::DomainStatus::Verified,
+            created: 0,
+            verified_at: None,
+        })
+        .await
+        .unwrap();
+
+    let app = quark::api::router(st.clone());
+    async fn create_domain(app: &axum::Router, host: &str) -> axum::http::StatusCode {
+        let body = serde_json::json!({ "host": host });
+        app.clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/admin/domains")
+                    .header("x-admin-token", ADMIN_TOKEN)
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
             .await
-            .unwrap();
+            .unwrap()
+            .status()
     }
-    let denied =
-        quark::api::entitlement::require_quota(&st, t, quark::api::entitlement::Quota::Domains, 3)
-            .await
-            .unwrap_err();
-    assert_eq!(denied.allowed, Some(3));
+
+    // All 3 of Free's slots are available to the caller, even with the
+    // automatic subdomain already on file.
+    for i in 0..3u64 {
+        let status = create_domain(&app, &format!("d{i}.example.com")).await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+    }
+    // The 4th is denied.
+    let status = create_domain(&app, "d3.example.com").await;
+    assert_eq!(status, axum::http::StatusCode::PAYMENT_REQUIRED);
 }
 
 /// End-to-end proof that the HTTP handler, not just `require` in isolation,
