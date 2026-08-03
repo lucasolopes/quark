@@ -1351,6 +1351,21 @@ impl Store for LmdbStore {
         Ok(None)
     }
 
+    // Billing plans are cloud-only, same reasoning as the primary domain above:
+    // the OSS backend is single-tenant and never has a plan.
+    async fn get_tenant_plan(&self, _tenant: TenantId) -> Result<Option<String>, StoreError> {
+        Ok(None)
+    }
+
+    async fn set_tenant_plan(&self, _tenant: TenantId, _plan: &str) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    // OSS is single-tenant: the implicit tenant always has exactly the operator.
+    async fn count_memberships(&self, _tenant: TenantId) -> Result<u64, StoreError> {
+        Ok(1)
+    }
+
     // SSO email-domain discovery (LUC-57) is cloud-only, same reasoning as
     // custom domains above: OSS is single-tenant, and the SSO-domain endpoints
     // are gated behind `multi_tenant`, so these are never invoked here.

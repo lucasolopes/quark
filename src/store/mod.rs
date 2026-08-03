@@ -712,6 +712,17 @@ pub trait Store: Send + Sync + 'static {
     /// The tenant's primary link domain id, or `None` when unset (callers fall
     /// back to the auto subdomain, then the shared host).
     async fn get_primary_domain_id(&self, tenant: TenantId) -> Result<Option<u64>, StoreError>;
+    /// The tenant's billing plan, as an opaque string. The core stores it and
+    /// never interprets it: the catalog that gives it meaning is Enterprise
+    /// (`src/ee/plan.rs`), which is why this is a `String` and not a typed enum.
+    /// `None` means no row, or a backend that does not carry plans at all.
+    async fn get_tenant_plan(&self, tenant: TenantId) -> Result<Option<String>, StoreError>;
+    /// Sets the tenant's billing plan. Cloud-only, like `set_primary_domain`.
+    async fn set_tenant_plan(&self, tenant: TenantId, plan: &str) -> Result<(), StoreError>;
+    /// How many members the tenant has. The existing
+    /// `list_memberships_for_user` answers the other direction and cannot be
+    /// used for a per-tenant ceiling.
+    async fn count_memberships(&self, tenant: TenantId) -> Result<u64, StoreError>;
 
     // --- SSO email-domain discovery (multi-tenancy LUC-57), cloud-only ---
     /// Allocates the next global SSO email-domain id.

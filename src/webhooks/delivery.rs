@@ -1674,6 +1674,25 @@ mod tests {
         ) -> Result<Option<u64>, StoreError> {
             Ok(None)
         }
+        async fn get_tenant_plan(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<Option<String>, StoreError> {
+            unimplemented!()
+        }
+        async fn set_tenant_plan(
+            &self,
+            _tenant: crate::tenant::TenantId,
+            _plan: &str,
+        ) -> Result<(), StoreError> {
+            unimplemented!()
+        }
+        async fn count_memberships(
+            &self,
+            _tenant: crate::tenant::TenantId,
+        ) -> Result<u64, StoreError> {
+            unimplemented!()
+        }
         async fn next_sso_domain_id(&self) -> Result<u64, StoreError> {
             unimplemented!()
         }

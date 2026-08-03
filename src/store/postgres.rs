@@ -821,6 +821,11 @@ impl PostgresStore {
                 // created above, or a fresh DB fails with "relation tenants does
                 // not exist" on first boot.
                 "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS primary_domain_id BIGINT",
+                // Billing plan per tenant (LUC-41 phase 1). Opaque here: the
+                // catalog that interprets it lives in `src/ee/plan.rs`. Default
+                // 'free' so a tenant created before billing existed reads as the
+                // entry plan instead of NULL.
+                "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free'",
                 "CREATE TABLE IF NOT EXISTS users (id BIGINT PRIMARY KEY, subject TEXT NOT NULL UNIQUE, email TEXT NOT NULL, display TEXT NOT NULL, created BIGINT NOT NULL)",
                 "CREATE SEQUENCE IF NOT EXISTS quark_user_id_seq",
                 // Starts at 1 so it never collides with the seeded default tenant (id 0).
@@ -2889,6 +2894,36 @@ impl Store for PostgresStore {
             }
             None => Ok(None),
         }
+    }
+
+    async fn get_tenant_plan(&self, tenant: TenantId) -> Result<Option<String>, StoreError> {
+        let row = sqlx::query("SELECT plan FROM tenants WHERE id = $1")
+            .bind(tenant.0 as i64)
+            .fetch_optional(&self.read)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(row.map(|r| r.get::<String, _>("plan")))
+    }
+
+    async fn set_tenant_plan(&self, tenant: TenantId, plan: &str) -> Result<(), StoreError> {
+        // `tenants` is a global table (not RLS-scoped), so this mirrors
+        // `set_primary_domain` and uses the bare pool.
+        sqlx::query("UPDATE tenants SET plan = $2 WHERE id = $1")
+            .bind(tenant.0 as i64)
+            .bind(plan)
+            .execute(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn count_memberships(&self, tenant: TenantId) -> Result<u64, StoreError> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memberships WHERE tenant_id = $1")
+            .bind(tenant.0 as i64)
+            .fetch_one(&self.read)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(n.max(0) as u64)
     }
 
     // --- SSO email-domain discovery (LUC-57), cloud-only ---
