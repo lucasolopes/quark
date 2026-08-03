@@ -20,6 +20,7 @@
 
 pub mod api;
 pub mod keycloak;
+pub mod plan;
 
 use std::sync::Arc;
 
