@@ -124,18 +124,6 @@ describe("Shell nav — Members gating", () => {
 describe("Shell v2 — sidebar + topbar", () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
-  it("still renders the workspace switcher, now inside the sidebar (cloud)", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      meResponse({
-        authenticated: true,
-        oidc_enabled: true,
-        memberships: [{ tenant_id: 3, name: "Acme", slug: "acme", role: "owner" }],
-        current_tenant: 3,
-      }),
-    );
-    render(withProviders(<Shell />, { initialEntries: ["/links"] }));
-    expect(await screen.findByRole("button", { name: /acme/i })).toBeInTheDocument();
-  });
 
   it("shows the global search input", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(meResponse({ authenticated: true, oidc_enabled: false }));

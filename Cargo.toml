@@ -61,6 +61,12 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 csv = "1"
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["tokio"] }
 
+[features]
+# Edicao Enterprise (LUC-19). NAO e default: `cargo build` produz a edicao
+# Community, que nao contem nada de `src/ee/`, e essa e a garantia forte da
+# separacao de licenca. O deploy do cloud builda com `--features ee`.
+ee = []
+
 [dev-dependencies]
 # `file_locks` enables `#[file_serial]`: a cross-process lock. Plain `#[serial]`
 # only serializes within one test binary, but `cargo test` runs the integration

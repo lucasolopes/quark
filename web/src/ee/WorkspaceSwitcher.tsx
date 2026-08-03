@@ -7,7 +7,7 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { CreateWorkspaceForm } from "@/components/CreateWorkspaceForm";
-import { DeleteWorkspaceDialog } from "@/components/DeleteWorkspaceDialog";
+import { DeleteWorkspaceDialog } from "./DeleteWorkspaceDialog";
 import { useT } from "@/i18n";
 import { useMe, useSwitchWorkspace } from "@/lib/queries";
 

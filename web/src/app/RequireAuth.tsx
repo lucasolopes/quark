@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { useMe } from "@/lib/queries";
 import { hasToken } from "@/lib/auth";
-import { WorkspaceGate } from "./WorkspaceGate";
+import { WorkspaceGate } from "@ee";
 
 /**
  * Route guard. A saved break-glass token authenticates immediately. Otherwise

@@ -1,12 +1,5 @@
 use super::*;
-
-/// The host of a tenant's automatic subdomain (multi-tenancy P3-completion),
-/// e.g. `subdomain_host("acme", "quarkus.com.br") == "acme.quarkus.com.br"`.
-/// Lowercased so it matches the lookup convention every other host in
-/// `domains` follows (`get_domain_by_host`/`HostRouter` always query lowercase).
-pub fn subdomain_host(slug: &str, suffix: &str) -> String {
-    format!("{slug}.{suffix}").to_ascii_lowercase()
-}
+use crate::domain::{Domain, DomainStatus};
 
 /// Ensures the tenant's automatic subdomain exists as a Verified `domains`
 /// row (multi-tenancy P3-completion). Called both on tenant creation and by
@@ -31,7 +24,7 @@ pub async fn seed_tenant_subdomain(
     let domain = Domain {
         id,
         tenant_id,
-        host: subdomain_host(slug, suffix),
+        host: crate::domain::subdomain_host(slug, suffix),
         token: String::new(),
         status: DomainStatus::Verified,
         created: ts,
@@ -70,7 +63,7 @@ pub(crate) fn log_keycloak_step_error(tenant_id: u64, step: &str, err: impl std:
 /// happens when the owner's `User` row has no email on file.
 pub async fn provision_tenant_keycloak(
     store: &Arc<dyn Store>,
-    kc: &dyn crate::keycloak::KeycloakAdmin,
+    kc: &dyn crate::ee::keycloak::KeycloakAdmin,
     base_url: &str,
     tenant: &crate::tenant::Tenant,
     owner_user_id: Option<u64>,
@@ -112,7 +105,7 @@ pub async fn provision_tenant_keycloak(
     // client secret exists for quark to hold, so this is always empty.
     let cfg = crate::oidc::TenantOidcConfig {
         tenant_id: tenant.id,
-        issuer: crate::keycloak::derive_issuer(base_url, &tenant.slug),
+        issuer: crate::ee::keycloak::derive_issuer(base_url, &tenant.slug),
         client_id: "quark".to_string(),
         client_secret: String::new(),
         scopes: vec![
@@ -155,7 +148,7 @@ pub async fn provision_tenant_keycloak(
 /// separately, not folded into the returned provisioned count.
 pub async fn backfill_keycloak_provisioning(
     store: &Arc<dyn Store>,
-    keycloak: &Arc<dyn crate::keycloak::KeycloakAdmin>,
+    keycloak: &Arc<dyn crate::ee::keycloak::KeycloakAdmin>,
     base_url: &str,
 ) -> Result<usize, StoreError> {
     let tenants = store.list_tenants().await?;
@@ -175,7 +168,7 @@ pub async fn backfill_keycloak_provisioning(
                 // rest of the blob untouched). Verification semantics are
                 // unchanged: we still verify against the stored issuer, we're
                 // just fixing the stored value. A correct issuer is left alone.
-                let expected = crate::keycloak::derive_issuer(base_url, &t.slug);
+                let expected = crate::ee::keycloak::derive_issuer(base_url, &t.slug);
                 if cfg.issuer != expected {
                     match store.update_oidc_config_issuer(t.id, &expected).await {
                         Ok(()) => {
@@ -313,7 +306,7 @@ pub(crate) async fn admin_tenants_create(
         match seed_tenant_subdomain(&st.store, tenant.id, &tenant.slug, suffix).await {
             Ok(()) => {
                 st.host_router
-                    .invalidate(&subdomain_host(&tenant.slug, suffix))
+                    .invalidate(&crate::domain::subdomain_host(&tenant.slug, suffix))
                     .await
             }
             Err(e) => {
@@ -325,11 +318,11 @@ pub(crate) async fn admin_tenants_create(
     // shape as the subdomain seed above — the tenant and its Owner membership
     // are already committed, so a provisioning failure here must not fail
     // this 201 (the boot backfill retries it).
-    if let Some(kc) = &st.keycloak {
+    if let Some(kc) = &st.ee.keycloak {
         provision_tenant_keycloak(
             &st.store,
             kc.as_ref(),
-            st.keycloak_base_url.as_deref().unwrap_or_default(),
+            st.ee.keycloak_base_url.as_deref().unwrap_or_default(),
             &tenant,
             Some(user_id),
         )
@@ -440,7 +433,7 @@ pub(crate) async fn admin_tenants_delete(
     if let Err(e) = st.sink.delete_tenant_data(id).await {
         tracing::warn!(error = %e, tenant_id = id, "tenant analytics delete failed");
     }
-    if let (Some(kc), Some(slug)) = (&st.keycloak, &slug) {
+    if let (Some(kc), Some(slug)) = (&st.ee.keycloak, &slug) {
         if let Err(e) = kc.delete_realm(slug).await {
             tracing::warn!(error = %e, slug = %slug, tenant_id = id, "realm delete failed");
         }

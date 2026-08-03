@@ -2,6 +2,9 @@
 // clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
 // topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
 #![allow(clippy::unwrap_used)]
+// Suite da edicao Enterprise: estas rotas so existem no build `--features ee`
+// (LUC-19). Sem a feature, a binaria compila vazia em vez de falhar.
+#![cfg(feature = "ee")]
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -1146,7 +1149,7 @@ async fn create_blocks_target_matching_any_registered_domain() {
 
 // --- P3-completion Task 1: auto per-tenant subdomain -----------------------
 // A tenant's subdomain is just a normal Verified `domains` row (`host =
-// <slug>.<suffix>`), seeded via `quark::api::seed_tenant_subdomain`. Since
+// <slug>.<suffix>`), seeded via `quark::ee::api::seed_tenant_subdomain`. Since
 // it's a real `domains` row, `get_domain_by_host` (isolation, wellknown, SSRF)
 // already works unchanged — these tests only cover the seeding itself.
 
@@ -1155,7 +1158,7 @@ async fn create_blocks_target_matching_any_registered_domain() {
 #[test]
 fn subdomain_host_lowercases_and_joins() {
     assert_eq!(
-        quark::api::subdomain_host("Acme", "Quarkus.COM.br"),
+        quark::domain::subdomain_host("Acme", "Quarkus.COM.br"),
         "acme.quarkus.com.br"
     );
 }
@@ -1185,7 +1188,7 @@ async fn seed_tenant_subdomain_materializes_verified_domain() {
         tenant_id
     };
 
-    quark::api::seed_tenant_subdomain(&store, tenant_id, "seed-co", "quarkus.test")
+    quark::ee::api::seed_tenant_subdomain(&store, tenant_id, "seed-co", "quarkus.test")
         .await
         .unwrap();
 
@@ -1229,12 +1232,12 @@ async fn seed_tenant_subdomain_is_idempotent() {
         tenant_id
     };
 
-    quark::api::seed_tenant_subdomain(&store, tenant_id, "twice-co", "quarkus.test")
+    quark::ee::api::seed_tenant_subdomain(&store, tenant_id, "twice-co", "quarkus.test")
         .await
         .unwrap();
     // 2nd seed of the same tenant: must succeed (not surface the unique
     // violation to the caller) and must not create a 2nd row.
-    quark::api::seed_tenant_subdomain(&store, tenant_id, "twice-co", "quarkus.test")
+    quark::ee::api::seed_tenant_subdomain(&store, tenant_id, "twice-co", "quarkus.test")
         .await
         .unwrap();
 
@@ -1271,9 +1274,9 @@ async fn backfill_shape_seeds_preexisting_tenant_idempotently() {
     let suffix = "quarkus.test";
     async fn run_backfill_pass(store: &Arc<dyn Store>, suffix: &str) {
         for t in store.list_tenants().await.unwrap() {
-            let host = quark::api::subdomain_host(&t.slug, suffix);
+            let host = quark::domain::subdomain_host(&t.slug, suffix);
             if store.get_domain_by_host(&host).await.unwrap().is_none() {
-                quark::api::seed_tenant_subdomain(store, t.id, &t.slug, suffix)
+                quark::ee::api::seed_tenant_subdomain(store, t.id, &t.slug, suffix)
                     .await
                     .unwrap();
             }
@@ -1485,7 +1488,7 @@ async fn cloud_create_stamps_callers_tenant_and_resolves_on_its_subdomain() {
     let suffix = "quarkus.test";
     let tenant_b = make_tenant(&store, "create-flow-b").await;
     let tenant_other = make_tenant(&store, "create-flow-other").await;
-    quark::api::seed_tenant_subdomain(
+    quark::ee::api::seed_tenant_subdomain(
         &(store.clone() as Arc<dyn Store>),
         tenant_b,
         "create-flow-b",
@@ -1493,7 +1496,7 @@ async fn cloud_create_stamps_callers_tenant_and_resolves_on_its_subdomain() {
     )
     .await
     .unwrap();
-    quark::api::seed_tenant_subdomain(
+    quark::ee::api::seed_tenant_subdomain(
         &(store.clone() as Arc<dyn Store>),
         tenant_other,
         "create-flow-other",
@@ -1533,7 +1536,7 @@ async fn cloud_create_stamps_callers_tenant_and_resolves_on_its_subdomain() {
     );
 
     // Resolves via B's own subdomain.
-    let host_b = quark::api::subdomain_host("create-flow-b", suffix);
+    let host_b = quark::domain::subdomain_host("create-flow-b", suffix);
     let status = get_with_host(&app, &host_b, &format!("/{code}")).await;
     assert!(
         status == StatusCode::FOUND || status == StatusCode::MOVED_PERMANENTLY,
@@ -1541,7 +1544,7 @@ async fn cloud_create_stamps_callers_tenant_and_resolves_on_its_subdomain() {
     );
 
     // Does NOT resolve on a different tenant's subdomain.
-    let host_other = quark::api::subdomain_host("create-flow-other", suffix);
+    let host_other = quark::domain::subdomain_host("create-flow-other", suffix);
     let status = get_with_host(&app, &host_other, &format!("/{code}")).await;
     assert_eq!(
         status,
@@ -1731,7 +1734,7 @@ async fn cloud_admin_stats_and_delete_resolve_alias_in_tenant_default_domain() {
     let store = Arc::new(store);
     let suffix = "quarkus.test";
     let tenant = make_tenant(&store, "admin-alias-tenant").await;
-    quark::api::seed_tenant_subdomain(
+    quark::ee::api::seed_tenant_subdomain(
         &(store.clone() as Arc<dyn Store>),
         tenant,
         "admin-alias-tenant",

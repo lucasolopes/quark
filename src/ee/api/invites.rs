@@ -86,7 +86,7 @@ pub(crate) async fn admin_invites_create(
     // (`ensure_user`/`send_set_password_email` are idempotent). Model B never
     // grants membership here: that only happens at first OIDC login, off the
     // group claim (see `admin_invites_accept`'s split below).
-    if let Some(kc) = &st.keycloak {
+    if let Some(kc) = &st.ee.keycloak {
         let group = match req.role {
             crate::tenant::Role::Admin => "quark-admins",
             // Member gets its own group (mapped to Role::Member -> write) so an
@@ -430,7 +430,7 @@ pub(crate) async fn admin_invites_accept(
     // `mark_invite_accepted` claim, no `put_membership`. The invite stays
     // pending (re-acceptable) and the caller is pointed at their org's login
     // instead. Model A (no Keycloak, P2c) is completely unchanged below.
-    if st.keycloak.is_some() {
+    if st.ee.keycloak.is_some() {
         let slug = match st.store.get_tenant(inv.tenant_id).await {
             Ok(Some(t)) => t.slug,
             // Data-integrity gap, not a backend failure: the invite points at

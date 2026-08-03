@@ -1,3 +1,21 @@
+quark is licensed under the GNU Affero General Public License v3.0 only,
+whose full text follows below, WITH ONE EXCEPTION:
+
+  The contents of the `src/ee/` and `web/src/ee/` directories are NOT covered
+  by the AGPL. They are licensed under the quark Enterprise Edition License,
+  found in `src/ee/LICENSE` and `web/src/ee/LICENSE`. Those directories are
+  published as source-available: you may read, audit, and develop against
+  them, but production use requires a valid quark Enterprise subscription.
+
+  Removing those two directories leaves a complete, buildable, fully
+  AGPL-licensed quark. See `docs/LICENSING.md`.
+
+Copyright (C) 2026 Lucas Olopes.
+
+Third-party components remain under the license of their respective owners.
+
+--------------------------------------------------------------------------------
+
                     GNU AFFERO GENERAL PUBLIC LICENSE
                        Version 3, 19 November 2007
 

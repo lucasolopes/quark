@@ -1,0 +1,70 @@
+quark Enterprise Edition License
+
+Copyright (c) 2026 Lucas Olopes. All rights reserved.
+
+This license governs the contents of the `src/ee/` directory of the quark
+repository and any file that declares this license. Everything outside those
+paths is licensed under the GNU Affero General Public License v3.0 only; see
+the `LICENSE` file at the repository root.
+
+1. Source availability
+
+   The source code covered by this license is published so that anyone can
+   read it, audit it, and understand exactly what the hosted quark service
+   runs. Publication is not a grant of the rights withheld below.
+
+2. Permitted use
+
+   You may read, copy, compile, modify, and run this software for the purposes
+   of development, testing, evaluation, security review, and non-production
+   internal experimentation, without a subscription.
+
+   You may use this software in production only if you have a valid quark
+   Enterprise subscription that covers your deployment, and only while that
+   subscription is in effect and you are in compliance with its terms.
+
+3. Restrictions
+
+   Except as permitted above, you may not distribute, sublicense, sell, rent,
+   lease, host as a service, or otherwise make this software available to third
+   parties, whether modified or unmodified.
+
+   You may not remove or alter this license, any copyright notice, or any
+   attribution contained in this software.
+
+4. Modifications
+
+   You may create modifications and patches. Modifications remain subject to
+   this license, and using them in production requires the same valid
+   subscription as the unmodified software.
+
+5. Contributions
+
+   Contributions to files covered by this license are accepted under the quark
+   Contributor License Agreement (`CLA.md`) and are licensed under these terms,
+   not under the AGPL that covers the rest of the repository. Contributors keep
+   ownership of their contributions; see the CLA for the exact grant.
+
+6. Termination
+
+   The rights granted in section 2 for production use end when the covering
+   subscription ends. The rights to read, audit, and develop against this
+   software do not end.
+
+7. No warranty and no liability
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY,
+   WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF,
+   OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+8. Third-party components
+
+   Third-party software included or referenced by this software remains under
+   the license of its respective owner.
+
+For a commercial license, or to ask whether your use needs one, contact the
+maintainer through the repository.

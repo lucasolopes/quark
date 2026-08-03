@@ -2,6 +2,9 @@
 // clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
 // topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
 #![allow(clippy::unwrap_used)]
+// Suite da edicao Enterprise: estas rotas so existem no build `--features ee`
+// (LUC-19). Sem a feature, a binaria compila vazia em vez de falhar.
+#![cfg(feature = "ee")]
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -69,7 +72,7 @@ fn app_over_with_keycloak(
     store: Arc<dyn Store>,
     sink: Arc<dyn AnalyticsSink>,
     multi_tenant: bool,
-    keycloak: Option<Arc<dyn quark::keycloak::KeycloakAdmin>>,
+    keycloak: Option<Arc<dyn quark::ee::keycloak::KeycloakAdmin>>,
     keycloak_base_url: Option<String>,
 ) -> axum::Router {
     app_over_full(store, sink, multi_tenant, None, keycloak, keycloak_base_url)
@@ -83,7 +86,7 @@ fn app_over_full(
     sink: Arc<dyn AnalyticsSink>,
     multi_tenant: bool,
     tenant_domain_suffix: Option<String>,
-    keycloak: Option<Arc<dyn quark::keycloak::KeycloakAdmin>>,
+    keycloak: Option<Arc<dyn quark::ee::keycloak::KeycloakAdmin>>,
     keycloak_base_url: Option<String>,
 ) -> axum::Router {
     let cache = Cache::new(store.clone(), 1000, None);
@@ -786,13 +789,13 @@ async fn create_tenant_provisions_keycloak_realm() {
     let store = Arc::new(store);
     let (_user_id, raw) = seed_session(&store, "kc-provision-subject").await;
 
-    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let mock = Arc::new(quark::ee::keycloak::testing::MockKeycloakAdmin::default());
     mock.set_next_user_id("kc-user-1");
     let app = app_over_with_keycloak(
         store.clone() as Arc<dyn Store>,
         store.clone() as Arc<dyn AnalyticsSink>,
         true,
-        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some(mock.clone() as Arc<dyn quark::ee::keycloak::KeycloakAdmin>),
         Some("https://kc.example.com".to_string()),
     );
 
@@ -895,7 +898,7 @@ async fn create_tenant_without_keycloak_writes_no_oidc_config() {
     );
 }
 
-/// Boot backfill (`quark::api::backfill_keycloak_provisioning`): a tenant
+/// Boot backfill (`quark::ee::api::backfill_keycloak_provisioning`): a tenant
 /// created before Keycloak was configured (no `oidc_config` yet) gets
 /// provisioned on the backfill pass; a tenant that already has one is left
 /// alone (no extra calls), and the count returned matches how many were
@@ -969,11 +972,11 @@ async fn backfill_provisions_tenants_missing_oidc_config() {
         .await
         .unwrap();
 
-    let mock: Arc<dyn quark::keycloak::KeycloakAdmin> =
-        Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let mock: Arc<dyn quark::ee::keycloak::KeycloakAdmin> =
+        Arc::new(quark::ee::keycloak::testing::MockKeycloakAdmin::default());
 
     let provisioned =
-        quark::api::backfill_keycloak_provisioning(&store, &mock, "https://kc.example.com")
+        quark::ee::api::backfill_keycloak_provisioning(&store, &mock, "https://kc.example.com")
             .await
             .unwrap();
     assert_eq!(
@@ -990,7 +993,7 @@ async fn backfill_provisions_tenants_missing_oidc_config() {
 
     // Idempotent: running the backfill again provisions nothing new.
     let provisioned_again =
-        quark::api::backfill_keycloak_provisioning(&store, &mock, "https://kc.example.com")
+        quark::ee::api::backfill_keycloak_provisioning(&store, &mock, "https://kc.example.com")
             .await
             .unwrap();
     assert_eq!(provisioned_again, 0);
@@ -1067,11 +1070,11 @@ async fn backfill_provisions_the_tenant_owner() {
         Some(owner_id)
     );
 
-    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let mock = Arc::new(quark::ee::keycloak::testing::MockKeycloakAdmin::default());
     mock.set_next_user_id("kc-owner-1");
-    let mock_dyn: Arc<dyn quark::keycloak::KeycloakAdmin> = mock.clone();
+    let mock_dyn: Arc<dyn quark::ee::keycloak::KeycloakAdmin> = mock.clone();
     let provisioned =
-        quark::api::backfill_keycloak_provisioning(&store, &mock_dyn, "https://kc.example.com")
+        quark::ee::api::backfill_keycloak_provisioning(&store, &mock_dyn, "https://kc.example.com")
             .await
             .unwrap();
     assert_eq!(provisioned, 1);
@@ -1111,7 +1114,7 @@ async fn backfill_reconciles_stale_issuer_preserving_client_secret() {
     store
         .put_oidc_config(&quark::oidc::TenantOidcConfig {
             tenant_id: TenantId(0),
-            issuer: quark::keycloak::derive_issuer(NEW_BASE, "default"),
+            issuer: quark::ee::keycloak::derive_issuer(NEW_BASE, "default"),
             client_id: "quark".to_string(),
             client_secret: String::new(),
             scopes: vec!["openid".to_string()],
@@ -1141,7 +1144,7 @@ async fn backfill_reconciles_stale_issuer_preserving_client_secret() {
     store
         .put_oidc_config(&quark::oidc::TenantOidcConfig {
             tenant_id: TenantId(stale_id),
-            issuer: quark::keycloak::derive_issuer(OLD_BASE, "stale-issuer"),
+            issuer: quark::ee::keycloak::derive_issuer(OLD_BASE, "stale-issuer"),
             client_id: "quark".to_string(),
             client_secret: "super-secret-value".to_string(),
             scopes: vec!["openid".to_string(), "profile".to_string()],
@@ -1167,7 +1170,7 @@ async fn backfill_reconciles_stale_issuer_preserving_client_secret() {
         })
         .await
         .unwrap();
-    let ok_issuer = quark::keycloak::derive_issuer(NEW_BASE, "already-correct");
+    let ok_issuer = quark::ee::keycloak::derive_issuer(NEW_BASE, "already-correct");
     store
         .put_oidc_config(&quark::oidc::TenantOidcConfig {
             tenant_id: TenantId(ok_id),
@@ -1186,11 +1189,11 @@ async fn backfill_reconciles_stale_issuer_preserving_client_secret() {
         .await
         .unwrap();
 
-    let mock: Arc<dyn quark::keycloak::KeycloakAdmin> =
-        Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let mock: Arc<dyn quark::ee::keycloak::KeycloakAdmin> =
+        Arc::new(quark::ee::keycloak::testing::MockKeycloakAdmin::default());
 
     // Both tenants already have a config, so nothing is newly *provisioned*.
-    let provisioned = quark::api::backfill_keycloak_provisioning(&store, &mock, NEW_BASE)
+    let provisioned = quark::ee::api::backfill_keycloak_provisioning(&store, &mock, NEW_BASE)
         .await
         .unwrap();
     assert_eq!(
@@ -1207,7 +1210,7 @@ async fn backfill_reconciles_stale_issuer_preserving_client_secret() {
         .expect("stale tenant still has a config");
     assert_eq!(
         reconciled.issuer,
-        quark::keycloak::derive_issuer(NEW_BASE, "stale-issuer"),
+        quark::ee::keycloak::derive_issuer(NEW_BASE, "stale-issuer"),
         "the stale issuer must be reconciled to the current base"
     );
     assert_eq!(
@@ -1232,7 +1235,7 @@ async fn backfill_reconciles_stale_issuer_preserving_client_secret() {
 
     // Idempotent: a second pass finds every issuer already correct, so it
     // reconciles nothing and still provisions nothing.
-    let provisioned_again = quark::api::backfill_keycloak_provisioning(&store, &mock, NEW_BASE)
+    let provisioned_again = quark::ee::api::backfill_keycloak_provisioning(&store, &mock, NEW_BASE)
         .await
         .unwrap();
     assert_eq!(provisioned_again, 0);
@@ -1243,7 +1246,7 @@ async fn backfill_reconciles_stale_issuer_preserving_client_secret() {
         .unwrap();
     assert_eq!(
         after.issuer,
-        quark::keycloak::derive_issuer(NEW_BASE, "stale-issuer")
+        quark::ee::keycloak::derive_issuer(NEW_BASE, "stale-issuer")
     );
     assert_eq!(after.client_secret, "super-secret-value");
 }
@@ -1263,12 +1266,12 @@ async fn create_tenant_provisions_only_its_own_slug() {
     let (_x_user, raw_x) = seed_session(&store, "kc-sweep-x-subject").await;
     let (_y_user, raw_y) = seed_session(&store, "kc-sweep-y-subject").await;
 
-    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let mock = Arc::new(quark::ee::keycloak::testing::MockKeycloakAdmin::default());
     let app = app_over_with_keycloak(
         store.clone() as Arc<dyn Store>,
         store.clone() as Arc<dyn AnalyticsSink>,
         true,
-        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some(mock.clone() as Arc<dyn quark::ee::keycloak::KeycloakAdmin>),
         Some("https://kc.example.com".to_string()),
     );
 
@@ -1319,18 +1322,23 @@ async fn create_tenant_provisions_only_its_own_slug() {
 struct EnsureRealmFailsKeycloakAdmin;
 
 #[async_trait::async_trait]
-impl quark::keycloak::KeycloakAdmin for EnsureRealmFailsKeycloakAdmin {
-    async fn ensure_realm(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
-        Err(quark::keycloak::KcError("ensure_realm unavailable".into()))
+impl quark::ee::keycloak::KeycloakAdmin for EnsureRealmFailsKeycloakAdmin {
+    async fn ensure_realm(&self, _slug: &str) -> Result<(), quark::ee::keycloak::KcError> {
+        Err(quark::ee::keycloak::KcError(
+            "ensure_realm unavailable".into(),
+        ))
     }
     async fn ensure_client(
         &self,
         _slug: &str,
         _redirect_uri: &str,
-    ) -> Result<(), quark::keycloak::KcError> {
+    ) -> Result<(), quark::ee::keycloak::KcError> {
         unreachable!("provisioning must stop at ensure_realm's failure")
     }
-    async fn ensure_groups_and_mapper(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+    async fn ensure_groups_and_mapper(
+        &self,
+        _slug: &str,
+    ) -> Result<(), quark::ee::keycloak::KcError> {
         unreachable!("provisioning must stop at ensure_realm's failure")
     }
     async fn ensure_user(
@@ -1338,17 +1346,17 @@ impl quark::keycloak::KeycloakAdmin for EnsureRealmFailsKeycloakAdmin {
         _slug: &str,
         _email: &str,
         _group: &str,
-    ) -> Result<String, quark::keycloak::KcError> {
+    ) -> Result<String, quark::ee::keycloak::KcError> {
         unreachable!("provisioning must stop at ensure_realm's failure")
     }
     async fn send_set_password_email(
         &self,
         _slug: &str,
         _user_id: &str,
-    ) -> Result<(), quark::keycloak::KcError> {
+    ) -> Result<(), quark::ee::keycloak::KcError> {
         unreachable!("provisioning must stop at ensure_realm's failure")
     }
-    async fn delete_realm(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+    async fn delete_realm(&self, _slug: &str) -> Result<(), quark::ee::keycloak::KcError> {
         unreachable!("this fake only exercises the creation path")
     }
 }
@@ -1367,7 +1375,7 @@ async fn create_tenant_survives_ensure_realm_failure() {
         store.clone() as Arc<dyn Store>,
         store.clone() as Arc<dyn AnalyticsSink>,
         true,
-        Some(Arc::new(EnsureRealmFailsKeycloakAdmin) as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some(Arc::new(EnsureRealmFailsKeycloakAdmin) as Arc<dyn quark::ee::keycloak::KeycloakAdmin>),
         Some("https://kc.example.com".to_string()),
     );
 
@@ -1415,8 +1423,8 @@ async fn create_tenant_survives_ensure_realm_failure() {
 /// one call, naming exactly the tenant being deleted.
 #[tokio::test]
 async fn delete_realm_is_called_with_the_tenant_slug() {
-    let kc = quark::keycloak::testing::MockKeycloakAdmin::default();
-    let admin: &dyn quark::keycloak::KeycloakAdmin = &kc;
+    let kc = quark::ee::keycloak::testing::MockKeycloakAdmin::default();
+    let admin: &dyn quark::ee::keycloak::KeycloakAdmin = &kc;
 
     admin.delete_realm("acme").await.unwrap();
 
@@ -2319,12 +2327,12 @@ async fn delete_tenant_deletes_only_its_own_realm() {
     )
     .await;
 
-    let mock = Arc::new(quark::keycloak::testing::MockKeycloakAdmin::default());
+    let mock = Arc::new(quark::ee::keycloak::testing::MockKeycloakAdmin::default());
     let app = app_over_with_keycloak(
         store.clone() as Arc<dyn Store>,
         store.clone() as Arc<dyn AnalyticsSink>,
         true,
-        Some(mock.clone() as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some(mock.clone() as Arc<dyn quark::ee::keycloak::KeycloakAdmin>),
         Some("https://kc.example.com".to_string()),
     );
     let resp = app.oneshot(delete_req(doomed, Some(&raw))).await.unwrap();
@@ -2442,18 +2450,21 @@ async fn delete_tenant_keeps_the_session_alive_on_another_workspace() {
 struct DeleteRealmFailsKeycloakAdmin;
 
 #[async_trait::async_trait]
-impl quark::keycloak::KeycloakAdmin for DeleteRealmFailsKeycloakAdmin {
-    async fn ensure_realm(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+impl quark::ee::keycloak::KeycloakAdmin for DeleteRealmFailsKeycloakAdmin {
+    async fn ensure_realm(&self, _slug: &str) -> Result<(), quark::ee::keycloak::KcError> {
         unreachable!("this fake only exercises the deletion path")
     }
     async fn ensure_client(
         &self,
         _slug: &str,
         _redirect_uri: &str,
-    ) -> Result<(), quark::keycloak::KcError> {
+    ) -> Result<(), quark::ee::keycloak::KcError> {
         unreachable!("this fake only exercises the deletion path")
     }
-    async fn ensure_groups_and_mapper(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
+    async fn ensure_groups_and_mapper(
+        &self,
+        _slug: &str,
+    ) -> Result<(), quark::ee::keycloak::KcError> {
         unreachable!("this fake only exercises the deletion path")
     }
     async fn ensure_user(
@@ -2461,18 +2472,20 @@ impl quark::keycloak::KeycloakAdmin for DeleteRealmFailsKeycloakAdmin {
         _slug: &str,
         _email: &str,
         _group: &str,
-    ) -> Result<String, quark::keycloak::KcError> {
+    ) -> Result<String, quark::ee::keycloak::KcError> {
         unreachable!("this fake only exercises the deletion path")
     }
     async fn send_set_password_email(
         &self,
         _slug: &str,
         _user_id: &str,
-    ) -> Result<(), quark::keycloak::KcError> {
+    ) -> Result<(), quark::ee::keycloak::KcError> {
         unreachable!("this fake only exercises the deletion path")
     }
-    async fn delete_realm(&self, _slug: &str) -> Result<(), quark::keycloak::KcError> {
-        Err(quark::keycloak::KcError("delete_realm unavailable".into()))
+    async fn delete_realm(&self, _slug: &str) -> Result<(), quark::ee::keycloak::KcError> {
+        Err(quark::ee::keycloak::KcError(
+            "delete_realm unavailable".into(),
+        ))
     }
 }
 
@@ -2504,7 +2517,7 @@ async fn delete_tenant_survives_delete_realm_failure() {
         store.clone() as Arc<dyn Store>,
         store.clone() as Arc<dyn AnalyticsSink>,
         true,
-        Some(Arc::new(DeleteRealmFailsKeycloakAdmin) as Arc<dyn quark::keycloak::KeycloakAdmin>),
+        Some(Arc::new(DeleteRealmFailsKeycloakAdmin) as Arc<dyn quark::ee::keycloak::KeycloakAdmin>),
         Some("https://kc.example.com".to_string()),
     );
     let resp = app.oneshot(delete_req(doomed, Some(&raw))).await.unwrap();

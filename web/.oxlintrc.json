@@ -50,7 +50,16 @@
       }
     },
     {
-      "files": ["vite.config.ts", "playwright.config.ts", "e2e/**"],
+      // Seam da edicao Enterprise (LUC-19): `@ee` e o stub inerte sao barrels
+      // que expoem rotas e componentes pela mesma porta, de proposito, e
+      // `suspended` e helper de rota e nao componente de tela.
+      "files": ["src/ee/index.tsx", "src/lib/ee-stub.tsx", "src/app/suspended.tsx"],
+      "rules": {
+        "react/only-export-components": "off"
+      }
+    },
+    {
+      "files": ["vite.config.ts", "vitest.ee.config.ts", "playwright.config.ts", "e2e/**"],
       "rules": {
         "import/no-default-export": "off"
       }

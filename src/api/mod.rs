@@ -1,11 +1,16 @@
+//! Namespace interno do core, plano de proposito: os submodulos fazem
+//! `use super::*` e enxergam tudo. Os modulos Enterprise em `src/ee/api/` fazem
+//! `use crate::api::*`, que alcanca os mesmos itens porque os reexports abaixo
+//! sao `pub(crate)`. Nao ha modulo `prelude` separado: seria uma indirecao sem
+//! ganho (LUC-19).
+
 pub(crate) use crate::abuse::{extract_host, is_internal_host};
 pub(crate) use crate::analytics::{device_from_ua, AnalyticsSink, ClickEvent};
 pub(crate) use crate::auth::{generate_token, hash_token, ApiToken, Scope};
 pub(crate) use crate::cache::Cache;
 pub(crate) use crate::dns::Dns;
-pub(crate) use crate::domain::{Domain, DomainStatus, SHARED_DOMAIN_ID};
+pub(crate) use crate::domain::SHARED_DOMAIN_ID;
 pub(crate) use crate::pixel::{PixelConfig, PixelCredentials, Provider};
-pub(crate) use crate::sso::{normalize_email_domain, SsoEmailDomain};
 pub(crate) use crate::store::{
     matched_rule_index, normalize_folder, normalize_tags, pick_variant, AlertRule, LinkHealth,
     Record, Rule, RuleField, Store, StoreError, Variant,
@@ -122,14 +127,12 @@ pub struct AppState {
     /// login and cached here, keyed by tenant id. Invalidated (best-effort) by
     /// `admin_oidc_config_put`/`_delete`; also self-expires via TTL.
     pub oidc_tenants: crate::oidc::TenantOidcCache,
-    /// Keycloak admin runtime (multi-tenancy P2e), present only when
-    /// `QUARK_KEYCLOAK_BASE_URL` is configured. `None` disables the whole
-    /// feature; provisioning logic that calls this is Task 2, not built here.
-    pub keycloak: Option<Arc<dyn crate::keycloak::KeycloakAdmin>>,
-    /// Base URL Keycloak is reachable at, kept alongside `keycloak` so a
-    /// tenant's issuer can be derived (`keycloak::derive_issuer`) without
-    /// re-reading the environment.
-    pub keycloak_base_url: Option<String>,
+    /// Estado da edicao Enterprise (LUC-19): runtime admin do Keycloak e a URL
+    /// base dele. Fica agregado num campo so, atras da feature `ee`, porque sao
+    /// os unicos campos que nomeiam um tipo que sai do core junto com
+    /// `src/ee/`. Sem isso o `AppState` nao compilaria com a pasta ausente.
+    #[cfg(feature = "ee")]
+    pub ee: crate::ee::EeState,
 }
 
 /// Break-glass admin token header, checked by `admin_guard` and allowed through
@@ -143,6 +146,20 @@ pub(crate) const HEADER_CSRF: &str = "x-quark-csrf";
 /// format change (the health body stays the plain string `"ok"`).
 pub(crate) const HEADER_QUARK_VERSION: &str = "x-quark-version";
 
+/// Se esta instancia sabe provisionar identidade por tenant. Sempre `false` na
+/// edicao Community, que nao traz o provisionador de realm (LUC-19). Existe para
+/// que `oidc_login.rs`, que fica no core, nao precise de `cfg` no meio do corpo.
+pub(crate) fn sso_provisioning(_st: &AppState) -> bool {
+    #[cfg(feature = "ee")]
+    {
+        _st.ee.keycloak.is_some()
+    }
+    #[cfg(not(feature = "ee"))]
+    {
+        false
+    }
+}
+
 impl AppState {
     /// Public short code for a link id: permute the id with the instance key,
     /// then base62-encode. The inverse is `permute::decode` (guarded by
@@ -153,31 +170,23 @@ impl AppState {
     }
 }
 
-mod domains;
 mod guard;
-mod invites;
 mod links;
 mod links_admin;
 mod oidc_login;
 mod router;
 mod sheets;
 mod slack;
-mod sso_domains;
-mod tenants;
 mod webhooks_api;
 
-pub(crate) use domains::*;
 pub use guard::*;
-pub(crate) use invites::*;
 pub use links::*;
 pub(crate) use links_admin::*;
 pub(crate) use oidc_login::*;
 pub use router::*;
 pub(crate) use sheets::*;
 pub(crate) use slack::*;
-pub(crate) use sso_domains::*;
-pub use tenants::*;
 pub(crate) use webhooks_api::*;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

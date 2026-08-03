@@ -1,4 +1,6 @@
 use super::*;
+use crate::domain::DomainStatus;
+use crate::sso::{normalize_email_domain, SsoEmailDomain};
 
 /// Name of the TXT record a caller must publish to prove ownership of an
 /// email domain for SSO discovery (mirrors `verify_txt_name`, but under its
