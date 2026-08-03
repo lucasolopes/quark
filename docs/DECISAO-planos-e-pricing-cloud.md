@@ -31,7 +31,7 @@ empurra o comprador local para cima da escada com mais força que o americano.
 
 ## 2. Três mecanismos que valem copiar
 
-Do benchmark (`docs/research/2026-07-24-shortio-benchmark/dossies/A4-pricing.md`):
+Levantados na página de preços e no FAQ deles, em 2026-07-24:
 
 1. **O produto nunca quebra, só a visibilidade.** Redirecionamento é ilimitado
    nos cinco planos deles, inclusive o grátis. O que é medido são os cliques
@@ -229,8 +229,6 @@ proração de assento.
 
 - `docs/research/2026-07-18-cloud-pricing-plans.md`, a pesquisa de mercado que
   este documento fecha
-- `docs/research/2026-07-24-shortio-benchmark/dossies/A4-pricing.md`, o dossiê de
-  pricing do Short.io, com a captura de DOM em BRL
 - [short.io/pt/pricing](https://short.io/pt/pricing/?currency=BRL), a régua
 - `docs/specs/2026-08-03-luc19-open-core-design.md`, para a separação entre
   edição e plano
