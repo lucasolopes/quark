@@ -7,6 +7,10 @@ services:
       POSTGRES_PASSWORD: quark
       POSTGRES_USER: quark
       POSTGRES_DB: quark
+    # Cria a role/banco quark_test (nao-superusuario) usados pelos testes
+    # gated. Ver docker/initdb/10-test-role.sql.
+    volumes:
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
     ports: ["5432:5432"]
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "quark"]

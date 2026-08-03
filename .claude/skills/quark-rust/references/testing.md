@@ -114,6 +114,12 @@ ClickHouse read `QUARK_TEST_DATABASE_URL` / `QUARK_TEST_VALKEY_URL` /
 `QUARK_TEST_CLICKHOUSE_URL` and **return** when absent. Never `#[ignore]`, never
 `unwrap()` on the var, never panic.
 
+`QUARK_TEST_DATABASE_URL` must point at a **non-superuser** role (compose ships
+`quark_test`, not `quark`). Postgres exempts superusers from RLS, so a
+superuser URL makes `FORCE ROW LEVEL SECURITY` — the cloud-mode tenant
+isolation mechanism — untested, and the isolation tests pass vacuously.
+`cloud_force_rls_blocks_raw_sql_without_tenant_predicate` asserts this.
+
 ```rust
 async fn fresh() -> Option<PostgresStore> {
     let url = std::env::var("QUARK_TEST_DATABASE_URL").ok()?;

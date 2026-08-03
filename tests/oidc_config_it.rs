@@ -1004,15 +1004,32 @@ fn sheets_connection(refresh_token: &str) -> quark::sheets::SheetsConnection {
     }
 }
 
+/// Reads the raw (possibly sealed) column straight from the table, bypassing
+/// the store's decryption.
+///
+/// Unlike `raw_oidc_client_secret`, this one has to open a transaction and set
+/// `app.tenant_id` first: `sheets_connection` is one of the tables cloud mode
+/// puts under `FORCE ROW LEVEL SECURITY`, and the test role is non-superuser
+/// (like production), so a bare-pool SELECT with no RLS context matches zero
+/// rows. `oidc_configs` is in the store's NOT_FORCED list, which is why the
+/// sibling helper can read it from the pool directly.
 async fn raw_sheets_refresh_token(pool: &PgPool, tenant: TenantId) -> String {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+        .bind(tenant.0.to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     let row = sqlx::query(
         "SELECT blob->>'refresh_token' AS s FROM sheets_connection WHERE tenant_id = $1",
     )
     .bind(tenant.0 as i64)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .unwrap();
-    row.try_get("s").unwrap()
+    let raw = row.try_get("s").unwrap();
+    tx.commit().await.unwrap();
+    raw
 }
 
 /// With the key set, `put_sheets_connection` seals `refresh_token` at rest,

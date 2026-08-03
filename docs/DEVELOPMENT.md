@@ -82,9 +82,29 @@ at a real deployment by accident:
 Point them at the compose services:
 
 ```bash
-export QUARK_TEST_DATABASE_URL=postgres://quark:quark@localhost:5432/quark
+export QUARK_TEST_DATABASE_URL=postgres://quark_test:quark_test@localhost:5432/quark_test
 export QUARK_TEST_VALKEY_URL=redis://localhost:6379
 export QUARK_TEST_CLICKHOUSE_URL=http://localhost:8123
+```
+
+`quark_test` is not the compose stack's `quark` role, and that matters. The
+compose `quark` role is the container's `POSTGRES_USER`, which Postgres creates
+as a **superuser**, and Postgres exempts superusers from Row Level Security
+unless the role carries `NOBYPASSRLS`. Since `FORCE ROW LEVEL SECURITY` is what
+isolates tenants from each other in cloud mode, running the suite as a
+superuser would test only the app-level `WHERE tenant_id` predicate and every
+isolation test would pass vacuously. `docker/initdb/10-test-role.sql` creates
+`quark_test` (non-superuser, `NOBYPASSRLS`, owner of its own database) on the
+first `docker compose up`, and CI creates the same role. Point
+`QUARK_TEST_DATABASE_URL` at a non-superuser role or
+`cloud_force_rls_blocks_raw_sql_without_tenant_predicate` fails on purpose.
+
+If the compose volume predates that init script, create the role by hand:
+
+```bash
+docker compose exec postgres psql -U quark -d quark \
+  -c "CREATE ROLE quark_test LOGIN PASSWORD 'quark_test' NOSUPERUSER NOBYPASSRLS NOCREATEROLE;" \
+  -c "CREATE DATABASE quark_test OWNER quark_test;"
 ```
 
 These tests share one database and reset it between cases. Every case that
@@ -102,6 +122,14 @@ time:
 cargo test -- --test-threads=1
 # or run a single gated file
 cargo test --test postgres_store_it -- --test-threads=1
+```
+
+`cargo test` is fail-fast: it stops at the first test binary that fails and
+hides the rest, so a broken shared database shows up as one failure when it is
+really dozens. Use `--no-fail-fast` (as CI does) to see the whole picture:
+
+```bash
+cargo test --no-fail-fast
 ```
 
 ## Web panel

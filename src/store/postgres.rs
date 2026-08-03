@@ -133,6 +133,34 @@ const TENANT_OWNED_TABLES: [&str; 18] = [
     "sso_email_domains",
 ];
 
+/// Tenant-owned tables that stay merely ENABLED (never FORCED), even in cloud
+/// mode, because their hot-path accessors run on the bare pool with no
+/// `app.tenant_id` set and FORCE would fail them closed. The long-form
+/// rationale, table by table, is in `init_schema` at the FORCE loop.
+const NOT_FORCED: [&str; 11] = [
+    "api_tokens",
+    "sessions",
+    "click_counters",
+    "stats_meta",
+    "click_events",
+    "webhook_deliveries",
+    "domains",
+    "aliases",
+    "invites",
+    "sso_email_domains",
+    "oidc_configs",
+];
+
+/// The tables that cloud mode actually FORCEs: every tenant-owned table minus
+/// [`NOT_FORCED`]. Shared by `init_schema` (which turns FORCE on) and
+/// `reset_for_tests` (which reconciles it back to the store's mode).
+fn forced_tables() -> impl Iterator<Item = &'static str> {
+    TENANT_OWNED_TABLES
+        .iter()
+        .copied()
+        .filter(|t| !NOT_FORCED.contains(t))
+}
+
 /// Maps a Postgres unique-constraint violation (SQLSTATE 23505) to
 /// `StoreError::UniqueViolation`, anything else to `StoreError::Backend`.
 /// Shared by every `put_*` whose target has a UNIQUE column the caller wants
@@ -1028,31 +1056,20 @@ impl PostgresStore {
             // `WHERE tenant_id`/`WHERE domain_id` predicate remains the
             // isolation layer for their scoped methods and for the bare-pool
             // accessors above.
-            const NOT_FORCED: [&str; 11] = [
-                "api_tokens",
-                "sessions",
-                "click_counters",
-                "stats_meta",
-                "click_events",
-                "webhook_deliveries",
-                "domains",
-                "aliases",
-                "invites",
-                // Discovery resolves the tenant from the email domain on the
-                // bare pool (`get_sso_domain_bare`) before any `app.tenant_id`
-                // RLS context — same reasoning as `domains`/`invites` above.
-                "sso_email_domains",
-                // Login/callback resolves the tenant from the URL slug (via
-                // `get_tenant_by_slug`) and reads the config on the bare pool
-                // (`get_oidc_config_bare`) before there is any `app.tenant_id`
-                // RLS context — same reasoning as `domains`/`invites` above.
-                "oidc_configs",
-            ];
+            // Also excepted: `sso_email_domains`. Discovery resolves the tenant
+            // from the email domain on the bare pool (`get_sso_domain_bare`)
+            // before any `app.tenant_id` RLS context — same reasoning as
+            // `domains`/`invites` above.
+            //
+            // Also excepted: `oidc_configs`. Login/callback resolves the tenant
+            // from the URL slug (via `get_tenant_by_slug`) and reads the config
+            // on the bare pool (`get_oidc_config_bare`) before there is any
+            // `app.tenant_id` RLS context — same reasoning as `domains` above.
+            //
+            // The list itself is the module-level `NOT_FORCED`, shared with
+            // `reset_for_tests`.
             if self.multi_tenant {
-                for table in TENANT_OWNED_TABLES
-                    .iter()
-                    .filter(|t| !NOT_FORCED.contains(t))
-                {
+                for table in forced_tables() {
                     sqlx::query(AssertSqlSafe(format!("ALTER TABLE {table} FORCE ROW LEVEL SECURITY")))
                         .execute(&mut *conn)
                         .await
@@ -1108,7 +1125,24 @@ impl PostgresStore {
 
     /// Used in tests: resets all state (and re-seeds the default tenant so the
     /// OSS/default-tenant path keeps working after a reset).
+    ///
+    /// Also reconciles `FORCE ROW LEVEL SECURITY` with THIS store's mode.
+    /// `ALTER TABLE ... FORCE` is persistent table metadata, so without this a
+    /// cloud-mode test would leave the shared test database FORCE'd and every
+    /// later OSS-mode test (which writes on the bare pool, with no
+    /// `app.tenant_id`) would fail with `new row violates row-level security
+    /// policy`. Dropping FORCE first also keeps the seed INSERT below from
+    /// tripping over a policy left behind by a previous run.
     pub async fn reset_for_tests(&self) -> Result<(), StoreError> {
+        for table in TENANT_OWNED_TABLES {
+            sqlx::query(AssertSqlSafe(format!(
+                "ALTER TABLE {table} NO FORCE ROW LEVEL SECURITY"
+            )))
+            .execute(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        }
+
         for q in [
             "TRUNCATE links, aliases, alert_rules, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships, domains, invites, oidc_configs, sso_email_domains RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
@@ -1126,6 +1160,19 @@ impl PostgresStore {
                 .execute(&self.write)
                 .await
                 .map_err(StoreError::backend)?;
+        }
+
+        // Put FORCE back for a cloud-mode store, so the enforcement tests keep
+        // running against the real production shape after the reset.
+        if self.multi_tenant {
+            for table in forced_tables() {
+                sqlx::query(AssertSqlSafe(format!(
+                    "ALTER TABLE {table} FORCE ROW LEVEL SECURITY"
+                )))
+                .execute(&self.write)
+                .await
+                .map_err(StoreError::backend)?;
+            }
         }
         Ok(())
     }

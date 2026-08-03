@@ -63,11 +63,27 @@ jobs:
       - name: Build
         run: cargo build --release
 
+      # Os testes gated NAO podem rodar como superusuario: o Postgres isenta
+      # superusuario de RLS a menos que a role tenha NOBYPASSRLS, e o
+      # FORCE ROW LEVEL SECURITY do modo cloud e justamente o mecanismo de
+      # isolamento entre tenants. Rodando como postgres, o RLS nunca era
+      # exercitado e so o predicado WHERE tenant_id da aplicacao era testado.
+      # A role abaixo espelha producao: sem superusuario, dona do proprio banco
+      # (o dono do banco herda CREATE no schema public a partir do PG15).
+      - name: Create non-superuser test role
+        run: |
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE quark_test LOGIN PASSWORD 'quark_test' NOSUPERUSER NOBYPASSRLS NOCREATEROLE;
+          CREATE DATABASE quark_test OWNER quark_test;
+          SQL
+
       - name: Test
-        run: cargo test
+        # --no-fail-fast: cargo test para na primeira binaria que falha e
+        # esconde as demais. Numa rodada quebrada isso mostra tudo de uma vez.
+        run: cargo test --no-fail-fast
         env:
           QUARK_TEST_VALKEY_URL: redis://127.0.0.1:6379
-          QUARK_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          QUARK_TEST_DATABASE_URL: postgres://quark_test:quark_test@127.0.0.1:5432/quark_test
           QUARK_TEST_CLICKHOUSE_URL: http://127.0.0.1:8123
 
   web:
