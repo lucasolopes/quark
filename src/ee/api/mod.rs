@@ -15,6 +15,7 @@ pub(crate) use crate::api::*;
 mod domains;
 mod invites;
 mod sso_domains;
+pub(crate) mod tenant_idp;
 mod tenants;
 
 pub(crate) use domains::*;

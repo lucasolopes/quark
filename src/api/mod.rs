@@ -122,11 +122,9 @@ pub struct AppState {
     /// disables the whole subdomain-auto feature (no seed on create, no boot
     /// backfill, `/admin/me` reports `null`).
     pub tenant_domain_suffix: Option<String>,
-    /// Per-tenant `OidcRuntime` cache (multi-tenancy P2d): each cloud tenant's
-    /// own IdP config (`oidc_configs`) is built into a runtime lazily on first
-    /// login and cached here, keyed by tenant id. Invalidated (best-effort) by
-    /// `admin_oidc_config_put`/`_delete`; also self-expires via TTL.
-    pub oidc_tenants: crate::oidc::TenantOidcCache,
+    /// Which edition this process is running (LUC-146). Resolved once at boot;
+    /// always `Community` in a build without the `ee` feature.
+    pub license: license::LicenseStatus,
     /// Enterprise state (LUC-19): the Keycloak admin runtime and its base URL.
     /// Aggregated into a single field, behind the `ee` feature, because these
     /// are the only fields that name a type which leaves the core along with
@@ -172,12 +170,14 @@ impl AppState {
 }
 
 mod guard;
+pub mod license;
 mod links;
 mod links_admin;
 mod oidc_login;
 mod router;
 mod sheets;
 mod slack;
+pub(crate) mod tenant_idp;
 mod webhooks_api;
 
 pub use guard::*;

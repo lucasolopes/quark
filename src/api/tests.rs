@@ -108,10 +108,10 @@ async fn build_state(
         real_ip_header: super::DEFAULT_REAL_IP_HEADER.to_string(),
         webhooks,
         multi_tenant,
+        license: Default::default(),
         host_router,
         dns: Arc::new(crate::dns::NullDns),
         tenant_domain_suffix: None,
-        oidc_tenants: crate::oidc::TenantOidcCache::new(),
         #[cfg(feature = "ee")]
         ee: Default::default(),
     })

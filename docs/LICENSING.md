@@ -77,8 +77,8 @@ Tests follow the same split: `cargo test` and `npm run test` cover Community,
 
 ## Environment variables that only do something in Enterprise
 
-`QUARK_MULTI_TENANT`, `QUARK_TENANT_DOMAIN_SUFFIX`, and every
-`QUARK_KEYCLOAK_*`. A Community build ignores them. See
+`QUARK_MULTI_TENANT`, `QUARK_TENANT_DOMAIN_SUFFIX`, `QUARK_LICENSE_KEY`, and
+every `QUARK_KEYCLOAK_*`. A Community build ignores them. See
 [`CONFIGURATION.md`](CONFIGURATION.md), where each one is marked.
 
 ## Contributing

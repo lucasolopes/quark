@@ -79,8 +79,8 @@ Enterprise.
 
 ## Variáveis de ambiente que só têm efeito na Enterprise
 
-`QUARK_MULTI_TENANT`, `QUARK_TENANT_DOMAIN_SUFFIX` e todas as
-`QUARK_KEYCLOAK_*`. Um build Community as ignora. Ver
+`QUARK_MULTI_TENANT`, `QUARK_TENANT_DOMAIN_SUFFIX`, `QUARK_LICENSE_KEY` e todas
+as `QUARK_KEYCLOAK_*`. Um build Community as ignora. Ver
 [`CONFIGURATION.PT_BR.md`](CONFIGURATION.PT_BR.md), onde cada uma está marcada.
 
 ## Contribuindo

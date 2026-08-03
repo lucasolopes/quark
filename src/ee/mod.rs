@@ -31,7 +31,9 @@ use std::sync::Arc;
 /// core even when only cloud uses them (`tenant_domain_suffix` is read by
 /// `api/links.rs`, `oidc_tenants` is a cache over the store, and `host_router`
 /// is on the hot path).
-#[derive(Clone, Default)]
+// Not `Clone`: it lives inside the `Arc<AppState>` and is never copied.
+// `Default` is what the test builders use to stand one up empty.
+#[derive(Default)]
 pub struct EeState {
     /// Keycloak admin runtime, present only when `QUARK_KEYCLOAK_BASE_URL` is
     /// configured. `None` disables per-tenant realm provisioning entirely.
@@ -39,6 +41,16 @@ pub struct EeState {
     /// Base URL Keycloak answers on, kept alongside the runtime so a tenant's
     /// issuer can be derived without re-reading the environment.
     pub keycloak_base_url: Option<String>,
+    /// Per-tenant `OidcRuntime` cache (multi-tenancy P2d): each tenant's own
+    /// IdP config (`oidc_configs`) is built into a runtime lazily on first
+    /// login and cached here, keyed by tenant id. Invalidated (best-effort) by
+    /// `admin_oidc_config_put`/`_delete`; also self-expires via TTL.
+    ///
+    /// Moved out of the core `AppState` in LUC-145: with per-tenant IdP
+    /// resolution behind `api::tenant_idp`, nothing in the core reads it. The
+    /// cache type itself stays in `src/oidc.rs`, which is core: it is a TTL map
+    /// over `OidcRuntime`, with no Enterprise logic of its own.
+    pub oidc_tenants: crate::oidc::TenantOidcCache,
 }
 
 /// Enterprise boot, called once by `main`.
@@ -148,5 +160,6 @@ pub async fn boot(
     EeState {
         keycloak,
         keycloak_base_url,
+        oidc_tenants: crate::oidc::TenantOidcCache::new(),
     }
 }

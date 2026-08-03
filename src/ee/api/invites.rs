@@ -312,7 +312,7 @@ pub(crate) async fn admin_oidc_config_put(
     if let Err(e) = st.store.put_oidc_config(&cfg).await {
         return conflict_or_503(e).into_response();
     }
-    st.oidc_tenants.invalidate(p.tenant).await;
+    st.ee.oidc_tenants.invalidate(p.tenant).await;
     Json(OidcConfigView::from(&cfg)).into_response()
 }
 
@@ -359,7 +359,7 @@ pub(crate) async fn admin_oidc_config_delete(
         Ok(()) => StatusCode::OK.into_response(),
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    st.oidc_tenants.invalidate(p.tenant).await;
+    st.ee.oidc_tenants.invalidate(p.tenant).await;
     resp
 }
 

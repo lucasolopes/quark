@@ -456,7 +456,7 @@ pub(crate) async fn admin_tenants_delete(
     for host in hosts {
         st.host_router.invalidate(&host).await;
     }
-    st.oidc_tenants.invalidate(target).await;
+    st.ee.oidc_tenants.invalidate(target).await;
     StatusCode::NO_CONTENT.into_response()
 }
 

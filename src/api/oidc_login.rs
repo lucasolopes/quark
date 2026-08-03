@@ -57,39 +57,25 @@ pub(crate) async fn oidc_login(
                 )
                     .into_response();
             }
-            // Rate-limit the org-login start by IP (LUC-51): the generic 404
-            // already hides slug existence by body, but an unthrottled caller
-            // could still probe slugs by response timing (unknown = 1 query vs
-            // configured = more). A per-IP brake closes that side channel.
-            let ip = client_ip(&headers, &st.real_ip_header, None);
-            if !st.ratelimiter.check(&ip, now()).await {
-                return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
-            }
-            // Both "unknown slug" and "known tenant, no IdP of its own" return
-            // the exact same 404 body: an unauthenticated caller must not be
-            // able to distinguish a nonexistent organization from a real one
-            // that simply hasn't set up OIDC (slug enumeration).
-            let tenant = match st.store.get_tenant_by_slug(slug).await {
-                Ok(Some(t)) => t,
-                Ok(None) => return org_login_not_found(),
-                Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-            };
-            let cfg = match st.store.get_oidc_config_bare(tenant.id).await {
-                Ok(Some(c)) => c,
-                Ok(None) => return org_login_not_found(),
-                Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-            };
-            let rt = match st.oidc_tenants.get_or_build(tenant.id, &cfg).await {
-                Ok(rt) => rt,
-                Err(_) => {
+            // Resolution against the tenant's own IdP is Enterprise (LUC-145);
+            // the Community build resolves nothing and lands on the same 404.
+            match tenant_idp::runtime_for_slug(&st, slug, &headers).await {
+                Ok((rt, tenant_id)) => (rt, Some(tenant_id)),
+                Err(tenant_idp::TenantIdpError::RateLimited) => {
+                    return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response()
+                }
+                Err(tenant_idp::TenantIdpError::Unavailable) => {
+                    return StatusCode::SERVICE_UNAVAILABLE.into_response()
+                }
+                Err(tenant_idp::TenantIdpError::Unreachable) => {
                     return (
                         StatusCode::BAD_GATEWAY,
                         "organization's identity provider is unreachable",
                     )
                         .into_response()
                 }
-            };
-            (rt, Some(tenant.id))
+                Err(tenant_idp::TenantIdpError::NotFound) => return org_login_not_found(),
+            }
         }
         None => {
             let Some(oidc) = st.oidc.as_ref() else {
@@ -190,31 +176,27 @@ pub(crate) async fn oidc_callback(
     // tenant signed into the login cookie (multi-tenancy P2d), or the global
     // env-configured IdP.
     let (runtime, tenant_cfg) = match tenant {
-        Some(tenant_id) => {
-            let cfg = match st.store.get_oidc_config_bare(tenant_id).await {
-                Ok(Some(c)) => c,
-                Ok(None) => {
-                    // The tenant's config was removed after the login started.
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        "organization's identity provider is no longer configured",
-                    )
-                        .into_response();
-                }
-                Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-            };
-            let rt = match st.oidc_tenants.get_or_build(tenant_id, &cfg).await {
-                Ok(rt) => rt,
-                Err(_) => {
-                    return (
-                        StatusCode::BAD_GATEWAY,
-                        "organization's identity provider is unreachable",
-                    )
-                        .into_response()
-                }
-            };
-            (rt, Some(cfg))
-        }
+        Some(tenant_id) => match tenant_idp::runtime_for_tenant(&st, tenant_id).await {
+            Ok((rt, cfg)) => (rt, Some(cfg)),
+            // The tenant's config was removed after the login started, or this
+            // is a Community build that cannot resolve one at all. Either way
+            // the login cannot be completed against a per-tenant IdP.
+            Err(tenant_idp::TenantIdpError::NotFound) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "organization's identity provider is no longer configured",
+                )
+                    .into_response()
+            }
+            Err(tenant_idp::TenantIdpError::Unreachable) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    "organization's identity provider is unreachable",
+                )
+                    .into_response()
+            }
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        },
         None => {
             let Some(oidc) = st.oidc.as_ref() else {
                 return (StatusCode::NOT_FOUND, "oidc not configured").into_response();
@@ -424,12 +406,9 @@ pub(crate) async fn oidc_logout(State(st): State<Arc<AppState>>, headers: Header
                     .and_then(|rt| rt.logout_url(tok, &redirect))
             } else if sess_tenant != crate::tenant::DEFAULT_TENANT {
                 // Per-tenant sign-in: the tenant's own realm issued the token.
-                match st.store.get_oidc_config_bare(sess_tenant).await {
-                    Ok(Some(cfg)) => match st.oidc_tenants.get_or_build(sess_tenant, &cfg).await {
-                        Ok(rt) => rt.logout_url(tok, &redirect),
-                        Err(_) => None,
-                    },
-                    _ => None,
+                match tenant_idp::runtime_for_tenant(&st, sess_tenant).await {
+                    Ok((rt, _)) => rt.logout_url(tok, &redirect),
+                    Err(_) => None,
                 }
             } else {
                 None
@@ -474,6 +453,7 @@ pub(crate) async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap
                 "tenant_domain_suffix": st.tenant_domain_suffix,
                 "public_host": st.public_host,
                 "slack_connect": st.slack.is_some(),
+                "edition": st.license.edition(),
             });
             // Cloud (multi-tenant) only: the panel gates workspace onboarding on
             // the PRESENCE of `memberships`, so OSS/single-tenant MUST omit both
@@ -533,6 +513,7 @@ pub(crate) async fn admin_me(State(st): State<Arc<AppState>>, headers: HeaderMap
         "tenant_domain_suffix": st.tenant_domain_suffix,
         "public_host": st.public_host,
         "slack_connect": st.slack.is_some(),
+        "edition": st.license.edition(),
     }))
     .into_response()
 }
