@@ -169,6 +169,7 @@ impl AppState {
     }
 }
 
+pub mod entitlement;
 mod guard;
 pub mod license;
 mod links;

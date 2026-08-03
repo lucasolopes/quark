@@ -13,6 +13,7 @@
 pub(crate) use crate::api::*;
 
 mod domains;
+pub mod entitlement;
 mod invites;
 mod sso_domains;
 pub(crate) mod tenant_idp;
