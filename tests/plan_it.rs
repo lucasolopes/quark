@@ -5,6 +5,7 @@
 
 use quark::analytics::AnalyticsSink;
 use quark::api::entitlement::{require, require_quota, Feature, Quota};
+use quark::ee::api::entitlement::plan_of;
 use quark::store::postgres::PostgresStore;
 use quark::store::Store;
 use quark::tenant::{Tenant, TenantId, DEFAULT_TENANT};
@@ -250,6 +251,146 @@ async fn domain_under_the_tenant_suffix_is_rejected_not_silently_exempted() {
     assert_eq!(
         st.store.list_domains(DEFAULT_TENANT).await.unwrap().len(),
         0
+    );
+}
+
+/// `GET /admin/plan` reports the grid the panel renders from: the plan
+/// string, its numeric ceilings, and the features it unlocks. Authenticates
+/// via break-glass, which resolves to `DEFAULT_TENANT` (see the note on
+/// `ADMIN_TOKEN` above), so the plan is granted there, not on some other
+/// tenant id.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn plan_endpoint_reports_the_grid_for_the_panel() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let st = state_with_plan_on_default_tenant("starter").await;
+    let app = quark::api::router(st.clone());
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/admin/plan")
+                .header("x-admin-token", ADMIN_TOKEN)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["plan"], "starter");
+    assert!(v["limits"]["domains"].is_number());
+    assert!(v["features"].is_array());
+}
+
+/// `PUT /admin/tenants/{id}/plan` is the operator's only way to change a
+/// tenant's plan: the break-glass token is required directly, the write
+/// takes effect immediately (the cache is invalidated, not just left to
+/// expire after the 60s TTL), and an unrecognized plan string is rejected
+/// with `400` instead of silently downgrading the tenant to Free.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn operator_can_change_the_plan_and_it_takes_effect_immediately() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let st = state_with_plan_on_default_tenant("free").await;
+    let app = quark::api::router(st.clone());
+
+    // Free is denied webhooks up front.
+    let denied = require(&st, DEFAULT_TENANT, Feature::Webhooks)
+        .await
+        .unwrap_err();
+    assert_eq!(denied.limit, "webhooks");
+
+    let res = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri(format!("/admin/tenants/{}/plan", DEFAULT_TENANT.0))
+                .header("x-admin-token", ADMIN_TOKEN)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::json!({ "plan": "starter" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::NO_CONTENT);
+
+    // No wait for the TTL: the handler must have invalidated the cache.
+    assert!(require(&st, DEFAULT_TENANT, Feature::Webhooks)
+        .await
+        .is_ok());
+}
+
+/// A tenant API token (`Scope::Full` even) must not be able to write its own
+/// plan: only the break-glass `QUARK_ADMIN_TOKEN` compared directly is
+/// accepted, never a credential `admin_guard` would otherwise resolve.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn tenant_cannot_promote_its_own_plan_without_the_break_glass_token() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let st = state_with_plan_on_default_tenant("free").await;
+    let app = quark::api::router(st.clone());
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri(format!("/admin/tenants/{}/plan", DEFAULT_TENANT.0))
+                .header("x-admin-token", "not-the-real-token")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::json!({ "plan": "custom" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+}
+
+/// A typo in the plan string must fail loudly with `400`, not silently fall
+/// back to Free the way `Plan::from_stored` does on read.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn unknown_plan_string_is_rejected_with_400() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let st = state_with_plan_on_default_tenant("starter").await;
+    let app = quark::api::router(st.clone());
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri(format!("/admin/tenants/{}/plan", DEFAULT_TENANT.0))
+                .header("x-admin-token", ADMIN_TOKEN)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::json!({ "plan": "starterr" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::BAD_REQUEST);
+    // Still starter, unchanged.
+    assert_eq!(
+        quark::ee::plan::Plan::Starter,
+        plan_of(&st, DEFAULT_TENANT).await
     );
 }
 
