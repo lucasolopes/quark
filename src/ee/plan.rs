@@ -162,6 +162,47 @@ impl Plan {
     }
 }
 
+/// Per-tenant plan cache. The plan is read on every gated request, and the
+/// store round-trip would otherwise be paid each time. Same shape the crate
+/// already uses for `TenantOidcCache` and the host router: moka with a TTL,
+/// plus explicit invalidation when the plan changes.
+#[derive(Clone)]
+pub struct PlanCache {
+    cache: moka::future::Cache<crate::tenant::TenantId, Plan>,
+}
+
+/// Short enough that a plan change nobody invalidated still converges quickly,
+/// long enough that the store is not hit per request.
+const PLAN_TTL_SECS: u64 = 60;
+
+impl PlanCache {
+    pub fn new() -> PlanCache {
+        PlanCache {
+            cache: moka::future::Cache::builder()
+                .time_to_live(std::time::Duration::from_secs(PLAN_TTL_SECS))
+                .build(),
+        }
+    }
+
+    pub async fn get(&self, tenant: crate::tenant::TenantId) -> Option<Plan> {
+        self.cache.get(&tenant).await
+    }
+
+    pub async fn put(&self, tenant: crate::tenant::TenantId, plan: Plan) {
+        self.cache.insert(tenant, plan).await;
+    }
+
+    pub async fn invalidate(&self, tenant: crate::tenant::TenantId) {
+        self.cache.invalidate(&tenant).await;
+    }
+}
+
+impl Default for PlanCache {
+    fn default() -> Self {
+        PlanCache::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

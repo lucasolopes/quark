@@ -235,6 +235,7 @@ impl TestState {
                 keycloak: self.keycloak,
                 keycloak_base_url: self.keycloak_base_url,
                 oidc_tenants: quark::oidc::TenantOidcCache::new(),
+                plans: quark::ee::plan::PlanCache::new(),
             },
         })
     }

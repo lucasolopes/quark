@@ -1,12 +1,17 @@
 // Codigo de teste pode entrar em panico: a falha e o proprio sinal.
 #![allow(clippy::unwrap_used)]
+// Community-only suite: with `--features ee`, `DEFAULT_TENANT` has no plan
+// row and resolves to `Plan::Free`, which denies `Sso` and other gated
+// features. That is the real Enterprise behavior, so it belongs to
+// `plan_it.rs`, not here.
+#![cfg(not(feature = "ee"))]
 
 //! The Community edition must never enforce a plan limit. A self-hosted AGPL
 //! install is free and unlimited (LUC-19), so every gate resolves to `Ok`.
 //!
-//! This binary runs in BOTH builds on purpose: with `--features ee` the state
-//! it builds has no plan configured, which must also resolve to the entry plan
-//! without denying anything a Free tenant may do.
+//! This binary proves the Community build only: it does not run under
+//! `--features ee`, where plans are real and a Free tenant is denied gated
+//! features on purpose.
 
 use quark::api::entitlement::{require, require_quota, Feature, Quota};
 use quark::store::open_backends;
