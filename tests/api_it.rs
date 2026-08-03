@@ -3202,6 +3202,7 @@ async fn sheets_callback_requires_the_state_cookie() {
         .oidc_configured(true)
         .sheets(Some(Arc::new(cfg)))
         .build();
+    common::grant_default_tenant_starter_plan(&state).await;
     let app = router(state);
 
     // Connect (admin-authed) returns the consent URL and sets the state cookie.
@@ -3398,6 +3399,12 @@ async fn sheets_connect_binds_the_state_cookie_to_the_callers_tenant() {
         )
         .await
         .unwrap();
+    #[cfg(feature = "ee")]
+    state
+        .ee
+        .plans
+        .put(tenant, quark::ee::plan::Plan::Starter)
+        .await;
     let app = router(state);
 
     let resp = app

@@ -233,6 +233,12 @@ pub(crate) async fn admin_webhooks_create(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
+    if let Err(denied) =
+        crate::api::entitlement::require(&st, p.tenant, crate::api::entitlement::Feature::Webhooks)
+            .await
+    {
+        return denied.into_response();
+    }
     if let Err((status, msg)) = validate_webhook_url(&req.url) {
         return (status, msg).into_response();
     }
@@ -500,6 +506,15 @@ pub(crate) async fn admin_pixels_create(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
+    if let Err(denied) = crate::api::entitlement::require(
+        &st,
+        p.tenant,
+        crate::api::entitlement::Feature::Integrations,
+    )
+    .await
+    {
+        return denied.into_response();
+    }
     let req: PixelCreateReq = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(_) => return (StatusCode::BAD_REQUEST, "invalid json").into_response(),

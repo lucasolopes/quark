@@ -49,6 +49,7 @@ async fn app_admin_with_dispatcher(
         .webhooks(webhooks)
         .admin_token(Some(token.to_string()))
         .build();
+    common::grant_default_tenant_starter_plan(&state).await;
     (router(state), wh_rx)
 }
 
@@ -82,6 +83,7 @@ async fn app_admin_with_store(token: &str) -> (axum::Router, Arc<dyn quark::stor
         .webhooks(webhooks)
         .admin_token(Some(token.to_string()))
         .build();
+    common::grant_default_tenant_starter_plan(&state).await;
     (router(state), store)
 }
 
@@ -230,6 +232,7 @@ async fn app_admin_with_dispatcher_clicked_subscribed(
         .webhooks(webhooks)
         .admin_token(Some(token.to_string()))
         .build();
+    common::grant_default_tenant_starter_plan(&state).await;
     (router(state), wh_rx)
 }
 

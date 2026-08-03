@@ -30,6 +30,7 @@ async fn app_with_token(admin_token: Option<&str>) -> axum::Router {
         .webhooks(common::test_webhook_dispatcher())
         .admin_token(admin_token.map(|s| s.to_string()))
         .build();
+    common::grant_default_tenant_starter_plan(&state).await;
     router(state)
 }
 
