@@ -13,9 +13,9 @@ function RouteFallback() {
 /**
  * Wrap a lazy route element in Suspense so its chunk can load without blocking.
  *
- * Mora num modulo proprio, e nao no `router.tsx`, porque o barrel Enterprise
- * (`web/src/ee/index.tsx`) tambem monta rotas e precisa do mesmo wrapper sem
- * criar import circular (LUC-19).
+ * Lives in its own module rather than in `router.tsx` because the Enterprise
+ * barrel (`web/src/ee/index.tsx`) also mounts routes and needs the same wrapper
+ * without creating a circular import (LUC-19).
  */
 export function suspended(element: ReactElement): ReactElement {
   return <Suspense fallback={<RouteFallback />}>{element}</Suspense>;

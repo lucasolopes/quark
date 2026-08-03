@@ -1,13 +1,13 @@
-// quark Enterprise Edition, painel.
+// quark Enterprise Edition, panel.
 //
-// ATENCAO: este diretorio NAO e AGPL. Ele e coberto pela quark Enterprise
-// Edition License em `web/src/ee/LICENSE`. Todo o resto de `web/` e
-// AGPL-3.0-only. Ver `docs/LICENSING.md`.
+// WARNING: this directory is NOT AGPL. It is covered by the quark Enterprise
+// Edition License in `web/src/ee/LICENSE`. Everything else in `web/` is
+// AGPL-3.0-only. See `docs/LICENSING.md`.
 //
-// Barrel que o core importa pelo alias `@ee`. O `vite.config.ts` resolve esse
-// alias para ca quando `VITE_QUARK_EE` esta ligado e a pasta existe, e para
-// `@/lib/ee-stub` caso contrario. As duas implementacoes tem a mesma forma, o
-// que e checado pelo `satisfies` no fim deste arquivo.
+// The barrel the core imports through the `@ee` alias. `vite.config.ts`
+// resolves that alias here when `VITE_QUARK_EE` is on and the directory
+// exists, and to `@/lib/ee-stub` otherwise. Both expose the same shape, and the
+// stub is what `tsconfig` typechecks the core against.
 import { lazy } from "react";
 import type { RouteObject } from "react-router";
 
@@ -24,7 +24,7 @@ const Domains = lazy(() => import("./Domains").then((m) => ({ default: m.Domains
 
 export const eeEnabled = true;
 
-/** Telas Enterprise dentro da arvore autenticada, montadas pelo `router.tsx`. */
+/** Enterprise screens inside the authenticated tree, mounted by `router.tsx`. */
 export const eeRoutes: RouteObject[] = [
   { path: "members", element: suspended(<Members />) },
   { path: "sso-domains", element: suspended(<SsoDomains />) },
@@ -33,9 +33,9 @@ export const eeRoutes: RouteObject[] = [
 ];
 
 /**
- * Aceite de convite. Fica fora da arvore autenticada de proposito: quem chega
- * por um link de convite ainda nao tem workspace, e montar isso sob a arvore
- * autenticada prenderia a pessoa no `WorkspaceGate`.
+ * Invite acceptance. Outside the authenticated tree on purpose: someone
+ * arriving from an invite link has no workspace yet, and mounting this under
+ * the authenticated tree would trap them in `WorkspaceGate`.
  */
 export const eePublicRoutes: RouteObject[] = [
   { path: "/invite/:token", element: suspended(<AcceptInvite />) },

@@ -433,10 +433,10 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Arc::new(quark::dns::NullDns)
     };
-    // Boot da edicao Enterprise (LUC-19): runtime do Keycloak, backfill de
-    // provisionamento e seed do subdominio automatico de cada tenant. Tudo isso
-    // vive em `src/ee/`, que nao e AGPL e so entra no binario com
-    // `--features ee`. Uma chamada so, e nao `cfg` espalhado pelo boot.
+    // Enterprise boot (LUC-19): the Keycloak runtime, the provisioning
+    // backfill, and each tenant's automatic subdomain seed. All of it lives in
+    // `src/ee/`, which is not AGPL and only enters the binary with
+    // `--features ee`. One call, rather than `cfg` scattered through startup.
     #[cfg(feature = "ee")]
     let ee = quark::ee::boot(&store, multi_tenant, tenant_domain_suffix.as_deref()).await;
 

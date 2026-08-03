@@ -50,9 +50,9 @@
       }
     },
     {
-      // Seam da edicao Enterprise (LUC-19): `@ee` e o stub inerte sao barrels
-      // que expoem rotas e componentes pela mesma porta, de proposito, e
-      // `suspended` e helper de rota e nao componente de tela.
+      // Enterprise seam (LUC-19): `@ee` and the inert stub are barrels that
+      // expose routes and components through the same door, on purpose, and
+      // `suspended` is a route helper rather than a screen component.
       "files": ["src/ee/index.tsx", "src/lib/ee-stub.tsx", "src/app/suspended.tsx"],
       "rules": {
         "react/only-export-components": "off"

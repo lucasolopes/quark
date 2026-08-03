@@ -1,16 +1,15 @@
-//! Rotas HTTP da edicao Enterprise. Coberto pela `src/ee/LICENSE`, nao pelo
-//! AGPL.
+//! Enterprise HTTP routes. Covered by `src/ee/LICENSE`, not by the AGPL.
 //!
-//! As 15 rotas montadas aqui sao exatamente as que ja respondiam 404 quando
-//! `!st.multi_tenant`: administrar workspaces, convidar terceiros, configurar
-//! IdP por tenant, discovery de SSO por dominio de e-mail e dominios proprios
-//! com verificacao DNS. O inventario que classificou cada uma esta em
+//! The 15 routes mounted here are exactly the ones that already answered 404
+//! when `!st.multi_tenant`: administering workspaces, inviting other people,
+//! configuring a per-tenant IdP, SSO discovery by email domain, and custom
+//! domains with DNS verification. The inventory that classified each one is in
 //! `docs/research/2026-08-03-luc19-inventario-oss-ee.md`.
 
-// Namespace interno do core (`AppState`, `admin_guard`, `client_ip`, os tipos
-// de dominio e o prelude de axum). Reexportado para que os submodulos daqui
-// alcancem tudo com um `use super::*`, do mesmo jeito que os submodulos de
-// `src/api/` fazem.
+// The core's internal namespace (`AppState`, `admin_guard`, `client_ip`, the
+// domain types, the axum prelude). Re-exported so the submodules here reach all
+// of it through a plain `use super::*`, the same way `src/api/`'s own
+// submodules do.
 pub(crate) use crate::api::*;
 
 mod domains;
@@ -23,8 +22,8 @@ pub(crate) use invites::*;
 pub(crate) use sso_domains::*;
 pub use tenants::*;
 
-/// Ponto de injecao chamado por `crate::api::router_with_cors`. Recebe o router
-/// do core e devolve com as rotas Enterprise montadas.
+/// Injection point called by `crate::api::router_with_cors`. Takes the core
+/// router and returns it with the Enterprise routes mounted.
 pub fn mount(r: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     r.route("/admin/tenants", post(admin_tenants_create))
         .route(
@@ -75,10 +74,10 @@ pub fn mount(r: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
         .route("/admin/invites/{token}/accept", post(admin_invites_accept))
 }
 
-// Helpers de sessao usados so pelos handlers Enterprise. Moraram em
-// `api/oidc_login.rs` ate a LUC-19; a doc de cada um cita o handler EE que os
-// chama (`/admin/tenants`, `admin_tenants_delete`, `put_tenant`). Vieram junto
-// para o build Community nao carregar codigo morto.
+// Session helpers used only by the Enterprise handlers. They lived in
+// `api/oidc_login.rs` until LUC-19; each one's doc names the EE handler that
+// calls it (`/admin/tenants`, `admin_tenants_delete`, `put_tenant`). They moved
+// along so the Community build carries no dead code.
 
 /// Resolves the session cookie to its `user_id`, independent of scopes. Used
 /// by `/admin/tenants`: creating a first workspace must be reachable by ANY
@@ -144,7 +143,8 @@ pub(super) fn conflict_or_503(e: StoreError) -> StatusCode {
 
 #[cfg(test)]
 mod tests {
-    //! Migrado de `src/api/tests.rs` na LUC-19, junto com o helper que exercita.
+    //! Moved out of `src/api/tests.rs` in LUC-19, along with the helper it
+    //! exercises.
 
     /// `session_user_id` must gate on `st.oidc_configured`, same as
     /// `admin_guard`'s session branch: a leftover session cookie must stop

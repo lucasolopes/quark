@@ -1,33 +1,34 @@
-// Implementacao inerte da superficie Enterprise, usada pela edicao Community.
+// Inert implementation of the Enterprise surface, used by the Community
+// edition.
 //
-// Este arquivo e AGPL, como o resto de `web/src/` fora de `web/src/ee/`. Ele
-// existe para que o painel continue compilando e rodando quando `web/src/ee/`
-// nao esta presente (LUC-19). O `vite.config.ts` aponta o alias `@ee` para ca
-// quando a pasta EE nao existe ou `VITE_QUARK_EE` nao esta ligado, e o
-// `tsconfig` aponta para ca sempre, o que faz deste arquivo o contrato de tipo
-// que a implementacao real precisa satisfazer.
+// This file is AGPL, like the rest of `web/src/` outside `web/src/ee/`. It
+// exists so the panel keeps building and running when `web/src/ee/` is not
+// there (LUC-19). `vite.config.ts` points the `@ee` alias here when the EE
+// directory is missing or `VITE_QUARK_EE` is off, and `tsconfig` points here
+// always, which makes this file the type contract the real implementation has
+// to satisfy.
 //
-// Nenhum destes componentes chega a renderizar na edicao Community: o servidor
-// nao roda em modo cloud, entao `me.multi_tenant` e falso e as telas que
-// dependem disso nunca sao alcancadas.
+// None of these components ever render in the Community edition: the server
+// does not run in cloud mode, so `me.multi_tenant` is false and the screens
+// that depend on it are never reached.
 import type { RouteObject } from "react-router";
 import type { MeResponse } from "@/lib/types";
 
-/** Ligada so na edicao Enterprise. */
+/** True only in the Enterprise edition. */
 export const eeEnabled = false;
 
-/** Rotas Enterprise montadas pelo router. Vazio aqui. */
+/** Enterprise routes mounted by the router. Empty here. */
 export const eeRoutes: RouteObject[] = [];
 
-/** Rota publica de aceite de convite, fora da arvore autenticada. */
+/** Public invite-acceptance route, outside the authenticated tree. */
 export const eePublicRoutes: RouteObject[] = [];
 
-/** Onboarding de workspace. Inalcancavel sem modo cloud. */
+/** Workspace onboarding. Unreachable without cloud mode. */
 export function WorkspaceGate(_props: { me: MeResponse }) {
   return null;
 }
 
-/** Seletor de workspace no topo da sidebar. */
+/** Workspace switcher at the top of the sidebar. */
 export function WorkspaceSwitcher() {
   return null;
 }

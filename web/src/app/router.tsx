@@ -23,8 +23,8 @@ const Pixels = lazy(() => import("@/routes/Pixels").then((m) => ({ default: m.Pi
 /** Centered spinner shown while a lazily-loaded route chunk is fetched. */
 export const router = createBrowserRouter([
   { path: "/login", element: suspended(<Login />) },
-  // Rotas publicas da edicao Enterprise (aceite de convite). Vazio na
-  // Community, onde `@ee` resolve para o stub inerte.
+  // Public Enterprise routes (invite acceptance). Empty in Community, where
+  // `@ee` resolves to the inert stub.
   ...eePublicRoutes,
   {
     path: "/",
@@ -44,8 +44,8 @@ export const router = createBrowserRouter([
       { path: "tokens", element: suspended(<Tokens />) },
       { path: "pixels", element: suspended(<Pixels />) },
       { path: "analytics", element: suspended(<Analytics />) },
-      // Telas da edicao Enterprise (workspace, convites, SSO por tenant,
-      // dominios). Vazio na Community.
+      // Enterprise screens (workspaces, invites, per-tenant SSO, domains).
+      // Empty in Community.
       ...eeRoutes,
       { path: "app-links", element: suspended(<AppLinks />) },
     ],

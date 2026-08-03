@@ -43,8 +43,9 @@ pub struct DomainRoute {
 /// Lowercased so it matches the lookup convention every other host in
 /// `domains` follows (`get_domain_by_host`/`HostRouter` always query lowercase).
 ///
-/// Fica no core, e nao em `src/ee/`, porque `api/links.rs` monta a URL curta
-/// com ela (LUC-19: o hot path manda). Administrar o subdominio e que e EE.
+/// Stays in the core rather than `src/ee/` because `api/links.rs` builds the
+/// short URL with it (LUC-19: the hot path wins). Administering the subdomain is
+/// the part that is Enterprise.
 pub fn subdomain_host(slug: &str, suffix: &str) -> String {
     format!("{slug}.{suffix}").to_ascii_lowercase()
 }

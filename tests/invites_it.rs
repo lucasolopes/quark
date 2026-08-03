@@ -6,8 +6,8 @@
 //! P2c Task 1+2: `invites` table + store methods (Task 1), plus the
 //! create/list/revoke HTTP endpoints (Task 2). Mirrors the non-superuser,
 //! PG-gated harness in `tests/domains_it.rs`.
-// Suite da edicao Enterprise: estas rotas so existem no build `--features ee`
-// (LUC-19). Sem a feature, a binaria compila vazia em vez de falhar.
+// Enterprise suite: these routes only exist in the `--features ee` build
+// (LUC-19). Without the feature the binary compiles empty instead of failing.
 #![cfg(feature = "ee")]
 
 use axum::body::Body;

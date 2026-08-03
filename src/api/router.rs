@@ -133,14 +133,14 @@ pub fn router_with_cors(state: Arc<AppState>, origins: Vec<String>) -> Router {
                 .delete(admin_wellknown_delete),
         );
 
-    // Ponto de injecao unico da edicao Enterprise (LUC-19). As rotas de
-    // workspace, convite, dominio e SSO por tenant vivem em `src/ee/`, que nao
-    // e AGPL e so entra no binario com `--features ee`. Um ponto so, e nao um
-    // `cfg` por rota: assim a fronteira e visivel e o build Community nunca
-    // referencia um handler que nao existe.
+    // The Enterprise edition's single injection point (LUC-19). Workspace,
+    // invite, domain, and per-tenant SSO routes live in `src/ee/`, which is not
+    // AGPL and only enters the binary with `--features ee`. One point rather
+    // than a `cfg` per route: the boundary stays visible, and the Community
+    // build never names a handler that does not exist.
     //
-    // Precisa vir antes do `with_state`, que converte o `Router<Arc<AppState>>`
-    // em `Router<()>`.
+    // Has to come before `with_state`, which turns `Router<Arc<AppState>>` into
+    // `Router<()>`.
     #[cfg(feature = "ee")]
     let app = crate::ee::api::mount(app);
 

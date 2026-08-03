@@ -1,14 +1,14 @@
-// Modo de teste da edicao Enterprise (LUC-19).
+// Enterprise test mode (LUC-19).
 //
-// Reaproveita a config base e sobrescreve dois pontos: o alias `@ee` passa a
-// apontar para a implementacao real em vez do stub inerte, e `src/ee/**` entra
-// na coleta.
+// Reuses the base config and overrides two things: the `@ee` alias now points
+// at the real implementation instead of the inert stub, and `src/ee/**` joins
+// the collection.
 //
-// Nao usa variavel de ambiente de proposito. Setar `process.env` num modulo ESM
-// nao funciona aqui: os imports sao hoisted, entao a config base leria a
-// variavel antes da atribuicao rodar, e o `test:ee` acabaria rodando exatamente
-// a mesma coisa que o `test`. Sobrescrever o objeto e deterministico e funciona
-// igual no Windows e no CI.
+// It deliberately avoids an environment variable. Setting `process.env` in an
+// ESM module does not work here: imports are hoisted, so the base config would
+// read the variable before the assignment runs, and `test:ee` would end up
+// running exactly what `test` runs. Overriding the object is deterministic and
+// behaves the same on Windows and in CI.
 import path from 'node:path'
 import { configDefaults } from 'vitest/config'
 

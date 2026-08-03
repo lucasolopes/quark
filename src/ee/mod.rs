@@ -1,54 +1,55 @@
 //! quark Enterprise Edition.
 //!
-//! ATENCAO: este diretorio NAO e AGPL. Ele e coberto pela quark Enterprise
-//! Edition License em `src/ee/LICENSE`. Todo o resto do repositorio e
-//! AGPL-3.0-only. Ver `docs/LICENSING.md`.
+//! WARNING: this directory is NOT AGPL. It is covered by the quark Enterprise
+//! Edition License in `src/ee/LICENSE`. Everything else in the repository is
+//! AGPL-3.0-only. See `docs/LICENSING.md`.
 //!
-//! O modulo inteiro vive atras da cargo feature `ee`, que nao e default:
+//! The whole module lives behind the `ee` cargo feature, which is not default:
 //!
 //! ```text
-//! cargo build                 # edicao Community, sem nada daqui
-//! cargo build --features ee   # edicao Enterprise
+//! cargo build                 # Community edition, none of this compiled in
+//! cargo build --features ee   # Enterprise edition
 //! ```
 //!
-//! Apagar `src/ee/` tem que deixar o core compilando e passando nos testes.
-//! O CI prova isso a cada push; se essa propriedade quebrar, a separacao virou
-//! decoracao. A regra do corte esta em
-//! `docs/specs/2026-08-03-luc19-open-core-design.md`: fica no core o que uma
-//! organizacao usa para si mesma, vem para ca o que so serve para operar o
-//! quark como servico para terceiros.
+//! Deleting `src/ee/` has to leave the core building and its tests passing. CI
+//! proves that on every push; the day it stops holding, the split has become
+//! decoration. The rule behind the cut is in
+//! `docs/specs/2026-08-03-luc19-open-core-design.md`: what one organization
+//! uses for itself stays in the core, what only serves operating quark as a
+//! service for other people comes here.
 
 pub mod api;
 pub mod keycloak;
 
 use std::sync::Arc;
 
-/// Os campos do `AppState` que so existem na edicao Enterprise.
+/// The `AppState` fields that only exist in the Enterprise edition.
 ///
-/// Deliberadamente pequeno. So entra aqui o campo que nomeia um tipo que sai do
-/// core junto com esta pasta: sem isso, `AppState` nao compilaria com `src/ee/`
-/// ausente. Campos que o core le continuam no core, mesmo sendo usados so em
-/// cloud (`tenant_domain_suffix` e lido por `api/links.rs`, `oidc_tenants` e
-/// cache sobre o store, `host_router` esta no hot path).
+/// Deliberately small. A field belongs here only when it names a type that
+/// leaves the core along with this directory: without that, `AppState` would
+/// not compile with `src/ee/` absent. Fields the core itself reads stay in the
+/// core even when only cloud uses them (`tenant_domain_suffix` is read by
+/// `api/links.rs`, `oidc_tenants` is a cache over the store, and `host_router`
+/// is on the hot path).
 #[derive(Clone, Default)]
 pub struct EeState {
-    /// Runtime admin do Keycloak, presente so quando `QUARK_KEYCLOAK_BASE_URL`
-    /// esta configurado. `None` desliga o provisionamento de realm por tenant.
+    /// Keycloak admin runtime, present only when `QUARK_KEYCLOAK_BASE_URL` is
+    /// configured. `None` disables per-tenant realm provisioning entirely.
     pub keycloak: Option<Arc<dyn keycloak::KeycloakAdmin>>,
-    /// URL base em que o Keycloak responde, guardada junto para derivar o
-    /// issuer de um tenant sem reler o ambiente.
+    /// Base URL Keycloak answers on, kept alongside the runtime so a tenant's
+    /// issuer can be derived without re-reading the environment.
     pub keycloak_base_url: Option<String>,
 }
 
-/// Boot da edicao Enterprise, chamado uma vez por `main`.
+/// Enterprise boot, called once by `main`.
 ///
-/// Junta o que antes estava espalhado pelo boot do binario: runtime admin do
-/// Keycloak, backfill de provisionamento por tenant e seed do subdominio
-/// automatico. Os tres so fazem sentido operando o quark como servico, entao
-/// moram aqui e nao no core (LUC-19).
+/// Collects what used to be scattered across the binary's startup: the
+/// Keycloak admin runtime, the per-tenant provisioning backfill, and the
+/// automatic subdomain seed. All three only make sense when operating quark as
+/// a service, so they live here and not in the core (LUC-19).
 ///
-/// Idempotente e barato: roda em toda replica, a cada boot, e pula o que ja
-/// esta feito.
+/// Idempotent and cheap: it runs on every replica at every boot and skips what
+/// is already done.
 pub async fn boot(
     store: &std::sync::Arc<dyn crate::store::Store>,
     multi_tenant: bool,

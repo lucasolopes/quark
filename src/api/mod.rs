@@ -1,8 +1,8 @@
-//! Namespace interno do core, plano de proposito: os submodulos fazem
-//! `use super::*` e enxergam tudo. Os modulos Enterprise em `src/ee/api/` fazem
-//! `use crate::api::*`, que alcanca os mesmos itens porque os reexports abaixo
-//! sao `pub(crate)`. Nao ha modulo `prelude` separado: seria uma indirecao sem
-//! ganho (LUC-19).
+//! The core's internal namespace, flat on purpose: submodules `use super::*`
+//! and see everything. The Enterprise modules in `src/ee/api/` reach the same
+//! items with `use crate::api::*`, which works because the re-exports below are
+//! `pub(crate)`. There is no separate `prelude` module: it would be indirection
+//! with nothing to show for it (LUC-19).
 
 pub(crate) use crate::abuse::{extract_host, is_internal_host};
 pub(crate) use crate::analytics::{device_from_ua, AnalyticsSink, ClickEvent};
@@ -127,10 +127,11 @@ pub struct AppState {
     /// login and cached here, keyed by tenant id. Invalidated (best-effort) by
     /// `admin_oidc_config_put`/`_delete`; also self-expires via TTL.
     pub oidc_tenants: crate::oidc::TenantOidcCache,
-    /// Estado da edicao Enterprise (LUC-19): runtime admin do Keycloak e a URL
-    /// base dele. Fica agregado num campo so, atras da feature `ee`, porque sao
-    /// os unicos campos que nomeiam um tipo que sai do core junto com
-    /// `src/ee/`. Sem isso o `AppState` nao compilaria com a pasta ausente.
+    /// Enterprise state (LUC-19): the Keycloak admin runtime and its base URL.
+    /// Aggregated into a single field, behind the `ee` feature, because these
+    /// are the only fields that name a type which leaves the core along with
+    /// `src/ee/`. Without this, `AppState` would not compile with the directory
+    /// absent.
     #[cfg(feature = "ee")]
     pub ee: crate::ee::EeState,
 }
@@ -146,9 +147,9 @@ pub(crate) const HEADER_CSRF: &str = "x-quark-csrf";
 /// format change (the health body stays the plain string `"ok"`).
 pub(crate) const HEADER_QUARK_VERSION: &str = "x-quark-version";
 
-/// Se esta instancia sabe provisionar identidade por tenant. Sempre `false` na
-/// edicao Community, que nao traz o provisionador de realm (LUC-19). Existe para
-/// que `oidc_login.rs`, que fica no core, nao precise de `cfg` no meio do corpo.
+/// Whether this instance can provision per-tenant identity. Always `false` in
+/// the Community edition, which ships no realm provisioner (LUC-19). It exists
+/// so `oidc_login.rs`, which stays in the core, needs no `cfg` mid-body.
 pub(crate) fn sso_provisioning(_st: &AppState) -> bool {
     #[cfg(feature = "ee")]
     {

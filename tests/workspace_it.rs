@@ -2,8 +2,8 @@
 // clippy.toml cobre itens sob #[test]/#[cfg(test)], mas nao os helpers de
 // topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
 #![allow(clippy::unwrap_used)]
-// Suite da edicao Enterprise: estas rotas so existem no build `--features ee`
-// (LUC-19). Sem a feature, a binaria compila vazia em vez de falhar.
+// Enterprise suite: these routes only exist in the `--features ee` build
+// (LUC-19). Without the feature the binary compiles empty instead of failing.
 #![cfg(feature = "ee")]
 
 use axum::body::Body;
