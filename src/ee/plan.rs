@@ -30,8 +30,13 @@ pub struct Limits {
 }
 
 impl Plan {
-    /// Cheapest first. The order is what makes `cheapest_with` and the
-    /// monotonicity test meaningful.
+    /// Strictly increasing in price: `Free` cheapest, `Custom` most
+    /// expensive. `Plan::cheapest_with` returns the first match in this
+    /// order, and the `feature_access_is_monotonic_up_the_ladder` test walks
+    /// it assuming later entries are pricier. Reordering this array (e.g. to
+    /// insert a new tier in the middle) silently breaks both without a
+    /// compile error — see `plan_all_is_in_ascending_price_order` below,
+    /// which pins the exact sequence so a reorder fails loudly instead.
     pub const ALL: [Plan; 5] = [
         Plan::Free,
         Plan::Starter,
@@ -204,5 +209,25 @@ mod tests {
     fn cheapest_plan_with_a_feature_is_reported_for_the_upgrade_hint() {
         assert_eq!(Plan::cheapest_with(Feature::Webhooks), Some(Plan::Starter));
         assert_eq!(Plan::cheapest_with(Feature::Sso), Some(Plan::Business));
+    }
+
+    /// `feature_access_is_monotonic_up_the_ladder` walks `Plan::ALL` and
+    /// trusts that it is already in ascending price order; it cannot detect
+    /// a reorder because it uses `Plan::ALL` as its own reference. This test
+    /// pins the literal sequence instead, so inserting a tier in the wrong
+    /// spot (or otherwise reordering the array) fails here immediately, with
+    /// a message that says exactly what moved.
+    #[test]
+    fn plan_all_is_in_ascending_price_order() {
+        assert_eq!(
+            Plan::ALL,
+            [
+                Plan::Free,
+                Plan::Starter,
+                Plan::Pro,
+                Plan::Business,
+                Plan::Custom,
+            ]
+        );
     }
 }
