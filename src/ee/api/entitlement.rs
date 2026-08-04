@@ -152,7 +152,7 @@ pub(crate) struct SetPlanReq {
 /// `PUT /admin/tenants/{id}/plan`: operator-only plan change.
 ///
 /// Requires the break-glass `QUARK_ADMIN_TOKEN` directly, compared in
-/// constant time, and NOT a tenant API token or session — `admin_guard`
+/// constant time, and NOT a tenant API token or session. `admin_guard`
 /// resolving a `Scope::Full` API token would still be a credential a tenant
 /// controls itself. `Plan::Custom` grants everything unlimited and `"custom"`
 /// is a string the parser recognizes, so anyone who could write this column
