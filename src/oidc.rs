@@ -682,6 +682,15 @@ pub async fn ensure_user_and_membership(
             Some(m) if m.role == Role::Owner => Role::Owner,
             _ => role,
         };
+        // This is where the Keycloak (model B) flow grants membership: the
+        // first login of a user whose IdP group claim maps to this tenant.
+        // Unlike `admin_invites_accept`'s model-A grant, this call does NOT
+        // check the plan's member quota. A tenant whose IdP is provisioned
+        // can therefore exceed its member ceiling simply by having enough
+        // distinct users log in. Known gap, accepted for this phase, tracked
+        // as LUC-148: closing it needs billing context (phase 2) to decide
+        // what happens to a user the IdP already authenticated into a
+        // workspace that is at its ceiling.
         store
             .put_membership(&Membership {
                 user_id: user.id,

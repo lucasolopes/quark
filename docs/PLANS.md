@@ -40,6 +40,15 @@ per-tenant override it is unlimited across the board. A per-tenant override
 column (`plan_limits`) is designed but not built yet; it has no consumer
 until a customer actually needs a narrower Custom limit than "everything".
 
+The member ceiling is enforced when a caller redeems an invite through
+`POST /admin/invites/:token/accept` (model A, no IdP provisioned for the
+tenant). For a tenant with its own IdP provisioned (Keycloak/model B),
+membership is instead granted at first login off the group claim, and that
+path does not apply the member quota yet. A tenant on that model can exceed
+its member ceiling by having enough distinct users log in. This is a known
+gap, accepted for this phase, tracked as LUC-148; closing it needs the
+billing context phase 2 brings.
+
 ### Features (binary, not a ceiling)
 
 | | Free | Starter | Pro | Business | Custom |

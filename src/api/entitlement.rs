@@ -23,7 +23,7 @@ use axum::Json;
 /// `HealthMonitoring` and `TokenScopes` are deliberately NOT here yet: the
 /// commercial grid in `docs/PLANS.md` lists "broken-link monitoring" and
 /// "scoped API tokens" as future plan-gated rows, but no handler in this
-/// phase actually checks either — `GET /admin/plan` would otherwise advertise
+/// phase actually checks either. `GET /admin/plan` would otherwise advertise
 /// them as unlocked while the backend never enforces or even offers them,
 /// which the panel would render as real. They come back together with the
 /// slice of work that wires them to a real handler.

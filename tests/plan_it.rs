@@ -618,7 +618,7 @@ async fn free_tenant_gets_402_on_oidc_config_put() {
 /// `Unsupported`. `plan_of` must read that as "this backend cannot carry a
 /// plan" and answer `Plan::Custom` (unlimited), not silently fall through to
 /// the same `Ok(None)` handling Postgres uses for "no plan row yet" (which
-/// resolves to `Free`) — that would deny an Enterprise self-hosted install
+/// resolves to `Free`). That would deny an Enterprise self-hosted install
 /// (embedded store, `--features ee`) every feature it already paid for.
 ///
 /// Ungated: LMDB is the default backend when `QUARK_DATABASE_URL` is unset,
@@ -645,7 +645,7 @@ async fn lmdb_backend_with_no_plan_system_resolves_to_unlimited_custom() {
 /// scope `admin_guard` would ever resolve, must still be rejected. This pins
 /// the regression `tenant_cannot_promote_its_own_plan_without_the_break_glass_token`
 /// cannot catch (an invented string is a weaker case than a real, valid
-/// credential) — swapping the manual comparison for `admin_guard(&st,
+/// credential): swapping the manual comparison for `admin_guard(&st,
 /// &headers, Scope::Full)` would silently start accepting this token and let
 /// a tenant promote itself to `custom`, and this test would catch that where
 /// the other one would stay green.

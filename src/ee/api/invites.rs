@@ -403,7 +403,10 @@ pub(crate) struct AcceptInviteResp {
 /// Checks run in an order where no membership is ever granted on a failure
 /// path: cloud gate, session, rate limit, invite lookup (covers unknown,
 /// expired, and already-accepted tokens alike, since `get_invite_by_hash`
-/// hides all three), email match, existing-membership conflict, then
+/// hides all three), email match, the model-A/model-B split (Keycloak
+/// configured returns here with no grant; see the comment on that branch
+/// below), existing-membership conflict, member-quota check (model A only;
+/// LUC-148 tracks the model-B gap where this is not applied), then
 /// `accept_invite_tx` claims the invite row AND grants the membership in one
 /// backend transaction (LUC-46): two concurrent accepts of the same token
 /// both pass the checks above, but only one wins the claim, and if the grant
@@ -480,6 +483,17 @@ pub(crate) async fn admin_invites_accept(
     // N invites are accepted yet), then have all N accepted and end up with
     // N+1 members on a 3-seat plan. Checking at the point of grant closes
     // that gap regardless of how many invites are outstanding.
+    //
+    // This only covers model A (no Keycloak). With Keycloak configured, this
+    // whole function returns above, at the `st.ee.keycloak.is_some()` branch
+    // (~line 455), before ever reaching here: this check is dead code on that
+    // path. Under Keycloak, membership is instead granted by the OIDC login
+    // callback, `ensure_user_and_membership` in `src/oidc.rs`, which does NOT
+    // apply this quota. A tenant whose IdP is provisioned can therefore still
+    // exceed its member ceiling by having enough distinct users log in.
+    // Known gap, accepted for this phase, tracked as LUC-148: closing it
+    // needs billing context (phase 2) to decide what happens to a user the
+    // IdP already authenticated into a workspace that is at its ceiling.
     let held = match st.store.count_memberships(inv.tenant_id).await {
         Ok(n) => n,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),

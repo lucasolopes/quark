@@ -23,7 +23,7 @@ use crate::tenant::TenantId;
 /// place a tenant on a plan, so treating its `Ok(None)` the same as Postgres's
 /// "not signed up" would deny an Enterprise self-hosted install (embedded
 /// store, `--features ee`) every feature it already paid for. The product
-/// decision is that "no plan system" means UNLIMITED, not `Free` — this
+/// decision is that "no plan system" means UNLIMITED, not `Free`: this
 /// answers `Plan::Custom` (unlimited across the board) without a store call
 /// or a cache write, since the answer is a static property of the backend
 /// and never changes at runtime.

@@ -40,6 +40,15 @@ tenant, é ilimitado em tudo. Uma coluna de override por tenant (`plan_limits`)
 está desenhada mas ainda não construída; não tem consumidor até que um
 cliente precise mesmo de um limite Custom mais estreito que "tudo".
 
+O teto de membros é aplicado quando alguém resgata um convite via
+`POST /admin/invites/:token/accept` (modelo A, sem IdP provisionado para o
+tenant). Para um tenant com IdP próprio provisionado (Keycloak/modelo B), a
+membership é concedida no primeiro login, a partir do group claim, e esse
+caminho ainda não aplica a cota de membros. Um tenant nesse modelo pode
+estourar o teto de membros bastando ter usuários distintos suficientes
+fazendo login. É um furo conhecido, aceito nesta fase, registrado como
+LUC-148; fechá-lo depende do contexto de billing que a fase 2 traz.
+
 ### Features (binário, não é teto)
 
 | | Free | Starter | Pro | Business | Custom |
