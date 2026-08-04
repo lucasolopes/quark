@@ -79,36 +79,26 @@ impl Plan {
             Plan::Free => match f {
                 Feature::Webhooks => false,
                 Feature::Integrations => false,
-                Feature::HealthMonitoring => false,
-                Feature::TokenScopes => false,
                 Feature::Sso => false,
             },
             Plan::Starter => match f {
                 Feature::Webhooks => true,
                 Feature::Integrations => true,
-                Feature::HealthMonitoring => false,
-                Feature::TokenScopes => false,
                 Feature::Sso => false,
             },
             Plan::Pro => match f {
                 Feature::Webhooks => true,
                 Feature::Integrations => true,
-                Feature::HealthMonitoring => true,
-                Feature::TokenScopes => true,
                 Feature::Sso => false,
             },
             Plan::Business => match f {
                 Feature::Webhooks => true,
                 Feature::Integrations => true,
-                Feature::HealthMonitoring => true,
-                Feature::TokenScopes => true,
                 Feature::Sso => true,
             },
             Plan::Custom => match f {
                 Feature::Webhooks => true,
                 Feature::Integrations => true,
-                Feature::HealthMonitoring => true,
-                Feature::TokenScopes => true,
                 Feature::Sso => true,
             },
         }
@@ -222,6 +212,44 @@ mod tests {
                 seen_allowed |= allowed;
             }
         }
+    }
+
+    /// Numeric twin of `feature_access_is_monotonic_up_the_ladder`, for the
+    /// ceilings `cheapest_above` (`src/ee/api/entitlement.rs`) relies on: a
+    /// pricier plan's ceiling for a given field must never be lower than a
+    /// cheaper plan's, treating `None` as infinity (so going from a finite
+    /// ceiling to `None` is a widening, and `None` staying `None` is a tie,
+    /// but `None` narrowing to a finite value is a violation). Without this,
+    /// a typo that drops `Pro`'s member ceiling below `Starter`'s would make
+    /// `cheapest_above` point a Starter tenant at an upgrade that does not
+    /// actually raise their ceiling — and nothing would catch it.
+    #[test]
+    fn numeric_limits_are_non_decreasing_up_the_ladder() {
+        fn check(name: &str, get: impl Fn(Limits) -> Option<u64>) {
+            let mut prev = get(Plan::ALL[0].limits());
+            for p in &Plan::ALL[1..] {
+                let cur = get(p.limits());
+                match (prev, cur) {
+                    // Already unlimited: must stay unlimited, never narrow.
+                    (None, cur) => assert_eq!(
+                        cur, None,
+                        "{name}: {p:?} narrows a cheaper plan's unlimited ceiling"
+                    ),
+                    // Widened to unlimited: always fine.
+                    (Some(_), None) => {}
+                    (Some(prev_v), Some(cur_v)) => assert!(
+                        cur_v >= prev_v,
+                        "{name}: {p:?} ({cur_v}) is below the cheaper plan's ceiling ({prev_v})"
+                    ),
+                }
+                prev = cur;
+            }
+        }
+        check("domains", |l| l.domains.map(u64::from));
+        check("members", |l| l.members.map(u64::from));
+        check("automation_per_month", |l| l.automation_per_month);
+        check("tracked_clicks_per_month", |l| l.tracked_clicks_per_month);
+        check("retention_days", |l| l.retention_days.map(u64::from));
     }
 
     /// The numbers here are the contract in

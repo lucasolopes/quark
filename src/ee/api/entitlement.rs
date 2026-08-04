@@ -16,7 +16,21 @@ use crate::tenant::TenantId;
 /// store again instead of being stuck denied. `Ok(None)` (no plan row yet) is
 /// a legitimate answer from the store, not an error, so it IS cached as
 /// `Free` like any other resolved plan.
+///
+/// A backend that does not support plans at all (`Store::supports_plans() ==
+/// false`, i.e. LMDB) is a different case from "no plan row yet" and is
+/// handled before either of the above: a store with no plan system cannot
+/// place a tenant on a plan, so treating its `Ok(None)` the same as Postgres's
+/// "not signed up" would deny an Enterprise self-hosted install (embedded
+/// store, `--features ee`) every feature it already paid for. The product
+/// decision is that "no plan system" means UNLIMITED, not `Free` — this
+/// answers `Plan::Custom` (unlimited across the board) without a store call
+/// or a cache write, since the answer is a static property of the backend
+/// and never changes at runtime.
 pub async fn plan_of(st: &AppState, tenant: TenantId) -> Plan {
+    if !st.store.supports_plans() {
+        return Plan::Custom;
+    }
     if let Some(p) = st.ee.plans.get(tenant).await {
         return p;
     }
@@ -145,6 +159,14 @@ pub(crate) struct SetPlanReq {
 /// would grant themselves unrestricted access; only the operator's own
 /// break-glass token may do it. Phase 2 replaces the manual call with the
 /// Stripe webhook, and this endpoint stays as the operator escape hatch.
+///
+/// The `st.ee.plans.invalidate(tenant)` call below makes the new plan take
+/// effect immediately, but only on the process that handled THIS request:
+/// `PlanCache` is per-process, with no cross-node invalidation. On a
+/// multi-replica deploy the other nodes keep serving the old plan out of
+/// their own cache until it converges on its own, within `PLAN_TTL_SECS`
+/// (60s). Wiring cross-node invalidation (e.g. over the pub/sub channel
+/// `src/invalidate.rs` already uses) is future work, not done here.
 pub(crate) async fn admin_tenant_plan_put(
     State(st): State<Arc<AppState>>,
     Path(id): Path<u64>,

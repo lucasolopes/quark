@@ -1361,6 +1361,14 @@ impl Store for LmdbStore {
         Err(StoreError::Unsupported)
     }
 
+    // LMDB has no plan column and no way to add one at runtime: `false` tells
+    // `plan_of` to treat this backend as unlimited (`Plan::Custom`) instead
+    // of resolving the absent row to `Free` and denying an Enterprise
+    // self-hosted install every feature it paid for.
+    fn supports_plans(&self) -> bool {
+        false
+    }
+
     // `memberships` is keyed `user_id || tenant_id` (see `membership_key`),
     // so the tenant is the suffix and there is no range to prefix-scan: the
     // whole sub-db is walked and only the entries pointing at this tenant are

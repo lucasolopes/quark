@@ -719,6 +719,16 @@ pub trait Store: Send + Sync + 'static {
     async fn get_tenant_plan(&self, tenant: TenantId) -> Result<Option<String>, StoreError>;
     /// Sets the tenant's billing plan. Cloud-only, like `set_primary_domain`.
     async fn set_tenant_plan(&self, tenant: TenantId, plan: &str) -> Result<(), StoreError>;
+    /// Whether this backend has a plan system at all. `false` means
+    /// `get_tenant_plan` can never answer anything but `Ok(None)` and
+    /// `set_tenant_plan` can never succeed (LMDB); `true` means the plan
+    /// column is real and read/write actually round-trip (Postgres).
+    ///
+    /// `crate::ee::api::entitlement::plan_of` uses this to tell "no plan row
+    /// yet" (a real `Free` tenant, on a backend that could grant a paid plan)
+    /// apart from "this backend cannot carry a plan at all" (which must
+    /// resolve to unlimited, not `Free` — see that function's doc comment).
+    fn supports_plans(&self) -> bool;
     /// How many members the tenant has. The existing
     /// `list_memberships_for_user` answers the other direction and cannot be
     /// used for a per-tenant ceiling.

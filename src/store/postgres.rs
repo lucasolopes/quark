@@ -2917,6 +2917,10 @@ impl Store for PostgresStore {
         Ok(())
     }
 
+    fn supports_plans(&self) -> bool {
+        true
+    }
+
     async fn count_memberships(&self, tenant: TenantId) -> Result<u64, StoreError> {
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memberships WHERE tenant_id = $1")
             .bind(tenant.0 as i64)

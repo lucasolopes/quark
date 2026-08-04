@@ -19,31 +19,29 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 
 /// A capability a plan either unlocks or does not. Binary, no ceiling.
+///
+/// `HealthMonitoring` and `TokenScopes` are deliberately NOT here yet: the
+/// commercial grid in `docs/PLANS.md` lists "broken-link monitoring" and
+/// "scoped API tokens" as future plan-gated rows, but no handler in this
+/// phase actually checks either — `GET /admin/plan` would otherwise advertise
+/// them as unlocked while the backend never enforces or even offers them,
+/// which the panel would render as real. They come back together with the
+/// slice of work that wires them to a real handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Feature {
     Webhooks,
     Integrations,
-    HealthMonitoring,
-    TokenScopes,
     Sso,
 }
 
 impl Feature {
-    pub const ALL: [Feature; 5] = [
-        Feature::Webhooks,
-        Feature::Integrations,
-        Feature::HealthMonitoring,
-        Feature::TokenScopes,
-        Feature::Sso,
-    ];
+    pub const ALL: [Feature; 3] = [Feature::Webhooks, Feature::Integrations, Feature::Sso];
 
     /// Stable wire name, used in the `402` body and by the panel.
     pub fn as_str(self) -> &'static str {
         match self {
             Feature::Webhooks => "webhooks",
             Feature::Integrations => "integrations",
-            Feature::HealthMonitoring => "health_monitoring",
-            Feature::TokenScopes => "token_scopes",
             Feature::Sso => "sso",
         }
     }

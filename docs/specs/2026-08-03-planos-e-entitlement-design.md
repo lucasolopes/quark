@@ -157,6 +157,18 @@ Feature que já saiu livre continua livre. Fechar depois é tirar o que já foi
 dado: rende pouco e queima confiança. É o mesmo raciocínio que manteve o login
 OIDC de instância única no core (D2.1 da spec da LUC-19).
 
+Isso choca de frente com o que a Fase 1 realmente faz: webhooks, Sheets,
+pixels, SSO, domínios e membros já existiam antes desta fase e, a partir
+dela, passam a ser limitados por plano. Pela letra de D8 isso seria "tirar o
+que já foi dado". A regra continua valendo porque a premissa dela (existe
+gente pagando, e fechar tira algo que ela já usava) ainda não se aplica: o
+quark Cloud não foi lançado, não existe cliente pagante, e ninguém hoje tem
+uma dessas features "dada" para ser tirada. Fechar agora, antes do
+lançamento, é definir a grade de lançamento, não fazer um take-back. D8 volta
+a valer no sentido literal a partir do lançamento: qualquer feature que saia
+livre depois desse ponto, para um tenant que já paga, segue a regra sem
+exceção.
+
 Regra para classificar feature nova, na ordem:
 
 | Pergunta | Se sim |

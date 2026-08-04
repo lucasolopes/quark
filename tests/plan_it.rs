@@ -5,10 +5,11 @@
 
 use quark::analytics::AnalyticsSink;
 use quark::api::entitlement::{require, require_quota, Feature, Quota};
+use quark::auth::{hash_token, ApiToken, Scope};
 use quark::ee::api::entitlement::plan_of;
 use quark::store::postgres::PostgresStore;
 use quark::store::Store;
-use quark::tenant::{Tenant, TenantId, DEFAULT_TENANT};
+use quark::tenant::{Membership, Role, Tenant, TenantId, DEFAULT_TENANT};
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -423,4 +424,275 @@ async fn free_tenant_gets_402_creating_a_webhook() {
         .await
         .unwrap();
     assert_eq!(res.status(), axum::http::StatusCode::PAYMENT_REQUIRED);
+}
+
+/// End-to-end proof that `POST /admin/invites` is wired to `Quota::Members`,
+/// mirroring `free_tenant_gets_402_on_the_fourth_domain`: Free allows 1
+/// member. The tenant starts holding 0 (only `count_memberships` counts,
+/// never a pending invite), so the first invite is accepted; seeding one real
+/// membership row afterwards puts the tenant at the ceiling, and the next
+/// invite is denied with `402`.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn free_tenant_gets_402_creating_a_second_invite_at_the_member_ceiling() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let url = std::env::var("QUARK_TEST_DATABASE_URL").unwrap();
+    let store = Arc::new(PostgresStore::open(&url, true).await.unwrap());
+    store.reset_for_tests().await.unwrap();
+    store
+        .put_tenant(&Tenant {
+            id: DEFAULT_TENANT,
+            name: "Default".into(),
+            slug: "acme".into(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    store.set_tenant_plan(DEFAULT_TENANT, "free").await.unwrap();
+    let sink: Arc<dyn AnalyticsSink> = store.clone();
+    let st = common::TestState::new(store.clone(), sink)
+        .admin_token(Some(ADMIN_TOKEN.into()))
+        .multi_tenant(true)
+        .build();
+    let app = quark::api::router(st.clone());
+
+    async fn create_invite(app: &axum::Router, email: &str) -> axum::http::StatusCode {
+        app.clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/admin/invites")
+                    .header("x-admin-token", ADMIN_TOKEN)
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({ "email": email, "role": "member" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    // Holding 0 members is under Free's ceiling of 1.
+    assert_eq!(
+        create_invite(&app, "first@acme.com").await,
+        axum::http::StatusCode::OK
+    );
+    // Seed a real membership (e.g. the tenant's own Owner) to reach the
+    // ceiling. A pending invite alone must never count; only this does.
+    store
+        .put_membership(&Membership {
+            user_id: 999,
+            tenant_id: DEFAULT_TENANT,
+            role: Role::Owner,
+            created: 0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        create_invite(&app, "second@acme.com").await,
+        axum::http::StatusCode::PAYMENT_REQUIRED
+    );
+}
+
+/// End-to-end proof that `GET /admin/integrations/sheets/connect` is wired to
+/// `Feature::Integrations`: a Free-plan tenant gets `402`, not the connect
+/// URL, and the gate fires before the "connector not configured" check (so
+/// this needs no `st.sheets` setup at all).
+#[tokio::test]
+#[serial_test::file_serial]
+async fn free_tenant_gets_402_on_sheets_connect() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let st = state_with_plan_on_default_tenant("free").await;
+    let app = quark::api::router(st.clone());
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/admin/integrations/sheets/connect")
+                .header("x-admin-token", ADMIN_TOKEN)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::PAYMENT_REQUIRED);
+}
+
+/// Same proof for `POST /admin/pixels`: `Feature::Integrations` is checked
+/// before the request body is even parsed, so a Free-plan tenant gets `402`
+/// regardless of what the body contains.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn free_tenant_gets_402_creating_a_pixel() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let st = state_with_plan_on_default_tenant("free").await;
+    let app = quark::api::router(st.clone());
+    let body = serde_json::json!({
+        "provider": "ga4",
+        "credentials": { "measurement_id": "G-TEST", "api_secret": "s3cr3t" },
+    });
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/admin/pixels")
+                .header("x-admin-token", ADMIN_TOKEN)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::PAYMENT_REQUIRED);
+}
+
+/// End-to-end proof that `PUT /admin/oidc-config` is wired to `Feature::Sso`:
+/// a Free-plan tenant gets `402`, not the config written, and nothing is
+/// persisted.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn free_tenant_gets_402_on_oidc_config_put() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let url = std::env::var("QUARK_TEST_DATABASE_URL").unwrap();
+    let store = Arc::new(PostgresStore::open(&url, true).await.unwrap());
+    store.reset_for_tests().await.unwrap();
+    store
+        .put_tenant(&Tenant {
+            id: DEFAULT_TENANT,
+            name: "Default".into(),
+            slug: "acme".into(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    store.set_tenant_plan(DEFAULT_TENANT, "free").await.unwrap();
+    let sink: Arc<dyn AnalyticsSink> = store.clone();
+    let st = common::TestState::new(store.clone(), sink)
+        .admin_token(Some(ADMIN_TOKEN.into()))
+        .multi_tenant(true)
+        .build();
+    let app = quark::api::router(st.clone());
+    let body = serde_json::json!({
+        "issuer": "https://idp.acme.example",
+        "client_id": "acme-client",
+        "client_secret": "top-secret-value",
+    });
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri("/admin/oidc-config")
+                .header("x-admin-token", ADMIN_TOKEN)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::PAYMENT_REQUIRED);
+    assert!(
+        store
+            .get_oidc_config(DEFAULT_TENANT)
+            .await
+            .unwrap()
+            .is_none(),
+        "a denied PUT must not persist a config"
+    );
+}
+
+/// LMDB (the embedded, single-binary backend) has no plan system at all:
+/// `get_tenant_plan` can only ever answer `Ok(None)` and `set_tenant_plan` is
+/// `Unsupported`. `plan_of` must read that as "this backend cannot carry a
+/// plan" and answer `Plan::Custom` (unlimited), not silently fall through to
+/// the same `Ok(None)` handling Postgres uses for "no plan row yet" (which
+/// resolves to `Free`) — that would deny an Enterprise self-hosted install
+/// (embedded store, `--features ee`) every feature it already paid for.
+///
+/// Ungated: LMDB is the default backend when `QUARK_DATABASE_URL` is unset,
+/// so this needs no `QUARK_TEST_DATABASE_URL`, mirroring
+/// `oss_invites_endpoints_are_404_without_postgres` in `tests/invites_it.rs`.
+#[tokio::test]
+async fn lmdb_backend_with_no_plan_system_resolves_to_unlimited_custom() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, sink) = quark::store::open_backends(dir.path(), true).await.unwrap();
+    let st = common::TestState::new(store, sink).build();
+    let tenant = TenantId(4242);
+
+    assert_eq!(plan_of(&st, tenant).await, quark::ee::plan::Plan::Custom);
+    assert!(require(&st, tenant, Feature::Sso).await.is_ok());
+    assert!(require(&st, tenant, Feature::Webhooks).await.is_ok());
+    assert!(require_quota(&st, tenant, Quota::Members, 999_999)
+        .await
+        .is_ok());
+}
+
+/// The break-glass check in `admin_tenant_plan_put` is a manual
+/// `constant_time_eq` against `st.admin_token`, deliberately NOT
+/// `admin_guard`: a real per-tenant API token with `Scope::Full`, the highest
+/// scope `admin_guard` would ever resolve, must still be rejected. This pins
+/// the regression `tenant_cannot_promote_its_own_plan_without_the_break_glass_token`
+/// cannot catch (an invented string is a weaker case than a real, valid
+/// credential) — swapping the manual comparison for `admin_guard(&st,
+/// &headers, Scope::Full)` would silently start accepting this token and let
+/// a tenant promote itself to `custom`, and this test would catch that where
+/// the other one would stay green.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn tenant_api_token_with_full_scope_cannot_promote_its_own_plan() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let st = state_with_plan_on_default_tenant("free").await;
+    let raw = "qtok_plan_promote_test";
+    st.store
+        .put_api_token(
+            DEFAULT_TENANT,
+            &ApiToken {
+                id: 42,
+                name: "full-scope-tenant-token".to_string(),
+                token_hash: hash_token(raw),
+                scopes: vec![Scope::Full],
+                rate_limit_per_min: None,
+                created: 0,
+                tenant_id: DEFAULT_TENANT,
+            },
+        )
+        .await
+        .unwrap();
+    let app = quark::api::router(st.clone());
+
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri(format!("/admin/tenants/{}/plan", DEFAULT_TENANT.0))
+                .header("x-admin-token", raw)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::json!({ "plan": "custom" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        plan_of(&st, DEFAULT_TENANT).await,
+        quark::ee::plan::Plan::Free,
+        "a rejected promotion must leave the tenant's plan untouched"
+    );
 }

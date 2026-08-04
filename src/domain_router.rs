@@ -621,6 +621,9 @@ mod tests {
         async fn set_tenant_plan(&self, _tenant: TenantId, _plan: &str) -> Result<(), StoreError> {
             unimplemented!()
         }
+        fn supports_plans(&self) -> bool {
+            unimplemented!()
+        }
         async fn count_memberships(&self, _tenant: TenantId) -> Result<u64, StoreError> {
             unimplemented!()
         }

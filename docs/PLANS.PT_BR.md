@@ -5,7 +5,7 @@
 O quark Cloud limita um pequeno número de features e cotas por plano. Isso é
 uma preocupação Enterprise: uma instalação Community self-hosted nunca tem
 plano e nunca esbarra num limite. Se você roda o build AGPL para si mesmo,
-esta página não se aplica a você — veja a nota abaixo.
+esta página não se aplica a você; veja a nota abaixo.
 
 ## A edição Community não aplica limite nenhum
 
@@ -36,8 +36,8 @@ para todo tenant naquele plano de uma vez.
 | Retenção de analytics | 30 dias | 365 dias | 730 dias | 1.095 dias | ilimitado¹ |
 
 ¹ `Custom` é o tier negociado para um cliente com contrato. Sem override por
-tenant, é ilimitado em tudo; uma coluna de override por tenant (`plan_limits`)
-está desenhada mas ainda não construída — não tem consumidor até que um
+tenant, é ilimitado em tudo. Uma coluna de override por tenant (`plan_limits`)
+está desenhada mas ainda não construída; não tem consumidor até que um
 cliente precise mesmo de um limite Custom mais estreito que "tudo".
 
 ### Features (binário, não é teto)
@@ -45,15 +45,27 @@ cliente precise mesmo de um limite Custom mais estreito que "tudo".
 | | Free | Starter | Pro | Business | Custom |
 |---|---|---|---|---|---|
 | Webhooks | – | ✓ | ✓ | ✓ | ✓ |
-| Integrações (Sheets, Slack, pixels) | – | ✓ | ✓ | ✓ | ✓ |
-| Monitoramento de link quebrado | – | – | ✓ | ✓ | ✓ |
-| Tokens de API com escopo | – | – | ✓ | ✓ | ✓ |
+| Integrações (Sheets, pixels) | – | ✓ | ✓ | ✓ | ✓ |
+| Monitoramento de link quebrado* | – | – | ✓ | ✓ | ✓ |
+| Tokens de API com escopo* | – | – | ✓ | ✓ | ✓ |
 | SSO | – | – | – | ✓ | ✓ |
 
+\* Não aplicado nesta fase. `Feature` (`src/api/entitlement.rs`) ainda não tem
+variante `HealthMonitoring` nem `TokenScopes`, nenhum handler checa nenhuma
+das duas, e `GET /admin/plan` não pode listá-las como liberadas porque elas
+não existem no código. Essas duas linhas descrevem o roadmap comercial, não o
+comportamento atual; elas entram no código junto com a fatia de trabalho que
+as ligar a um handler de verdade.
+
+O Slack (`src/api/slack.rs`) não tem gate de plano nenhum e não faz parte da
+grade comercial nesta fase; conectar é livre em qualquer plano, Free incluso.
+
 Os contadores mensais (execuções de automação, cliques rastreados) estão
-desenhados mas ainda não são aplicados — compartilham uma máquina de
-contagem mensal que a fase 3 constrói. Hoje só as cotas por contagem de linha
-(domínios, membros) e as features binárias são de fato limitadas.
+desenhados mas ainda não são aplicados; compartilham uma máquina de contagem
+mensal que a fase 3 constrói. Hoje só as cotas por contagem de linha
+(domínios, membros) e as features Webhooks, Integrações e SSO são de fato
+limitadas. Monitoramento de link quebrado e tokens de API com escopo não são,
+conforme a nota acima.
 
 ## Como é uma recusa
 
@@ -108,7 +120,7 @@ plano/uso a partir desse endpoint em vez de carregar cópia própria da grade,
 que ficaria desatualizada assim que um limite mudasse.
 
 Qualquer credencial que passe por `admin_guard` com `Scope::LinksRead` ou
-maior pode ler isso — não é sensível, e todo tenant já sabe o próprio plano
+maior pode ler isso. Não é sensível, e todo tenant já sabe o próprio plano
 pelo produto que experimenta.
 
 ## Trocando o plano de um tenant
@@ -127,7 +139,7 @@ Content-Type: application/json
 Duas coisas tornam esse endpoint diferente de toda outra rota admin:
 
 - **Exige o break-glass `QUARK_ADMIN_TOKEN` diretamente**, comparado em
-  tempo constante, e nada mais — nem token de API de tenant, nem sessão, nem
+  tempo constante, e nada mais: nem token de API de tenant, nem sessão, nem
   qualquer credencial que `admin_guard` resolveria em nome de um tenant.
   Isso é proposital: `Plan::Custom` concede tudo ilimitado, e `"custom"` é
   uma string que o parser reconhece como qualquer outro nome de plano. Se
@@ -139,19 +151,24 @@ Duas coisas tornam esse endpoint diferente de toda outra rota admin:
   string desconhecida, o que é a escolha segura para leitura: um valor
   corrompido no store não pode derrubar o produto nem conceder mais do que o
   pretendido. Numa escrita, esse mesmo fallback seria perigoso na direção
-  oposta — um typo como `"starterr"` rebaixaria o tenant para Free em
+  oposta: um typo como `"starterr"` rebaixaria o tenant para Free em
   silêncio em vez de falhar alto. O handler de escrita compara a string
   canônica do plano já interpretado com o que foi enviado e rejeita qualquer
   coisa que não bata.
 
-A troca vale de imediato: o handler chama `st.ee.plans.invalidate(tenant)`
-depois de gravar o plano, então a próxima requisição não espera os 60
-segundos do TTL do cache de plano.
+A troca vale de imediato no nó que atendeu esta requisição: o handler chama
+`st.ee.plans.invalidate(tenant)` depois de gravar o plano, então a próxima
+requisição NESSE nó não espera os 60 segundos do TTL do cache de plano.
+`PlanCache` é por processo, sem invalidação entre nós, então num deploy com
+várias réplicas os outros nós continuam respondendo com o próprio cache até
+convergir sozinhos, dentro do mesmo TTL de 60 segundos. Ligar a invalidação
+entre nós (o canal pub/sub que `src/invalidate.rs` já usa para entradas de
+cache) é trabalho futuro.
 
 ## A página de preços é cópia, não fonte
 
 A grade de planos que o site de marketing ou a página de preços mostra é
 cópia, mantida sincronizada à mão. `crate::ee::plan::Plan` neste repositório
 é a única fonte de verdade sobre o que um plano de fato aplica. Se as duas
-discordarem algum dia, o código vence — e a página de preços precisa ser
+discordarem algum dia, o código vence, e a página de preços precisa ser
 corrigida.

@@ -1445,3 +1445,126 @@ async fn accept_invite_without_keycloak_keeps_model_a_behavior() {
         "without Keycloak configured, accept must still grant the invited role (P2c parity)"
     );
 }
+
+// --- LUC-41 fix: the member-quota check ALSO runs at accept time -----------
+//
+// `admin_invites_create` alone is not enough: it only checks the ceiling at
+// the moment an invite is issued, but the membership row is born at accept
+// time (`accept_invite_tx`, above). A tenant with 1 seat left free could
+// issue several invites while each individually sees `held < ceiling`, then
+// have all of them accepted, overshooting the plan's member ceiling. The
+// fix adds a second check right before `accept_invite_tx` runs.
+
+/// With `--features ee` and no plan set, a fresh tenant defaults to `Free`
+/// (`Plan::from_stored` on `Ok(None)`), whose member ceiling is 1
+/// (`crate::ee::plan::Plan::Free.limits().members`). Seed one real membership
+/// to put the tenant AT that ceiling, then accept a second, unrelated invite:
+/// it must be denied with `402`, and denial must not mark the invite accepted
+/// or grant the membership (the invite is still redeemable later, e.g. after
+/// an upgrade or another member leaving).
+#[tokio::test]
+#[file_serial]
+async fn accept_invite_denies_membership_when_the_tenant_is_at_the_member_ceiling() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-accept-quota-full").await;
+    // Fill the Free ceiling (1 member) with an unrelated existing member.
+    // A sentinel id far above the `next_user_id` sequence, so it can never
+    // collide with the invited user's real id below.
+    store
+        .put_membership(&Membership {
+            user_id: 900_001,
+            tenant_id: tenant,
+            role: Role::Owner,
+            created: 0,
+        })
+        .await
+        .unwrap();
+    let (new_user_id, raw) =
+        seed_session(&store, "accept-quota-full-subject", "quota-full@acme.com").await;
+    make_invite(
+        &store,
+        tenant,
+        "quota-full@acme.com",
+        "raw-accept-quota-full",
+        quark::now(),
+        quark::now() + 3600,
+    )
+    .await;
+
+    let app = session_app_over(store.clone(), true);
+    let (status, _) = accept_invite(&app, "raw-accept-quota-full", Some(&raw)).await;
+    assert_eq!(status, StatusCode::PAYMENT_REQUIRED);
+
+    assert!(
+        store
+            .get_membership(new_user_id, tenant)
+            .await
+            .unwrap()
+            .is_none(),
+        "a quota-denied accept must not grant the membership"
+    );
+    // Still pending: the hash lookup still finds it, so a later retry (after
+    // an upgrade, or a seat freeing up) can still redeem it.
+    assert!(
+        store
+            .get_invite_by_hash(&hash_token("raw-accept-quota-full"), quark::now())
+            .await
+            .unwrap()
+            .is_some(),
+        "a quota-denied accept must leave the invite pending, not consumed"
+    );
+}
+
+/// The gate from the test above is real enforcement, not a coincidence of
+/// timing: the same invite, on a tenant with room for one more member (the
+/// ceiling was never reached), is accepted normally.
+#[tokio::test]
+#[file_serial]
+async fn accept_invite_grants_membership_when_under_the_member_ceiling() {
+    let Some(store) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let store = Arc::new(store);
+    let tenant = make_tenant(&store, "invites-accept-quota-room").await;
+    store.set_tenant_plan(tenant, "starter").await.unwrap();
+    // Starter allows 3 members; only 1 is held, leaving room. Same sentinel
+    // id as the ceiling test above, so it cannot collide with the invited
+    // user's real (sequential, reset-to-1) id below.
+    store
+        .put_membership(&Membership {
+            user_id: 900_001,
+            tenant_id: tenant,
+            role: Role::Owner,
+            created: 0,
+        })
+        .await
+        .unwrap();
+    let (new_user_id, raw) =
+        seed_session(&store, "accept-quota-room-subject", "quota-room@acme.com").await;
+    make_invite(
+        &store,
+        tenant,
+        "quota-room@acme.com",
+        "raw-accept-quota-room",
+        quark::now(),
+        quark::now() + 3600,
+    )
+    .await;
+
+    let app = session_app_over(store.clone(), true);
+    let (status, _) = accept_invite(&app, "raw-accept-quota-room", Some(&raw)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        store
+            .get_membership(new_user_id, tenant)
+            .await
+            .unwrap()
+            .map(|m| m.role),
+        Some(Role::Member)
+    );
+}

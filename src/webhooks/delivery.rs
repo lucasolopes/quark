@@ -1687,6 +1687,9 @@ mod tests {
         ) -> Result<(), StoreError> {
             unimplemented!()
         }
+        fn supports_plans(&self) -> bool {
+            unimplemented!()
+        }
         async fn count_memberships(
             &self,
             _tenant: crate::tenant::TenantId,

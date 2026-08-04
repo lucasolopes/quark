@@ -5,7 +5,7 @@
 quark Cloud gates a small number of features and quotas by plan. This is an
 Enterprise concern: a self-hosted Community install never has a plan and
 never hits a limit. If you are running the AGPL build for yourself, this page
-does not apply to you — see the note below.
+does not apply to you; see the note below.
 
 ## The Community edition applies no limit at all
 
@@ -36,8 +36,8 @@ applies to every tenant on that plan at once.
 | Analytics retention | 30 days | 365 days | 730 days | 1,095 days | unlimited¹ |
 
 ¹ `Custom` is the negotiated tier for a contracted customer. Absent a
-per-tenant override it is unlimited across the board; a per-tenant override
-column (`plan_limits`) is designed but not built yet — it has no consumer
+per-tenant override it is unlimited across the board. A per-tenant override
+column (`plan_limits`) is designed but not built yet; it has no consumer
 until a customer actually needs a narrower Custom limit than "everything".
 
 ### Features (binary, not a ceiling)
@@ -45,15 +45,27 @@ until a customer actually needs a narrower Custom limit than "everything".
 | | Free | Starter | Pro | Business | Custom |
 |---|---|---|---|---|---|
 | Webhooks | – | ✓ | ✓ | ✓ | ✓ |
-| Integrations (Sheets, Slack, pixels) | – | ✓ | ✓ | ✓ | ✓ |
-| Broken-link monitoring | – | – | ✓ | ✓ | ✓ |
-| Scoped API tokens | – | – | ✓ | ✓ | ✓ |
+| Integrations (Sheets, pixels) | – | ✓ | ✓ | ✓ | ✓ |
+| Broken-link monitoring* | – | – | ✓ | ✓ | ✓ |
+| Scoped API tokens* | – | – | ✓ | ✓ | ✓ |
 | SSO | – | – | – | ✓ | ✓ |
 
+\* Not enforced in this phase. `Feature` (`src/api/entitlement.rs`) has no
+`HealthMonitoring` or `TokenScopes` variant yet, no handler checks either one,
+and `GET /admin/plan` cannot list them as unlocked because they do not exist
+in code. These two rows describe the commercial roadmap, not current
+behavior; they land in code together with the slice of work that wires them
+to a real handler.
+
+Slack (`src/api/slack.rs`) has no plan gate at all and is not part of the
+commercial grid in this phase; connecting it is free on every plan, Free
+included.
+
 The monthly counters (automation runs, tracked clicks) are designed but not
-enforced yet — they share a monthly counting mechanism that phase 3 builds.
-Today only the row-count quotas (domains, members) and the binary features
-are actually gated.
+enforced yet; they share a monthly counting mechanism that phase 3 builds.
+Today only the row-count quotas (domains, members) and the Webhooks,
+Integrations, and SSO features are actually gated. Broken-link monitoring and
+scoped API tokens are not, per the note above.
 
 ## What a denial looks like
 
@@ -108,7 +120,7 @@ from this endpoint rather than carrying its own copy of the grid, which
 would drift the first time a limit changes.
 
 Any credential that passes `admin_guard` with `Scope::LinksRead` or higher
-can read this — it is not sensitive, and every tenant already knows its own
+can read this. It is not sensitive, and every tenant already knows its own
 plan from the product it experiences.
 
 ## Changing a tenant's plan
@@ -127,7 +139,7 @@ Content-Type: application/json
 Two things make this endpoint different from every other admin route:
 
 - **It requires the break-glass `QUARK_ADMIN_TOKEN` directly**, compared in
-  constant time, and nothing else — not a tenant API token, not a session,
+  constant time, and nothing else: not a tenant API token, not a session,
   not any credential `admin_guard` would resolve on a tenant's behalf. This
   is deliberate: `Plan::Custom` grants everything unlimited, and `"custom"`
   is a string the parser recognizes like any other plan name. If a tenant
@@ -138,19 +150,24 @@ Two things make this endpoint different from every other admin route:
   accepted. `Plan::from_stored` (used on every read) falls back to `Free` on
   an unknown string, which is the safe choice for a read: a corrupt value in
   the store must not take the product down or grant more than intended. On
-  a write, that same fallback would be dangerous in the other direction — a
+  a write, that same fallback would be dangerous in the other direction: a
   typo like `"starterr"` would silently downgrade the tenant to Free instead
   of failing loudly. The write handler compares the parsed plan's canonical
   string back against what was sent and rejects anything that does not
   round-trip.
 
-The change takes effect immediately: the handler calls
-`st.ee.plans.invalidate(tenant)` after writing the plan, so the next request
-does not wait out the plan cache's 60-second TTL.
+The change takes effect immediately on the node that handled this request:
+the handler calls `st.ee.plans.invalidate(tenant)` after writing the plan, so
+that node's very next request does not wait out the plan cache's 60-second
+TTL. `PlanCache` is per-process, with no cross-node invalidation, so on a
+multi-replica deploy the other nodes keep answering from their own cache
+until it converges on its own, within the same 60-second TTL. Wiring
+cross-node invalidation (the pub/sub channel `src/invalidate.rs` already uses
+for cache entries) is future work.
 
 ## The pricing page is copy, not source
 
 The plan grid your marketing site or pricing page shows is copy, kept in
 sync by hand. `crate::ee::plan::Plan` in this repository is the only source
 of truth for what a plan actually enforces. If the two ever disagree, the
-code wins — and the pricing page needs to be fixed.
+code wins, and the pricing page needs to be fixed.

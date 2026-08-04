@@ -472,6 +472,30 @@ pub(crate) async fn admin_invites_accept(
         Ok(None) => {}
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
+    // The quota is ALSO checked here, not just in `admin_invites_create`: the
+    // membership row is born here, not at invite creation, so creation's
+    // check alone is fail-early UX, not enforcement. Without this second
+    // check, an Owner could issue N invites while the tenant holds 1 seat
+    // (each creation sees `held = 1 < ceiling` and passes, since none of the
+    // N invites are accepted yet), then have all N accepted and end up with
+    // N+1 members on a 3-seat plan. Checking at the point of grant closes
+    // that gap regardless of how many invites are outstanding.
+    let held = match st.store.count_memberships(inv.tenant_id).await {
+        Ok(n) => n,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if let Err(denied) = crate::api::entitlement::require_quota(
+        &st,
+        inv.tenant_id,
+        crate::api::entitlement::Quota::Members,
+        held,
+    )
+    .await
+    {
+        // The invite stays pending (not claimed, not marked accepted): the
+        // caller can retry once the tenant frees a seat or upgrades.
+        return denied.into_response();
+    }
     let membership = crate::tenant::Membership {
         user_id,
         tenant_id: inv.tenant_id,
