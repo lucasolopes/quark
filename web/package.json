@@ -51,7 +51,7 @@
     "autoprefixer": "10.5.4",
     "jsdom": "29.1.1",
     "oxlint": "1.75.0",
-    "postcss": "8.5.22",
+    "postcss": "8.5.25",
     "shadcn": "4.14.0",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
