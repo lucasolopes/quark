@@ -70,7 +70,11 @@ async-stripe-checkout = { version = "=1.0.0-rc.8", features = ["checkout_session
 async-stripe-billing = { version = "=1.0.0-rc.8", features = ["subscription", "billing_portal_session"], optional = true }
 async-stripe-product = { version = "=1.0.0-rc.8", features = ["price"], optional = true }
 async-stripe-webhook = { version = "=1.0.0-rc.8", features = ["async-stripe-checkout", "async-stripe-billing"], optional = true }
-async-stripe-shared = { version = "=1.0.0-rc.8", optional = true }
+# `deserialize` is only exercised by `tests/billing_it.rs`, which builds a
+# `stripe_shared::Subscription` from a JSON fixture with `serde_json`
+# directly (the client itself deserializes API responses via miniserde, not
+# serde, so production code does not need this feature).
+async-stripe-shared = { version = "=1.0.0-rc.8", features = ["deserialize"], optional = true }
 async-stripe-types = { version = "=1.0.0-rc.8", optional = true }
 
 [features]

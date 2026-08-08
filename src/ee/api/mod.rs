@@ -20,6 +20,7 @@ mod sso_domains;
 pub(crate) mod tenant_idp;
 mod tenants;
 
+pub use billing::apply_subscription;
 pub(crate) use billing::*;
 pub(crate) use domains::*;
 pub(crate) use invites::*;
@@ -83,6 +84,7 @@ pub fn mount(r: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
         )
         .route("/admin/billing/checkout", post(admin_billing_checkout))
         .route("/admin/billing/portal", post(admin_billing_portal))
+        .route("/stripe/webhook", post(stripe_webhook))
 }
 
 // Session helpers used only by the Enterprise handlers. They lived in

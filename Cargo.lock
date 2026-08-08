@@ -189,6 +189,7 @@ dependencies = [
  "async-stripe-types",
  "miniserde",
  "serde",
+ "serde_json",
  "smol_str",
  "tracing",
 ]
@@ -201,6 +202,7 @@ checksum = "b6c44f1c110ccddbb5674b39e4b68345b245acf5b9c8ac1e6ca9f25011109263"
 dependencies = [
  "miniserde",
  "serde",
+ "serde_json",
  "smol_str",
 ]
 

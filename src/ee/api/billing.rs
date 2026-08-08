@@ -250,3 +250,172 @@ pub(crate) async fn admin_billing_portal(
     };
     Json(serde_json::json!({ "url": portal.url })).into_response()
 }
+
+/// Applies a subscription's current state to its tenant: status plus the
+/// price lookup key decide the effective plan (spec D8), written through the
+/// phase 1 seam and cache. Public to the crate's tests; the only production
+/// caller is the webhook below.
+pub async fn apply_subscription(
+    st: &AppState,
+    sub: &stripe_shared::Subscription,
+) -> Result<(), StatusCode> {
+    // The webhook arrives with a customer id; metadata's tenant_id is the
+    // fallback for events older than the reverse index.
+    let customer_id = match &sub.customer {
+        stripe_types::Expandable::Id(id) => id.to_string(),
+        stripe_types::Expandable::Object(c) => c.id.to_string(),
+    };
+    let tenant = match st.store.find_tenant_by_stripe_customer(&customer_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            match sub
+                .metadata
+                .get("tenant_id")
+                .and_then(|v| v.parse::<u64>().ok())
+            {
+                Some(id) => crate::tenant::TenantId(id),
+                None => {
+                    // Orphan event (an old environment, a deleted tenant):
+                    // acknowledge, never leave it retrying forever.
+                    tracing::warn!(customer = %customer_id, "stripe event for unknown tenant");
+                    return Ok(());
+                }
+            }
+        }
+        Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
+    };
+    let paid = sub
+        .items
+        .data
+        .first()
+        .and_then(|item| item.price.lookup_key.as_deref())
+        .and_then(crate::ee::stripe::map::plan_for_lookup_key)
+        .unwrap_or(Plan::Free);
+    let effective = crate::ee::stripe::map::effective_plan(&sub.status, paid);
+    if st
+        .store
+        .set_tenant_plan(tenant, effective.as_str())
+        .await
+        .is_err()
+    {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    if st
+        .store
+        .set_stripe_subscription_id(tenant, sub.id.as_str())
+        .await
+        .is_err()
+    {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    st.ee.plans.invalidate(tenant).await;
+    tracing::info!(
+        tenant_id = tenant.0,
+        plan = effective.as_str(),
+        status = ?sub.status,
+        "plan updated from stripe subscription"
+    );
+    Ok(())
+}
+
+/// `POST /stripe/webhook`. Public route: the authentication IS the
+/// `Stripe-Signature` header. 400 on a bad signature, 200 on a duplicate,
+/// 5xx on our own failure so Stripe retries.
+pub(crate) async fn stripe_webhook(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let Some(billing) = st.ee.billing.clone() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(sig) = headers
+        .get("stripe-signature")
+        .and_then(|v| v.to_str().ok())
+    else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let event = match stripe_webhook::Webhook::construct_event(&body, sig, &billing.webhook_secret)
+    {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(error = %e, "stripe webhook signature rejected");
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+    };
+
+    // Idempotency ledger (spec D4): one row per event id, replays are acked
+    // and skipped. The row is RELEASED again on every 5xx below: otherwise
+    // Stripe's retry of a failed delivery would hit the dedup and the change
+    // would be lost for good.
+    let event_id = event.id.to_string();
+    match st
+        .store
+        .record_stripe_event(&event_id, event.type_.as_str(), now())
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::OK.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    // Best-effort ledger release before answering 5xx (see above).
+    let fail = |st: Arc<AppState>, event_id: String, status: StatusCode| async move {
+        let _ = st.store.delete_stripe_event(&event_id).await;
+        status.into_response()
+    };
+
+    use stripe_webhook::EventObject;
+    match event.data.object {
+        EventObject::CheckoutSessionCompleted(session) => {
+            // The subscription id is all this event contributes; the plan
+            // itself arrives via customer.subscription.created/updated.
+            let tenant = session
+                .client_reference_id
+                .as_deref()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(crate::tenant::TenantId);
+            let sub_id = session.subscription.as_ref().map(|s| match s {
+                stripe_types::Expandable::Id(id) => id.to_string(),
+                stripe_types::Expandable::Object(o) => o.id.to_string(),
+            });
+            if let (Some(tenant), Some(sub_id)) = (tenant, sub_id) {
+                if st
+                    .store
+                    .set_stripe_subscription_id(tenant, &sub_id)
+                    .await
+                    .is_err()
+                {
+                    return fail(st, event_id, StatusCode::SERVICE_UNAVAILABLE).await;
+                }
+            }
+            StatusCode::OK.into_response()
+        }
+        EventObject::CustomerSubscriptionCreated(sub)
+        | EventObject::CustomerSubscriptionUpdated(sub)
+        | EventObject::CustomerSubscriptionDeleted(sub) => {
+            // Spec D4: never trust the payload's state, fetch the current
+            // subscription. Event order is not guaranteed; the API is.
+            let fetched = stripe_billing::subscription::RetrieveSubscription::new(sub.id.clone())
+                .send(&billing.client)
+                .await;
+            let current = match fetched {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(error = %e, "stripe subscription re-fetch failed");
+                    return fail(st, event_id, StatusCode::SERVICE_UNAVAILABLE).await;
+                }
+            };
+            match apply_subscription(&st, &current).await {
+                Ok(()) => StatusCode::OK.into_response(),
+                Err(status) => fail(st, event_id, status).await,
+            }
+        }
+        _ => {
+            // invoice.paid / invoice.payment_failed and anything else we do
+            // not act on: structured log only, Stripe's own emails handle
+            // dunning communication.
+            tracing::info!(event_type = %event.type_, "stripe event acknowledged");
+            StatusCode::OK.into_response()
+        }
+    }
+}
