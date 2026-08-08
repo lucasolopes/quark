@@ -1233,3 +1233,63 @@ async fn tenant_plan_round_trips_and_defaults_to_free_pg() {
     // A tenant with no memberships counts zero; the ceiling check relies on it.
     assert_eq!(s.count_memberships(t).await.unwrap(), 0);
 }
+
+#[tokio::test]
+#[file_serial]
+async fn stripe_billing_columns_round_trip_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let t = quark::tenant::TenantId(4243);
+    s.put_tenant(&quark::tenant::Tenant {
+        id: t,
+        name: "Acme".into(),
+        slug: "acme-stripe".into(),
+        created: 0,
+    })
+    .await
+    .unwrap();
+
+    // No billing yet.
+    assert_eq!(s.get_stripe_customer_id(t).await.unwrap(), None);
+    assert_eq!(s.get_stripe_subscription_id(t).await.unwrap(), None);
+    assert_eq!(
+        s.find_tenant_by_stripe_customer("cus_none").await.unwrap(),
+        None
+    );
+
+    s.set_stripe_customer_id(t, "cus_123").await.unwrap();
+    assert_eq!(
+        s.get_stripe_customer_id(t).await.unwrap().as_deref(),
+        Some("cus_123")
+    );
+    assert_eq!(
+        s.find_tenant_by_stripe_customer("cus_123").await.unwrap(),
+        Some(t)
+    );
+
+    s.set_stripe_subscription_id(t, "sub_123").await.unwrap();
+    assert_eq!(
+        s.get_stripe_subscription_id(t).await.unwrap().as_deref(),
+        Some("sub_123")
+    );
+
+    // Event dedup: first insert true, replay false.
+    assert!(s
+        .record_stripe_event("evt_1", "invoice.paid", 100)
+        .await
+        .unwrap());
+    assert!(!s
+        .record_stripe_event("evt_1", "invoice.paid", 101)
+        .await
+        .unwrap());
+
+    // Deleting frees the id again: this is what lets a Stripe retry through
+    // after our own processing failed.
+    s.delete_stripe_event("evt_1").await.unwrap();
+    assert!(s
+        .record_stripe_event("evt_1", "invoice.paid", 102)
+        .await
+        .unwrap());
+}

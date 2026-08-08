@@ -719,6 +719,44 @@ pub trait Store: Send + Sync + 'static {
     async fn get_tenant_plan(&self, tenant: TenantId) -> Result<Option<String>, StoreError>;
     /// Sets the tenant's billing plan. Cloud-only, like `set_primary_domain`.
     async fn set_tenant_plan(&self, tenant: TenantId, plan: &str) -> Result<(), StoreError>;
+    /// The tenant's Stripe customer id, opaque to the core (LUC-41 phase 2).
+    /// `None` means the tenant never started a checkout, or a backend that
+    /// carries no billing at all.
+    async fn get_stripe_customer_id(&self, tenant: TenantId) -> Result<Option<String>, StoreError>;
+    /// Persists the Stripe customer id, written once at first checkout.
+    async fn set_stripe_customer_id(
+        &self,
+        tenant: TenantId,
+        customer_id: &str,
+    ) -> Result<(), StoreError>;
+    /// The tenant's latest Stripe subscription id. Kept after cancellation on
+    /// purpose: its presence is what marks "already had a trial".
+    async fn get_stripe_subscription_id(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Option<String>, StoreError>;
+    async fn set_stripe_subscription_id(
+        &self,
+        tenant: TenantId,
+        subscription_id: &str,
+    ) -> Result<(), StoreError>;
+    /// Reverse lookup for the webhook, which arrives with a customer id.
+    async fn find_tenant_by_stripe_customer(
+        &self,
+        customer_id: &str,
+    ) -> Result<Option<TenantId>, StoreError>;
+    /// Idempotency ledger for Stripe webhook events. `Ok(true)` recorded,
+    /// `Ok(false)` the id was already there and the event must be skipped.
+    async fn record_stripe_event(
+        &self,
+        id: &str,
+        event_type: &str,
+        received_at: u64,
+    ) -> Result<bool, StoreError>;
+    /// Removes an event from the ledger. Called when OUR processing failed
+    /// after recording, so Stripe's retry of the same id is not swallowed by
+    /// the dedup.
+    async fn delete_stripe_event(&self, id: &str) -> Result<(), StoreError>;
     /// Whether this backend has a plan system at all. `false` means
     /// `get_tenant_plan` can never answer anything but `Ok(None)` and
     /// `set_tenant_plan` can never succeed (LMDB); `true` means the plan

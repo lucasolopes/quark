@@ -826,6 +826,16 @@ impl PostgresStore {
                 // 'free' so a tenant created before billing existed reads as the
                 // entry plan instead of NULL.
                 "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free'",
+                // Stripe billing (LUC-41 phase 2). Opaque ids; the meaning
+                // lives in `src/ee/stripe/`.
+                "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT",
+                "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT",
+                // Webhook idempotency ledger: one row per delivered event id.
+                "CREATE TABLE IF NOT EXISTS stripe_events (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    received_at BIGINT NOT NULL
+                )",
                 "CREATE TABLE IF NOT EXISTS users (id BIGINT PRIMARY KEY, subject TEXT NOT NULL UNIQUE, email TEXT NOT NULL, display TEXT NOT NULL, created BIGINT NOT NULL)",
                 "CREATE SEQUENCE IF NOT EXISTS quark_user_id_seq",
                 // Starts at 1 so it never collides with the seeded default tenant (id 0).
@@ -2911,6 +2921,95 @@ impl Store for PostgresStore {
         sqlx::query("UPDATE tenants SET plan = $2 WHERE id = $1")
             .bind(tenant.0 as i64)
             .bind(plan)
+            .execute(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn get_stripe_customer_id(&self, tenant: TenantId) -> Result<Option<String>, StoreError> {
+        let row = sqlx::query("SELECT stripe_customer_id FROM tenants WHERE id = $1")
+            .bind(tenant.0 as i64)
+            .fetch_optional(&self.read)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(row.and_then(|r| r.get::<Option<String>, _>("stripe_customer_id")))
+    }
+
+    async fn set_stripe_customer_id(
+        &self,
+        tenant: TenantId,
+        customer_id: &str,
+    ) -> Result<(), StoreError> {
+        sqlx::query("UPDATE tenants SET stripe_customer_id = $2 WHERE id = $1")
+            .bind(tenant.0 as i64)
+            .bind(customer_id)
+            .execute(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn get_stripe_subscription_id(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Option<String>, StoreError> {
+        let row = sqlx::query("SELECT stripe_subscription_id FROM tenants WHERE id = $1")
+            .bind(tenant.0 as i64)
+            .fetch_optional(&self.read)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(row.and_then(|r| r.get::<Option<String>, _>("stripe_subscription_id")))
+    }
+
+    async fn set_stripe_subscription_id(
+        &self,
+        tenant: TenantId,
+        subscription_id: &str,
+    ) -> Result<(), StoreError> {
+        sqlx::query("UPDATE tenants SET stripe_subscription_id = $2 WHERE id = $1")
+            .bind(tenant.0 as i64)
+            .bind(subscription_id)
+            .execute(&self.write)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(())
+    }
+
+    async fn find_tenant_by_stripe_customer(
+        &self,
+        customer_id: &str,
+    ) -> Result<Option<TenantId>, StoreError> {
+        let row = sqlx::query("SELECT id FROM tenants WHERE stripe_customer_id = $1")
+            .bind(customer_id)
+            .fetch_optional(&self.read)
+            .await
+            .map_err(StoreError::backend)?;
+        Ok(row.map(|r| TenantId(r.get::<i64, _>("id") as u64)))
+    }
+
+    async fn record_stripe_event(
+        &self,
+        id: &str,
+        event_type: &str,
+        received_at: u64,
+    ) -> Result<bool, StoreError> {
+        let res = sqlx::query(
+            "INSERT INTO stripe_events (id, type, received_at) VALUES ($1, $2, $3)
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(id)
+        .bind(event_type)
+        .bind(received_at as i64)
+        .execute(&self.write)
+        .await
+        .map_err(StoreError::backend)?;
+        Ok(res.rows_affected() == 1)
+    }
+
+    async fn delete_stripe_event(&self, id: &str) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM stripe_events WHERE id = $1")
+            .bind(id)
             .execute(&self.write)
             .await
             .map_err(StoreError::backend)?;
