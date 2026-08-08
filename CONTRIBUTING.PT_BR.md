@@ -37,7 +37,7 @@ aceite uma vez e vale para todos os PRs seguintes.
 ## Desenvolvimento
 
 Pré-requisitos: toolchain estável do Rust (via [rustup](https://rustup.rs)) e
-Node 20+ para o painel. O detalhe está em
+Node 22+ para o painel. O detalhe está em
 [docs/DEVELOPMENT.PT_BR.md](docs/DEVELOPMENT.PT_BR.md); aqui fica só o mínimo
 para o primeiro PR.
 
