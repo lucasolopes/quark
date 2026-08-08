@@ -723,7 +723,13 @@ pub trait Store: Send + Sync + 'static {
     /// `None` means the tenant never started a checkout, or a backend that
     /// carries no billing at all.
     async fn get_stripe_customer_id(&self, tenant: TenantId) -> Result<Option<String>, StoreError>;
-    /// Persists the Stripe customer id, written once at first checkout.
+    /// Claims the Stripe customer id for the tenant's first checkout.
+    /// Idempotent, not a blind write: it only fills the column when it is
+    /// still empty (`WHERE stripe_customer_id IS NULL` on Postgres), so two
+    /// concurrent checkouts racing to create a Stripe Customer converge on
+    /// whichever call lands first, and the loser's write is silently
+    /// dropped. Callers that need to know the winning id must re-read
+    /// `get_stripe_customer_id` after calling this.
     async fn set_stripe_customer_id(
         &self,
         tenant: TenantId,

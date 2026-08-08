@@ -105,7 +105,33 @@ pub(crate) async fn admin_billing_checkout(
             {
                 return StatusCode::SERVICE_UNAVAILABLE.into_response();
             }
-            customer.id.to_string()
+            // The write above is an idempotent claim (first checkout wins),
+            // not a blind overwrite: a concurrent request for the same
+            // tenant may have created and persisted a different customer
+            // first. Re-read to learn who actually won, so both requests
+            // converge on the same Stripe customer instead of splitting
+            // into two. The loser's `customer` is orphaned in Stripe
+            // (harmless: it never gets a subscription).
+            match st.store.get_stripe_customer_id(tenant).await {
+                Ok(Some(won)) => {
+                    if won != customer.id.as_str() {
+                        tracing::info!(
+                            tenant_id = tenant.0,
+                            created = customer.id.as_str(),
+                            winner = won.as_str(),
+                            "stripe customer race: concurrent checkout won, discarding this create"
+                        );
+                    }
+                    won
+                }
+                Ok(None) => {
+                    // Can't happen: this branch just claimed the column (or
+                    // lost the race to another claim), so it is never NULL
+                    // here. Fall back to the locally created id defensively.
+                    customer.id.to_string()
+                }
+                Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            }
         }
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };

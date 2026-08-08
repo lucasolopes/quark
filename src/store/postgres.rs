@@ -1159,7 +1159,7 @@ impl PostgresStore {
         }
 
         for q in [
-            "TRUNCATE links, aliases, alert_rules, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships, domains, invites, oidc_configs, sso_email_domains RESTART IDENTITY",
+            "TRUNCATE links, aliases, alert_rules, link_health, health_lease, sessions, stats, events, webhooks, api_tokens, pixels, wellknown_documents, click_counters, stats_meta, click_events, webhook_deliveries, sheets_connection, sheets_lease, tenants, users, memberships, domains, invites, oidc_configs, sso_email_domains, stripe_events RESTART IDENTITY",
             "ALTER SEQUENCE quark_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_webhook_id_seq RESTART WITH 1",
             "ALTER SEQUENCE quark_api_token_id_seq RESTART WITH 1",
@@ -2941,12 +2941,19 @@ impl Store for PostgresStore {
         tenant: TenantId,
         customer_id: &str,
     ) -> Result<(), StoreError> {
-        sqlx::query("UPDATE tenants SET stripe_customer_id = $2 WHERE id = $1")
-            .bind(tenant.0 as i64)
-            .bind(customer_id)
-            .execute(&self.write)
-            .await
-            .map_err(StoreError::backend)?;
+        // Idempotent claim, not a blind overwrite: two concurrent checkouts
+        // for the same tenant can each create a Stripe Customer before either
+        // write lands, so whichever `UPDATE` runs first here wins and the
+        // second is a no-op. Callers re-read `get_stripe_customer_id` after
+        // this to learn who won (see `admin_billing_checkout`).
+        sqlx::query(
+            "UPDATE tenants SET stripe_customer_id = $2 WHERE id = $1 AND stripe_customer_id IS NULL",
+        )
+        .bind(tenant.0 as i64)
+        .bind(customer_id)
+        .execute(&self.write)
+        .await
+        .map_err(StoreError::backend)?;
         Ok(())
     }
 

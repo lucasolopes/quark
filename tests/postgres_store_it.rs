@@ -1269,6 +1269,18 @@ async fn stripe_billing_columns_round_trip_pg() {
         Some(t)
     );
 
+    // Idempotent claim, not a blind write: a second `set` (the losing side
+    // of a concurrent-checkout race) must not clobber the first customer.
+    s.set_stripe_customer_id(t, "cus_456").await.unwrap();
+    assert_eq!(
+        s.get_stripe_customer_id(t).await.unwrap().as_deref(),
+        Some("cus_123")
+    );
+    assert_eq!(
+        s.find_tenant_by_stripe_customer("cus_456").await.unwrap(),
+        None
+    );
+
     s.set_stripe_subscription_id(t, "sub_123").await.unwrap();
     assert_eq!(
         s.get_stripe_subscription_id(t).await.unwrap().as_deref(),
