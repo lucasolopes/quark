@@ -89,6 +89,8 @@ pub struct TestState {
     keycloak: Option<Arc<dyn KeycloakAdmin>>,
     #[cfg(feature = "ee")]
     keycloak_base_url: Option<String>,
+    #[cfg(feature = "ee")]
+    billing: Option<Arc<quark::ee::stripe::StripeBilling>>,
     dns: Arc<dyn Dns>,
 }
 
@@ -117,6 +119,8 @@ impl TestState {
             keycloak: None,
             #[cfg(feature = "ee")]
             keycloak_base_url: None,
+            #[cfg(feature = "ee")]
+            billing: None,
             dns: Arc::new(NullDns),
         }
     }
@@ -213,6 +217,12 @@ impl TestState {
         self
     }
 
+    #[cfg(feature = "ee")]
+    pub fn billing(mut self, billing: Option<Arc<quark::ee::stripe::StripeBilling>>) -> Self {
+        self.billing = billing;
+        self
+    }
+
     pub fn dns(mut self, dns: Arc<dyn Dns>) -> Self {
         self.dns = dns;
         self
@@ -259,7 +269,7 @@ impl TestState {
                 keycloak_base_url: self.keycloak_base_url,
                 oidc_tenants: quark::oidc::TenantOidcCache::new(),
                 plans: quark::ee::plan::PlanCache::new(),
-                billing: None,
+                billing: self.billing,
             },
         })
     }
