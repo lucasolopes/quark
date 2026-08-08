@@ -378,14 +378,28 @@ pub(crate) async fn stripe_webhook(
                 stripe_types::Expandable::Id(id) => id.to_string(),
                 stripe_types::Expandable::Object(o) => o.id.to_string(),
             });
-            if let (Some(tenant), Some(sub_id)) = (tenant, sub_id) {
-                if st
-                    .store
-                    .set_stripe_subscription_id(tenant, &sub_id)
-                    .await
-                    .is_err()
-                {
-                    return fail(st, event_id, StatusCode::SERVICE_UNAVAILABLE).await;
+            match (tenant, sub_id) {
+                (Some(tenant), Some(sub_id)) => {
+                    if st
+                        .store
+                        .set_stripe_subscription_id(tenant, &sub_id)
+                        .await
+                        .is_err()
+                    {
+                        return fail(st, event_id, StatusCode::SERVICE_UNAVAILABLE).await;
+                    }
+                }
+                _ => {
+                    // Not fatal (the session still completed on Stripe's
+                    // side, nothing to retry), but worth a signal: a
+                    // checkout without a parseable tenant or subscription id
+                    // means either an integration bug on our side (missing
+                    // `client_reference_id`) or a session created outside
+                    // our own checkout flow.
+                    tracing::warn!(
+                        session_id = session.id.as_str(),
+                        "checkout.session.completed missing tenant or subscription id"
+                    );
                 }
             }
             StatusCode::OK.into_response()
