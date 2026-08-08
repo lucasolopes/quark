@@ -20,7 +20,12 @@ Configurado no dashboard do CF (passo do Lucas, feito):
 - Repo conectado: `quark`, production branch `main`.
 - Root directory: `web`. Build command: `npm run build`. Output: `dist`.
 - Env vars (Production + Preview): `VITE_API_BASE_URL=https://backend.quarkus.com.br`,
-  `NODE_VERSION=22`.
+  `NODE_VERSION=24`, `NPM_CONFIG_ENGINE_STRICT=false`.
+- Por que 24 e engine-strict off SÓ no CF: o build image do Pages atrasa patches
+  de Node (resolvia "22" pra 22.22.0 quando o jsdom 30.0.1 já exigia >=22.22.2),
+  então o `engine-strict=true` do `web/.npmrc` derrubava o `npm ci` lá. A env
+  vence o `.npmrc` só no CF; CI e dev local continuam estritos, e o jsdom é
+  devDependency de teste, não entra no bundle do `vite build`.
 
 Reforços no repo (rede de segurança, pra o build nunca depender só do dashboard):
 - `web/.env.production` com `VITE_API_BASE_URL=https://backend.quarkus.com.br`. O
@@ -28,7 +33,8 @@ Reforços no repo (rede de segurança, pra o build nunca depender só do dashboa
   segredo. Isso garante que qualquer `npm run build` (CF, CI, local ou manual)
   sai apontando pro backend certo, mesmo se a env do dashboard for esquecida —
   foi exatamente esse esquecimento que quebrou o login no deploy manual da Fase 3.
-- `web/.node-version` com `22`, pro build do CF usar o mesmo Node do CI.
+- `web/.node-version` com `22`, alinhado com o CI (a env `NODE_VERSION` do
+  dashboard tem precedência no build do CF).
 
 Resultado: push na `main` → CF builda+deploya o painel; PR → preview URL.
 
