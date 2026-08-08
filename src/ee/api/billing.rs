@@ -158,10 +158,48 @@ pub(crate) async fn admin_billing_checkout(
 
     // Trial once per tenant (spec D6): a tenant that ever had a subscription
     // does not get another trial by resubscribing.
-    let had_subscription = match st.store.get_stripe_subscription_id(tenant).await {
-        Ok(v) => v.is_some(),
+    let existing_subscription_id = match st.store.get_stripe_subscription_id(tenant).await {
+        Ok(v) => v,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
+    let had_subscription = existing_subscription_id.is_some();
+
+    // A recorded subscription id is not proof the tenant is currently
+    // unsubscribed: it may still be active, trialing, or past_due, in which
+    // case a second checkout would open a second paid subscription for the
+    // same tenant (double billing). Re-fetch it live, the same way the
+    // webhook does, instead of trusting whatever status is cached locally.
+    if let Some(sub_id) = existing_subscription_id.as_deref() {
+        let fetched = stripe_billing::subscription::RetrieveSubscription::new(
+            stripe_shared::SubscriptionId::from(sub_id),
+        )
+        .send(&billing.client)
+        .await;
+        let current = match fetched {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, tenant_id = tenant.0, "stripe subscription re-fetch failed");
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+        };
+        let paid = current
+            .items
+            .data
+            .first()
+            .and_then(|item| item.price.lookup_key.as_deref())
+            .and_then(crate::ee::stripe::map::plan_for_lookup_key)
+            .unwrap_or(Plan::Free);
+        if crate::ee::stripe::map::effective_plan(&current.status, paid) != Plan::Free {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "subscription_active",
+                    "manage_url": null
+                })),
+            )
+                .into_response();
+        }
+    }
 
     use stripe_checkout::checkout_session::{
         CreateCheckoutSession, CreateCheckoutSessionLineItems,
@@ -292,6 +330,39 @@ pub async fn apply_subscription(
         .and_then(crate::ee::stripe::map::plan_for_lookup_key)
         .unwrap_or(Plan::Free);
     let effective = crate::ee::stripe::map::effective_plan(&sub.status, paid);
+
+    // Out-of-order guard for the cancel-and-resubscribe cycle: an owner who
+    // cancels subscription A and immediately creates B can have Stripe
+    // deliver `created`(B, paid) before `deleted`(A, canceled). The D4
+    // re-fetch above only protects against reordering WITHIN one
+    // subscription's own events; it does nothing for two different
+    // subscriptions on the same customer racing each other. Without this
+    // guard, `deleted`(A) would land last, re-resolve to Free (A really is
+    // canceled), and clobber the tenant with the terminal state of a
+    // subscription that is no longer the one paying, downgrading an actual
+    // paying tenant. So: a terminal (Free) result only gets written when
+    // `sub` is still the tenant's CURRENT subscription id. A terminal event
+    // for a subscription that has already been superseded is a stale event
+    // about a stale subscription; ack it and leave the tenant's real
+    // (newer) plan alone. Non-terminal (paid) results always apply: the
+    // newest paid subscription wins regardless of arrival order.
+    if effective == Plan::Free {
+        let current = st.store.get_stripe_subscription_id(tenant).await;
+        match current {
+            Ok(Some(ref current_id)) if current_id != sub.id.as_str() => {
+                tracing::info!(
+                    tenant_id = tenant.0,
+                    stale_subscription = sub.id.as_str(),
+                    current_subscription = current_id.as_str(),
+                    "stale terminal event for a superseded subscription, ignoring"
+                );
+                return Ok(());
+            }
+            Ok(_) => {}
+            Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
+        }
+    }
+
     if st
         .store
         .set_tenant_plan(tenant, effective.as_str())
