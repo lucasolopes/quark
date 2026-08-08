@@ -21,9 +21,10 @@
 //!   This isolates quark's actual claim: ARX round vs cryptographic-hash
 //!   round, holding the network structure constant.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
+use std::hint::black_box;
 
 use quark::codec;
 use quark::permute::{self, MAX_ID};

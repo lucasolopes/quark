@@ -12,13 +12,14 @@
 //! UNcontended cost (floor). Contention on the mpsc channel under N real threads
 //! doesn't show up here — but oha couldn't measure it above the noise either.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use quark::analytics::{spawn_worker, ClickEvent};
 use quark::api::router;
 use quark::cache::Cache;
 use quark::codec::to_base62;
 use quark::permute::encode;
 use quark::store::{open_backends, Record};
+use std::hint::black_box;
 use std::sync::Arc;
 
 use axum::body::Body;
