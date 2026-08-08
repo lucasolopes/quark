@@ -125,6 +125,53 @@ pub(crate) async fn admin_domains_create(
     if is_internal_host(&host) || st.public_host.as_deref() == Some(host.as_str()) {
         return (StatusCode::BAD_REQUEST, "host not allowed").into_response();
     }
+    // `tenant_domain_suffix` is our own namespace (e.g. `tenants.example.com`),
+    // reserved for the automatic per-tenant subdomain `seed_tenant_subdomain`
+    // creates at workspace setup. A caller registering their own custom domain
+    // must never be able to claim a host inside it — nothing upstream of this
+    // check (`is_valid_host_format`, `is_internal_host`, the `public_host`
+    // comparison) rejects it, so this is the only gate.
+    if let Some(suffix) = &st.tenant_domain_suffix {
+        if host == suffix.as_str() || host.ends_with(&format!(".{suffix}")) {
+            return (
+                StatusCode::BAD_REQUEST,
+                "host is reserved for the platform's tenant subdomain namespace",
+            )
+                .into_response();
+        }
+    }
+    let held = match st.store.list_domains(p.tenant).await {
+        // Exclude exactly the automatic subdomain `seed_tenant_subdomain`
+        // wrote for this tenant (`<slug>.<suffix>`) from the ceiling: it is
+        // infrastructure we created, not a domain the caller asked for. The
+        // reservation check above already guarantees no caller-registered
+        // domain can collide with this host, so the exclusion can never hide
+        // a real customer domain from the count.
+        Ok(d) => {
+            let auto_subdomain = match &st.tenant_domain_suffix {
+                Some(suffix) => match st.store.get_tenant(p.tenant).await {
+                    Ok(Some(tenant)) => Some(crate::domain::subdomain_host(&tenant.slug, suffix)),
+                    Ok(None) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                    Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                },
+                None => None,
+            };
+            d.iter()
+                .filter(|domain| Some(&domain.host) != auto_subdomain.as_ref())
+                .count() as u64
+        }
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if let Err(denied) = crate::api::entitlement::require_quota(
+        &st,
+        p.tenant,
+        crate::api::entitlement::Quota::Domains,
+        held,
+    )
+    .await
+    {
+        return denied.into_response();
+    }
     let id = match st.store.next_domain_id().await {
         Ok(i) => i,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),

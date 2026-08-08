@@ -13,6 +13,7 @@
 pub(crate) use crate::api::*;
 
 mod domains;
+pub mod entitlement;
 mod invites;
 mod sso_domains;
 pub(crate) mod tenant_idp;
@@ -73,6 +74,11 @@ pub fn mount(r: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             axum::routing::delete(admin_invites_delete),
         )
         .route("/admin/invites/{token}/accept", post(admin_invites_accept))
+        .route("/admin/plan", get(entitlement::admin_plan_get))
+        .route(
+            "/admin/tenants/{id}/plan",
+            axum::routing::put(entitlement::admin_tenant_plan_put),
+        )
 }
 
 // Session helpers used only by the Enterprise handlers. They lived in

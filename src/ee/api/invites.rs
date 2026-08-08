@@ -55,6 +55,23 @@ pub(crate) async fn admin_invites_create(
     if email.is_empty() || !email.contains('@') {
         return (StatusCode::BAD_REQUEST, "invalid email").into_response();
     }
+    // A pending invite does not occupy a seat: only accepted memberships count
+    // toward the ceiling, or a declined/expired invite would block the seat
+    // forever.
+    let held = match st.store.count_memberships(p.tenant).await {
+        Ok(n) => n,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if let Err(denied) = crate::api::entitlement::require_quota(
+        &st,
+        p.tenant,
+        crate::api::entitlement::Quota::Members,
+        held,
+    )
+    .await
+    {
+        return denied.into_response();
+    }
     let token = generate_token();
     let id = match st.store.next_invite_id().await {
         Ok(i) => i,
@@ -271,6 +288,11 @@ pub(crate) async fn admin_oidc_config_put(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
+    if let Err(denied) =
+        crate::api::entitlement::require(&st, p.tenant, crate::api::entitlement::Feature::Sso).await
+    {
+        return denied.into_response();
+    }
     let ip = client_ip(&headers, &st.real_ip_header, None);
     if !st.ratelimiter.check(&ip, now()).await {
         return (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
@@ -381,7 +403,10 @@ pub(crate) struct AcceptInviteResp {
 /// Checks run in an order where no membership is ever granted on a failure
 /// path: cloud gate, session, rate limit, invite lookup (covers unknown,
 /// expired, and already-accepted tokens alike, since `get_invite_by_hash`
-/// hides all three), email match, existing-membership conflict, then
+/// hides all three), email match, the model-A/model-B split (Keycloak
+/// configured returns here with no grant; see the comment on that branch
+/// below), existing-membership conflict, member-quota check (model A only;
+/// LUC-148 tracks the model-B gap where this is not applied), then
 /// `accept_invite_tx` claims the invite row AND grants the membership in one
 /// backend transaction (LUC-46): two concurrent accepts of the same token
 /// both pass the checks above, but only one wins the claim, and if the grant
@@ -449,6 +474,41 @@ pub(crate) async fn admin_invites_accept(
         Ok(Some(_)) => return StatusCode::CONFLICT.into_response(),
         Ok(None) => {}
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    // The quota is ALSO checked here, not just in `admin_invites_create`: the
+    // membership row is born here, not at invite creation, so creation's
+    // check alone is fail-early UX, not enforcement. Without this second
+    // check, an Owner could issue N invites while the tenant holds 1 seat
+    // (each creation sees `held = 1 < ceiling` and passes, since none of the
+    // N invites are accepted yet), then have all N accepted and end up with
+    // N+1 members on a 3-seat plan. Checking at the point of grant closes
+    // that gap regardless of how many invites are outstanding.
+    //
+    // This only covers model A (no Keycloak). With Keycloak configured, this
+    // whole function returns above, at the `st.ee.keycloak.is_some()` branch
+    // (~line 455), before ever reaching here: this check is dead code on that
+    // path. Under Keycloak, membership is instead granted by the OIDC login
+    // callback, `ensure_user_and_membership` in `src/oidc.rs`, which does NOT
+    // apply this quota. A tenant whose IdP is provisioned can therefore still
+    // exceed its member ceiling by having enough distinct users log in.
+    // Known gap, accepted for this phase, tracked as LUC-148: closing it
+    // needs billing context (phase 2) to decide what happens to a user the
+    // IdP already authenticated into a workspace that is at its ceiling.
+    let held = match st.store.count_memberships(inv.tenant_id).await {
+        Ok(n) => n,
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    if let Err(denied) = crate::api::entitlement::require_quota(
+        &st,
+        inv.tenant_id,
+        crate::api::entitlement::Quota::Members,
+        held,
+    )
+    .await
+    {
+        // The invite stays pending (not claimed, not marked accepted): the
+        // caller can retry once the tenant frees a seat or upgrades.
+        return denied.into_response();
     }
     let membership = crate::tenant::Membership {
         user_id,

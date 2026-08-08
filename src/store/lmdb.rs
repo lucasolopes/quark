@@ -1351,6 +1351,44 @@ impl Store for LmdbStore {
         Ok(None)
     }
 
+    // Billing plans are cloud-only, same reasoning as the primary domain above:
+    // the OSS backend is single-tenant and never has a plan.
+    async fn get_tenant_plan(&self, _tenant: TenantId) -> Result<Option<String>, StoreError> {
+        Ok(None)
+    }
+
+    async fn set_tenant_plan(&self, _tenant: TenantId, _plan: &str) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    // LMDB has no plan column and no way to add one at runtime: `false` tells
+    // `plan_of` to treat this backend as unlimited (`Plan::Custom`) instead
+    // of resolving the absent row to `Free` and denying an Enterprise
+    // self-hosted install every feature it paid for.
+    fn supports_plans(&self) -> bool {
+        false
+    }
+
+    // `memberships` is keyed `user_id || tenant_id` (see `membership_key`),
+    // so the tenant is the suffix and there is no range to prefix-scan: the
+    // whole sub-db is walked and only the entries pointing at this tenant are
+    // counted. OSS is usually single-tenant, but `put_membership` is a real
+    // implementation (OIDC login writes one row per user against
+    // `DEFAULT_TENANT`, see `src/oidc.rs`), so this counts for real instead
+    // of assuming a fixed membership count.
+    async fn count_memberships(&self, tenant: TenantId) -> Result<u64, StoreError> {
+        let rtxn = self.env.read_txn()?;
+        let suffix = tenant.0.to_be_bytes();
+        let mut n: u64 = 0;
+        for item in self.memberships.iter(&rtxn)? {
+            let (key, _) = item?;
+            if key.len() == 16 && key[8..16] == suffix {
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
     // SSO email-domain discovery (LUC-57) is cloud-only, same reasoning as
     // custom domains above: OSS is single-tenant, and the SSO-domain endpoints
     // are gated behind `multi_tenant`, so these are never invoked here.
@@ -1838,6 +1876,57 @@ mod tests {
         };
         let r = store.accept_invite_tx(1, &membership, 0).await;
         assert!(matches!(r, Err(StoreError::Unsupported)));
+    }
+
+    #[tokio::test]
+    async fn count_memberships_counts_per_tenant_not_globally() {
+        // `memberships` is keyed `user_id || tenant_id`, so a naive scan (or
+        // a hardcoded constant) can easily miscount once more than one
+        // tenant is involved. Two memberships in tenant A and one in tenant
+        // B must report 2 and 1, not 3 for both and not a fixed value.
+        let dir = tempfile::tempdir().unwrap();
+        let store = LmdbStore::open_with_node_id(dir.path(), None).unwrap();
+        let tenant_a = crate::tenant::TenantId(1);
+        let tenant_b = crate::tenant::TenantId(2);
+
+        store
+            .put_membership(&Membership {
+                user_id: 1,
+                tenant_id: tenant_a,
+                role: crate::tenant::Role::Member,
+                created: 0,
+            })
+            .await
+            .unwrap();
+        store
+            .put_membership(&Membership {
+                user_id: 2,
+                tenant_id: tenant_a,
+                role: crate::tenant::Role::Member,
+                created: 0,
+            })
+            .await
+            .unwrap();
+        store
+            .put_membership(&Membership {
+                user_id: 3,
+                tenant_id: tenant_b,
+                role: crate::tenant::Role::Member,
+                created: 0,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(store.count_memberships(tenant_a).await.unwrap(), 2);
+        assert_eq!(store.count_memberships(tenant_b).await.unwrap(), 1);
+        // A tenant with no memberships counts zero.
+        assert_eq!(
+            store
+                .count_memberships(crate::tenant::TenantId(3))
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]

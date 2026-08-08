@@ -19,6 +19,15 @@ pub(crate) async fn sheets_connect(
         Ok(p) => p,
         Err(status) => return status.into_response(),
     };
+    if let Err(denied) = crate::api::entitlement::require(
+        &st,
+        p.tenant,
+        crate::api::entitlement::Feature::Integrations,
+    )
+    .await
+    {
+        return denied.into_response();
+    }
     let Some(cfg) = st.sheets.as_ref() else {
         return sheets_off_status(&st).into_response();
     };

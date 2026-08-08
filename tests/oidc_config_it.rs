@@ -386,6 +386,9 @@ async fn put_oidc_config_http_upserts_and_round_trips_secret() {
     };
     let store = Arc::new(store);
     let tenant = make_tenant(&store, "oidc-cfg-put-a").await;
+    // Per-tenant OIDC (`Feature::Sso`) is a Business+ feature (LUC-41); grant it
+    // so this test exercises the PUT handler's own behavior, not the gate.
+    store.set_tenant_plan(tenant, "business").await.unwrap();
     let (app, token) =
         admin_app_with_scopes(store.clone(), true, tenant, 9201, vec![Scope::Full]).await;
 
@@ -454,6 +457,8 @@ async fn required_value_accepted_on_put_and_reflected_on_get() {
     };
     let store = Arc::new(store);
     let tenant = make_tenant(&store, "oidc-cfg-required-http-a").await;
+    // Per-tenant OIDC (`Feature::Sso`) is a Business+ feature (LUC-41).
+    store.set_tenant_plan(tenant, "business").await.unwrap();
     let (app, token) =
         admin_app_with_scopes(store.clone(), true, tenant, 9207, vec![Scope::Full]).await;
 
@@ -493,6 +498,9 @@ async fn put_oidc_config_http_with_empty_issuer_or_client_id_is_400() {
     };
     let store = Arc::new(store);
     let tenant = make_tenant(&store, "oidc-cfg-put-empty-a").await;
+    // Per-tenant OIDC (`Feature::Sso`) is a Business+ feature (LUC-41); grant it
+    // so the 400 asserted below comes from field validation, not the gate.
+    store.set_tenant_plan(tenant, "business").await.unwrap();
     let (app, token) =
         admin_app_with_scopes(store.clone(), true, tenant, 9202, vec![Scope::Full]).await;
 
@@ -525,6 +533,9 @@ async fn get_oidc_config_http_redacts_secret() {
     };
     let store = Arc::new(store);
     let tenant = make_tenant(&store, "oidc-cfg-get-a").await;
+    // Per-tenant OIDC (`Feature::Sso`) is a Business+ feature (LUC-41); grant it
+    // so the PUT below (seeding the config) is not itself denied.
+    store.set_tenant_plan(tenant, "business").await.unwrap();
     let (app, token) =
         admin_app_with_scopes(store.clone(), true, tenant, 9203, vec![Scope::Full]).await;
     let (put_status, _, _) = put_oidc_config_http(&app, &token, put_body()).await;
@@ -572,6 +583,9 @@ async fn delete_oidc_config_http_removes_it() {
     };
     let store = Arc::new(store);
     let tenant = make_tenant(&store, "oidc-cfg-delete-a").await;
+    // Per-tenant OIDC (`Feature::Sso`) is a Business+ feature (LUC-41); grant it
+    // so the PUT below (seeding the config) is not itself denied.
+    store.set_tenant_plan(tenant, "business").await.unwrap();
     let (app, token) =
         admin_app_with_scopes(store.clone(), true, tenant, 9205, vec![Scope::Full]).await;
     let (put_status, _, _) = put_oidc_config_http(&app, &token, put_body()).await;
@@ -787,6 +801,11 @@ async fn cross_tenant_token_cannot_see_edit_or_delete_another_tenants_config() {
     let tenant_b = make_tenant(&store, "oidc-xtenant-b").await;
     let config_a = cfg(tenant_a, "https://idp.acme.example");
     store.put_oidc_config(&config_a).await.unwrap();
+    // Tenant B exercises the PUT handler below; per-tenant OIDC (`Feature::Sso`)
+    // is a Business+ feature (LUC-41), so it needs a compatible plan. Tenant A's
+    // config above went straight through the store, not the handler, so it
+    // needs none.
+    store.set_tenant_plan(tenant_b, "business").await.unwrap();
 
     let (app_b, token_b) =
         admin_app_with_scopes(store.clone(), true, tenant_b, 9301, vec![Scope::Full]).await;

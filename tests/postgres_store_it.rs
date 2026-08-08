@@ -1198,3 +1198,38 @@ async fn session_round_trip_and_gc_pg() {
     s.delete_session("h1").await.unwrap();
     assert!(s.get_session_by_hash("h1", 50).await.unwrap().is_none());
 }
+
+#[tokio::test]
+#[file_serial]
+async fn tenant_plan_round_trips_and_defaults_to_free_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let t = quark::tenant::TenantId(4242);
+    s.put_tenant(&quark::tenant::Tenant {
+        id: t,
+        name: "Acme".into(),
+        slug: "acme-plan".into(),
+        created: 0,
+    })
+    .await
+    .unwrap();
+
+    // A fresh tenant carries the column default.
+    assert_eq!(s.get_tenant_plan(t).await.unwrap().as_deref(), Some("free"));
+
+    s.set_tenant_plan(t, "pro").await.unwrap();
+    assert_eq!(s.get_tenant_plan(t).await.unwrap().as_deref(), Some("pro"));
+
+    // An unknown tenant has no plan at all.
+    assert_eq!(
+        s.get_tenant_plan(quark::tenant::TenantId(999_999))
+            .await
+            .unwrap(),
+        None
+    );
+
+    // A tenant with no memberships counts zero; the ceiling check relies on it.
+    assert_eq!(s.count_memberships(t).await.unwrap(), 0);
+}

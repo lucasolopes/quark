@@ -83,6 +83,11 @@ Enterprise.
 as `QUARK_KEYCLOAK_*`. Um build Community as ignora. Ver
 [`CONFIGURATION.PT_BR.md`](CONFIGURATION.PT_BR.md), onde cada uma está marcada.
 
+Limites de plano também são só-Enterprise, aplicados pelo mesmo gate
+`--features ee` em vez de por variável de ambiente. Ver
+[`PLANS.PT_BR.md`](PLANS.PT_BR.md) para a grade, o que cada plano libera e
+como um operador troca o plano de um tenant.
+
 ## Contribuindo
 
 Contribuição é bem-vinda nas duas árvores. Um pull request que toca `src/ee/` ou

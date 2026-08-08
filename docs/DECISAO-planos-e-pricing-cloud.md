@@ -145,7 +145,7 @@ sempre.
 | Automação (API/lote) | 100/mês | 5k/mês | 50k/mês | 500k/mês | custom |
 | Cliques monitorados | 50k/mês | 250k/mês | 1M/mês | 5M/mês | custom |
 | Retenção de analytics | 30 dias | 1 ano | 2 anos | 3 anos | custom |
-| Domínios | 3 | 10 | 50 | ilimitado | ilimitado |
+| Domínios¹ | 3 | 10 | 50 | ilimitado | ilimitado |
 | Membros | 1 | 3 | 10 | ilimitado | ilimitado |
 | Geo/device, A/B, deep link, senha, TTL, QR, UTM | sim | sim | sim | sim | sim |
 | Webhooks e canais | não | sim | sim | sim | sim |
@@ -165,6 +165,10 @@ Quatro escolhas que divergem do doc de julho:
 - **SSO no Business**, não no topo sob consulta. É autosserviço, como no
   Short.io, porque esconder atrás de vendas é o erro que os outros quatro
   cometem.
+
+¹ O subdomínio automático do tenant (`<slug>.<sufixo>`, criado junto com o
+workspace) não consome essa cota: é infraestrutura nossa, não um domínio que
+o cliente pediu.
 
 ## 5. As pendências de julho, resolvidas
 

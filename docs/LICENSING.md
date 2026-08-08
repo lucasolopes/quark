@@ -81,6 +81,11 @@ Tests follow the same split: `cargo test` and `npm run test` cover Community,
 every `QUARK_KEYCLOAK_*`. A Community build ignores them. See
 [`CONFIGURATION.md`](CONFIGURATION.md), where each one is marked.
 
+Plan limits are also Enterprise-only, enforced through the same `--features
+ee` gate rather than an environment variable. See
+[`PLANS.md`](PLANS.md) for the grid, what each plan unlocks, and how an
+operator changes a tenant's plan.
+
 ## Contributing
 
 Contributions are welcome in both trees. A pull request that touches `src/ee/`

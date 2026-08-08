@@ -712,6 +712,27 @@ pub trait Store: Send + Sync + 'static {
     /// The tenant's primary link domain id, or `None` when unset (callers fall
     /// back to the auto subdomain, then the shared host).
     async fn get_primary_domain_id(&self, tenant: TenantId) -> Result<Option<u64>, StoreError>;
+    /// The tenant's billing plan, as an opaque string. The core stores it and
+    /// never interprets it: the catalog that gives it meaning is Enterprise
+    /// (`src/ee/plan.rs`), which is why this is a `String` and not a typed enum.
+    /// `None` means no row, or a backend that does not carry plans at all.
+    async fn get_tenant_plan(&self, tenant: TenantId) -> Result<Option<String>, StoreError>;
+    /// Sets the tenant's billing plan. Cloud-only, like `set_primary_domain`.
+    async fn set_tenant_plan(&self, tenant: TenantId, plan: &str) -> Result<(), StoreError>;
+    /// Whether this backend has a plan system at all. `false` means
+    /// `get_tenant_plan` can never answer anything but `Ok(None)` and
+    /// `set_tenant_plan` can never succeed (LMDB); `true` means the plan
+    /// column is real and read/write actually round-trip (Postgres).
+    ///
+    /// `crate::ee::api::entitlement::plan_of` uses this to tell "no plan row
+    /// yet" (a real `Free` tenant, on a backend that could grant a paid plan)
+    /// apart from "this backend cannot carry a plan at all" (which must
+    /// resolve to unlimited, not `Free` — see that function's doc comment).
+    fn supports_plans(&self) -> bool;
+    /// How many members the tenant has. The existing
+    /// `list_memberships_for_user` answers the other direction and cannot be
+    /// used for a per-tenant ceiling.
+    async fn count_memberships(&self, tenant: TenantId) -> Result<u64, StoreError>;
 
     // --- SSO email-domain discovery (multi-tenancy LUC-57), cloud-only ---
     /// Allocates the next global SSO email-domain id.

@@ -20,6 +20,7 @@
 
 pub mod api;
 pub mod keycloak;
+pub mod plan;
 
 use std::sync::Arc;
 
@@ -51,6 +52,8 @@ pub struct EeState {
     /// cache type itself stays in `src/oidc.rs`, which is core: it is a TTL map
     /// over `OidcRuntime`, with no Enterprise logic of its own.
     pub oidc_tenants: crate::oidc::TenantOidcCache,
+    /// Per-tenant plan cache (LUC-41 phase 1). See `plan::PlanCache`.
+    pub plans: plan::PlanCache,
 }
 
 /// Enterprise boot, called once by `main`.
@@ -161,5 +164,6 @@ pub async fn boot(
         keycloak,
         keycloak_base_url,
         oidc_tenants: crate::oidc::TenantOidcCache::new(),
+        plans: plan::PlanCache::new(),
     }
 }

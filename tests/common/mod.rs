@@ -22,6 +22,29 @@ use quark::slack::SlackConfig;
 use quark::store::Store;
 use quark::webhooks::delivery::WebhookDispatcher;
 
+/// Grants `DEFAULT_TENANT` a plan that unlocks every gated feature (LUC-41),
+/// by seeding the in-memory plan cache directly rather than going through
+/// `Store::set_tenant_plan` (which the LMDB backend these OSS-shaped tests
+/// build on does not support — it always returns `Unsupported`).
+///
+/// Community-only tests (built without `--features ee`) never call this: the
+/// Community `entitlement::require` is an unconditional `Ok`, so there is
+/// nothing to seed. EE-shaped admin CRUD tests that create a webhook, pixel,
+/// or Sheets connection and authenticate via the `x-admin-token` break-glass
+/// (which always resolves to `DEFAULT_TENANT`, see `admin_guard`) call this
+/// right after `build()` so the plan gate does not turn their existing `2xx`
+/// assertions into `402`.
+pub async fn grant_default_tenant_starter_plan(#[allow(unused_variables)] st: &AppState) {
+    #[cfg(feature = "ee")]
+    st.ee
+        .plans
+        .put(
+            quark::tenant::DEFAULT_TENANT,
+            quark::ee::plan::Plan::Starter,
+        )
+        .await;
+}
+
 /// A `WebhookDispatcher` for tests that don't exercise webhooks: the receiver
 /// is dropped immediately, so `emit` silently no-ops (logs and drops) rather
 /// than needing a live worker. Matches the per-file `test_webhook_dispatcher`
@@ -235,6 +258,7 @@ impl TestState {
                 keycloak: self.keycloak,
                 keycloak_base_url: self.keycloak_base_url,
                 oidc_tenants: quark::oidc::TenantOidcCache::new(),
+                plans: quark::ee::plan::PlanCache::new(),
             },
         })
     }
