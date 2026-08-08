@@ -60,12 +60,33 @@ jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 csv = "1"
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["tokio"] }
+# Stripe billing runtime (LUC-41 phase 2), only pulled in by the `ee` feature
+# (all `optional = true` below). Pinned exactly: pre-release semver, no
+# stability promise between rc builds (see
+# docs/research/2026-08-08-async-stripe-rc-api.md).
+async-stripe = { version = "=1.0.0-rc.8", default-features = false, features = ["rustls-tls-webpki-roots", "rustls-ring"], optional = true }
+async-stripe-core = { version = "=1.0.0-rc.8", features = ["customer"], optional = true }
+async-stripe-checkout = { version = "=1.0.0-rc.8", features = ["checkout_session"], optional = true }
+async-stripe-billing = { version = "=1.0.0-rc.8", features = ["subscription", "billing_portal_session"], optional = true }
+async-stripe-product = { version = "=1.0.0-rc.8", features = ["price"], optional = true }
+async-stripe-webhook = { version = "=1.0.0-rc.8", features = ["async-stripe-checkout", "async-stripe-billing"], optional = true }
+async-stripe-shared = { version = "=1.0.0-rc.8", optional = true }
+async-stripe-types = { version = "=1.0.0-rc.8", optional = true }
 
 [features]
 # Edicao Enterprise (LUC-19). NAO e default: `cargo build` produz a edicao
 # Community, que nao contem nada de `src/ee/`, e essa e a garantia forte da
 # separacao de licenca. O deploy do cloud builda com `--features ee`.
-ee = []
+ee = [
+    "dep:async-stripe",
+    "dep:async-stripe-core",
+    "dep:async-stripe-checkout",
+    "dep:async-stripe-billing",
+    "dep:async-stripe-product",
+    "dep:async-stripe-webhook",
+    "dep:async-stripe-shared",
+    "dep:async-stripe-types",
+]
 
 [dev-dependencies]
 # `file_locks` enables `#[file_serial]`: a cross-process lock. Plain `#[serial]`
