@@ -20,7 +20,7 @@ Configurado no dashboard do CF (passo do Lucas, feito):
 - Repo conectado: `quark`, production branch `main`.
 - Root directory: `web`. Build command: `npm run build`. Output: `dist`.
 - Env vars (Production + Preview): `VITE_API_BASE_URL=https://backend.quarkus.com.br`,
-  `NODE_VERSION=20`.
+  `NODE_VERSION=22`.
 
 Reforços no repo (rede de segurança, pra o build nunca depender só do dashboard):
 - `web/.env.production` com `VITE_API_BASE_URL=https://backend.quarkus.com.br`. O
@@ -28,7 +28,7 @@ Reforços no repo (rede de segurança, pra o build nunca depender só do dashboa
   segredo. Isso garante que qualquer `npm run build` (CF, CI, local ou manual)
   sai apontando pro backend certo, mesmo se a env do dashboard for esquecida —
   foi exatamente esse esquecimento que quebrou o login no deploy manual da Fase 3.
-- `web/.node-version` com `20`, pro build do CF usar o mesmo Node do CI.
+- `web/.node-version` com `22`, pro build do CF usar o mesmo Node do CI.
 
 Resultado: push na `main` → CF builda+deploya o painel; PR → preview URL.
 
