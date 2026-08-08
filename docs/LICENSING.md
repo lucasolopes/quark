@@ -84,7 +84,9 @@ every `QUARK_KEYCLOAK_*`. A Community build ignores them. See
 Plan limits are also Enterprise-only, enforced through the same `--features
 ee` gate rather than an environment variable. See
 [`PLANS.md`](PLANS.md) for the grid, what each plan unlocks, and how an
-operator changes a tenant's plan.
+operator changes a tenant's plan. Billing itself runs through
+`QUARK_STRIPE_SECRET_KEY`, `QUARK_STRIPE_WEBHOOK_SECRET`, and
+`QUARK_STRIPE_PANEL_URL`; see [`BILLING.md`](BILLING.md).
 
 ## Contributing
 

@@ -134,8 +134,17 @@ plan from the product it experiences.
 
 ## Changing a tenant's plan
 
-There is no payment gateway yet (that is phase 2). Until then, changing a
-tenant's plan is an operator action:
+With Stripe configured (`QUARK_STRIPE_SECRET_KEY`,
+`QUARK_STRIPE_WEBHOOK_SECRET`, `QUARK_STRIPE_PANEL_URL`; see
+[`BILLING.md`](BILLING.md)), the normal way a plan changes is a subscription:
+the workspace Owner checks out or manages the subscription through the
+Stripe-hosted Customer Portal, and the webhook writes the resulting plan.
+The endpoint below still exists and still requires the operator's
+break-glass token; with billing on, treat it as an escape hatch (support
+overrides, negotiated `Custom` tiers, fixing a stuck workspace) rather than
+the everyday path.
+
+Without Stripe configured, this endpoint is the only way to change a plan:
 
 ```
 PUT /admin/tenants/{id}/plan
