@@ -112,6 +112,7 @@ async fn build_state(
         host_router,
         dns: Arc::new(crate::dns::NullDns),
         tenant_domain_suffix: None,
+        panel_url: None,
         #[cfg(feature = "ee")]
         ee: Default::default(),
     })
