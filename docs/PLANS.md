@@ -42,12 +42,23 @@ until a customer actually needs a narrower Custom limit than "everything".
 
 The member ceiling is enforced when a caller redeems an invite through
 `POST /admin/invites/:token/accept` (model A, no IdP provisioned for the
-tenant). For a tenant with its own IdP provisioned (Keycloak/model B),
-membership is instead granted at first login off the group claim, and that
-path does not apply the member quota yet. A tenant on that model can exceed
-its member ceiling by having enough distinct users log in. This is a known
-gap, accepted for this phase, tracked as LUC-148; closing it needs the
-billing context phase 2 brings.
+tenant), and it is enforced the same way for a tenant with its own IdP
+provisioned (Keycloak/model B), where membership is instead granted at first
+login off the group claim: `GET /admin/callback` checks the ceiling before
+creating a brand-new member's membership (LUC-148). A person who already has
+a membership in the workspace is never affected by this check, no matter how
+the plan changes afterward; only a login that would create a NEW membership
+in a workspace already at its ceiling is refused, with an error naming the
+limit (`member_limit_reached`) instead of being silently granted an extra
+seat.
+
+SSO itself follows a separate rule from the member ceiling: `Feature::Sso`
+gates only creating or changing a tenant's IdP configuration
+(`PUT /admin/oidc-config`), not using one that already exists. A workspace
+that had SSO configured before a downgrade keeps signing members in through
+it afterward; the downgrade removes the ability to set up (or reconfigure) an
+IdP, not the IdP that is already wired up. The member ceiling from the
+paragraph above still applies on every login regardless.
 
 ### Features (binary, not a ceiling)
 

@@ -95,6 +95,25 @@ creation, the same enforcement point phase 1 already uses for every other
 quota. There is no background job that prunes a workspace down to its new
 plan's ceiling.
 
+The member ceiling follows this same rule, including for a workspace whose
+members join through its own SSO provider (Keycloak/model B, LUC-148): a
+downgrade never removes an existing member, and nobody who already has a
+membership is ever logged out or blocked from signing back in because the
+workspace is now over the new ceiling. What a downgrade DOES block is a
+BRAND NEW member joining: the next person who was never a member before and
+tries to log in through the group claim gets the login refused
+(`member_limit_reached`) until the workspace is back under the ceiling or
+on a plan whose ceiling allows it, the same shape as the "cannot create a
+ninth domain" rule above.
+
+SSO access itself is unaffected by a downgrade in a different sense: `Sso` is
+a feature gate on creating or editing the tenant's IdP configuration, not on
+using one that is already configured. A workspace that configured SSO on a
+paid plan and later drops to a plan without the `Sso` feature keeps signing
+members in through that IdP exactly as before; only setting up (or changing)
+the configuration requires the feature again. The member ceiling above still
+applies to every login on that IdP regardless of the `Sso` feature.
+
 ## Not supported yet
 
 - **Currency change for an existing customer.** Stripe does not let you flip
