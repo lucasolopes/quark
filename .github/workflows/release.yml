@@ -97,6 +97,13 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
+          # A imagem de release carrega a edicao Enterprise, como antes do
+          # split da LUC-19 (o cloud roda esta imagem; num self-host o codigo
+          # EE fica inerte sem multi-tenant). Sem este build-arg o Dockerfile
+          # compila só o core e as rotas EE somem do cloud, que foi o
+          # incidente do v0.5.0.
+          build-args: |
+            QUARK_FEATURES=ee
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           # Scope por arquitetura. Sem isso os dois jobs escrevem na mesma
           # entrada de cache e toda release comeca fria.
