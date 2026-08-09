@@ -4,7 +4,7 @@
 #![allow(clippy::unwrap_used)]
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use quark::permute::{decode, encode};
+use quark::permute::{deobfuscate, obfuscate};
 use std::hint::black_box;
 
 fn bench(c: &mut Criterion) {
@@ -13,12 +13,12 @@ fn bench(c: &mut Criterion) {
         let mut id = 0u64;
         b.iter(|| {
             id = id.wrapping_add(1) & quark::permute::MAX_ID;
-            black_box(encode(black_box(id), key))
+            black_box(obfuscate(black_box(id), key))
         })
     });
     c.bench_function("decode", |b| {
-        let code = encode(12345, key);
-        b.iter(|| black_box(decode(black_box(code), key)))
+        let code = obfuscate(12345, key);
+        b.iter(|| black_box(deobfuscate(black_box(code), key)))
     });
 }
 

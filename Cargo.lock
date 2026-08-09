@@ -82,6 +82,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arxid"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "606dee69840fec9320fbe2d4af902291685e45a3ce488274c6685c91547d519e"
+dependencies = [
+ "zeroize",
+]
+
+[[package]]
 name = "async-lock"
 version = "3.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2504,6 +2513,7 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "argon2",
+ "arxid",
  "async-stripe",
  "async-stripe-billing",
  "async-stripe-checkout",

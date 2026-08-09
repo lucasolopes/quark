@@ -1033,7 +1033,7 @@ async fn create_link_core_numeric_writes_under_the_passed_tenant() {
     .await
     .expect("create succeeds");
     let permuted = crate::codec::from_base62(&code).expect("numeric code decodes");
-    let id = crate::permute::decode(permuted, st.key);
+    let id = crate::permute::deobfuscate(permuted, st.key);
 
     assert!(
         st.store.get_link(tenant, id).await.unwrap().is_some(),

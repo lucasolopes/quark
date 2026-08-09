@@ -19,6 +19,11 @@ name = "quark"
 path = "src/main.rs"
 
 [dependencies]
+# A permutacao Feistel/ARX + base62 que gera os short codes, extraida deste
+# repo para uma lib standalone (spec v2: 6 rounds e key fold por wrapping add,
+# corrigindo o colapso do keyspace para 2^63 que o fold por XOR tinha). MIT,
+# sem build.rs nem proc-macro; zeroize ja e dependencia direta.
+arxid = "0.2"
 async-trait = "0.1"
 thiserror = "2"
 # Erro opaco com contexto, restrito a binario e teste: a lib usa erro tipado, e
@@ -134,8 +139,8 @@ harness = false
 #
 # Grupo ligado precisa de priority = -1, senao os lints individuais em priority
 # 0 nao tem efeito garantido. Nunca ligar restriction ou nursery inteiros:
-# restriction quebraria src/codec.rs (base62) e src/permute.rs (Feistel), que
-# legitimamente fazem aritmetica e indexacao.
+# restriction quebraria codigo que legitimamente faz aritmetica e indexacao
+# (parsing de short code, benches).
 [lints.rust]
 unsafe_code = "deny"
 

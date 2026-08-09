@@ -186,7 +186,7 @@ allow-panic-in-tests = true
 ```
 
 Never enable the whole `restriction` or `nursery` group - cherry-pick.
-`indexing_slicing` and `string_slice` matter directly in `src/codec.rs` (base62)
+`indexing_slicing` and `string_slice` matter directly in short-code parsing
 and short-code parsing. Do **not** create a `rustfmt.toml`: the project uses the
 default and CI already checks it; a config file would only produce reformat churn.
 

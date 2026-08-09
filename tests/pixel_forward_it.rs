@@ -147,8 +147,8 @@ async fn worker_forwards_only_matching_tenant_events_to_each_pixel() {
     drop(tx);
     handle.await.unwrap();
 
-    let code_a = codec::to_base62(permute::encode(10, KEY));
-    let code_b = codec::to_base62(permute::encode(20, KEY));
+    let code_a = codec::to_base62(permute::obfuscate(10, KEY));
+    let code_b = codec::to_base62(permute::obfuscate(20, KEY));
 
     let calls = captured.lock().unwrap();
     // Uma chamada por pixel (dois pixels), não uma só com o batch inteiro.
@@ -214,7 +214,7 @@ async fn worker_flush_forwards_batch_to_active_pixel_with_real_short_code() {
     assert_eq!(calls.len(), 1);
     let (path, body) = &calls[0];
     assert!(path.starts_with("/mp/collect?measurement_id=G-ABC123"));
-    let expected_code = codec::to_base62(permute::encode(42, KEY));
+    let expected_code = codec::to_base62(permute::obfuscate(42, KEY));
     assert_ne!(expected_code, "42");
     assert_eq!(body["events"][0]["params"]["link_code"], expected_code);
 }

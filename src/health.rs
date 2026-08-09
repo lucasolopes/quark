@@ -218,7 +218,7 @@ where
                     } else {
                         EventType::LinkBroken
                     };
-                    let code = codec::to_base62(permute::encode(id, key));
+                    let code = codec::to_base62(permute::obfuscate(id, key));
                     // Persist the new state only once the transition event is
                     // enqueued; if the best-effort channel is full, leave the old
                     // state so the next sweep retries (no permanently-lost alert).

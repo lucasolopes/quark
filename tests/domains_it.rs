@@ -219,7 +219,7 @@ fn cloud_app(
 /// The base62 short code a numeric `id` resolves to under `KEY`, matching
 /// what `create_link_core`/`resolve_code` would produce/consume.
 fn numeric_code(id: u64) -> String {
-    quark::codec::to_base62(quark::permute::encode(id, KEY))
+    quark::codec::to_base62(quark::permute::obfuscate(id, KEY))
 }
 
 async fn make_domain(store: &PostgresStore, tenant: TenantId, host: &str) -> u64 {
@@ -1519,7 +1519,7 @@ async fn cloud_create_stamps_callers_tenant_and_resolves_on_its_subdomain() {
 
     // The link is stamped under tenant B, not DEFAULT_TENANT.
     let permuted = quark::codec::from_base62(&code).expect("numeric code decodes");
-    let id = quark::permute::decode(permuted, KEY);
+    let id = quark::permute::deobfuscate(permuted, KEY);
     let rec = store
         .get_link(tenant_b, id)
         .await
@@ -1657,7 +1657,7 @@ async fn oss_create_still_stamps_default_tenant_and_shared_domain() {
     let code = body["code"].as_str().unwrap().to_string();
 
     let permuted = quark::codec::from_base62(&code).expect("numeric code decodes");
-    let id = quark::permute::decode(permuted, KEY);
+    let id = quark::permute::deobfuscate(permuted, KEY);
     let rec = store
         .get_link(quark::tenant::DEFAULT_TENANT, id)
         .await

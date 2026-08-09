@@ -79,7 +79,7 @@ fn bench_quark(c: &mut Criterion) {
         let mut id = 0u64;
         b.iter(|| {
             id = id.wrapping_add(1) & MAX_ID;
-            let code = permute::encode(black_box(id), key);
+            let code = permute::obfuscate(black_box(id), key);
             black_box(codec::to_base62(black_box(code)))
         })
     });
@@ -88,10 +88,10 @@ fn bench_quark(c: &mut Criterion) {
         let mut id = 0u64;
         b.iter(|| {
             id = id.wrapping_add(1) & MAX_ID;
-            let code = permute::encode(id, key);
+            let code = permute::obfuscate(id, key);
             let s = codec::to_base62(code);
             let n = codec::from_base62(black_box(&s)).unwrap();
-            black_box(permute::decode(black_box(n), key))
+            black_box(permute::deobfuscate(black_box(n), key))
         })
     });
 

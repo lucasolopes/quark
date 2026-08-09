@@ -56,7 +56,7 @@ Most shorteners pick one of two paths for the code:
 - **Reversible encoding** (Hashids, Sqids-style): fast, but not security. Codes are partially enumerable; you can scrape `/aaaa`, `/aaab`, …
 - **Real cipher** (e.g. Feistly = Feistel + HMAC-SHA256): non-enumerable, but slow. A full cryptographic hash runs on every round.
 
-quark closes that gap with a **Feistel network whose round function is ARX** (add-rotate-xor), not a hash. A Feistel network over an integer domain is a bijection by construction: `decode(encode(id)) == id` for every id, with **zero collision checks needed**, ever. The only open question is *how many rounds* of mixing are needed before the output looks random enough to resist enumeration, and that's not a guess here: it's **measured** (see the avalanche table below). The result is a code generator that is simultaneously non-enumerable *and* roughly an order of magnitude faster than a real-cipher approach (~18× measured against a structurally identical HMAC-round Feistel, see the benchmark below), because ARX rounds are cheap integer ops, not hash calls.
+quark closes that gap with a **Feistel network whose round function is ARX** (add-rotate-xor), not a hash. A Feistel network over an integer domain is a bijection by construction: `deobfuscate(obfuscate(id)) == id` for every id, with **zero collision checks needed**, ever. The only open question is *how many rounds* of mixing are needed before the output looks random enough to resist enumeration, and that's not a guess here: it's **measured** (see the avalanche table below). The result is a code generator that is simultaneously non-enumerable *and* roughly an order of magnitude faster than a real-cipher approach (~19× measured against a structurally identical HMAC-round Feistel, see the benchmark below), because ARX rounds are cheap integer ops, not hash calls.
 
 Since the code is the permutation of the id, the store never has to index by string. It's keyed by `u64`, straight into an mmap'd database. Millions of links occupy a fraction of what a string-indexed store would need.
 
@@ -66,13 +66,13 @@ Since the code is the permutation of the id, the store never has to index by str
 flowchart LR
     C[Client] -->|POST /| API[api axum]
     C -->|GET /:code| API
-    API -->|encode/decode| P[permute + codec]
+    API -->|obfuscate/deobfuscate| P[arxid permute + codec]
     API --> CA[cache moka]
     CA -->|miss| ST[(store LMDB)]
     P -.no I/O.-> API
 ```
 
-`permute` (the Feistel/ARX bijection) and `codec` (integer ↔ base62) are pure math: no I/O, no locks, off to the side of the request path. The hot path is: decode the code to an id, check the in-memory cache, fall back to a single mmap read on miss.
+`permute` (the Feistel/ARX bijection) and `codec` (integer ↔ base62) are pure math: no I/O, no locks, off to the side of the request path. Both modules were born in this repo and now live in the [arxid](https://github.com/lucasolopes/arxid) crate, re-exported under the same paths; the spec, test vectors and ports (TypeScript today, more planned) live there. The hot path is: decode the code to an id, check the in-memory cache, fall back to a single mmap read on miss.
 
 ## Redirect sequence
 
@@ -83,7 +83,7 @@ sequenceDiagram
     participant Ca as cache
     participant St as store
     Cli->>Api: GET /:code
-    Api->>Api: id = decode(base62⁻¹(code), key)
+    Api->>Api: id = deobfuscate(base62⁻¹(code), key)
     Api->>Ca: get(id)
     alt hit
         Ca-->>Api: Record
@@ -125,7 +125,9 @@ rounds | avg_avalanche | coverage(/40)
 - **avg_avalanche**: average fraction of output bits that flip when one input bit flips (target: 0.5 exactly).
 - **coverage**: the minimum, across all 40 input bits, of how many distinct output bits that single input bit has ever managed to affect. `40/40` means every input bit can influence every output bit: full diffusion, no structural blind spot.
 
-`ROUNDS = 4` is the smallest round count where avalanche hits `0.5000` exactly *and* coverage is full. Round 3 is close (`0.4866`) but not there yet. Rounds 5 through 12 buy nothing: the diffusion has already closed, so quark uses 4 and stops, keeping every round of runtime that isn't needed for the property it's paying for.
+`ROUNDS = 4` is the smallest round count where avalanche hits `0.5000` exactly *and* coverage is full. Round 3 is close (`0.4866`) but not there yet.
+
+SAC turned out to be necessary but not sufficient. After the permutation was extracted into [arxid](https://github.com/lucasolopes/arxid), deeper testing found two defects that avalanche numbers do not see: a chosen-query distinguisher that separated the 4-round construction from a random permutation at about 2^13 queries, and consecutive ids mapping to adjacent codes at hundreds of times the rate of a random permutation. Both measure clean at 5 rounds; arxid spec v2 uses **6**, taking Patarin's recommended margin for Feistel schemes, and also fixes a key-schedule fold that halved the effective key space. quark consumes arxid, so its codes are spec v2: 6 rounds, at about 1.9 ns per extra round. The `calibrate` binary still reproduces the SAC sweep above against the same `feistel_n` that production uses.
 
 ## Speed: the trophy number
 
@@ -139,28 +141,28 @@ Measured on this machine (criterion, `benches/permute_bench.rs`):
 
 | op | time/op | ops/sec |
 |---|---|---|
-| `permute::encode` (u64 → u64, the permutation engine) | ~3.98 ns | ~251,000,000 |
-| `permute::decode` (u64 → u64) | ~3.45 ns | ~290,000,000 |
+| `permute::obfuscate` (u64 → u64, the permutation engine) | ~12.9 ns | ~77,000,000 |
+| `permute::deobfuscate` (u64 → u64) | ~13.2 ns | ~76,000,000 |
 
 That's the raw permutation. The **product operation** is `id → 7-char base62 string` (and back), which adds one heap-allocated `String` per call:
 
 | op | time/op | ops/sec |
 |---|---|---|
-| `encode` (id → code string) | ~45 ns | ~22,000,000 |
-| `decode` (code string → id) | ~80 ns | ~12,500,000 |
+| `obfuscate` (id → code string) | ~158 ns | ~6,300,000 |
+| `deobfuscate` (code string → id) | ~261 ns | ~3,800,000 |
 
 ### Head-to-head (same machine, same criterion harness)
 
-`benches/compare_bench.rs` measures the same class of operation (*integer id → opaque short string*) for quark and three real competitor approaches, over ids in `0..2^40`. The one that isolates quark's actual claim is **`feistel_hmac`**: an identical balanced Feistel (4 rounds, 40 bits), changing *only* the round function from ARX to HMAC-SHA256 (i.e. the "real cipher" approach that libraries like Feistly take).
+`benches/compare_bench.rs` measures the same class of operation (*integer id → opaque short string*) for quark and three real competitor approaches, over ids in `0..2^40`. The one that isolates quark's actual claim is **`feistel_hmac`**: an identical balanced Feistel (same round count, 40 bits), changing *only* the round function from ARX to HMAC-SHA256 (i.e. the "real cipher" approach that libraries like Feistly take).
 
 | approach | encode ops/sec | vs quark | what it is |
 |---|---|---|---|
-| **quark** (ARX Feistel) | **~22,000,000** | 1× | keyed bijection, fixed 7-char, non-enumerable |
-| hashids (`harsh` 0.2.2) | ~2,950,000 | ~7.5× slower | obfuscation encoding (weak salt, not keyed) |
-| feistel + HMAC-SHA256 | ~1,230,000 | **~18× slower** | same structure as quark, hash round fn |
-| sqids (`sqids` 0.4.2) | ~680,000 | ~32× slower | obfuscation encoding (no key) |
+| **quark** (ARX Feistel) | **~6,300,000** | 1× | keyed bijection, fixed 7-char, non-enumerable |
+| hashids (`harsh` 0.2.2) | ~940,000 | ~6.7× slower | obfuscation encoding (weak salt, not keyed) |
+| feistel + HMAC-SHA256 | ~335,000 | **~19× slower** | same structure as quark, hash round fn |
+| sqids (`sqids` 0.4.2) | ~290,000 | ~22× slower | obfuscation encoding (no key) |
 
-The honest headline: against the **structurally identical** cipher (same Feistel, keyed, only the round function differs), quark's ARX round is **~18× faster**, because each round is a handful of adds/rotates/xors, not a cryptographic hash invocation. That is the direct payoff of *measuring* the minimum round count (4) instead of over-provisioning "for safety".
+The honest headline: against the **structurally identical** cipher (same Feistel, keyed, only the round function differs), quark's ARX round is **~19× faster**, because each round is a handful of adds/rotates/xors, not a cryptographic hash invocation. That is the direct payoff of *measuring* the round count instead of over-provisioning "for safety".
 
 **Fairness caveat:** sqids and hashids are obfuscation encodings: they hide sequential ids but are **not** keyed cryptographic primitives (sqids has no key; hashids' salt is documented as non-secure), and they encode an arbitrary-length domain rather than quark's fixed 40-bit → 7-char bijection. So against those two, quark's numbers show a speed advantage, not a security-equivalent one. Only `feistel_hmac` is a like-for-like security comparison. Reproduce all of it with `cargo bench --bench compare_bench`.
 

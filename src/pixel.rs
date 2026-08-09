@@ -127,10 +127,10 @@ fn instance_client_id() -> &'static str {
 }
 
 /// The real short code for a click, as seen by the end user
-/// (`codec::to_base62(permute::encode(id, key))`), used as `link_code` in
+/// (`codec::to_base62(permute::obfuscate(id, key))`), used as `link_code` in
 /// both provider payloads instead of the raw internal id.
 fn link_code(id: u64, key: u64) -> String {
-    codec::to_base62(permute::encode(id, key))
+    codec::to_base62(permute::obfuscate(id, key))
 }
 
 /// Builds the GA4 Measurement Protocol batch body for a slice of events.
@@ -452,7 +452,7 @@ mod tests {
             .as_str()
             .unwrap();
         assert_ne!(code, "10");
-        assert_eq!(code, codec::to_base62(permute::encode(10, TEST_KEY)));
+        assert_eq!(code, codec::to_base62(permute::obfuscate(10, TEST_KEY)));
     }
 
     #[test]

@@ -820,7 +820,7 @@ pub(crate) async fn resolve_code(
     code: &str,
 ) -> Result<Option<u64>, StoreError> {
     match codec::from_base62(code) {
-        Some(c) if c <= permute::MAX_ID => Ok(Some(permute::decode(c, st.key))),
+        Some(c) if c <= permute::MAX_ID => Ok(Some(permute::deobfuscate(c, st.key))),
         _ => st.store.get_alias(domain_id, code).await,
     }
 }

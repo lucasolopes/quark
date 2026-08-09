@@ -251,14 +251,15 @@ a rename route.
 
 ## permute is obfuscation, not a MAC
 
-Short codes come from `permute::encode(id, key)` - a 4-round Feistel over 40 bits,
-calibrated by `bin/calibrate` for 0.5 avalanche. The key is a `u64` parsed from
-`QUARK_KEY` as decimal; when absent it falls back to the development value
-`0x9E3779B97F4A7C15` while printing "DO NOT use in production".
+Short codes come from `permute::obfuscate(id, key)` - a 6-round Feistel over 40
+bits from the `arxid` crate (extracted from this repo; spec v2), re-exported as
+`quark::permute`. The key is a `u64` parsed from `QUARK_KEY` as decimal; when
+absent it falls back to the development value `0x9E3779B97F4A7C15` while
+printing "DO NOT use in production".
 
 Treat it as anti-enumeration obfuscation, **not** a cryptographic secret.
-`encode`/`decode` mask the input (`& MAX_ID`), are total, and never panic. **Never
-reuse `QUARK_KEY` to sign anything.**
+`obfuscate`/`deobfuscate` mask the input (`& MAX_ID`), are total, and never
+panic. **Never reuse `QUARK_KEY` to sign anything.**
 
 Signing uses a separate secret: `st.signing_key: [u8; 32]`, base64 of
 `QUARK_SIGNING_KEY` truncated to the first 32 bytes, requiring `len() >= 32`.

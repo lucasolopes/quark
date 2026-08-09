@@ -31,7 +31,8 @@ with opt-in production backends (Postgres, Valkey/Redis, ClickHouse).
   `extract_host`). Admin auth is in `src/api/guard.rs` (`admin_guard`,
   `require_admin_for_create`); API tokens and scopes are in `src/auth.rs`.
 - Other modules: `src/pixel.rs` (conversion forwarding), `src/import.rs`,
-  `src/permute.rs` (keyed Feistel code generation), `src/codec.rs` (base62),
+  the `arxid` crate reexported as `quark::{permute, codec}` in `src/lib.rs`
+  (keyed Feistel code generation + base62; extracted from this repo),
   `src/invalidate.rs` (cross-node pub/sub invalidation), `src/main.rs`,
   `src/lib.rs`.
 - Tests: integration tests are `tests/*_it.rs` (e.g. `api_it.rs`,

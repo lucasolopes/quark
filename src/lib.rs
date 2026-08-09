@@ -4,7 +4,6 @@ pub mod api;
 pub mod auth;
 pub mod cache;
 pub mod cluster;
-pub mod codec;
 pub mod dns;
 pub mod domain;
 pub mod domain_router;
@@ -16,7 +15,6 @@ pub mod invalidate;
 pub mod invite;
 pub mod oidc;
 pub mod password;
-pub mod permute;
 pub mod pixel;
 pub mod secretbox;
 pub mod sheets;
@@ -25,6 +23,13 @@ pub mod sso;
 pub mod store;
 pub mod tenant;
 pub mod webhooks;
+
+// The short-code engine. Both modules were born in this repo (`src/permute.rs`
+// and `src/codec.rs`) and were extracted to the arxid crate (spec v2: 6 rounds
+// and an additive key fold; the in-tree v1 had a chosen-query distinguisher and
+// a 2^63 effective key space). Re-exported under the old paths so `crate::permute`
+// and `crate::codec` keep resolving everywhere.
+pub use arxid::{codec, permute};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
