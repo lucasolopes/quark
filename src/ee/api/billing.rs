@@ -289,6 +289,126 @@ pub(crate) async fn admin_billing_portal(
     Json(serde_json::json!({ "url": portal.url })).into_response()
 }
 
+/// `GET /admin/billing/catalog`: the whole plan grid for the panel. Read
+/// scope on purpose: any member may LOOK at the grid (spec D3); the actions
+/// stay Owner-only. Limits and features come from the code catalog (phase 1
+/// D6: the panel never carries its own copy); prices come from Stripe
+/// through the 12h cache (spec D2).
+pub(crate) async fn admin_billing_catalog(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    if !st.multi_tenant {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let p = match admin_guard(&st, &headers, Scope::LinksRead).await {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+    let current = crate::ee::api::entitlement::plan_of(&st, p.tenant).await;
+    let (prices, currency_locked) = match &st.ee.billing {
+        Some(b) => (
+            b.catalog_prices().await,
+            locked_currency(&st, b, p.tenant).await,
+        ),
+        None => (None, None),
+    };
+    let plans: Vec<serde_json::Value> = Plan::ALL
+        .into_iter()
+        .map(|plan| {
+            let l = plan.limits();
+            let features: Vec<&'static str> = crate::api::entitlement::Feature::ALL
+                .into_iter()
+                .filter(|f| plan.allows(*f))
+                .map(crate::api::entitlement::Feature::as_str)
+                .collect();
+            let plan_prices = prices.as_ref().and_then(|cp| {
+                let m = lookup_key(plan, Cycle::Monthly)?;
+                let y = lookup_key(plan, Cycle::Yearly)?;
+                Some(serde_json::json!({
+                    "monthly": cp.by_lookup_key.get(m),
+                    "yearly": cp.by_lookup_key.get(y),
+                }))
+            });
+            serde_json::json!({
+                "plan": plan.as_str(),
+                "limits": {
+                    "domains": l.domains,
+                    "members": l.members,
+                    "automation_per_month": l.automation_per_month,
+                    "tracked_clicks_per_month": l.tracked_clicks_per_month,
+                    "retention_days": l.retention_days,
+                },
+                "features": features,
+                "prices": plan_prices,
+            })
+        })
+        .collect();
+    Json(serde_json::json!({
+        "current_plan": current.as_str(),
+        "currency_locked": currency_locked,
+        "prices_available": prices.is_some(),
+        "plans": plans,
+    }))
+    .into_response()
+}
+
+/// The tenant's Stripe-locked currency, for the catalog's currency-picker
+/// display. Cached alongside the catalog prices (`StripeBilling::currency_cache`),
+/// same 12h/stale-serves-old pattern as `catalog_prices`. `None` (no customer
+/// yet, or any lookup failure) is the safe fallback: it just means the free
+/// checkout currency picker stays open, and Stripe itself would reject a
+/// currency mismatched with an existing subscription at checkout time anyway.
+async fn locked_currency(
+    st: &AppState,
+    billing: &crate::ee::stripe::StripeBilling,
+    tenant: crate::tenant::TenantId,
+) -> Option<String> {
+    {
+        let cache = billing.currency_cache.read().await;
+        if let Some((fetched_at, value)) = cache.get(&tenant) {
+            if fetched_at.elapsed() < crate::ee::stripe::CATALOG_TTL {
+                return value.clone();
+            }
+        }
+    }
+    let customer_id = match st.store.get_stripe_customer_id(tenant).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return None,
+        Err(_) => return None,
+    };
+    let fetched = stripe_core::customer::RetrieveCustomer::new(customer_id.as_str())
+        .send(&billing.client)
+        .await;
+    let currency = match fetched {
+        Ok(stripe_core::customer::RetrieveCustomerReturned::Customer(c)) => {
+            c.currency.map(|c| c.to_string())
+        }
+        // A deleted customer has no currency to lock against; treat like "no
+        // customer yet" rather than surfacing an error for something the
+        // caller can't act on.
+        Ok(stripe_core::customer::RetrieveCustomerReturned::DeletedCustomer(_)) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, tenant_id = tenant.0, "stripe customer retrieve failed");
+            // Stale-serves-old, same as `catalog_prices`: fall back to
+            // whatever was cached (possibly still nothing) instead of
+            // treating a transient Stripe failure as "definitely no lock".
+            return billing
+                .currency_cache
+                .read()
+                .await
+                .get(&tenant)
+                .and_then(|(_, v)| v.clone());
+        }
+    };
+    billing
+        .currency_cache
+        .write()
+        .await
+        .insert(tenant, (std::time::Instant::now(), currency.clone()));
+    currency
+}
+
 /// Applies a subscription's current state to its tenant: status plus the
 /// price lookup key decide the effective plan (spec D8), written through the
 /// phase 1 seam and cache. Public to the crate's tests; the only production

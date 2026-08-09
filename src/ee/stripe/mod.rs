@@ -7,7 +7,37 @@
 
 pub mod map;
 
-use std::time::Duration;
+use crate::ee::plan::Plan;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+/// One plan's Stripe prices for the catalog, cents per currency and cycle.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CatalogPrice {
+    pub usd_cents: i64,
+    pub brl_cents: i64,
+}
+
+/// The 6 self-service prices, cached process-wide (not per tenant: the grid
+/// itself is the same for everyone, only the checkout currency choice and the
+/// locked currency are tenant-specific).
+#[derive(Debug, Clone)]
+pub struct CatalogPrices {
+    /// lookup_key -> price. Missing key means the dashboard lacks that price,
+    /// or the price exists but is missing a BRL `currency_options` entry (a
+    /// half-configured price is treated as absent rather than USD-only, so
+    /// the panel's "no price" state is unambiguous).
+    pub by_lookup_key: HashMap<String, CatalogPrice>,
+    /// The tenant-independent part only; the customer's locked currency is
+    /// resolved per request, not cached here.
+    pub fetched_at: Instant,
+}
+
+/// Cache lifetime for both the catalog prices and the per-tenant locked
+/// currency: prices and a customer's currency both change rarely enough that
+/// a Stripe API call per catalog view would be wasteful, and a stale value
+/// stays useful far longer than a checkout flow's usual timescale (spec D2).
+pub const CATALOG_TTL: Duration = Duration::from_secs(12 * 60 * 60);
 
 pub struct StripeBilling {
     pub client: stripe::Client,
@@ -15,6 +45,14 @@ pub struct StripeBilling {
     pub webhook_secret: String,
     /// Panel base URL without trailing slash, for success/cancel/return URLs.
     pub panel_url: String,
+    /// The plan grid's prices, refreshed at most once per `CATALOG_TTL`.
+    pub catalog_cache: tokio::sync::RwLock<Option<CatalogPrices>>,
+    /// Per-tenant Stripe-locked currency, same TTL and stale-serves-old
+    /// pattern as `catalog_cache`. Kept here rather than a crate-wide moka
+    /// cache: it is low-traffic (one lookup per catalog view) and belongs
+    /// next to the price cache it is displayed alongside.
+    pub currency_cache:
+        tokio::sync::RwLock<HashMap<crate::tenant::TenantId, (Instant, Option<String>)>>,
 }
 
 impl StripeBilling {
@@ -61,7 +99,82 @@ impl StripeBilling {
             client,
             webhook_secret: webhook_secret.trim().to_string(),
             panel_url: panel_url.trim().trim_end_matches('/').to_string(),
+            catalog_cache: tokio::sync::RwLock::new(None),
+            currency_cache: tokio::sync::RwLock::new(HashMap::new()),
         })
+    }
+
+    /// The 6 self-service prices, cached for 12h. On a Stripe failure past
+    /// the TTL the stale value is served instead of breaking the grid (spec
+    /// D2); `None` only when there has never been a successful fetch.
+    pub async fn catalog_prices(&self) -> Option<CatalogPrices> {
+        {
+            let cached = self.catalog_cache.read().await;
+            if let Some(cp) = cached.as_ref() {
+                if cp.fetched_at.elapsed() < CATALOG_TTL {
+                    return Some(cp.clone());
+                }
+            }
+        }
+
+        let keys: Vec<String> = [
+            (Plan::Starter, map::Cycle::Monthly),
+            (Plan::Starter, map::Cycle::Yearly),
+            (Plan::Pro, map::Cycle::Monthly),
+            (Plan::Pro, map::Cycle::Yearly),
+            (Plan::Business, map::Cycle::Monthly),
+            (Plan::Business, map::Cycle::Yearly),
+        ]
+        .into_iter()
+        .filter_map(|(plan, cycle)| map::lookup_key(plan, cycle))
+        .map(str::to_string)
+        .collect();
+
+        let result = stripe_product::price::ListPrice::new()
+            .lookup_keys(keys)
+            .active(true)
+            .expand(vec!["data.currency_options".to_string()])
+            .send(&self.client)
+            .await;
+
+        match result {
+            Ok(list) => {
+                let mut by_lookup_key = HashMap::new();
+                for price in list.data {
+                    let Some(key) = price.lookup_key.clone() else {
+                        continue;
+                    };
+                    let Some(usd_cents) = price.unit_amount else {
+                        continue;
+                    };
+                    let Some(brl_cents) = price
+                        .currency_options
+                        .as_ref()
+                        .and_then(|opts| opts.get(&stripe_types::Currency::BRL))
+                        .and_then(|opt| opt.unit_amount)
+                    else {
+                        continue;
+                    };
+                    by_lookup_key.insert(
+                        key,
+                        CatalogPrice {
+                            usd_cents,
+                            brl_cents,
+                        },
+                    );
+                }
+                let fresh = CatalogPrices {
+                    by_lookup_key,
+                    fetched_at: Instant::now(),
+                };
+                *self.catalog_cache.write().await = Some(fresh.clone());
+                Some(fresh)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "stripe catalog price list failed");
+                self.catalog_cache.read().await.clone()
+            }
+        }
     }
 }
 
