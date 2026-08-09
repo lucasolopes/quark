@@ -830,6 +830,13 @@ impl PostgresStore {
                 // lives in `src/ee/stripe/`.
                 "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT",
                 "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT",
+                // Speeds up the webhook's reverse lookup (`find_tenant_by_stripe_customer`)
+                // and, more importantly, stops two tenants from ever claiming the
+                // same Stripe customer: `set_stripe_customer_id`'s `WHERE
+                // stripe_customer_id IS NULL` guard only protects the *same*
+                // tenant against a concurrent double-claim, not two different
+                // tenants racing to claim the same id.
+                "CREATE UNIQUE INDEX IF NOT EXISTS tenants_stripe_customer_uidx ON tenants (stripe_customer_id) WHERE stripe_customer_id IS NOT NULL",
                 // Webhook idempotency ledger: one row per delivered event id.
                 "CREATE TABLE IF NOT EXISTS stripe_events (
                     id TEXT PRIMARY KEY,

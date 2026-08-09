@@ -1305,3 +1305,65 @@ async fn stripe_billing_columns_round_trip_pg() {
         .await
         .unwrap());
 }
+
+#[tokio::test]
+#[file_serial]
+async fn stripe_customer_id_is_unique_across_tenants_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+    let t1 = quark::tenant::TenantId(4244);
+    let t2 = quark::tenant::TenantId(4245);
+    s.put_tenant(&quark::tenant::Tenant {
+        id: t1,
+        name: "Acme".into(),
+        slug: "acme-uidx-1".into(),
+        created: 0,
+    })
+    .await
+    .unwrap();
+    s.put_tenant(&quark::tenant::Tenant {
+        id: t2,
+        name: "Acme Two".into(),
+        slug: "acme-uidx-2".into(),
+        created: 0,
+    })
+    .await
+    .unwrap();
+
+    s.set_stripe_customer_id(t1, "cus_shared").await.unwrap();
+
+    // `set_stripe_customer_id`'s `WHERE stripe_customer_id IS NULL` claim
+    // only guards the *same* tenant from a concurrent double-claim; it does
+    // nothing to stop a second, different tenant from claiming the same
+    // Stripe customer id. The partial unique index is what turns that into
+    // a hard failure at the database level instead of two tenants silently
+    // sharing one Stripe customer.
+    let err = s
+        .set_stripe_customer_id(t2, "cus_shared")
+        .await
+        .expect_err("second tenant claiming the same Stripe customer must fail");
+    // `set_stripe_customer_id` maps all sqlx errors through `StoreError::backend`
+    // (it does not special-case 23505 like `put_tenant` does for `slug`), so
+    // the unique-index violation surfaces as `StoreError::Backend`, not
+    // `StoreError::UniqueViolation`. This assertion documents that real,
+    // currently-observed behavior rather than the ideal one.
+    match err {
+        quark::store::StoreError::Backend(msg) => {
+            assert!(
+                msg.contains("tenants_stripe_customer_uidx"),
+                "expected the unique index violation message, got: {msg}"
+            );
+        }
+        other => panic!("expected StoreError::Backend, got {other:?}"),
+    }
+
+    // The first tenant's claim is untouched.
+    assert_eq!(
+        s.get_stripe_customer_id(t1).await.unwrap().as_deref(),
+        Some("cus_shared")
+    );
+    // The second tenant never got the claim.
+    assert_eq!(s.get_stripe_customer_id(t2).await.unwrap(), None);
+}
