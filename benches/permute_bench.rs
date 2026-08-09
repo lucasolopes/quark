@@ -3,8 +3,9 @@
 // topo de arquivo (fn app(), fixtures), que sao a maioria aqui.
 #![allow(clippy::unwrap_used)]
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use quark::permute::{decode, encode};
+use std::hint::black_box;
 
 fn bench(c: &mut Criterion) {
     let key = 0x9E3779B97F4A7C15;

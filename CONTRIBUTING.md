@@ -35,7 +35,7 @@ accept it once and it covers every future PR.
 ## Development
 
 Prerequisites: a stable Rust toolchain (via [rustup](https://rustup.rs)) and
-Node 20+ for the admin panel. Depth lives in
+Node 22+ for the admin panel. Depth lives in
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md); this is only what you need for a
 first PR.
 
