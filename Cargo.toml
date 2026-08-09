@@ -1,6 +1,6 @@
 [package]
 name = "quark"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 description = "URL shortener whose short code is a calibrated reduced-round ARX permutation"
 license = "AGPL-3.0-only"

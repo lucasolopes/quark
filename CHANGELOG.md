@@ -20,6 +20,50 @@ layout are not covered.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-09
+
+### Added
+
+- **Open core.** The repository is now AGPL-3.0-only everywhere except
+  `src/ee/` and `web/src/ee/`, which are covered by the quark Enterprise
+  Edition License (`src/ee/LICENSE`). The Enterprise code sits behind the
+  non-default `ee` cargo feature and a single router injection point; deleting
+  both directories leaves a buildable, passing core, and CI proves that on
+  every push. What lives there is what only makes sense operating quark as a
+  service for other people: workspace administration, invites, per-tenant IdP,
+  Keycloak provisioning, custom-domain verification. Nothing on the redirect
+  path is gated, ever. See `docs/LICENSING.md`.
+- **Plans and entitlement (cloud).** A tenant now carries a billing plan
+  (Free, Starter, Pro, Business, Custom); the catalog of limits lives in code,
+  versioned with the features it limits. Gated endpoints answer
+  `402 Payment Required` naming the limit hit, the ceiling and the cheapest
+  plan that lifts it: webhooks, Sheets and pixels by feature, custom domains
+  and members by ceiling, per-tenant SSO by plan. `GET /admin/plan` reports
+  the tenant's plan, limits and unlocked features so the panel never carries
+  its own copy of the grid, and `PUT /admin/tenants/{id}/plan` is the
+  operator escape hatch. The Community edition never enforces any of this: a
+  self-hosted AGPL install stays free and unlimited. See `docs/PLANS.md`.
+- **Stripe billing (cloud).** `POST /admin/billing/checkout` opens a hosted
+  Checkout Session: Owner only, currency (`usd` or `brl`) chosen on the first
+  checkout and locked to the customer from then on, and a 14-day no-card
+  trial granted once per workspace. `POST /admin/billing/portal` opens the
+  Customer Portal, where upgrade, downgrade, cancellation, cards and invoices
+  live. `POST /stripe/webhook` is the only automatic writer of the plan:
+  signature-verified, deduplicated by event id, and it always re-fetches the
+  subscription from the API instead of trusting the event payload, so
+  out-of-order deliveries cannot downgrade a paying workspace. `past_due`
+  keeps the plan through the retry window; terminal states drop to Free;
+  downgrades never delete anything, they only block new creation. Enabled by
+  `QUARK_STRIPE_SECRET_KEY`, `QUARK_STRIPE_WEBHOOK_SECRET` and
+  `QUARK_STRIPE_PANEL_URL`, all three or nothing; without them the billing
+  endpoints do not exist. See `docs/BILLING.md` and `docs/RUNBOOK-stripe.md`.
+
+### Changed
+
+- CI runs on Node 22 (Node 20 is end-of-life), and a dependency wave landed:
+  the tokio stack, `base64` 0.23, `criterion` 0.8, and the React, Vite and
+  npm groups on the panel.
+
 ## [0.4.1] - 2026-07-27
 
 ### Added
@@ -177,7 +221,8 @@ became installable.
 - AGPL-3.0-only core with a CLA collected on every pull request.
 - Private vulnerability reporting and a written security policy.
 
-[Unreleased]: https://github.com/lucasolopes/quark/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/lucasolopes/quark/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/lucasolopes/quark/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/lucasolopes/quark/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/lucasolopes/quark/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/lucasolopes/quark/compare/v0.3.0...v0.3.1
