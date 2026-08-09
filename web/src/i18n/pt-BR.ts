@@ -877,6 +877,7 @@ export const ptBR: Messages = {
     checkoutSuccess: "Pagamento recebido. Seu plano atualiza em alguns segundos.",
     checkoutCanceled: "Checkout cancelado. Nada mudou.",
     notConfigured: "O billing não está configurado neste servidor, então a compra não está disponível aqui. Esta grade é só informativa.",
+    priceUnavailable: "—",
     limits: {
       domains: "Domínios",
       members: "Membros",

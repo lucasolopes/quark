@@ -875,6 +875,7 @@ export const en = {
     checkoutSuccess: "Payment received. Your plan updates in a few seconds.",
     checkoutCanceled: "Checkout canceled. No changes were made.",
     notConfigured: "Billing isn't configured on this server, so purchase isn't available here. This grid is informational only.",
+    priceUnavailable: "—",
     limits: {
       domains: "Domains",
       members: "Members",

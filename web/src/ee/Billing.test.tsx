@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useSearchParams } from "react-router-dom";
 import { Billing } from "./Billing";
@@ -244,5 +244,68 @@ describe("Billing", () => {
     const portalButtons = screen.getAllByRole("button", { name: /manage in portal/i });
     expect(portalButtons.length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: /^upgrade$/i })).not.toBeInTheDocument();
+  });
+
+  it("hides the price and the upgrade button for a cycle whose price is null, but keeps the other cycle sellable", async () => {
+    const catalogWithNullYearlyPro: BillingCatalog = {
+      ...CATALOG,
+      plans: CATALOG.plans.map((plan) =>
+        plan.plan === "pro" && plan.prices
+          ? { ...plan, prices: { ...plan.prices, yearly: null } }
+          : plan,
+      ),
+    };
+    mockFetch({ me: ME_OWNER, catalog: catalogWithNullYearlyPro });
+    render(withProviders(<Billing />));
+
+    await screen.findByText("Pro");
+
+    // Monthly (default cycle): Pro's monthly price is still set, so it stays sellable.
+    const cards = screen.getAllByTestId("plan-card");
+    const proCard = cards.find((card) => within(card).queryByText("Pro"));
+    expect(proCard).toBeDefined();
+    expect(within(proCard as HTMLElement).getByText(/\$14\b/)).toBeInTheDocument();
+    expect(within(proCard as HTMLElement).getByRole("button", { name: /upgrade/i })).toBeInTheDocument();
+
+    // Switch to yearly: Pro's yearly price is null (half-configured Stripe price), so the card
+    // must show the unavailable placeholder, not "$0", and must not offer an upgrade button.
+    await userEvent.click(screen.getByRole("button", { name: "Yearly" }));
+    const cardsAfter = screen.getAllByTestId("plan-card");
+    const proCardAfter = cardsAfter.find((card) => within(card).queryByText("Pro"));
+    expect(proCardAfter).toBeDefined();
+    expect(within(proCardAfter as HTMLElement).queryByText(/\$0\b/)).not.toBeInTheDocument();
+    expect(within(proCardAfter as HTMLElement).getByText("—")).toBeInTheDocument();
+    expect(within(proCardAfter as HTMLElement).queryByRole("button", { name: /upgrade|manage in portal/i })).not.toBeInTheDocument();
+  });
+
+  it("falls back to checkout in the same click when the portal 404s (paid plan set via the operator escape hatch)", async () => {
+    const fetchMock = mockFetch({
+      me: ME_OWNER,
+      catalog: { ...CATALOG, current_plan: "pro" },
+      portal: () => jsonResponse({ error: "no_stripe_customer" }, 404),
+    });
+    const assignMock = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign: assignMock } as Location);
+
+    render(withProviders(<Billing />));
+    await screen.findByText("Starter");
+
+    // Seeded as an active subscription (current_plan "pro" is paid), so the button starts as
+    // "Manage in portal".
+    const portalButtons = screen.getAllByRole("button", { name: /manage in portal/i });
+    await userEvent.click(portalButtons[0]);
+
+    // The portal 404s: no Stripe customer behind this workspace. The same click must fall
+    // through to checkout instead of leaving the owner stuck.
+    await waitFor(() => {
+      const checkoutCall = fetchMock.mock.calls.find(([u]) => String(u).includes("/admin/billing/checkout"));
+      expect(checkoutCall).toBeDefined();
+    });
+    await waitFor(() => {
+      expect(assignMock).toHaveBeenCalledWith("https://checkout.stripe.com/session");
+    });
+
+    // The button set has flipped back to "Upgrade" for a future render.
+    expect(await screen.findAllByRole("button", { name: /^upgrade$/i })).not.toHaveLength(0);
   });
 });
