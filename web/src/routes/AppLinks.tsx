@@ -1,6 +1,7 @@
 import { Info, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useT, type MessageKey } from "@/i18n";
@@ -13,11 +14,8 @@ export function AppLinks() {
   const t = useT();
 
   return (
-    <div className="flex flex-col gap-4 max-w-[860px]">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold">{t("appLinks.heading")}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{t("appLinks.subtitle")}</p>
-      </div>
+    <div className="flex flex-col gap-4 animate-rise max-w-[860px]">
+      <PageHeader title={t("appLinks.heading")} subtitle={t("appLinks.subtitle")} />
 
       <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-sm text-muted-foreground">
         <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
