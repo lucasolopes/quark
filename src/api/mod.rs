@@ -161,11 +161,11 @@ pub(crate) fn sso_provisioning(_st: &AppState) -> bool {
 
 impl AppState {
     /// Public short code for a link id: permute the id with the instance key,
-    /// then base62-encode. The inverse is `permute::decode` (guarded by
+    /// then base62-encode. The inverse is `permute::deobfuscate` (guarded by
     /// `permute::MAX_ID`). Centralizes the composition that the create/redirect
     /// and admin-list paths would otherwise repeat.
     pub(crate) fn encode_code(&self, id: u64) -> String {
-        codec::to_base62(permute::encode(id, self.key))
+        codec::to_base62(permute::obfuscate(id, self.key))
     }
 }
 

@@ -6,13 +6,13 @@ Este documento explica como o quark funciona para quem nunca viu o código. Não
 
 ## Visão geral
 
-O quark é um único binário Rust feito de poucos módulos pequenos e de propósito único. Dois deles (`permute` e `codec`) não fazem I/O nenhum; são funções puras sobre inteiros. Todo o resto existe para mover bytes entre a rede e o banco o mais barato possível. Store, cache e analytics ficam atrás de traits, então o mesmo binário roda como um nó único sem dependências ou contra Postgres, Valkey e ClickHouse, escolhidos no startup por quais env vars estão setadas.
+O quark é um único binário Rust feito de poucos módulos pequenos e de propósito único. Dois deles (`permute` e `codec`, fornecidos pelo crate [arxid](https://github.com/lucasolopes/arxid), que foi extraído deste repo) não fazem I/O nenhum; são funções puras sobre inteiros. Todo o resto existe para mover bytes entre a rede e o banco o mais barato possível. Store, cache e analytics ficam atrás de traits, então o mesmo binário roda como um nó único sem dependências ou contra Postgres, Valkey e ClickHouse, escolhidos no startup por quais env vars estão setadas.
 
 ```mermaid
 flowchart LR
     C[Client] -->|POST /| API[api axum]
     C -->|GET /:code| API
-    API -->|encode / decode| P[permute + codec]
+    API -->|obfuscate / deobfuscate| P[arxid permute + codec]
     API --> CA[cache L1 moka + L2 Valkey]
     CA -->|miss| ST[(store LMDB ou Postgres)]
     API -.evento de clique.-> AN[worker + sink de analytics]
@@ -22,8 +22,8 @@ flowchart LR
 
 | Módulo | Responsabilidade | Depende de |
 |---|---|---|
-| `permute` | A bijeção entre id e código: uma rede Feistel balanceada com função de round ARX. `encode(u64) -> u64`, `decode(u64) -> u64`, domínio de 40 bits, 4 rounds. Sem estado, sem I/O. | (núcleo puro) |
-| `codec` | Inteiro para string base62 de 7 caracteres, URL-safe, e de volta. | (núcleo puro) |
+| `permute` | A bijeção entre id e código: uma rede Feistel balanceada com função de round ARX. `obfuscate(u64) -> u64`, `deobfuscate(u64) -> u64`, domínio de 40 bits, 6 rounds (spec v2 do arxid). Sem estado, sem I/O. Reexportado do crate `arxid`. | (núcleo puro, arxid) |
+| `codec` | Inteiro para string base62 de 7 caracteres, URL-safe, e de volta. Reexportado do crate `arxid`. | (núcleo puro, arxid) |
 | `store` | Persistência atrás da trait `Store`: links por `u64`, aliases, webhooks, tokens, pixels, docs well-known, visitas, o outbox de webhook. Backends: `lmdb.rs` (embutido default) e `postgres.rs` (compartilhado). | `heed` (LMDB), `sqlx` (Postgres) |
 | `cache` | Mapa concorrente L1 `id -> Record` na frente do store, com tier L2 opcional e um circuit breaker. | `moka`, `redis` (L2 opt-in) |
 | `analytics` | Captura de clique fora do redirect (fire-and-forget), worker de lote em background, agregados mais últimos N eventos; a trait `AnalyticsSink` e as impls embutida e ClickHouse. Também dirige o forward de conversão. | `tokio` mpsc, `clickhouse` (opt-in) |
@@ -56,7 +56,7 @@ sequenceDiagram
     Note over Api,St: sem alias = sem checagem de colisão (a bijeção garante)
 ```
 
-A API valida que a URL é `http(s)://`, roda os guards de abuso, então pede ao store o próximo id, um contador persistido para reinícios não reusarem ids. Grava o `Record` pela chave do id inteiro cru, depois computa o código público rodando o id por `permute::encode` e base62. Note o que falta: não há checagem de "esse código já existe?". Como `encode` é uma bijeção, dois ids diferentes nunca produzem o mesmo código, então a checagem de colisão é eliminada por design no nível de tipo, não em runtime.
+A API valida que a URL é `http(s)://`, roda os guards de abuso, então pede ao store o próximo id, um contador persistido para reinícios não reusarem ids. Grava o `Record` pela chave do id inteiro cru, depois computa o código público rodando o id por `permute::obfuscate` e base62. Note o que falta: não há checagem de "esse código já existe?". Como `obfuscate` é uma bijeção, dois ids diferentes nunca produzem o mesmo código, então a checagem de colisão é eliminada por design no nível de tipo, não em runtime.
 
 Aliases customizados são um caminho de propósito separado: ainda alocam um id e registro reais (para a lógica de redirect não precisar de dois caminhos), mas passam por uma tabela `aliases: alias -> id` que precisa de checagem de unicidade, porque um humano escolheu a string e dois humanos podem escolher a mesma. É o único lugar do sistema que faz checagem de colisão, e é opt-in.
 
@@ -114,7 +114,7 @@ sequenceDiagram
     end
 ```
 
-O quark primeiro tenta parsear o segmento do path como código base62 numérico e rodar por `permute::decode`. Se o parse falha (tamanho errado, caractere inválido ou valor fora da faixa), cai num lookup de alias. Então o caminho quente (códigos numéricos, a maioria esmagadora do tráfego num encurtador read-heavy) nunca toca a tabela `aliases`: aritmética pura para o id, depois um lookup de cache. Só num miss de cache cai numa leitura mmap do LMDB (um lookup de page-table no caso comum) ou numa query Postgres. Expiração é checada preguiçosamente na leitura; não há varredor em background.
+O quark primeiro tenta parsear o segmento do path como código base62 numérico e rodar por `permute::deobfuscate`. Se o parse falha (tamanho errado, caractere inválido ou valor fora da faixa), cai num lookup de alias. Então o caminho quente (códigos numéricos, a maioria esmagadora do tráfego num encurtador read-heavy) nunca toca a tabela `aliases`: aritmética pura para o id, depois um lookup de cache. Só num miss de cache cai numa leitura mmap do LMDB (um lookup de page-table no caso comum) ou numa query Postgres. Expiração é checada preguiçosamente na leitura; não há varredor em background.
 
 ### Precedência de destino
 
@@ -160,7 +160,7 @@ rounds | avalanche_medio | cobertura(/40)
  5..12  |     0.5000      |   40
 ```
 
-`avalanche_medio` é a fração média de bits de saída virados; `cobertura` é o pior caso, sobre os 40 bits de entrada, de quantos bits de saída distintos um bit já influenciou, pegando um ponto cego estrutural que a média esconderia. No round 4 os dois saturam: avalanche exatamente `0.5000`, cobertura cheia `40/40`. Round 3 é perto (`0.4866`) mas não lá; rounds 5 a 12 medem idêntico. `ROUNDS = 4` é fixo como constante de compilação em `src/permute.rs`, derivado dessa medição, não escolhido "por segurança".
+`avalanche_medio` é a fração média de bits de saída virados; `cobertura` é o pior caso, sobre os 40 bits de entrada, de quantos bits de saída distintos um bit já influenciou, pegando um ponto cego estrutural que a média esconderia. No round 4 os dois saturam: avalanche exatamente `0.5000`, cobertura cheia `40/40`. Round 3 é perto (`0.4866`) mas não lá; rounds 5 a 12 medem idêntico. A varredura SAC fechou em 4 rounds, e o quark rodou com `ROUNDS = 4` enquanto a permutação vivia no repo. Depois da extração para o arxid, testes mais profundos (um distinguisher de queries escolhidas a ~2^13 queries e um excesso de códigos adjacentes para ids consecutivos) mostraram que SAC sozinho não bastava; a spec v2 do arxid fixou `ROUNDS = 6` (limpo em 5, mais a margem de Patarin para esquemas Feistel), e o quark herda essa constante do crate.
 
 ## Backends plugáveis
 

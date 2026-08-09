@@ -17,7 +17,7 @@ use quark::analytics::{spawn_worker, ClickEvent};
 use quark::api::router;
 use quark::cache::Cache;
 use quark::codec::to_base62;
-use quark::permute::encode;
+use quark::permute::obfuscate;
 use quark::store::{open_backends, Record};
 use std::hint::black_box;
 use std::sync::Arc;
@@ -104,7 +104,7 @@ fn bench(c: &mut Criterion) {
             .key(key)
             .real_ip_header("cf-connecting-ip".to_string())
             .build();
-        let code = to_base62(encode(1, key));
+        let code = to_base62(obfuscate(1, key));
         (state, code, tx, worker)
     });
 

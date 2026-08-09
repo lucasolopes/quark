@@ -56,7 +56,7 @@ A maioria dos encurtadores escolhe um de dois caminhos para o código:
 - **Codificação reversível** (estilo Hashids, Sqids): rápida, mas não é segurança, os códigos são parcialmente enumeráveis. Você consegue raspar `/aaaa`, `/aaab`, …
 - **Cifra de verdade** (ex.: Feistly = Feistel + HMAC-SHA256): não enumerável, mas lenta, um hash criptográfico completo roda em cada round.
 
-O quark fecha essa lacuna com uma **rede Feistel cuja função de round é ARX** (add-rotate-xor), não um hash. Uma rede Feistel sobre um domínio inteiro é uma bijeção por construção: `decode(encode(id)) == id` para todo id, com **zero checagens de colisão necessárias**, nunca. A única questão aberta é *quantos rounds* de mistura são necessários até o output parecer aleatório o suficiente pra resistir a enumeração, e isso aqui não é um palpite, é **medido** (veja a tabela de avalanche abaixo). O resultado é um gerador de código simultaneamente não enumerável *e* aproximadamente uma ordem de magnitude mais rápido que uma abordagem de cifra de verdade (~18× medido contra uma Feistel estruturalmente idêntica com round HMAC, veja o benchmark abaixo), porque rounds ARX são operações inteiras baratas, não chamadas de hash.
+O quark fecha essa lacuna com uma **rede Feistel cuja função de round é ARX** (add-rotate-xor), não um hash. Uma rede Feistel sobre um domínio inteiro é uma bijeção por construção: `deobfuscate(obfuscate(id)) == id` para todo id, com **zero checagens de colisão necessárias**, nunca. A única questão aberta é *quantos rounds* de mistura são necessários até o output parecer aleatório o suficiente pra resistir a enumeração, e isso aqui não é um palpite, é **medido** (veja a tabela de avalanche abaixo). O resultado é um gerador de código simultaneamente não enumerável *e* aproximadamente uma ordem de magnitude mais rápido que uma abordagem de cifra de verdade (~19× medido contra uma Feistel estruturalmente idêntica com round HMAC, veja o benchmark abaixo), porque rounds ARX são operações inteiras baratas, não chamadas de hash.
 
 Como o código é a permutação do id, o store nunca precisa indexar por string. Ele é chaveado por `u64`, direto num banco mmap'd. Milhões de links ocupam uma fração do que um store indexado por string precisaria.
 
@@ -66,13 +66,13 @@ Como o código é a permutação do id, o store nunca precisa indexar por string
 flowchart LR
     C[Client] -->|POST /| API[api axum]
     C -->|GET /:code| API
-    API -->|encode/decode| P[permute + codec]
+    API -->|obfuscate/deobfuscate| P[arxid permute + codec]
     API --> CA[cache moka]
     CA -->|miss| ST[(store LMDB)]
     P -.no I/O.-> API
 ```
 
-`permute` (a bijeção Feistel/ARX) e `codec` (integer ↔ base62) são matemática pura, sem I/O, sem locks, fora do caminho da requisição. O caminho quente é: decodificar o código pra um id, checar o cache em memória, cair pra uma única leitura mmap em caso de miss.
+`permute` (a bijeção Feistel/ARX) e `codec` (integer ↔ base62) são matemática pura, sem I/O, sem locks, fora do caminho da requisição. Os dois módulos nasceram neste repo e hoje vivem no crate [arxid](https://github.com/lucasolopes/arxid), reexportados nos mesmos paths; a spec, os vetores de teste e os ports (TypeScript hoje, mais planejados) moram lá. O caminho quente é: decodificar o código pra um id, checar o cache em memória, cair pra uma única leitura mmap em caso de miss.
 
 ## Sequência de redirect
 
@@ -83,7 +83,7 @@ sequenceDiagram
     participant Ca as cache
     participant St as store
     Cli->>Api: GET /:code
-    Api->>Api: id = decode(base62⁻¹(code), key)
+    Api->>Api: id = deobfuscate(base62⁻¹(code), key)
     Api->>Ca: get(id)
     alt hit
         Ca-->>Api: Record
@@ -125,7 +125,9 @@ rounds | avalanche_medio | cobertura(/40)
 - **avalanche_medio**: fração média de bits de saída que flipam quando um bit de entrada flipa (alvo: exatamente 0.5).
 - **cobertura**: o mínimo, entre todos os 40 bits de entrada, de quantos bits de saída distintos aquele único bit de entrada já conseguiu afetar. `40/40` significa que todo bit de entrada consegue influenciar todo bit de saída, difusão completa, sem ponto cego estrutural.
 
-`ROUNDS = 4` é o menor número de rounds em que o avalanche bate exatamente `0.5000` *e* a cobertura é total. O round 3 está perto (`0.4866`) mas ainda não chegou lá. Os rounds 5 a 12 não compram nada, a difusão já fechou, então o quark usa 4 e para, mantendo cada round de runtime que não é necessário para a propriedade que está sendo pago por ele.
+`ROUNDS = 4` é o menor número de rounds em que o avalanche bate exatamente `0.5000` *e* a cobertura é total. O round 3 está perto (`0.4866`) mas ainda não chegou lá.
+
+O SAC se mostrou necessário mas não suficiente. Depois que a permutação foi extraída para o [arxid](https://github.com/lucasolopes/arxid), testes mais profundos acharam dois defeitos que os números de avalanche não enxergam: um distinguisher de queries escolhidas que separava a construção de 4 rounds de uma permutação aleatória com cerca de 2^13 queries, e ids consecutivos mapeando pra códigos adjacentes centenas de vezes acima da taxa de uma permutação aleatória. Os dois medem limpo com 5 rounds; a spec v2 do arxid usa **6**, tomando a margem que Patarin recomenda para esquemas Feistel, e também corrige um fold do key schedule que cortava o espaço efetivo de chaves pela metade. O quark consome o arxid, então seus códigos são spec v2: 6 rounds, a ~1.9 ns por round extra. O binário `calibrate` continua reproduzindo a varredura SAC acima contra o mesmo `feistel_n` que a produção usa.
 
 ## Velocidade: o número de troféu
 
@@ -139,28 +141,28 @@ Medido nesta máquina (criterion, `benches/permute_bench.rs`):
 
 | op | time/op | ops/sec |
 |---|---|---|
-| `permute::encode` (u64 → u64, o motor de permutação) | ~3.98 ns | ~251.000.000 |
-| `permute::decode` (u64 → u64) | ~3.45 ns | ~290.000.000 |
+| `permute::obfuscate` (u64 → u64, o motor de permutação) | ~12.9 ns | ~77.000.000 |
+| `permute::deobfuscate` (u64 → u64) | ~13.2 ns | ~76.000.000 |
 
 Essa é a permutação bruta. A **operação de produto** é `id → string base62 de 7 caracteres` (e de volta), que adiciona uma `String` alocada no heap por chamada:
 
 | op | time/op | ops/sec |
 |---|---|---|
-| `encode` (id → código string) | ~45 ns | ~22.000.000 |
-| `decode` (código string → id) | ~80 ns | ~12.500.000 |
+| `obfuscate` (id → código string) | ~158 ns | ~6.300.000 |
+| `deobfuscate` (código string → id) | ~261 ns | ~3.800.000 |
 
 ### Cabeça a cabeça (mesma máquina, mesmo harness criterion)
 
-`benches/compare_bench.rs` mede a mesma classe de operação, *id inteiro → string curta opaca*, para o quark e três abordagens concorrentes reais, sobre ids em `0..2^40`. A que isola a afirmação real do quark é a **`feistel_hmac`**: uma Feistel balanceada idêntica (4 rounds, 40 bits), trocando *só* a função de round de ARX pra HMAC-SHA256 (ou seja, a abordagem de "cifra de verdade" que bibliotecas como a Feistly usam).
+`benches/compare_bench.rs` mede a mesma classe de operação, *id inteiro → string curta opaca*, para o quark e três abordagens concorrentes reais, sobre ids em `0..2^40`. A que isola a afirmação real do quark é a **`feistel_hmac`**: uma Feistel balanceada idêntica (mesmo número de rounds, 40 bits), trocando *só* a função de round de ARX pra HMAC-SHA256 (ou seja, a abordagem de "cifra de verdade" que bibliotecas como a Feistly usam).
 
 | abordagem | encode ops/sec | vs quark | o que é |
 |---|---|---|---|
-| **quark** (Feistel ARX) | **~22.000.000** | 1× | bijeção chaveada, 7 caracteres fixos, não enumerável |
-| hashids (`harsh` 0.2.2) | ~2.950.000 | ~7.5× mais lento | codificação de obfuscação (salt fraco, não chaveada) |
-| feistel + HMAC-SHA256 | ~1.230.000 | **~18× mais lento** | mesma estrutura do quark, função de round por hash |
-| sqids (`sqids` 0.4.2) | ~680.000 | ~32× mais lento | codificação de obfuscação (sem chave) |
+| **quark** (Feistel ARX) | **~6.300.000** | 1× | bijeção chaveada, 7 caracteres fixos, não enumerável |
+| hashids (`harsh` 0.2.2) | ~940.000 | ~6.7× mais lento | codificação de obfuscação (salt fraco, não chaveada) |
+| feistel + HMAC-SHA256 | ~335.000 | **~19× mais lento** | mesma estrutura do quark, função de round por hash |
+| sqids (`sqids` 0.4.2) | ~290.000 | ~22× mais lento | codificação de obfuscação (sem chave) |
 
-O resumo honesto: contra a cifra **estruturalmente idêntica** (mesma Feistel, chaveada, só a função de round difere), o round ARX do quark é **~18× mais rápido**, porque cada round é um punhado de somas/rotações/xors, não uma invocação de hash criptográfico. Esse é o retorno direto de *medir* o número mínimo de rounds (4) em vez de superprovisionar "por segurança".
+O resumo honesto: contra a cifra **estruturalmente idêntica** (mesma Feistel, chaveada, só a função de round difere), o round ARX do quark é **~19× mais rápido**, porque cada round é um punhado de somas/rotações/xors, não uma invocação de hash criptográfico. Esse é o retorno direto de *medir* o número de rounds em vez de superprovisionar "por segurança".
 
 **Ressalva de justiça:** sqids e hashids são codificações de obfuscação, elas escondem ids sequenciais mas **não** são primitivas criptográficas chaveadas (sqids não tem chave; o salt do hashids é documentado como não seguro), e elas codificam um domínio de tamanho arbitrário em vez da bijeção fixa de 40 bits → 7 caracteres do quark. Então contra essas duas, os números do quark mostram uma vantagem de velocidade, não uma equivalência de segurança. Só a `feistel_hmac` é uma comparação de segurança comparável de fato. Reproduza tudo isso com `cargo bench --bench compare_bench`.
 

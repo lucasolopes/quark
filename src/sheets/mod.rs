@@ -230,7 +230,7 @@ pub fn catalog_rows(
         .collect(),
     );
     for (id, rec) in links {
-        let code = crate::codec::to_base62(crate::permute::encode(*id, key));
+        let code = crate::codec::to_base62(crate::permute::obfuscate(*id, key));
         rows.push(vec![
             code.clone(),
             format!("{base_url}/{code}"),

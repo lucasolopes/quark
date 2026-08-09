@@ -572,7 +572,7 @@ async fn process_alerts(
             continue;
         };
         if let Some(count) = counter.observe(ev.tenant_id, ev.id, rule, ev.ts).await {
-            let code = crate::codec::to_base62(crate::permute::encode(ev.id, key));
+            let code = crate::codec::to_base62(crate::permute::obfuscate(ev.id, key));
             let body = threshold_payload(&code, count, rule.threshold, rule.window_secs, ev.ts);
             webhooks.emit(WebhookEvent {
                 event_type: EventType::LinkThresholdReached,

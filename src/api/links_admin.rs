@@ -251,7 +251,7 @@ pub(crate) async fn resolve_for_admin(
     code: &str,
 ) -> Result<Option<(u64, Option<String>)>, StoreError> {
     match codec::from_base62(code) {
-        Some(c) if c <= permute::MAX_ID => Ok(Some((permute::decode(c, st.key), None))),
+        Some(c) if c <= permute::MAX_ID => Ok(Some((permute::deobfuscate(c, st.key), None))),
         _ => {
             let domain_id = default_domain_id(st, tenant).await;
             match st.store.get_alias(domain_id, code).await? {
