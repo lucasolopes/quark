@@ -621,6 +621,49 @@ mod tests {
         async fn set_tenant_plan(&self, _tenant: TenantId, _plan: &str) -> Result<(), StoreError> {
             unimplemented!()
         }
+        async fn get_stripe_customer_id(
+            &self,
+            _tenant: TenantId,
+        ) -> Result<Option<String>, StoreError> {
+            Ok(None)
+        }
+        async fn set_stripe_customer_id(
+            &self,
+            _tenant: TenantId,
+            _customer_id: &str,
+        ) -> Result<(), StoreError> {
+            Err(StoreError::Unsupported)
+        }
+        async fn get_stripe_subscription_id(
+            &self,
+            _tenant: TenantId,
+        ) -> Result<Option<String>, StoreError> {
+            Ok(None)
+        }
+        async fn set_stripe_subscription_id(
+            &self,
+            _tenant: TenantId,
+            _subscription_id: &str,
+        ) -> Result<(), StoreError> {
+            Err(StoreError::Unsupported)
+        }
+        async fn find_tenant_by_stripe_customer(
+            &self,
+            _customer_id: &str,
+        ) -> Result<Option<TenantId>, StoreError> {
+            Ok(None)
+        }
+        async fn record_stripe_event(
+            &self,
+            _id: &str,
+            _event_type: &str,
+            _received_at: u64,
+        ) -> Result<bool, StoreError> {
+            Err(StoreError::Unsupported)
+        }
+        async fn delete_stripe_event(&self, _id: &str) -> Result<(), StoreError> {
+            Err(StoreError::Unsupported)
+        }
         fn supports_plans(&self) -> bool {
             unimplemented!()
         }

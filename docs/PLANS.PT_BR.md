@@ -134,8 +134,17 @@ pelo produto que experimenta.
 
 ## Trocando o plano de um tenant
 
-Ainda não existe gateway de pagamento (isso é a fase 2). Até lá, trocar o
-plano de um tenant é ação do operador:
+Com o Stripe configurado (`QUARK_STRIPE_SECRET_KEY`,
+`QUARK_STRIPE_WEBHOOK_SECRET`, `QUARK_STRIPE_PANEL_URL`; ver
+[`BILLING.PT_BR.md`](BILLING.PT_BR.md)), o jeito normal de um plano mudar é
+por assinatura: o Owner do workspace faz checkout ou gerencia a assinatura
+pelo Customer Portal hospedado pelo Stripe, e o webhook grava o plano
+resultante. O endpoint abaixo continua existindo e continua exigindo o token
+break-glass do operador; com billing ligado, trate-o como escape hatch
+(overrides de suporte, tiers `Custom` negociados, destravar um workspace
+travado) em vez do caminho do dia a dia.
+
+Sem o Stripe configurado, esse endpoint é o único jeito de trocar um plano:
 
 ```
 PUT /admin/tenants/{id}/plan

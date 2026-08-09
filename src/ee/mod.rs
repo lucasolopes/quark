@@ -21,7 +21,12 @@
 pub mod api;
 pub mod keycloak;
 pub mod plan;
+pub mod stripe;
 
+// The local module `crate::ee::stripe` shadows the `stripe` crate name used
+// inside it, so alias the crate reference here rather than juggling the
+// fully-qualified path at every use site.
+use crate::ee::stripe as stripe_mod;
 use std::sync::Arc;
 
 /// The `AppState` fields that only exist in the Enterprise edition.
@@ -54,6 +59,9 @@ pub struct EeState {
     pub oidc_tenants: crate::oidc::TenantOidcCache,
     /// Per-tenant plan cache (LUC-41 phase 1). See `plan::PlanCache`.
     pub plans: plan::PlanCache,
+    /// Stripe billing runtime (LUC-41 phase 2), present only when the three
+    /// `QUARK_STRIPE_*` env vars are configured. See `stripe::StripeBilling`.
+    pub billing: Option<Arc<stripe_mod::StripeBilling>>,
 }
 
 /// Enterprise boot, called once by `main`.
@@ -160,10 +168,20 @@ pub async fn boot(
         }
     }
 
+    let billing = crate::ee::stripe::StripeBilling::from_env().map(Arc::new);
+    match &billing {
+        Some(_) => tracing::info!("stripe billing enabled"),
+        None => tracing::info!(
+            "stripe billing: disabled (set QUARK_STRIPE_SECRET_KEY, \
+             QUARK_STRIPE_WEBHOOK_SECRET and QUARK_STRIPE_PANEL_URL to enable)"
+        ),
+    }
+
     EeState {
         keycloak,
         keycloak_base_url,
         oidc_tenants: crate::oidc::TenantOidcCache::new(),
         plans: plan::PlanCache::new(),
+        billing,
     }
 }

@@ -1361,6 +1361,56 @@ impl Store for LmdbStore {
         Err(StoreError::Unsupported)
     }
 
+    async fn get_stripe_customer_id(
+        &self,
+        _tenant: TenantId,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(None)
+    }
+
+    async fn set_stripe_customer_id(
+        &self,
+        _tenant: TenantId,
+        _customer_id: &str,
+    ) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn get_stripe_subscription_id(
+        &self,
+        _tenant: TenantId,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(None)
+    }
+
+    async fn set_stripe_subscription_id(
+        &self,
+        _tenant: TenantId,
+        _subscription_id: &str,
+    ) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn find_tenant_by_stripe_customer(
+        &self,
+        _customer_id: &str,
+    ) -> Result<Option<TenantId>, StoreError> {
+        Ok(None)
+    }
+
+    async fn record_stripe_event(
+        &self,
+        _id: &str,
+        _event_type: &str,
+        _received_at: u64,
+    ) -> Result<bool, StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
+    async fn delete_stripe_event(&self, _id: &str) -> Result<(), StoreError> {
+        Err(StoreError::Unsupported)
+    }
+
     // LMDB has no plan column and no way to add one at runtime: `false` tells
     // `plan_of` to treat this backend as unlimited (`Plan::Custom`) instead
     // of resolving the absent row to `Free` and denying an Enterprise

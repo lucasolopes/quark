@@ -86,7 +86,9 @@ as `QUARK_KEYCLOAK_*`. Um build Community as ignora. Ver
 Limites de plano também são só-Enterprise, aplicados pelo mesmo gate
 `--features ee` em vez de por variável de ambiente. Ver
 [`PLANS.PT_BR.md`](PLANS.PT_BR.md) para a grade, o que cada plano libera e
-como um operador troca o plano de um tenant.
+como um operador troca o plano de um tenant. O billing em si roda por
+`QUARK_STRIPE_SECRET_KEY`, `QUARK_STRIPE_WEBHOOK_SECRET` e
+`QUARK_STRIPE_PANEL_URL`; ver [`BILLING.PT_BR.md`](BILLING.PT_BR.md).
 
 ## Contribuindo
 
