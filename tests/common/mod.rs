@@ -85,6 +85,7 @@ pub struct TestState {
     slack: Option<Arc<SlackConfig>>,
     multi_tenant: bool,
     tenant_domain_suffix: Option<String>,
+    panel_url: Option<String>,
     #[cfg(feature = "ee")]
     keycloak: Option<Arc<dyn KeycloakAdmin>>,
     #[cfg(feature = "ee")]
@@ -115,6 +116,7 @@ impl TestState {
             slack: None,
             multi_tenant: false,
             tenant_domain_suffix: None,
+            panel_url: None,
             #[cfg(feature = "ee")]
             keycloak: None,
             #[cfg(feature = "ee")]
@@ -205,6 +207,15 @@ impl TestState {
         self
     }
 
+    /// The panel base URL `oidc_callback` redirects a member-quota-denied
+    /// login to (LUC-41). Defaults to `None`, matching a deployment with no
+    /// `QUARK_STRIPE_PANEL_URL` configured (the gate then falls back to its
+    /// original 402 JSON body).
+    pub fn panel_url(mut self, panel_url: Option<String>) -> Self {
+        self.panel_url = panel_url;
+        self
+    }
+
     #[cfg(feature = "ee")]
     pub fn keycloak(mut self, keycloak: Option<Arc<dyn KeycloakAdmin>>) -> Self {
         self.keycloak = keycloak;
@@ -263,6 +274,7 @@ impl TestState {
             host_router,
             dns: self.dns,
             tenant_domain_suffix: self.tenant_domain_suffix,
+            panel_url: self.panel_url,
             #[cfg(feature = "ee")]
             ee: quark::ee::EeState {
                 keycloak: self.keycloak,

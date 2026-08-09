@@ -153,6 +153,14 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .map(|s| s.trim().trim_end_matches('.').to_ascii_lowercase())
         .filter(|s| !s.is_empty());
+    // Panel base URL (LUC-41): the core reads `QUARK_STRIPE_PANEL_URL` only to
+    // redirect a login denied by the member-quota gate back to the panel's
+    // `/login` screen. `quark::ee::stripe::StripeBilling::from_env` reads the
+    // same env var independently for its own checkout/webhook URLs.
+    let panel_url = std::env::var("QUARK_STRIPE_PANEL_URL")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty());
     let (store, sink) = open_backends(std::path::Path::new(&path), multi_tenant)
         .await
         .context("opening the storage backends")?;
@@ -467,6 +475,7 @@ async fn main() -> anyhow::Result<()> {
         host_router,
         dns,
         tenant_domain_suffix,
+        panel_url,
         #[cfg(feature = "ee")]
         ee,
     });

@@ -25,7 +25,7 @@ pub(crate) use axum::extract::{ConnectInfo, Path, Query, RawQuery, Request, Stat
 pub(crate) use axum::http::Method;
 pub(crate) use axum::http::{header, HeaderMap, StatusCode};
 pub(crate) use axum::middleware::Next;
-pub(crate) use axum::response::{IntoResponse, Response};
+pub(crate) use axum::response::{IntoResponse, Redirect, Response};
 pub(crate) use axum::routing::{get, post};
 pub(crate) use axum::{Json, Router};
 pub(crate) use base64::Engine as _;
@@ -122,6 +122,14 @@ pub struct AppState {
     /// disables the whole subdomain-auto feature (no seed on create, no boot
     /// backfill, `/admin/me` reports `null`).
     pub tenant_domain_suffix: Option<String>,
+    /// Panel base URL, from the env var `QUARK_STRIPE_PANEL_URL` (LUC-41).
+    /// Despite the name, the core reads this ONLY to redirect a login denied
+    /// by the member-quota gate (`MemberLoginDenied::Quota`) back to the
+    /// panel's `/login` screen — it is not wired to anything Enterprise here.
+    /// `EeState`/`StripeBilling` reads the same env var independently for its
+    /// own checkout/webhook/return URLs, so the two never need to agree on a
+    /// shared field.
+    pub panel_url: Option<String>,
     /// Which edition this process is running (LUC-146). Resolved once at boot;
     /// always `Community` in a build without the `ee` feature.
     pub license: license::LicenseStatus,

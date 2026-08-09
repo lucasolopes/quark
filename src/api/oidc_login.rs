@@ -134,25 +134,39 @@ pub enum MemberLoginDenied {
     StoreUnavailable,
 }
 
-impl IntoResponse for MemberLoginDenied {
-    fn into_response(self) -> Response {
+impl MemberLoginDenied {
+    /// Turns this denial into the actual response `oidc_callback` returns
+    /// (LUC-41). Not an `IntoResponse` impl because the `Quota` branch needs
+    /// `st.panel_url`, which the trait's fixed `fn into_response(self)`
+    /// signature has no way to receive.
+    ///
+    /// `StoreUnavailable` always fails closed as a `503`, unconditionally.
+    /// `Quota` redirects to the panel's own `/login` screen when a panel URL
+    /// is known — a JSON `402` body has nowhere useful to land mid-redirect
+    /// in a browser — carrying `error=member_limit_reached` so the panel can
+    /// render its own message. Without a known panel (self-hosted Community,
+    /// or an Enterprise deploy that hasn't set `QUARK_STRIPE_PANEL_URL`) it
+    /// falls back to the original `402` JSON body: same shape as
+    /// `entitlement::Denied`'s own `IntoResponse`, but with a login-specific
+    /// error code so the caller can tell "your login was refused, the
+    /// workspace is full" apart from a normal API call hitting a plan limit.
+    pub fn into_login_response(self, st: &AppState) -> Response {
         match self {
             MemberLoginDenied::StoreUnavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-            // Same shape as `entitlement::Denied`'s own `IntoResponse`, but
-            // with a login-specific error code: the panel needs to tell "your
-            // login was refused, the workspace is full" apart from a normal
-            // API call hitting a plan limit, even though both are `402`s
-            // carrying the same `limit`/`allowed`/`upgrade_to` triple.
-            MemberLoginDenied::Quota(denied) => (
-                StatusCode::PAYMENT_REQUIRED,
-                Json(serde_json::json!({
-                    "error": "member_limit_reached",
-                    "limit": denied.limit,
-                    "allowed": denied.allowed,
-                    "upgrade_to": denied.upgrade_to,
-                })),
-            )
-                .into_response(),
+            MemberLoginDenied::Quota(denied) => match st.panel_url.as_deref() {
+                Some(panel) => Redirect::to(&format!("{panel}/login?error=member_limit_reached"))
+                    .into_response(),
+                None => (
+                    StatusCode::PAYMENT_REQUIRED,
+                    Json(serde_json::json!({
+                        "error": "member_limit_reached",
+                        "limit": denied.limit,
+                        "allowed": denied.allowed,
+                        "upgrade_to": denied.upgrade_to,
+                    })),
+                )
+                    .into_response(),
+            },
         }
     }
 }
@@ -373,7 +387,7 @@ pub(crate) async fn oidc_callback(
     if st.multi_tenant {
         if let Some((tenant_id, _)) = tenant_membership {
             if let Err(denied) = member_quota_allows_login(&st, tenant_id, &claims.subject).await {
-                return denied.into_response();
+                return denied.into_login_response(&st);
             }
         }
     }
