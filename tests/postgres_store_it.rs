@@ -1367,3 +1367,40 @@ async fn stripe_customer_id_is_unique_across_tenants_pg() {
     // The second tenant never got the claim.
     assert_eq!(s.get_stripe_customer_id(t2).await.unwrap(), None);
 }
+
+#[tokio::test]
+#[file_serial]
+async fn record_stripe_event_prunes_the_ledger_on_new_writes_pg() {
+    let Some(s) = fresh().await else {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    };
+
+    let old_received_at: u64 = 100;
+    assert!(s
+        .record_stripe_event("evt_old", "invoice.paid", old_received_at)
+        .await
+        .unwrap());
+
+    // 31 days after the old event: past the 30-day retention window, so
+    // recording this new event should prune "evt_old" out of the ledger.
+    let new_received_at = old_received_at + 31 * 24 * 3600;
+    assert!(s
+        .record_stripe_event("evt_new", "invoice.paid", new_received_at)
+        .await
+        .unwrap());
+
+    // "evt_old" was pruned: it's free again, so recording it a second time
+    // succeeds (Ok(true)) instead of being rejected as a replay.
+    assert!(s
+        .record_stripe_event("evt_old", "invoice.paid", old_received_at)
+        .await
+        .unwrap());
+
+    // "evt_new" is still within the retention window and was never pruned:
+    // recording it again is a replay (Ok(false)).
+    assert!(!s
+        .record_stripe_event("evt_new", "invoice.paid", new_received_at)
+        .await
+        .unwrap());
+}
