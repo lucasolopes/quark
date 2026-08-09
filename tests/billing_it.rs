@@ -54,6 +54,36 @@ async fn state_with_billing(api_base: &str) -> (std::sync::Arc<quark::api::AppSt
     (st, t)
 }
 
+/// State with a Postgres store, multi-tenant on, OIDC on (so session cookies
+/// resolve), and NO billing configured. Extracted from
+/// `checkout_is_404_when_billing_is_not_configured`'s body so the catalog
+/// tests (which need a seeded session on top of "no billing") can share it.
+async fn state_without_billing() -> (std::sync::Arc<quark::api::AppState>, TenantId) {
+    let url = std::env::var("QUARK_TEST_DATABASE_URL").unwrap();
+    let store = Arc::new(
+        quark::store::postgres::PostgresStore::open(&url, true)
+            .await
+            .unwrap(),
+    );
+    store.reset_for_tests().await.unwrap();
+    let t = TenantId(7101);
+    store
+        .put_tenant(&Tenant {
+            id: t,
+            name: "Acme".into(),
+            slug: "acme-no-billing".into(),
+            created: 0,
+        })
+        .await
+        .unwrap();
+    let sink: Arc<dyn AnalyticsSink> = store.clone();
+    let st = common::TestState::new(store, sink)
+        .multi_tenant(true)
+        .oidc_configured(true)
+        .build(); // no billing
+    (st, t)
+}
+
 /// Seeds a user, a membership with `role`, and a session cookie for it.
 /// Returns the Cookie header value.
 async fn seed_session(
@@ -119,17 +149,7 @@ async fn checkout_is_404_when_billing_is_not_configured() {
         eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
         return;
     }
-    let url = std::env::var("QUARK_TEST_DATABASE_URL").unwrap();
-    let store = Arc::new(
-        quark::store::postgres::PostgresStore::open(&url, true)
-            .await
-            .unwrap(),
-    );
-    store.reset_for_tests().await.unwrap();
-    let sink: Arc<dyn AnalyticsSink> = store.clone();
-    let st = common::TestState::new(store, sink)
-        .multi_tenant(true)
-        .build(); // no billing
+    let (st, _t) = state_without_billing().await;
     let app = quark::api::router(st);
     let res = app
         .oneshot(post(
@@ -627,4 +647,140 @@ async fn webhook_subscription_event_flips_the_plan_end_to_end() {
             .as_deref(),
         Some("sub_e2e")
     );
+}
+
+/// Local mock Stripe server that answers `GET /v1/prices` with one price per
+/// `lookup_keys[...]` value in the request query string, so
+/// `StripeBilling::catalog_prices` can be exercised end to end without a real
+/// Stripe account: usd `unit_amount` 400, `currency_options.brl.unit_amount`
+/// 1900, `recurring.interval` derived from whether the key ends in
+/// "-monthly" or "-yearly". The client serializes `lookup_keys` as
+/// `lookup_keys[0]=...&lookup_keys[1]=...` (`serde_qs`), so any query param
+/// whose name starts with `lookup_keys` is taken as one requested key.
+async fn spawn_stripe_mock_with_prices() -> String {
+    async fn prices_handler(uri: axum::http::Uri) -> axum::Json<serde_json::Value> {
+        let query = uri.query().unwrap_or("");
+        let keys: Vec<&str> = query
+            .split('&')
+            .filter_map(|pair| {
+                let (k, v) = pair.split_once('=')?;
+                k.starts_with("lookup_keys").then_some(v)
+            })
+            .collect();
+        let data: Vec<serde_json::Value> = keys
+            .iter()
+            .enumerate()
+            .map(|(i, key)| {
+                let interval = if key.ends_with("yearly") {
+                    "year"
+                } else {
+                    "month"
+                };
+                serde_json::json!({
+                    "id": format!("price_{i}"),
+                    "object": "price",
+                    "active": true,
+                    "billing_scheme": "per_unit",
+                    "created": 1700000000,
+                    "currency": "usd",
+                    "currency_options": {"brl": {"unit_amount": 1900}},
+                    "livemode": false,
+                    "lookup_key": key,
+                    "metadata": {},
+                    "product": "prod_1",
+                    "recurring": {
+                        "interval": interval,
+                        "interval_count": 1,
+                        "usage_type": "licensed"
+                    },
+                    "type": "recurring",
+                    "unit_amount": 400
+                })
+            })
+            .collect();
+        axum::Json(serde_json::json!({
+            "object": "list",
+            "url": "/v1/prices",
+            "has_more": false,
+            "data": data
+        }))
+    }
+    let app = axum::Router::new().route("/v1/prices", axum::routing::get(prices_handler));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}")
+}
+
+/// `GET /admin/billing/catalog` serves the full 5-plan grid, with Stripe
+/// prices filled in from the mock for the 3 self-service plans (Free and
+/// Custom have no price to buy). Any member (Viewer here, not Owner) may
+/// read the grid: the catalog is a read surface, unlike checkout/portal.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn catalog_serves_the_grid_with_prices_from_the_mock() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let (st, t) = state_with_billing(&spawn_stripe_mock_with_prices().await).await;
+    let cookie = seed_session(&st, t, 31, Role::Viewer).await;
+    let app = quark::api::router(st.clone());
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/admin/billing/catalog")
+                .header("cookie", &cookie)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["prices_available"], true);
+    assert_eq!(v["plans"].as_array().unwrap().len(), 5);
+    let starter = &v["plans"][1];
+    assert_eq!(starter["plan"], "starter");
+    assert_eq!(starter["limits"]["members"], 3);
+    assert_eq!(starter["prices"]["monthly"]["usd_cents"], 400);
+    assert_eq!(starter["prices"]["monthly"]["brl_cents"], 1900);
+    assert_eq!(v["plans"][0]["prices"], serde_json::Value::Null); // free
+    assert_eq!(v["plans"][4]["prices"], serde_json::Value::Null); // custom
+}
+
+/// Without billing configured, the catalog still answers 200 with limits and
+/// features from the code catalog; it just never has prices to show.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn catalog_without_billing_is_informative_only() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let (st, t) = state_without_billing().await;
+    let cookie = seed_session(&st, t, 32, Role::Member).await;
+    let app = quark::api::router(st.clone());
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/admin/billing/catalog")
+                .header("cookie", &cookie)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["prices_available"], false);
+    assert_eq!(v["plans"][1]["prices"], serde_json::Value::Null);
 }

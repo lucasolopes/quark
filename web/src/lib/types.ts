@@ -298,6 +298,37 @@ export interface LinkDomainView {
   primary: boolean;
 }
 
+/** One price point, in both settlement currencies (a plan may only sell in one). */
+export interface CatalogPrice { usd_cents: number; brl_cents: number; }
+
+/** A plan's monthly/yearly prices; either (or both) may be null when unpriced (e.g. a free plan). */
+export interface CatalogPlanPrices { monthly: CatalogPrice | null; yearly: CatalogPrice | null; }
+
+/** One plan in the billing catalog. `limits` entries are null for "unlimited". */
+export interface CatalogPlan {
+  plan: string;
+  limits: {
+    domains: number | null;
+    members: number | null;
+    automation_per_month: number | null;
+    tracked_clicks_per_month: number | null;
+    retention_days: number | null;
+  };
+  features: string[];
+  prices: CatalogPlanPrices | null;
+}
+
+/** Response of `GET /admin/billing/catalog`: every plan plus the workspace's current one. */
+export interface BillingCatalog {
+  current_plan: string;
+  currency_locked: string | null;
+  prices_available: boolean;
+  plans: CatalogPlan[];
+}
+
+/** Body of a 402 plan-limit response: which limit was hit and which plan lifts it. */
+export interface PlanLimitBody { error: string; limit: string; allowed: number | null; upgrade_to: string; }
+
 /** The tenant's own OIDC provider, redacted: the `client_secret` never leaves
  * the server, so only `client_secret_set` reports whether one is on file. */
 export interface OidcConfigView {

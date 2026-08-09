@@ -21,6 +21,7 @@ const Members = lazy(() => import("./Members").then((m) => ({ default: m.Members
 const SsoDomains = lazy(() => import("./SsoDomains").then((m) => ({ default: m.SsoDomains })));
 const OidcProvider = lazy(() => import("./OidcProvider").then((m) => ({ default: m.OidcProvider })));
 const Domains = lazy(() => import("./Domains").then((m) => ({ default: m.Domains })));
+const Billing = lazy(() => import("./Billing").then((m) => ({ default: m.Billing })));
 
 export const eeEnabled = true;
 
@@ -30,6 +31,7 @@ export const eeRoutes: RouteObject[] = [
   { path: "sso-domains", element: suspended(<SsoDomains />) },
   { path: "sso-provider", element: suspended(<OidcProvider />) },
   { path: "domains", element: suspended(<Domains />) },
+  { path: "settings/billing", element: suspended(<Billing />) },
 ];
 
 /**

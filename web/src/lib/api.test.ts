@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { api, ApiError, oidcLoginUrl, setUnauthorizedHandler } from "./api";
+import { api, ApiError, oidcLoginUrl, setUnauthorizedHandler, setPlanLimitHandler } from "./api";
 import { setToken } from "./auth";
+import type { PlanLimitBody } from "./types";
 
 describe("api client", () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
@@ -262,5 +263,20 @@ describe("SSO email domain endpoints", () => {
   it("deleteSsoDomain throws ApiError on a non-ok response", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("not found", { status: 404 }));
     await expect(api.deleteSsoDomain(7)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe("plan-limit (402) interceptor", () => {
+  beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); setPlanLimitHandler(() => {}); });
+
+  it("parses a 402 body, fires the plan-limit handler and enriches ApiError", async () => {
+    const seen: PlanLimitBody[] = [];
+    setPlanLimitHandler((b) => seen.push(b));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "plan_limit_reached", limit: "webhooks", allowed: null, upgrade_to: "starter" }), { status: 402 }),
+    );
+    await expect(api.createWebhook({ url: "https://x.example", events: ["link.created"], kind: "generic" })).rejects.toMatchObject({ status: 402, planLimit: { limit: "webhooks", upgrade_to: "starter" } });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].upgrade_to).toBe("starter");
   });
 });

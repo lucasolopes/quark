@@ -82,6 +82,7 @@ pub fn mount(r: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             "/admin/tenants/{id}/plan",
             axum::routing::put(entitlement::admin_tenant_plan_put),
         )
+        .route("/admin/billing/catalog", get(admin_billing_catalog))
         .route("/admin/billing/checkout", post(admin_billing_checkout))
         .route("/admin/billing/portal", post(admin_billing_portal))
         .route("/stripe/webhook", post(stripe_webhook))

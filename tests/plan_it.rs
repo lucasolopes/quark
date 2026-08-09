@@ -588,6 +588,70 @@ async fn member_quota_denies_new_member_at_ceiling_but_never_an_existing_one() {
         .is_ok());
 }
 
+/// LUC-41: a `Quota` denial's actual HTTP response depends on `st.panel_url`,
+/// not on anything the denial itself carries — `into_login_response` reads
+/// the panel URL off whichever `AppState` it's given. With a known panel URL
+/// the response is a `303 See Other` (what `axum::response::Redirect::to`
+/// emits) to the panel's `/login` screen; without one it falls back to the
+/// original `402` JSON body, so a self-hosted deploy with no
+/// `QUARK_STRIPE_PANEL_URL` configured keeps its old behavior.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn member_quota_denial_redirects_to_panel_when_known_else_402() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let (st, t) = state_with_plan("free").await;
+    st.store
+        .put_membership(&Membership {
+            user_id: 999,
+            tenant_id: t,
+            role: Role::Owner,
+            created: 0,
+        })
+        .await
+        .unwrap();
+
+    // No panel URL configured: the original 402 JSON body.
+    let denied = member_quota_allows_login(&st, t, "sub-new")
+        .await
+        .unwrap_err();
+    let res = denied.into_login_response(&st);
+    assert_eq!(res.status(), axum::http::StatusCode::PAYMENT_REQUIRED);
+
+    // Same denial, but against an `AppState` with a known panel URL: a
+    // redirect to its `/login` screen instead.
+    let st_with_panel = common::TestState::new(st.store.clone(), st.sink.clone())
+        .multi_tenant(true)
+        .panel_url(Some("https://app.example.com".to_string()))
+        .build();
+    let denied = member_quota_allows_login(&st, t, "sub-new")
+        .await
+        .unwrap_err();
+    let res = denied.into_login_response(&st_with_panel);
+    assert_eq!(res.status(), axum::http::StatusCode::SEE_OTHER);
+    let location = res
+        .headers()
+        .get(axum::http::header::LOCATION)
+        .expect("redirect must carry a Location header")
+        .to_str()
+        .unwrap();
+    assert_eq!(
+        location,
+        "https://app.example.com/login?error=member_limit_reached"
+    );
+
+    // `StoreUnavailable` is unaffected by the panel URL either way: always a
+    // fail-closed 503.
+    assert_eq!(
+        quark::api::MemberLoginDenied::StoreUnavailable
+            .into_login_response(&st_with_panel)
+            .status(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
 /// Thin proof that `oidc_callback` actually calls `member_quota_allows_login`
 /// on the per-tenant login branch, not just that the seam works in isolation
 /// (the test above). The real callback needs a live IdP to reach that point

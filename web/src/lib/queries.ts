@@ -15,6 +15,7 @@ const SSO_DOMAINS_QUERY_KEY = ["sso-domains"];
 const DOMAINS_QUERY_KEY = ["domains"];
 const OIDC_CONFIGURED_QUERY_KEY = ["oidc-configured"];
 const OIDC_CONFIG_QUERY_KEY = ["oidc-config"];
+const BILLING_CATALOG_QUERY_KEY = ["billing-catalog"];
 
 /**
  * The application's single TanStack Query client. `retry: false` because a
@@ -584,5 +585,34 @@ export function useDeleteOidcConfig() {
       void client.invalidateQueries({ queryKey: OIDC_CONFIG_QUERY_KEY });
       void client.invalidateQueries({ queryKey: OIDC_CONFIGURED_QUERY_KEY });
     },
+  });
+}
+
+/**
+ * The plan catalog (limits, features, prices) for the Billing screen.
+ * `staleTime: 12h` mirrors the backend's own cache TTL for Stripe prices (see
+ * `docs/specs/2026-08-09-luc41-billing-front-design.md` D2): the panel has no
+ * reason to re-fetch within a session more often than the source can change.
+ */
+export function useBillingCatalog() {
+  return useQuery({
+    queryKey: BILLING_CATALOG_QUERY_KEY,
+    queryFn: () => api.getBillingCatalog(),
+    staleTime: 12 * 60 * 60 * 1000,
+  });
+}
+
+/** Starts a Checkout session for a plan/cycle/currency; resolves with the URL to redirect the browser to. */
+export function useStartCheckout() {
+  return useMutation({
+    mutationFn: ({ plan, cycle, currency }: { plan: string; cycle: string; currency: string }) =>
+      api.startCheckout(plan, cycle, currency),
+  });
+}
+
+/** Opens the billing portal for the current workspace's subscription; resolves with the URL to redirect the browser to. */
+export function useOpenPortal() {
+  return useMutation({
+    mutationFn: () => api.openPortal(),
   });
 }
