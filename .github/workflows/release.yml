@@ -311,8 +311,72 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Prova que a imagem publicada carrega a edicao Enterprise ANTES do deploy
+  # (LUC-150). No incidente do v0.5.0 a imagem saiu sem a feature `ee` e as
+  # rotas EE responderam 404 em producao; nenhum job olhava o binario que ia
+  # pro ar. O detector: com QUARK_MULTI_TENANT=1, `POST /admin/tenants` sem
+  # credencial responde 422 (Json extractor rejeita o body vazio) ou 401 no
+  # build EE, e 404 no build Community (a rota nao foi montada). Validado
+  # contra o binario real antes de escrever isto. Mudar esse contrato exige
+  # atualizar este smoke junto.
+  smoke:
+    needs: [guard, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      packages: read
+    steps:
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sobe o container publicado (LMDB, multi-tenant)
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker run -d --name quark-smoke -p 8080:8080 \
+            -e QUARK_ADDR=0.0.0.0:8080 \
+            -e QUARK_MULTI_TENANT=1 \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION"
+
+      - name: Espera o binario subir
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/admin/me || true)"
+            [ "$code" = "200" ] && exit 0
+            sleep 2
+          done
+          echo "container nunca respondeu 200 em /admin/me"
+          docker logs quark-smoke
+          exit 1
+
+      - name: Rota EE presente (422/401, nunca 404)
+        run: |
+          set -euo pipefail
+          code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'content-type: application/json' -d '{}' \
+            http://127.0.0.1:8080/admin/tenants)"
+          echo "POST /admin/tenants => $code"
+          if [ "$code" = "404" ]; then
+            echo "::error::imagem sem a edicao Enterprise: rota EE respondeu 404 (regressao do build-arg QUARK_FEATURES, ver LUC-150)"
+            docker logs quark-smoke
+            exit 1
+          fi
+          case "$code" in
+            422|401) ;;
+            *) echo "::error::esperava 422 ou 401, veio $code"; docker logs quark-smoke; exit 1 ;;
+          esac
+
+      - name: Logs do container (sempre)
+        if: always()
+        run: docker logs quark-smoke || true
+
   deploy:
-    needs: [guard, publish, panel]
+    needs: [guard, publish, panel, smoke]
     if: needs.guard.outputs.prerelease == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 20
