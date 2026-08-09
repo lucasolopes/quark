@@ -380,6 +380,13 @@ pub async fn apply_subscription(
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
     st.ee.plans.invalidate(tenant).await;
+    // Best-effort cross-node invalidation: other replicas' `PlanCache`
+    // entries would otherwise only converge within `PLAN_TTL_SECS`.
+    // `publish` is itself fail-open (logs and swallows), so no error
+    // handling is needed here.
+    if let Some(inv) = st.cache.invalidator() {
+        inv.publish(&format!("plan:{}", tenant.0)).await;
+    }
     tracing::info!(
         tenant_id = tenant.0,
         plan = effective.as_str(),

@@ -563,3 +563,68 @@ async fn checkout_is_conflict_when_the_existing_subscription_is_still_active() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"], "subscription_active");
 }
+
+/// `customer.subscription.updated` event envelope wrapping the shared
+/// `subscription_fixture_json` fixture as `data.object`, mirroring
+/// `checkout_completed_event`'s envelope shape. Required (non-Option)
+/// `Event` fields beyond `subscription_fixture_json` are filled in the same
+/// way `checkout_completed_event` does; if deserialization still names a
+/// missing field, that field belongs in the fixture, not a handler change.
+fn subscription_updated_event(event_id: &str, sub_id: &str, tenant: TenantId) -> String {
+    serde_json::json!({
+        "id": event_id,
+        "object": "event",
+        "api_version": "2026-07-29.dahlia",
+        "created": 1700000000,
+        "livemode": false,
+        "pending_webhooks": 0,
+        "type": "customer.subscription.updated",
+        "data": {
+            "object": subscription_fixture_json(sub_id, "active", tenant)
+        }
+    })
+    .to_string()
+}
+
+/// Endpoint-level path for a subscription webhook: `POST /stripe/webhook`
+/// against the real router, with a local mock standing in for Stripe's API
+/// so the handler's mandatory re-fetch (spec D4: never trust the payload,
+/// fetch the current subscription) resolves against the SAME fixture data
+/// the event itself carries. `apply_subscription_maps_status_and_lookup_key_to_the_plan`
+/// exercises the applier directly; this test is the one that goes through
+/// signature verification, idempotency, and the live re-fetch together.
+#[tokio::test]
+#[serial_test::file_serial]
+async fn webhook_subscription_event_flips_the_plan_end_to_end() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let placeholder_tenant = TenantId(0);
+    let sub_body = subscription_fixture_json("sub_e2e", "active", placeholder_tenant);
+    let api_base = spawn_subscription_mock(sub_body).await;
+
+    let (st, t) = state_with_billing(&api_base).await;
+    st.store.set_stripe_customer_id(t, "cus_123").await.unwrap();
+    let app = quark::api::router(st.clone());
+
+    let payload = subscription_updated_event("evt_sub_e2e", "sub_e2e", t);
+    let res = app
+        .oneshot(webhook_post(&payload, "whsec_test"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+
+    assert_eq!(
+        st.store.get_tenant_plan(t).await.unwrap().as_deref(),
+        Some("pro")
+    );
+    assert_eq!(
+        st.store
+            .get_stripe_subscription_id(t)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("sub_e2e")
+    );
+}

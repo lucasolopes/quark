@@ -830,6 +830,13 @@ impl PostgresStore {
                 // lives in `src/ee/stripe/`.
                 "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT",
                 "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT",
+                // Speeds up the webhook's reverse lookup (`find_tenant_by_stripe_customer`)
+                // and, more importantly, stops two tenants from ever claiming the
+                // same Stripe customer: `set_stripe_customer_id`'s `WHERE
+                // stripe_customer_id IS NULL` guard only protects the *same*
+                // tenant against a concurrent double-claim, not two different
+                // tenants racing to claim the same id.
+                "CREATE UNIQUE INDEX IF NOT EXISTS tenants_stripe_customer_uidx ON tenants (stripe_customer_id) WHERE stripe_customer_id IS NOT NULL",
                 // Webhook idempotency ledger: one row per delivered event id.
                 "CREATE TABLE IF NOT EXISTS stripe_events (
                     id TEXT PRIMARY KEY,
@@ -1243,6 +1250,12 @@ impl PostgresStore {
         }
     }
 }
+
+/// How long a row survives in `stripe_events` before `record_stripe_event`
+/// prunes it. The ledger only needs to cover Stripe's webhook retry window
+/// (Stripe gives up retrying after ~3 days), so 30 days is cheap slack
+/// against clock skew and delayed replays, not a real requirement.
+const STRIPE_EVENTS_RETENTION_SECS: u64 = 30 * 24 * 3600;
 
 #[async_trait::async_trait]
 impl Store for PostgresStore {
@@ -3011,7 +3024,21 @@ impl Store for PostgresStore {
         .execute(&self.write)
         .await
         .map_err(StoreError::backend)?;
-        Ok(res.rows_affected() == 1)
+        let inserted = res.rows_affected() == 1;
+        if inserted {
+            // Prune on record, not on a schedule: this ledger only needs to
+            // cover Stripe's retry window (~3 days), so 30 days is cheap
+            // slack that keeps it from growing forever. Gated on `inserted`
+            // so a webhook replay (which hits `ON CONFLICT DO NOTHING`
+            // above) never pays for a DELETE scan.
+            let cutoff = (received_at as i64).saturating_sub(STRIPE_EVENTS_RETENTION_SECS as i64);
+            sqlx::query("DELETE FROM stripe_events WHERE received_at < $1")
+                .bind(cutoff)
+                .execute(&self.write)
+                .await
+                .map_err(StoreError::backend)?;
+        }
+        Ok(inserted)
     }
 
     async fn delete_stripe_event(&self, id: &str) -> Result<(), StoreError> {
