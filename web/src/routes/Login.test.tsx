@@ -1,8 +1,32 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter, useLocation } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { I18nProvider } from "@/i18n";
 import { Login } from "./Login";
 import { withProviders } from "@/test-utils";
+
+/** Renders raw `location.search` next to `Login` so tests can assert the `?error=` param is stripped. */
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-search">{location.search}</div>;
+}
+
+/** Same providers as `withProviders`, but with a `LocationProbe` sibling to inspect the URL. */
+function renderWithLocationProbe(initialEntries: string[]) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return render(
+    <I18nProvider locale="en">
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={initialEntries}>
+          <Login />
+          <LocationProbe />
+        </MemoryRouter>
+      </QueryClientProvider>
+    </I18nProvider>,
+  );
+}
 
 /**
  * Fetch mock that branches on the request URL: `/admin/me` gets `meBody`,
@@ -115,10 +139,32 @@ describe("Login", () => {
     expect(screen.queryByLabelText(/^email$/i)).not.toBeInTheDocument();
   });
 
-  it("shows the member-limit message when redirected back with ?error=member_limit_reached", async () => {
+  it("shows the member-limit message when redirected back with ?error=member_limit_reached, then strips the param from the URL", async () => {
     mockFetchByUrl({ authenticated: false, oidc_enabled: false });
-    render(withProviders(<Login />, { initialEntries: ["/login?error=member_limit_reached"] }));
+    renderWithLocationProbe(["/login?error=member_limit_reached"]);
     expect(await screen.findByRole("alert")).toHaveTextContent(/member limit/i);
+    // The param is consumed into state, not left dangling in the URL: a later
+    // refresh or back-navigation to this URL must not re-trigger the alert.
+    await vi.waitFor(() => expect(screen.getByTestId("location-search")).toHaveTextContent(""));
+  });
+
+  it("clears the member-limit message once the visitor retries the token form", async () => {
+    mockFetchByUrl({ authenticated: false, oidc_enabled: false });
+    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/admin/me")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ authenticated: false, oidc_enabled: false }), { status: 200 }),
+        );
+      }
+      return Promise.resolve(new Response("", { status: 401 }));
+    });
+    renderWithLocationProbe(["/login?error=member_limit_reached"]);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/member limit/i);
+    await userEvent.type(screen.getByLabelText(/token/i), "secret");
+    await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
+    await screen.findByText(/invalid token/i);
+    expect(screen.queryByText(/member limit/i)).not.toBeInTheDocument();
   });
 
   it("clicking the per-tenant button navigates to /admin/login?org=acme", async () => {

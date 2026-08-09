@@ -29,14 +29,32 @@ export function Login() {
   const [sharedLoginRevealed, setSharedLoginRevealed] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
-  const [params] = useSearchParams();
+  const [params, setSearchParams] = useSearchParams();
   // Untrusted UX hint from the URL: only ever displayed and forwarded to
   // `oidcLoginUrl`, never validated here — the server decides what it means.
   const org = params.get("org")?.trim() || "";
   // Set by the operator's login redirect (LUC-41 phase 1) when a brand new
   // member tries to join a workspace already at its plan's member ceiling.
-  // Purely informational: the value is only ever compared, never rendered.
-  const callbackError = params.get("error");
+  // Read once into state (not derived from `params` on every render) so it
+  // follows the same lifecycle as `mutation.isError` below: it shows until
+  // the visitor tries again, then clears, instead of reappearing on every
+  // back-navigation or refresh that restores the query string.
+  const [memberLimitError, setMemberLimitError] = useState(
+    () => params.get("error") === "member_limit_reached",
+  );
+
+  useEffect(() => {
+    // Strip `?error=` from the URL once its value has been captured into
+    // state above, so a refresh or a later back-navigation to this URL
+    // doesn't re-trigger the alert.
+    if (params.get("error") !== "member_limit_reached") return;
+    const next = new URLSearchParams(params);
+    next.delete("error");
+    setSearchParams(next, { replace: true });
+    // Runs once on mount: `params`/`setSearchParams` intentionally excluded
+    // so this doesn't re-fire on every search-param change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // `?org=` always wins (LUC-53): it already picked the tenant, so the
   // email-first discovery step would be redundant. The step is cloud-only:
   // home-realm discovery is meaningless in single-tenant OSS, so it never
@@ -84,6 +102,7 @@ export function Login() {
     e.preventDefault();
     const token = value.trim();
     if (!token || mutation.isPending) return;
+    setMemberLimitError(false);
     mutation.mutate(token);
   }
 
@@ -109,6 +128,7 @@ export function Login() {
     e.preventDefault();
     const candidate = email.trim();
     if (!candidate || discoverMutation.isPending) return;
+    setMemberLimitError(false);
     discoverMutation.mutate(candidate);
   }
 
@@ -118,7 +138,7 @@ export function Login() {
       subtitle={adminLoginEnabled ? t("login.description") : t("login.descriptionSso")}
       topRight={<LanguageSwitcher />}
     >
-      {callbackError === "member_limit_reached" && (
+      {memberLimitError && (
         <p role="alert" className="mb-4 text-center text-sm text-destructive">
           {t("login.memberLimit")}
         </p>
