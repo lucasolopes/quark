@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useSearchParams } from "react-router-dom";
 import { Billing } from "./Billing";
 import { withProviders } from "@/test-utils";
 import { Toaster } from "@/components/ui/sonner";
@@ -88,6 +89,18 @@ function mockFetch(opts: {
     }
     return Promise.resolve(jsonResponse({}));
   });
+}
+
+/** Test-only sibling of `Billing`, sharing its `MemoryRouter` context: lets a test move the
+ * `?highlight=` param without unmounting `Billing` (mirroring `App.tsx`'s in-place navigation
+ * from a second plan-limit toast while the user is already on this screen). */
+function HighlightSwitcher({ to }: { to: string }) {
+  const [, setSearchParams] = useSearchParams();
+  return (
+    <button type="button" onClick={() => setSearchParams({ highlight: to })}>
+      switch highlight
+    </button>
+  );
 }
 
 describe("Billing", () => {
@@ -194,6 +207,31 @@ describe("Billing", () => {
     // firing `catalogQuery.refetch()` against a torn-down component).
     unmount();
     expect(clearIntervalSpy).toHaveBeenCalled();
+  });
+
+  it("scrolls again when the highlighted plan changes while the screen stays mounted", async () => {
+    mockFetch({ me: ME_OWNER, catalog: CATALOG });
+    const scrollIntoViewMock = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoViewMock;
+
+    render(
+      withProviders(
+        <>
+          <HighlightSwitcher to="pro" />
+          <Billing />
+        </>,
+        { initialEntries: ["/settings/billing?highlight=starter"] },
+      ),
+    );
+
+    await screen.findByText("Starter");
+    await waitFor(() => expect(scrollIntoViewMock).toHaveBeenCalledTimes(1));
+
+    // Same component instance, no unmount: a second `?highlight=` (e.g. a follow-up 402 toast
+    // sending the user to a different plan) must scroll again, not stay silently parked on the
+    // first card.
+    await userEvent.click(screen.getByRole("button", { name: /switch highlight/i }));
+    await waitFor(() => expect(scrollIntoViewMock).toHaveBeenCalledTimes(2));
   });
 
   it("shows Manage in portal immediately for an owner whose current plan is already paid", async () => {

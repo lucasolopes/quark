@@ -59,7 +59,12 @@ export function Billing() {
   const [actingOnPlan, setActingOnPlan] = useState<string | null>(null);
   const highlightRef = useRef<HTMLDivElement | null>(null);
   const subscriptionInitialized = useRef(false);
-  const scrolledToHighlightRef = useRef(false);
+  /** The `highlight` value already scrolled to, or `null` before the first scroll. Storing the
+   * value (not a boolean) means a later navigation to a *different* `highlight` — e.g. a second
+   * 402 toast sending the user to `?highlight=B` while they're already on this screen, which
+   * doesn't unmount the component — is recognized as new and scrolls again, while a re-render
+   * with the same `highlight` (a catalog refetch, for instance) still only scrolls once. */
+  const scrolledToHighlightRef = useRef<string | null>(null);
 
   const catalogQuery = useBillingCatalog();
   const me = useMe();
@@ -107,16 +112,17 @@ export function Billing() {
   }, []);
 
   useEffect(() => {
-    if (!highlight || scrolledToHighlightRef.current) return;
+    if (!highlight || scrolledToHighlightRef.current === highlight) return;
     if (!highlightRef.current) return; // the catalog (and its cards) hasn't rendered yet; retried below once it does
     highlightRef.current.scrollIntoView?.({ behavior: "smooth", block: "center" });
-    scrolledToHighlightRef.current = true;
+    scrolledToHighlightRef.current = highlight;
     // Depends on `catalogQuery.isSuccess`, not `catalog` itself: `catalog` gets a new object
     // identity on every refetch (including the 3 checkout-success refetches that fire while
-    // `highlight` is also set), which would re-run this effect and re-scroll every time. `isSuccess`
+    // `highlight` is also set), which would re-run this effect on every one of them. `isSuccess`
     // flips once, from false to true, on the first successful load and then stays put — exactly the
-    // "the highlighted card just mounted" signal this needs — and `scrolledToHighlightRef` still
-    // guards it down to a single scroll even so.
+    // "the highlighted card just mounted" signal this needs. `scrolledToHighlightRef` storing the
+    // already-scrolled *value* (not a boolean) is what still caps it to one scroll per distinct
+    // `highlight`, while letting a later `highlight` change scroll again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlight, catalogQuery.isSuccess]);
 
