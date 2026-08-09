@@ -856,6 +856,10 @@ export const en = {
     issuerRequired: "Issuer URL is required.",
     clientIdRequired: "Client ID is required.",
   },
+  billing: {
+    limitToast: "Your plan's {limit} limit was reached.",
+    limitToastCta: "View plans",
+  },
   accept: {
     title: "Join workspace",
     description: "You've been invited to join a workspace on quark.",

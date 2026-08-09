@@ -858,6 +858,10 @@ export const ptBR: Messages = {
     issuerRequired: "A URL do issuer é obrigatória.",
     clientIdRequired: "O Client ID é obrigatório.",
   },
+  billing: {
+    limitToast: "O limite de {limit} do seu plano foi atingido.",
+    limitToastCta: "Ver planos",
+  },
   accept: {
     title: "Entrar no workspace",
     description: "Você foi convidado para entrar num workspace do quark.",

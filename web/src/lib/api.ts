@@ -12,6 +12,7 @@ import type {
   InviteView, CreateInviteResponse,
   SsoDomainView, AlertRule,
   OidcConfigView, PutOidcConfigInput, LinkDomainView,
+  BillingCatalog, PlanLimitBody,
 } from "./types";
 
 /**
@@ -24,13 +25,45 @@ const BASE: string = ((import.meta.env.VITE_API_BASE_URL as string | undefined) 
 let onUnauthorized: () => void = () => {};
 export function setUnauthorizedHandler(fn: () => void): void { onUnauthorized = fn; }
 
+/** Fired when a request hits a plan limit (402, `plan_limit_reached`/`member_limit_reached`); the panel wires this to a global upgrade toast. */
+let onPlanLimit: (b: PlanLimitBody) => void = () => {};
+export function setPlanLimitHandler(fn: (b: PlanLimitBody) => void): void { onPlanLimit = fn; }
+
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** Set on a 402 whose body is a recognized plan-limit shape (see `onPlanLimit`). */
+  planLimit?: PlanLimitBody;
+  constructor(status: number, message: string, planLimit?: PlanLimitBody) {
     super(message);
     this.status = status;
+    this.planLimit = planLimit;
     this.name = "ApiError";
   }
+}
+
+/**
+ * Turns a non-ok `Response` into a thrown `ApiError`. On a 402 whose JSON
+ * body carries a `plan_limit_reached`/`member_limit_reached` error, fires the
+ * global plan-limit handler and enriches the error with the parsed body, so
+ * every write endpoint (JSON or void) can surface the same upgrade prompt
+ * without duplicating the parse/dispatch logic.
+ */
+async function throwApiError(res: Response): Promise<never> {
+  const text = await res.text().catch(() => res.statusText);
+  if (res.status === 402) {
+    try {
+      const body = JSON.parse(text) as Partial<PlanLimitBody>;
+      if (body.error === "plan_limit_reached" || body.error === "member_limit_reached") {
+        const planLimit = body as PlanLimitBody;
+        onPlanLimit(planLimit);
+        throw new ApiError(402, text, planLimit);
+      }
+    } catch (e) {
+      if (e instanceof ApiError) throw e;
+      // JSON.parse failure: fall through to the generic ApiError below.
+    }
+  }
+  throw new ApiError(res.status, text);
 }
 
 async function req(path: string, opts: RequestInit = {}): Promise<Response> {
@@ -64,7 +97,7 @@ export function oidcLoginUrl(org?: string, email?: string): string {
 }
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+  if (!res.ok) return throwApiError(res);
   return (await res.json()) as T;
 }
 
@@ -94,12 +127,12 @@ export const api = {
    */
   async deleteWorkspace(tenantId: number): Promise<void> {
     const res = await req(`/admin/tenants/${tenantId}`, { method: "DELETE" });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   /** Switches the session's current workspace (cloud only). 403 if the user has no membership in `tenantId`. */
   async switchWorkspace(tenantId: number): Promise<void> {
     const res = await req("/admin/workspace/switch", { method: "POST", body: JSON.stringify({ tenant_id: tenantId }) });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   async createLink(body: CreateLinkRequest): Promise<CreateLinkResponse> {
     return jsonOrThrow(await req("/", { method: "POST", body: JSON.stringify(body) }));
@@ -118,13 +151,13 @@ export const api = {
   },
   async deleteLink(code: string): Promise<void> {
     const res = await req(`/admin/links/${encodeURIComponent(code)}`, { method: "DELETE" });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   async patchLink(code: string, body: PatchLinkRequest): Promise<void> {
     const res = await req(`/admin/links/${encodeURIComponent(code)}`, {
       method: "PATCH", body: JSON.stringify(body),
     });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   /**
    * Applies one operation (`delete`/`add_tag`/`remove_tag`/`set_folder`) to a
@@ -150,7 +183,7 @@ export const api = {
   /** Removes the link's alert rule; a missing rule is not an error. */
   async deleteLinkAlert(code: string): Promise<void> {
     const res = await req(`/admin/links/${encodeURIComponent(code)}/alert`, { method: "DELETE" });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   async getStats(code: string): Promise<Stats> {
     return jsonOrThrow(await req(`/${encodeURIComponent(code)}/stats`));
@@ -169,11 +202,11 @@ export const api = {
   },
   async patchWebhook(id: number, body: PatchWebhookRequest): Promise<void> {
     const res = await req(`/admin/webhooks/${id}`, { method: "PATCH", body: JSON.stringify(body) });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   async deleteWebhook(id: number): Promise<void> {
     const res = await req(`/admin/webhooks/${id}`, { method: "DELETE" });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   async testWebhook(id: number): Promise<TestWebhookResponse> {
     return jsonOrThrow(await req(`/admin/webhooks/${id}/test`, { method: "POST" }));
@@ -197,7 +230,7 @@ export const api = {
   },
   async deleteToken(id: number): Promise<void> {
     const res = await req(`/admin/tokens/${id}`, { method: "DELETE" });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   async listPixels(): Promise<ListPixelsResponse> {
     return jsonOrThrow(await req("/admin/pixels"));
@@ -207,22 +240,22 @@ export const api = {
   },
   async deletePixel(id: number): Promise<void> {
     const res = await req(`/admin/pixels/${encodeURIComponent(String(id))}`, { method: "DELETE" });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   async getWellknown(name: WellknownName): Promise<string | null> {
     const res = await req(`/admin/wellknown/${encodeURIComponent(name)}`);
     if (res.status === 404) return null;
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
     const body = await res.text();
     return body === "" ? null : body;
   },
   async putWellknown(name: WellknownName, body: string): Promise<void> {
     const res = await req(`/admin/wellknown/${encodeURIComponent(name)}`, { method: "PUT", body });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   async deleteWellknown(name: WellknownName): Promise<void> {
     const res = await req(`/admin/wellknown/${encodeURIComponent(name)}`, { method: "DELETE" });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   /**
    * Google Sheets connector status. The connector-off case returns the admin
@@ -253,7 +286,7 @@ export const api = {
   /** Disconnects the connector (drops the stored connection, including the refresh token). */
   async sheetsDisconnect(): Promise<void> {
     const res = await req("/admin/integrations/sheets", { method: "DELETE" });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   /** Starts the Slack "Add to Slack" OAuth install: returns the authorize URL to navigate to (the server also sets a signed state cookie). */
   async slackConnect(): Promise<{ url: string }> {
@@ -270,7 +303,7 @@ export const api = {
   /** Revokes a pending invite. */
   async revokeInvite(id: number): Promise<void> {
     const res = await req(`/admin/invites/${id}`, { method: "DELETE" });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   /**
    * Accepts an invite by token, granting the current user membership in its
@@ -320,7 +353,7 @@ export const api = {
   /** Removes a custom link domain. */
   async deleteDomain(id: number): Promise<void> {
     const res = await req(`/admin/domains/${id}`, { method: "DELETE" });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   /** Makes a verified domain the tenant's primary link domain (copy button + new links use it). */
   async setPrimaryDomain(id: number): Promise<LinkDomainView> {
@@ -337,7 +370,7 @@ export const api = {
   /** Removes the workspace's OIDC provider (falls back to the shared/global login). */
   async deleteOidcConfig(): Promise<void> {
     const res = await req("/admin/oidc-config", { method: "DELETE" });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
   },
   /** Lists the current workspace's SSO email domains with their DNS verification instructions (cloud only). */
   async listSsoDomains(): Promise<SsoDomainView[]> {
@@ -358,6 +391,20 @@ export const api = {
   /** Removes an SSO email domain from the current workspace. */
   async deleteSsoDomain(id: number): Promise<void> {
     const res = await req(`/admin/sso-domains/${id}`, { method: "DELETE" });
-    if (!res.ok) throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+    if (!res.ok) return throwApiError(res);
+  },
+  /** The full plan catalog (limits, features, prices) plus the workspace's current plan. */
+  async getBillingCatalog(): Promise<BillingCatalog> {
+    return jsonOrThrow(await req("/admin/billing/catalog"));
+  },
+  /** Starts a checkout session for `plan`/`cycle` priced in `currency`; returns the URL to navigate the browser to. */
+  async startCheckout(plan: string, cycle: string, currency: string): Promise<{ url: string }> {
+    return jsonOrThrow(
+      await req("/admin/billing/checkout", { method: "POST", body: JSON.stringify({ plan, cycle, currency }) }),
+    );
+  },
+  /** Opens the billing portal (manage payment method, invoices, cancel) for the current workspace's subscription. */
+  async openPortal(): Promise<{ url: string }> {
+    return jsonOrThrow(await req("/admin/billing/portal", { method: "POST" }));
   },
 };
