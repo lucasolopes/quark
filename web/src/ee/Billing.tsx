@@ -58,6 +58,8 @@ export function Billing() {
   const [hasActiveSubscription, setHasActiveSubscription] = useState(false);
   const [actingOnPlan, setActingOnPlan] = useState<string | null>(null);
   const highlightRef = useRef<HTMLDivElement | null>(null);
+  const subscriptionInitialized = useRef(false);
+  const scrolledToHighlightRef = useRef(false);
 
   const catalogQuery = useBillingCatalog();
   const me = useMe();
@@ -78,13 +80,14 @@ export function Billing() {
   // the catalog does the same job without a second endpoint.
   useEffect(() => {
     if (!checkoutState) return;
+    let interval: ReturnType<typeof setInterval> | undefined;
     if (checkoutState === "success") {
       toast.success(t("billing.checkoutSuccess"));
       let attempts = 0;
-      const interval = setInterval(() => {
+      interval = setInterval(() => {
         attempts += 1;
         void catalogQuery.refetch();
-        if (attempts >= 3) clearInterval(interval);
+        if (attempts >= 3 && interval) clearInterval(interval);
       }, 2000);
     } else if (checkoutState === "cancel") {
       toast(t("billing.checkoutCanceled"));
@@ -94,13 +97,41 @@ export function Billing() {
     setSearchParams(next, { replace: true });
     // Runs once on mount: the toast/refetch fires exactly once for the redirect that
     // brought the user here, then the param is stripped so a later re-render never repeats it.
+    // The interval must still be torn down on unmount (navigating away mid-poll, or the test
+    // harness tearing the component down) — otherwise it keeps firing `catalogQuery.refetch()`
+    // against a component that's gone.
+    return () => {
+      if (interval) clearInterval(interval);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    highlightRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    if (!highlight || scrolledToHighlightRef.current) return;
+    if (!highlightRef.current) return; // the catalog (and its cards) hasn't rendered yet; retried below once it does
+    highlightRef.current.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    scrolledToHighlightRef.current = true;
+    // Depends on `catalogQuery.isSuccess`, not `catalog` itself: `catalog` gets a new object
+    // identity on every refetch (including the 3 checkout-success refetches that fire while
+    // `highlight` is also set), which would re-run this effect and re-scroll every time. `isSuccess`
+    // flips once, from false to true, on the first successful load and then stays put — exactly the
+    // "the highlighted card just mounted" signal this needs — and `scrolledToHighlightRef` still
+    // guards it down to a single scroll even so.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [highlight, catalog]);
+  }, [highlight, catalogQuery.isSuccess]);
+
+  // Seeds `hasActiveSubscription` from the catalog the first time it loads: a workspace
+  // already on a paid plan (`current_plan !== "free"`) almost certainly has an active Stripe
+  // subscription, so its owner should land straight on "Manage in portal" instead of paying the
+  // round-trip through a checkout attempt that would just come back 409. Runs once (guarded by
+  // `subscriptionInitialized`) so it doesn't fight the 409 handler below, which is still the
+  // source of truth if this guess and the real Stripe state ever diverge (e.g. the catalog is
+  // momentarily stale right after a cancellation).
+  useEffect(() => {
+    if (!catalog || subscriptionInitialized.current) return;
+    subscriptionInitialized.current = true;
+    if (catalog.current_plan !== "free") setHasActiveSubscription(true);
+  }, [catalog]);
 
   async function handlePlanAction(plan: string) {
     setActingOnPlan(plan);

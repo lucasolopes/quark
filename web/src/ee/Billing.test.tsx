@@ -166,7 +166,7 @@ describe("Billing", () => {
     expect(screen.getByText(/billing isn't configured/i)).toBeInTheDocument();
   });
 
-  it("shows the success toast when returning from checkout", async () => {
+  it("shows the success toast when returning from checkout, and clears the polling interval on unmount", async () => {
     mockFetch({ me: ME_OWNER, catalog: CATALOG });
     // sonner's `Toaster` reads `prefers-color-scheme` via `matchMedia`, which jsdom doesn't implement.
     vi.stubGlobal("matchMedia", (query: string) => ({
@@ -175,7 +175,9 @@ describe("Billing", () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     }));
-    render(
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+
+    const { unmount } = render(
       withProviders(
         <>
           <Toaster />
@@ -186,5 +188,23 @@ describe("Billing", () => {
     );
 
     expect(await screen.findByText(/payment received/i)).toBeInTheDocument();
+
+    // The `?checkout=success` effect schedules a 3-attempt polling interval to catch the
+    // webhook-delayed plan change; unmounting before it finishes must clear it (not leave it
+    // firing `catalogQuery.refetch()` against a torn-down component).
+    unmount();
+    expect(clearIntervalSpy).toHaveBeenCalled();
+  });
+
+  it("shows Manage in portal immediately for an owner whose current plan is already paid", async () => {
+    mockFetch({ me: ME_OWNER, catalog: { ...CATALOG, current_plan: "starter" } });
+    render(withProviders(<Billing />));
+
+    await screen.findByText("Starter");
+    // `current_plan` is a paid plan on mount: the screen assumes an active subscription right
+    // away instead of waiting for a 409 round-trip to discover it.
+    const portalButtons = screen.getAllByRole("button", { name: /manage in portal/i });
+    expect(portalButtons.length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /^upgrade$/i })).not.toBeInTheDocument();
   });
 });
