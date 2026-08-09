@@ -21,6 +21,51 @@ tabelas do ClickHouse não estão cobertos.
 
 ## [Não lançado]
 
+## [0.5.0] - 2026-08-09
+
+### Adicionado
+
+- **Open core.** O repositório agora é AGPL-3.0-only em tudo, exceto
+  `src/ee/` e `web/src/ee/`, cobertos pela quark Enterprise Edition License
+  (`src/ee/LICENSE`). O código Enterprise fica atrás da feature de cargo `ee`
+  (não-default) e de um único ponto de injeção no router; apagar as duas
+  pastas deixa o core compilando e passando, e o CI prova isso a cada push. O
+  que mora lá é o que só faz sentido operando o quark como serviço para
+  terceiros: administração de workspaces, convites, IdP por tenant,
+  provisionamento de Keycloak, verificação de domínio próprio. Nada do
+  caminho de redirect é gated, nunca. Ver `docs/LICENSING.PT_BR.md`.
+- **Planos e entitlement (cloud).** O tenant agora carrega um plano de
+  cobrança (Free, Starter, Pro, Business, Custom); o catálogo de limites vive
+  em código, versionado junto das features que ele limita. Endpoints gated
+  respondem `402 Payment Required` nomeando o limite atingido, o teto e o
+  plano mais barato que resolve: webhooks, Sheets e pixels por feature,
+  domínios próprios e membros por teto, SSO por tenant por plano.
+  `GET /admin/plan` devolve o plano, os limites e as features liberadas, para
+  o painel nunca carregar cópia própria da grade, e
+  `PUT /admin/tenants/{id}/plan` é o escape hatch do operador. A edição
+  Community nunca aplica nada disso: um self-host AGPL segue livre e
+  ilimitado. Ver `docs/PLANS.PT_BR.md`.
+- **Billing com Stripe (cloud).** `POST /admin/billing/checkout` abre uma
+  Checkout Session hospedada: só Owner, moeda (`usd` ou `brl`) escolhida no
+  primeiro checkout e travada no customer dali em diante, e trial de 14 dias
+  sem cartão concedido uma vez por workspace. `POST /admin/billing/portal`
+  abre o Customer Portal, onde vivem upgrade, downgrade, cancelamento, cartão
+  e faturas. `POST /stripe/webhook` é o único escritor automático do plano:
+  assinatura verificada, deduplicado por event id, e sempre re-busca a
+  subscription na API em vez de confiar no payload do evento, então entregas
+  fora de ordem não rebaixam um workspace pagante. `past_due` mantém o plano
+  durante a janela de retry; estados terminais caem para Free; downgrade não
+  apaga nada, só bloqueia criação nova. Liga com `QUARK_STRIPE_SECRET_KEY`,
+  `QUARK_STRIPE_WEBHOOK_SECRET` e `QUARK_STRIPE_PANEL_URL`, as três ou
+  nenhuma; sem elas os endpoints de billing não existem. Ver
+  `docs/BILLING.PT_BR.md` e `docs/RUNBOOK-stripe.md`.
+
+### Mudado
+
+- O CI roda em Node 22 (o Node 20 chegou ao fim de vida), e entrou uma leva
+  de dependências: a stack do tokio, `base64` 0.23, `criterion` 0.8, e os
+  grupos de React, Vite e npm do painel.
+
 ## [0.4.1] - 2026-07-27
 
 ### Adicionado
@@ -186,7 +231,8 @@ virou instalável.
 - Núcleo AGPL-3.0-only com um CLA coletado em cada pull request.
 - Relato privado de vulnerabilidade e política de segurança escrita.
 
-[Não lançado]: https://github.com/lucasolopes/quark/compare/v0.4.1...HEAD
+[Não lançado]: https://github.com/lucasolopes/quark/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/lucasolopes/quark/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/lucasolopes/quark/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/lucasolopes/quark/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/lucasolopes/quark/compare/v0.3.0...v0.3.1
