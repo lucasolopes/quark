@@ -5,8 +5,10 @@
 
 use quark::analytics::AnalyticsSink;
 use quark::api::entitlement::{require, require_quota, Feature, Quota};
+use quark::api::member_quota_allows_login;
 use quark::auth::{hash_token, ApiToken, Scope};
 use quark::ee::api::entitlement::plan_of;
+use quark::oidc::ensure_user_and_membership;
 use quark::store::postgres::PostgresStore;
 use quark::store::Store;
 use quark::tenant::{Membership, Role, Tenant, TenantId, DEFAULT_TENANT};
@@ -496,6 +498,121 @@ async fn free_tenant_gets_402_creating_a_second_invite_at_the_member_ceiling() {
     assert_eq!(
         create_invite(&app, "second@acme.com").await,
         axum::http::StatusCode::PAYMENT_REQUIRED
+    );
+}
+
+/// LUC-148: `member_quota_allows_login` is the seam `oidc_callback`
+/// (multi-tenancy model B / Keycloak login) checks before granting a
+/// brand-new membership. Free allows 1 member; seeded with exactly one real
+/// membership (holding the ceiling), a subject with no `User` row at all (a
+/// brand-new member) is denied, one that already holds a membership in the
+/// tenant is still admitted even though the tenant is now over the ceiling,
+/// and switching the tenant to Business (unlimited members) admits a new
+/// subject too. This is the direct-function counterpart to
+/// `free_tenant_gets_402_creating_a_second_invite_at_the_member_ceiling`:
+/// the real HTTP callback cannot be driven end to end offline (it needs a
+/// live IdP for the code exchange), so this exercises the same quota
+/// decision at the seam the callback actually calls (see
+/// `oidc_callback_is_wired_to_the_member_quota_gate` below for the proof
+/// that it does).
+#[tokio::test]
+#[serial_test::file_serial]
+async fn member_quota_denies_new_member_at_ceiling_but_never_an_existing_one() {
+    if std::env::var("QUARK_TEST_DATABASE_URL").is_err() {
+        eprintln!("skip: QUARK_TEST_DATABASE_URL not set");
+        return;
+    }
+    let (st, t) = state_with_plan("free").await;
+
+    // Seed one real membership (e.g. the tenant's Owner) to reach Free's
+    // ceiling of 1, mirroring
+    // `free_tenant_gets_402_creating_a_second_invite_at_the_member_ceiling`.
+    st.store
+        .put_membership(&Membership {
+            user_id: 999,
+            tenant_id: t,
+            role: Role::Owner,
+            created: 0,
+        })
+        .await
+        .unwrap();
+
+    // Brand-new subject, no `User` row: denied.
+    let denied = member_quota_allows_login(&st, t, "sub-new")
+        .await
+        .unwrap_err();
+    match denied {
+        quark::api::MemberLoginDenied::Quota(d) => {
+            assert_eq!(d.limit, "members");
+            assert_eq!(d.allowed, Some(1));
+        }
+        quark::api::MemberLoginDenied::StoreUnavailable => {
+            panic!("must be a quota denial here, not a store error")
+        }
+    }
+
+    // Grant a second member directly (as `ensure_user_and_membership` would
+    // have done unconditionally before this fix), simulating a user who is
+    // already in the tenant.
+    let uid = ensure_user_and_membership(
+        st.store.as_ref(),
+        true,
+        "sub-existing",
+        "existing@acme.example",
+        "Existing",
+        &[],
+        Some((t, Role::Member)),
+    )
+    .await
+    .unwrap();
+    assert!(st.store.get_membership(uid, t).await.unwrap().is_some());
+
+    // The existing member's later login is never re-gated by the ceiling,
+    // even though the tenant is now over it (2 members on a 1-member plan).
+    assert!(member_quota_allows_login(&st, t, "sub-existing")
+        .await
+        .is_ok());
+
+    // A DIFFERENT brand-new subject is still denied at the (still-exceeded)
+    // ceiling.
+    assert!(member_quota_allows_login(&st, t, "sub-another-new")
+        .await
+        .is_err());
+
+    // Upgrading the plan to Business (unlimited members) admits the new
+    // subject too.
+    st.store.set_tenant_plan(t, "business").await.unwrap();
+    st.ee.plans.invalidate(t).await;
+    assert!(member_quota_allows_login(&st, t, "sub-another-new")
+        .await
+        .is_ok());
+}
+
+/// Thin proof that `oidc_callback` actually calls `member_quota_allows_login`
+/// on the per-tenant login branch, not just that the seam works in isolation
+/// (the test above). The real callback needs a live IdP to reach that point
+/// (code exchange + id_token verification), so there is no way to drive it
+/// end to end in this offline suite; reading the source is the next best
+/// evidence, same spirit as the codebase's own `grep`-based sanity checks.
+#[test]
+fn oidc_callback_is_wired_to_the_member_quota_gate() {
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/api/oidc_login.rs"
+    ))
+    .unwrap();
+    let callback_start = src
+        .find("pub(crate) async fn oidc_callback")
+        .expect("oidc_callback must still exist in src/api/oidc_login.rs");
+    let ensure_call = src[callback_start..]
+        .find("crate::oidc::ensure_user_and_membership")
+        .expect("oidc_callback must still call ensure_user_and_membership");
+    let gate_call = src[callback_start..]
+        .find("member_quota_allows_login(&st, tenant_id, &claims.subject)")
+        .expect("oidc_callback must call member_quota_allows_login");
+    assert!(
+        gate_call < ensure_call,
+        "the member-quota gate must run BEFORE ensure_user_and_membership grants anything"
     );
 }
 

@@ -488,12 +488,12 @@ pub(crate) async fn admin_invites_accept(
     // whole function returns above, at the `st.ee.keycloak.is_some()` branch
     // (~line 455), before ever reaching here: this check is dead code on that
     // path. Under Keycloak, membership is instead granted by the OIDC login
-    // callback, `ensure_user_and_membership` in `src/oidc.rs`, which does NOT
-    // apply this quota. A tenant whose IdP is provisioned can therefore still
-    // exceed its member ceiling by having enough distinct users log in.
-    // Known gap, accepted for this phase, tracked as LUC-148: closing it
-    // needs billing context (phase 2) to decide what happens to a user the
-    // IdP already authenticated into a workspace that is at its ceiling.
+    // callback (`oidc_callback` in `src/api/oidc_login.rs`), not by this
+    // function. That callback applies the same quota itself now (LUC-148,
+    // `member_quota_allows_login`), just at a different point: a brand-new
+    // member logging in above the ceiling gets the login refused, before
+    // `ensure_user_and_membership` grants anything. An existing member is
+    // exempt there too, matching this function's own rule.
     let held = match st.store.count_memberships(inv.tenant_id).await {
         Ok(n) => n,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),

@@ -1497,3 +1497,52 @@ fn client_ip_prefers_the_configured_header_then_the_socket_then_unknown() {
     let headers = ReqHeaderMap::new();
     assert_eq!(client_ip(&headers, "cf-connecting-ip", None), "unknown");
 }
+
+/// Community: `member_quota_allows_login` (LUC-148) never denies a login,
+/// for either a brand-new subject or one that already holds a membership —
+/// `entitlement::require_quota` always answers `Ok` outside `--features ee`.
+/// This pins that wiring the gate into `oidc_callback` changes nothing about
+/// Community's behavior: every per-tenant group-claim login still grants its
+/// membership exactly as before LUC-148. The Enterprise counterpart
+/// (`tests/plan_it.rs`) is what proves the gate actually denies once a real
+/// plan ceiling exists.
+#[tokio::test]
+async fn member_quota_allows_login_never_denies_in_community() {
+    let st = multi_tenant_state().await;
+    let tenant = crate::tenant::TenantId(1);
+
+    // Brand-new subject: no `User` row exists yet for it.
+    assert!(
+        super::member_quota_allows_login(&st, tenant, "sub-new")
+            .await
+            .is_ok(),
+        "a new member's login must be granted on Community"
+    );
+
+    // Existing member: grant it the same way `oidc_callback` does, then
+    // confirm the gate still allows the SAME subject on a later login (the
+    // exemption branch, not just Community's always-Ok quota).
+    let uid = crate::oidc::ensure_user_and_membership(
+        st.store.as_ref(),
+        true,
+        "sub-existing",
+        "existing@acme.example",
+        "Existing",
+        &[],
+        Some((tenant, crate::tenant::Role::Member)),
+    )
+    .await
+    .unwrap();
+    assert!(st
+        .store
+        .get_membership(uid, tenant)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(
+        super::member_quota_allows_login(&st, tenant, "sub-existing")
+            .await
+            .is_ok(),
+        "an existing member's login must be granted regardless of the quota"
+    );
+}
