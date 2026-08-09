@@ -114,15 +114,40 @@ logando membros por aquele IdP exatamente como antes; só configurar (ou
 alterar) a configuração exige a feature de novo. O teto de membros acima
 continua valendo em todo login nesse IdP, independente da feature `Sso`.
 
+## A tela do painel
+
+`/settings/billing` mostra a grade de comparação dos 5 planos (Free até
+Custom), os limites e features de cada um, e o badge do plano atual.
+Qualquer membro do workspace pode abrir e ver a grade; só o Owner vê um
+botão ativo de "Fazer upgrade" ou "Gerenciar no portal", seguindo a mesma
+regra de "só o Owner pode iniciar um checkout" acima. Todo o resto vê o
+mesmo botão desabilitado, com um tooltip explicando que é exclusivo do
+Owner.
+
+O alternador mensal/anual e a escolha USD/BRL também ficam nessa tela, mas
+o seletor de moeda só aparece antes do primeiro checkout do workspace. Uma
+vez que o Stripe trava a moeda do workspace (veja "Moeda" acima), a tela lê
+esse valor travado da resposta do catálogo e para de oferecer a outra
+opção. Um workspace que já tem assinatura ativa pula a chamada de checkout
+por completo: os botões dos planos vão direto para "Gerenciar no portal" e
+abrem o Customer Portal descrito acima, em vez de tentar um segundo
+checkout que o Stripe rejeitaria.
+
+Qualquer outro lugar do painel que bata num `402` (requisição bloqueada por
+um limite de plano) mostra um toast nomeando o limite, com uma chamada para
+ação que navega para essa tela e rola até o plano que resolveria o limite.
+
+Sem as três env vars do Stripe ligadas, os endpoints de checkout e portal
+respondem `404` (veja "Ligando"), então a tela ainda renderiza a grade e os
+limites, mas todo botão de compra fica inerte; ela permanece puramente
+informativa em vez de dar erro.
+
 ## Ainda não suportado
 
 - **Troca de moeda de um customer existente.** O Stripe não deixa trocar a
   moeda de um customer depois de definida; mudar isso é ação manual do
   operador (tipicamente: cancelar e reassinar com a moeda nova), não um fluxo
   self-service.
-- **Tela de billing no painel e o aviso de upgrade no 402.** O painel ainda
-  não renderiza plano/uso nem uma chamada para ação quando uma requisição
-  volta `402`. Isso chega junto com a landing page de billing.
 - **Domínio próprio no checkout.** Checkout e portal usam o domínio do
   próprio Stripe até o suporte a domínio customizado (LUC-147) chegar.
 - **Soft cap, os contadores mensais e o teto de automação.** Isso é fase 3.

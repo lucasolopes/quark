@@ -33,6 +33,10 @@ export function Login() {
   // Untrusted UX hint from the URL: only ever displayed and forwarded to
   // `oidcLoginUrl`, never validated here — the server decides what it means.
   const org = params.get("org")?.trim() || "";
+  // Set by the operator's login redirect (LUC-41 phase 1) when a brand new
+  // member tries to join a workspace already at its plan's member ceiling.
+  // Purely informational: the value is only ever compared, never rendered.
+  const callbackError = params.get("error");
   // `?org=` always wins (LUC-53): it already picked the tenant, so the
   // email-first discovery step would be redundant. The step is cloud-only:
   // home-realm discovery is meaningless in single-tenant OSS, so it never
@@ -114,6 +118,11 @@ export function Login() {
       subtitle={adminLoginEnabled ? t("login.description") : t("login.descriptionSso")}
       topRight={<LanguageSwitcher />}
     >
+      {callbackError === "member_limit_reached" && (
+        <p role="alert" className="mb-4 text-center text-sm text-destructive">
+          {t("login.memberLimit")}
+        </p>
+      )}
       {oidcEnabled && (
         <>
           {org ? (

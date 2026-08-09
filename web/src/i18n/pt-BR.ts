@@ -30,6 +30,7 @@ export const ptBR: Messages = {
     emailLabel: "E-mail",
     emailHint: "Vamos checar se sua organização usa login único (SSO).",
     continue: "Continuar",
+    memberLimit: "Este workspace está no limite de membros do plano. Peça ao admin do workspace para fazer upgrade.",
   },
   shell: {
     navLinks: "Links",

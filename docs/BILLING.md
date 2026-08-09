@@ -114,15 +114,39 @@ members in through that IdP exactly as before; only setting up (or changing)
 the configuration requires the feature again. The member ceiling above still
 applies to every login on that IdP regardless of the `Sso` feature.
 
+## The panel screen
+
+`/settings/billing` shows the 5-plan comparison grid (Free through Custom),
+each plan's limits and features, and the current plan badge. Any member of
+the workspace can open it and see the grid; only the Owner sees an active
+"Upgrade" or "Manage in portal" button, matching the "only the Owner can
+start a checkout" rule above. Everyone else sees the same button disabled,
+with a tooltip explaining it is Owner-only.
+
+The monthly/yearly toggle and the USD/BRL choice live on this screen too,
+but the currency picker itself only shows before the workspace's first
+checkout. Once Stripe has locked a currency for the workspace (see
+"Currency" above), the screen reads that locked value from the catalog
+response and stops offering the other one. A workspace that already has an
+active subscription skips the checkout call entirely: its plan buttons go
+straight to "Manage in portal" and open the Customer Portal described
+above, instead of attempting a second checkout that Stripe would reject.
+
+Any other place in the panel that hits a `402` (a request blocked by a plan
+limit) surfaces a toast naming the limit, with a call-to-action that
+navigates to this screen and scrolls to the plan that would lift it.
+
+Without the three Stripe env vars turned on, the checkout and portal
+endpoints answer `404` (see "Turning it on"), so the screen still renders
+the grid and limits but every purchase button is inert; it stays purely
+informational rather than erroring out.
+
 ## Not supported yet
 
 - **Currency change for an existing customer.** Stripe does not let you flip
   a customer's currency once it is set; changing it is a manual operator
   action (typically: cancel and resubscribe with the new currency), not a
   self-service flow.
-- **Panel billing screen and the 402 upgrade prompt.** The panel does not
-  yet render plan/usage or a call-to-action when a request comes back `402`.
-  That lands with the billing landing page.
 - **Custom domain for checkout.** Checkout and the portal use Stripe's own
   domain until custom-domain support (LUC-147) lands.
 - **Soft caps, the monthly counters, and the automation ceiling.** Those are

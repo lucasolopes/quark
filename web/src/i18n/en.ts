@@ -28,6 +28,7 @@ export const en = {
     emailLabel: "Email",
     emailHint: "We'll check if your organization uses single sign-on.",
     continue: "Continue",
+    memberLimit: "This workspace is at its plan's member limit. Ask the workspace admin to upgrade.",
   },
   shell: {
     navLinks: "Links",

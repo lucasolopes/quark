@@ -115,6 +115,12 @@ describe("Login", () => {
     expect(screen.queryByLabelText(/^email$/i)).not.toBeInTheDocument();
   });
 
+  it("shows the member-limit message when redirected back with ?error=member_limit_reached", async () => {
+    mockFetchByUrl({ authenticated: false, oidc_enabled: false });
+    render(withProviders(<Login />, { initialEntries: ["/login?error=member_limit_reached"] }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/member limit/i);
+  });
+
   it("clicking the per-tenant button navigates to /admin/login?org=acme", async () => {
     mockFetchByUrl({ authenticated: false, oidc_enabled: true, multi_tenant: true });
     const originalLocation = window.location;
