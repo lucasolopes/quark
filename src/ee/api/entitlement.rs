@@ -161,12 +161,12 @@ pub(crate) struct SetPlanReq {
 /// Stripe webhook, and this endpoint stays as the operator escape hatch.
 ///
 /// The `st.ee.plans.invalidate(tenant)` call below makes the new plan take
-/// effect immediately, but only on the process that handled THIS request:
-/// `PlanCache` is per-process, with no cross-node invalidation. On a
-/// multi-replica deploy the other nodes keep serving the old plan out of
-/// their own cache until it converges on its own, within `PLAN_TTL_SECS`
-/// (60s). Wiring cross-node invalidation (e.g. over the pub/sub channel
-/// `src/invalidate.rs` already uses) is future work, not done here.
+/// effect immediately on the process that handled THIS request. It also
+/// best-effort publishes `plan:<tenant_id>` on the same pub/sub channel
+/// `src/invalidate.rs` uses for links and hosts, so other replicas drop
+/// their `PlanCache` entry too (LUC-41 follow-up). That publish is
+/// fail-open: single-node deployments (no `QUARK_VALKEY_URL`) and a dropped
+/// message both fall back to `PlanCache`'s own `PLAN_TTL_SECS` (60s) TTL.
 pub(crate) async fn admin_tenant_plan_put(
     State(st): State<Arc<AppState>>,
     Path(id): Path<u64>,
@@ -196,5 +196,10 @@ pub(crate) async fn admin_tenant_plan_put(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     st.ee.plans.invalidate(tenant).await;
+    // Best-effort cross-node invalidation, same as `apply_subscription`:
+    // `publish` is fail-open, so no error handling is needed here.
+    if let Some(inv) = st.cache.invalidator() {
+        inv.publish(&format!("plan:{}", tenant.0)).await;
+    }
     StatusCode::NO_CONTENT.into_response()
 }

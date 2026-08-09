@@ -230,6 +230,15 @@ impl Cache {
     pub async fn invalidate_local(&self, id: u64) {
         self.hot.invalidate(&id);
     }
+
+    /// The shared cross-replica `Invalidator`, if one is configured
+    /// (`QUARK_VALKEY_URL` set), for callers that need to publish an
+    /// invalidation message this cache doesn't itself know about (e.g. EE's
+    /// `plan:<tenant_id>` message for `PlanCache`, LUC-41). `None` in
+    /// single-node deployments, same as `HostRouter::has_invalidator`.
+    pub fn invalidator(&self) -> Option<&Arc<Invalidator>> {
+        self.invalidator.as_ref()
+    }
 }
 
 #[cfg(test)]

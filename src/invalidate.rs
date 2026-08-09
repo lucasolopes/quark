@@ -4,8 +4,9 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 
 /// Valkey pub/sub channel carrying cross-node invalidation messages. Payloads are
-/// tiny text: `link:<id>` (drop one L1 cache entry everywhere) or
-/// `host:<name>` (drop one `HostRouter` L1 entry everywhere).
+/// tiny text: `link:<id>` (drop one L1 cache entry everywhere), `host:<name>`
+/// (drop one `HostRouter` L1 entry everywhere), or `plan:<tenant_id>` (drop
+/// one `PlanCache` entry everywhere, EE-only).
 pub const INVALIDATION_CHANNEL: &str = "quark:invalidate";
 
 /// Backoff between subscriber reconnect attempts. The per-node TTL (L1 60s)
@@ -55,13 +56,14 @@ impl Invalidator {
 enum Invalidation {
     Link(u64),
     Host(String),
+    Plan(u64),
 }
 
-/// Parses a channel payload into an `Invalidation`. `link:<u64>` and
-/// `host:<name>` are the only accepted forms; anything else (bad prefix,
-/// non-numeric link id, empty host name, garbage) is `None`. The host name is
-/// taken as everything after the `host:` prefix without re-splitting on `:`
-/// (a DNS host never contains one, but this stays robust either way).
+/// Parses a channel payload into an `Invalidation`. `link:<u64>`,
+/// `host:<name>` and `plan:<u64>` are the only accepted forms; anything else
+/// (bad prefix, non-numeric id, empty host name, garbage) is `None`. The host
+/// name is taken as everything after the `host:` prefix without re-splitting
+/// on `:` (a DNS host never contains one, but this stays robust either way).
 fn parse_message(payload: &str) -> Option<Invalidation> {
     if let Some(rest) = payload.strip_prefix("link:") {
         return rest.parse::<u64>().ok().map(Invalidation::Link);
@@ -72,6 +74,9 @@ fn parse_message(payload: &str) -> Option<Invalidation> {
         } else {
             Some(Invalidation::Host(rest.to_string()))
         };
+    }
+    if let Some(rest) = payload.strip_prefix("plan:") {
+        return rest.parse::<u64>().ok().map(Invalidation::Plan);
     }
     None
 }
@@ -118,6 +123,16 @@ async fn run_once(url: &str, state: &Arc<AppState>) -> Result<(), redis::RedisEr
         match parse_message(&payload) {
             Some(Invalidation::Link(id)) => state.cache.invalidate_local(id).await,
             Some(Invalidation::Host(name)) => state.host_router.invalidate_local(&name).await,
+            Some(Invalidation::Plan(id)) => {
+                #[cfg(feature = "ee")]
+                {
+                    state.ee.plans.invalidate(crate::tenant::TenantId(id)).await;
+                }
+                #[cfg(not(feature = "ee"))]
+                {
+                    let _ = id;
+                }
+            }
             None => tracing::warn!(payload = %payload, "unknown invalidation message, ignored"),
         }
     }
@@ -162,5 +177,19 @@ mod tests {
         assert_eq!(parse_message("link:-1"), None);
         assert_eq!(parse_message(""), None);
         assert_eq!(parse_message("garbage"), None);
+    }
+
+    /// LUC-41 follow-up: `plan:<tenant_id>` is parsed into `Invalidation::Plan`.
+    #[test]
+    fn parses_plan_tenant_ids() {
+        assert_eq!(parse_message("plan:7"), Some(Invalidation::Plan(7)));
+    }
+
+    /// LUC-41 follow-up: non-numeric and empty `plan:` payloads are rejected,
+    /// same as `link:`.
+    #[test]
+    fn rejects_malformed_plan() {
+        assert_eq!(parse_message("plan:x"), None);
+        assert_eq!(parse_message("plan:"), None);
     }
 }
