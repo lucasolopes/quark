@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "paths": {
+      "@/i18n": ["../web/src/i18n/index.ts"],
+      "@/*": ["../web/src/*"],
+      "@ee": ["../web/src/lib/ee-stub.tsx"]
+    }
+  }
+}
