@@ -1,0 +1,44 @@
+// design-sync entry — barrel exposing the quark panel components as an
+// importable design system (window.Quark on claude.ai/design). Not part of
+// the app build (outside tsconfig.app/node include).
+export * from "./src/components/ui/alert-dialog";
+export * from "./src/components/ui/badge";
+export * from "./src/components/ui/button";
+export * from "./src/components/ui/card";
+export * from "./src/components/ui/checkbox";
+export * from "./src/components/ui/dialog";
+export * from "./src/components/ui/dropdown-menu";
+export * from "./src/components/ui/input";
+export * from "./src/components/ui/label";
+export * from "./src/components/ui/skeleton";
+export * from "./src/components/ui/sonner";
+export * from "./src/components/ui/switch";
+export * from "./src/components/ui/table";
+export * from "./src/components/ui/tabs";
+export * from "./src/components/ui/textarea";
+export * from "./src/components/brand/QuarkMark";
+export * from "./src/components/CollapsibleSection";
+export * from "./src/components/Combobox";
+export * from "./src/components/CreateLinkDialog";
+export * from "./src/components/CreateTokenDialog";
+export * from "./src/components/CreateWorkspaceForm";
+export * from "./src/components/DurationField";
+export * from "./src/components/EditLinkDialog";
+export * from "./src/components/LanguageSwitcher";
+export * from "./src/components/LinkQrDialog";
+export * from "./src/components/LinkTable";
+export * from "./src/components/MeterBar";
+export * from "./src/components/MobileNav";
+export * from "./src/components/OutOfShellFrame";
+export * from "./src/components/PageHeader";
+export * from "./src/components/RecentEventsTable";
+export * from "./src/components/RulesEditor";
+export * from "./src/components/StatCard";
+export * from "./src/components/StatsCharts";
+export * from "./src/components/StatsView";
+export * from "./src/components/Terminal";
+export * from "./src/components/TtlChips";
+export * from "./src/components/VariantsEditor";
+export { cn } from "./src/lib/utils";
+export { I18nProvider } from "./src/i18n";
+export { toast } from "sonner";

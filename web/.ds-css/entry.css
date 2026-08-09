@@ -1,0 +1,6 @@
+/* design-sync CSS entry — compiles the panel theme (src/index.css) into a
+ * static stylesheet for the design-system bundle. The extra @source makes
+ * sure utilities used by authored previews (.design-sync/previews) are
+ * included even though they live outside web/. */
+@import "../src/index.css";
+@source "../../.design-sync";

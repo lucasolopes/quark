@@ -29,3 +29,11 @@ web/.env.local
 .claude/worktrees/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# design-sync (build/scratch — the durable set lives in .design-sync/ minus these entries)
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+web/.ds-css/ds.css
