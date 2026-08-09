@@ -42,12 +42,22 @@ cliente precise mesmo de um limite Custom mais estreito que "tudo".
 
 O teto de membros é aplicado quando alguém resgata um convite via
 `POST /admin/invites/:token/accept` (modelo A, sem IdP provisionado para o
-tenant). Para um tenant com IdP próprio provisionado (Keycloak/modelo B), a
-membership é concedida no primeiro login, a partir do group claim, e esse
-caminho ainda não aplica a cota de membros. Um tenant nesse modelo pode
-estourar o teto de membros bastando ter usuários distintos suficientes
-fazendo login. É um furo conhecido, aceito nesta fase, registrado como
-LUC-148; fechá-lo depende do contexto de billing que a fase 2 traz.
+tenant), e é aplicado da mesma forma para um tenant com IdP próprio
+provisionado (Keycloak/modelo B), onde a membership é concedida no primeiro
+login a partir do group claim: `GET /admin/callback` checa o teto antes de
+criar a membership de um membro novo (LUC-148). Quem já tem membership no
+workspace nunca é afetado por essa checagem, não importa como o plano mude
+depois; só um login que criaria uma membership NOVA num workspace já no teto
+é recusado, com um erro nomeando o limite (`member_limit_reached`) em vez de
+ganhar silenciosamente um assento extra.
+
+O SSO em si segue uma regra separada do teto de membros: `Feature::Sso`
+trava só a criação ou alteração da configuração de IdP do tenant
+(`PUT /admin/oidc-config`), não o uso de um IdP que já existe. Um workspace
+que já tinha SSO configurado antes de um downgrade continua logando membros
+por ele depois; o downgrade tira a capacidade de configurar (ou reconfigurar)
+um IdP, não o IdP que já está funcionando. O teto de membros do parágrafo
+acima continua valendo em todo login, independente disso.
 
 ### Features (binário, não é teto)
 

@@ -115,6 +115,100 @@ pub(crate) async fn oidc_login(
         .into_response()
 }
 
+/// Why `member_quota_allows_login` refused a login. Distinct from
+/// `entitlement::Denied` alone because a store failure here must become a
+/// `503`, not a `402` misreported as a plan limit.
+///
+/// `pub`, not `pub(crate)`, so the Enterprise integration suite
+/// (`tests/plan_it.rs`) can call `member_quota_allows_login` directly: the
+/// real callback can't be driven end to end offline (it needs a live IdP for
+/// the code exchange), so this is the finest-grained seam that is both
+/// testable without one and actually wired into `oidc_callback`.
+#[derive(Debug)]
+pub enum MemberLoginDenied {
+    /// The plan's member ceiling is already held and `subject` would be a
+    /// new member.
+    Quota(crate::api::entitlement::Denied),
+    /// Could not determine whether `subject` is already a member (store
+    /// unreachable), so the login cannot be safely evaluated either way.
+    StoreUnavailable,
+}
+
+impl IntoResponse for MemberLoginDenied {
+    fn into_response(self) -> Response {
+        match self {
+            MemberLoginDenied::StoreUnavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            // Same shape as `entitlement::Denied`'s own `IntoResponse`, but
+            // with a login-specific error code: the panel needs to tell "your
+            // login was refused, the workspace is full" apart from a normal
+            // API call hitting a plan limit, even though both are `402`s
+            // carrying the same `limit`/`allowed`/`upgrade_to` triple.
+            MemberLoginDenied::Quota(denied) => (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(serde_json::json!({
+                    "error": "member_limit_reached",
+                    "limit": denied.limit,
+                    "allowed": denied.allowed,
+                    "upgrade_to": denied.upgrade_to,
+                })),
+            )
+                .into_response(),
+        }
+    }
+}
+
+/// Whether the plan's member quota admits `subject` logging into `tenant` via
+/// its own IdP group-claim mapping (multi-tenancy model B / Keycloak,
+/// LUC-148).
+///
+/// Gates ONLY a brand-new member: a `subject` that already holds a
+/// `Membership` in `tenant` is exempt, so a plan downgrade never locks out
+/// anyone already in — the same "existing grants are never revoked" rule
+/// phase 1 applied to domains and invites (`docs/specs/...luc19...` and the
+/// invite quota check in `src/ee/api/invites.rs`). A `subject` with no `User`
+/// row at all is a new member by definition (it cannot hold a membership
+/// either), so it is evaluated the same way.
+///
+/// Community's `require_quota` always answers `Ok`, so this only bites
+/// Enterprise builds whose tenant plan caps members below what it already
+/// holds.
+pub async fn member_quota_allows_login(
+    st: &AppState,
+    tenant: crate::tenant::TenantId,
+    subject: &str,
+) -> Result<(), MemberLoginDenied> {
+    let existing_user = st
+        .store
+        .get_user_by_subject(subject)
+        .await
+        .map_err(|_| MemberLoginDenied::StoreUnavailable)?;
+    if let Some(user) = existing_user {
+        let membership = st
+            .store
+            .get_membership(user.id, tenant)
+            .await
+            .map_err(|_| MemberLoginDenied::StoreUnavailable)?;
+        if membership.is_some() {
+            // Already a member of this tenant: never re-gated by the ceiling
+            // on a later login, no matter what the plan does afterwards.
+            return Ok(());
+        }
+    }
+    let held = st
+        .store
+        .count_memberships(tenant)
+        .await
+        .map_err(|_| MemberLoginDenied::StoreUnavailable)?;
+    crate::api::entitlement::require_quota(
+        st,
+        tenant,
+        crate::api::entitlement::Quota::Members,
+        held,
+    )
+    .await
+    .map_err(MemberLoginDenied::Quota)
+}
+
 #[derive(Deserialize)]
 pub(crate) struct CallbackParams {
     pub(crate) code: Option<String>,
@@ -268,6 +362,21 @@ pub(crate) async fn oidc_callback(
             )
         }
     };
+
+    // Member-quota gate (LUC-148): only a per-tenant login that would create
+    // a BRAND NEW membership can be refused here, checked before
+    // `ensure_user_and_membership` grants anything (that call is
+    // unconditional for whoever reaches it). Someone who already has a
+    // membership in `tenant` sails through regardless of the plan's current
+    // ceiling; a plan downgrade never revokes access from an existing
+    // member, only blocks a new one from joining.
+    if st.multi_tenant {
+        if let Some((tenant_id, _)) = tenant_membership {
+            if let Err(denied) = member_quota_allows_login(&st, tenant_id, &claims.subject).await {
+                return denied.into_response();
+            }
+        }
+    }
 
     let user_id = match crate::oidc::ensure_user_and_membership(
         st.store.as_ref(),

@@ -96,6 +96,24 @@ teto permita. A camada de plano só bloqueia criação nova, o mesmo ponto de
 aplicação que a fase 1 já usa para toda outra cota. Não existe job de fundo
 que apaga recursos de um workspace até caber no teto do novo plano.
 
+O teto de membros segue essa mesma regra, inclusive para um workspace cujos
+membros entram pelo próprio provedor SSO (Keycloak/modelo B, LUC-148): um
+downgrade nunca remove um membro existente, e ninguém que já tem membership é
+deslogado ou barrado de logar de novo só porque o workspace ficou acima do
+novo teto. O que um downgrade BLOQUEIA é um membro NOVO entrando: a próxima
+pessoa que nunca foi membro e tenta logar pelo group claim tem o login
+recusado (`member_limit_reached`) até o workspace voltar abaixo do teto ou
+estar num plano cujo teto permita, a mesma forma da regra "não pode criar um
+nono domínio" acima.
+
+O acesso via SSO em si não é afetado por um downgrade num sentido diferente:
+`Sso` é uma feature que trava criar ou editar a configuração de IdP do
+tenant, não usar um IdP que já está configurado. Um workspace que configurou
+SSO num plano pago e depois cai para um plano sem a feature `Sso` continua
+logando membros por aquele IdP exatamente como antes; só configurar (ou
+alterar) a configuração exige a feature de novo. O teto de membros acima
+continua valendo em todo login nesse IdP, independente da feature `Sso`.
+
 ## Ainda não suportado
 
 - **Troca de moeda de um customer existente.** O Stripe não deixa trocar a

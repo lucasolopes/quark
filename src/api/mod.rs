@@ -184,7 +184,13 @@ mod webhooks_api;
 pub use guard::*;
 pub use links::*;
 pub(crate) use links_admin::*;
-pub(crate) use oidc_login::*;
+// `pub`, not `pub(crate)`: `member_quota_allows_login`/`MemberLoginDenied`
+// (LUC-148) need to reach `tests/plan_it.rs`, an Enterprise integration
+// crate outside this one. Every other item in `oidc_login` stays
+// `pub(crate)` at its own declaration, so this glob does not widen them —
+// a glob re-export can only forward an item as public as the item already
+// declared itself.
+pub use oidc_login::*;
 pub use router::*;
 pub(crate) use sheets::*;
 pub(crate) use slack::*;

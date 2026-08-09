@@ -684,13 +684,16 @@ pub async fn ensure_user_and_membership(
         };
         // This is where the Keycloak (model B) flow grants membership: the
         // first login of a user whose IdP group claim maps to this tenant.
-        // Unlike `admin_invites_accept`'s model-A grant, this call does NOT
-        // check the plan's member quota. A tenant whose IdP is provisioned
-        // can therefore exceed its member ceiling simply by having enough
-        // distinct users log in. Known gap, accepted for this phase, tracked
-        // as LUC-148: closing it needs billing context (phase 2) to decide
-        // what happens to a user the IdP already authenticated into a
-        // workspace that is at its ceiling.
+        // Unlike `admin_invites_accept`'s model-A grant, this function itself
+        // does NOT check the plan's member quota — it can't, it only holds
+        // `&dyn Store`, not the `AppState` the entitlement seam needs.
+        // Closed for LUC-148: the caller, `oidc_callback` in
+        // `src/api/oidc_login.rs`, applies the quota BEFORE calling this
+        // function, via `member_quota_allows_login`. A brand-new member of a
+        // tenant already at its ceiling has the login refused there; a
+        // `subject` that already holds a membership is exempt, so this
+        // `put_membership` call for them is a no-op (unconditional here) but
+        // never reached for a denied new member.
         store
             .put_membership(&Membership {
                 user_id: user.id,
