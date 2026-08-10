@@ -100,7 +100,7 @@ ee = [
 # would concurrently run schema DDL / `FORCE ROW LEVEL SECURITY` / `TRUNCATE`
 # and race (a non-tenant query seeing `no rows` once another binary FORCEs RLS).
 # A file lock serializes them across processes.
-serial_test = { version = "3", features = ["file_locks"] }
+serial_test = { version = "4", features = ["file_locks"] }
 tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"
 # `deserialize` is only exercised by `tests/billing_it.rs`, which builds a
