@@ -340,6 +340,22 @@ async fn main() -> anyhow::Result<()> {
         anonymize_ip: pixel_anonymize_ip,
         ..quark::pixel::PixelBases::default()
     };
+    // Cadence of the analytics flush/snapshot tick. The default suits a
+    // self-hosted database; a serverless Postgres billed by active compute
+    // wants it far higher, because the tick polls the store on every beat even
+    // when no click arrived. Zero or unparsable falls back to the default,
+    // since a zero period would panic `tokio::time::interval`.
+    let analytics_flush_secs: u64 = std::env::var("QUARK_ANALYTICS_FLUSH_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(quark::analytics::DEFAULT_FLUSH_INTERVAL_SECS);
+    if analytics_flush_secs != quark::analytics::DEFAULT_FLUSH_INTERVAL_SECS {
+        tracing::info!(
+            interval_secs = analytics_flush_secs,
+            "analytics flush interval overridden (QUARK_ANALYTICS_FLUSH_SECS); pixel and alert-rule edits take up to this long to apply"
+        );
+    }
     let analytics_worker = spawn_worker(
         analytics_rx,
         sink.clone(),
@@ -349,6 +365,7 @@ async fn main() -> anyhow::Result<()> {
         pixel_bases,
         webhooks.clone(),
         control_conn.clone(),
+        analytics_flush_secs,
     );
 
     // OIDC login (opt-in via QUARK_OIDC_ISSUER). A failed init disables login but

@@ -6,7 +6,7 @@
 use axum::extract::State;
 use axum::routing::post;
 use axum::Router;
-use quark::analytics::{spawn_worker, ClickEvent};
+use quark::analytics::{spawn_worker, ClickEvent, DEFAULT_FLUSH_INTERVAL_SECS};
 use quark::codec;
 use quark::permute;
 use quark::pixel::{self, PixelBases, PixelConfig, PixelCredentials, Provider};
@@ -140,6 +140,7 @@ async fn worker_forwards_only_matching_tenant_events_to_each_pixel() {
         bases,
         noop_dispatcher(),
         None,
+        DEFAULT_FLUSH_INTERVAL_SECS,
     );
 
     tx.send(ev_t(10, 1_752_300_000, 0)).await.unwrap(); // tenant A
@@ -201,6 +202,7 @@ async fn worker_flush_forwards_batch_to_active_pixel_with_real_short_code() {
         bases,
         noop_dispatcher(),
         None,
+        DEFAULT_FLUSH_INTERVAL_SECS,
     );
 
     tx.send(ev(42, 1_752_300_000)).await.unwrap();
@@ -246,6 +248,7 @@ async fn worker_flush_skips_inactive_pixel_configs() {
         bases,
         noop_dispatcher(),
         None,
+        DEFAULT_FLUSH_INTERVAL_SECS,
     );
 
     tx.send(ev(1, 1_752_300_000)).await.unwrap();
@@ -281,6 +284,7 @@ async fn worker_flush_is_fail_open_when_provider_is_down() {
         bases,
         noop_dispatcher(),
         None,
+        DEFAULT_FLUSH_INTERVAL_SECS,
     );
 
     tx.send(ev(7, 1_752_300_000)).await.unwrap();
@@ -327,6 +331,7 @@ async fn worker_flush_is_fail_open_when_provider_returns_500() {
         bases,
         noop_dispatcher(),
         None,
+        DEFAULT_FLUSH_INTERVAL_SECS,
     );
 
     tx.send(ev(9, 1_752_300_000)).await.unwrap();
@@ -369,6 +374,7 @@ async fn worker_forwards_to_a_pixel_added_after_start_once_the_snapshot_refreshe
         bases,
         noop_dispatcher(),
         None,
+        DEFAULT_FLUSH_INTERVAL_SECS,
     );
 
     // Added only now, after the worker's initial snapshot load already ran.
@@ -459,6 +465,7 @@ async fn worker_flush_records_pixel_health_ok_on_successful_forward() {
         bases,
         noop_dispatcher(),
         None,
+        DEFAULT_FLUSH_INTERVAL_SECS,
     );
 
     tx.send(ev(42, 1_752_300_000)).await.unwrap();
@@ -510,6 +517,7 @@ async fn worker_flush_records_pixel_health_error_on_failed_forward() {
         bases,
         noop_dispatcher(),
         None,
+        DEFAULT_FLUSH_INTERVAL_SECS,
     );
 
     tx.send(ev(9, 1_752_300_000)).await.unwrap();

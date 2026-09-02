@@ -13,7 +13,7 @@
 //! doesn't show up here — but oha couldn't measure it above the noise either.
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use quark::analytics::{spawn_worker, ClickEvent};
+use quark::analytics::{spawn_worker, ClickEvent, DEFAULT_FLUSH_INTERVAL_SECS};
 use quark::api::router;
 use quark::cache::Cache;
 use quark::codec::to_base62;
@@ -82,6 +82,7 @@ fn bench(c: &mut Criterion) {
                 ))
             },
             None,
+            DEFAULT_FLUSH_INTERVAL_SECS,
         );
         let host_router = Arc::new(quark::domain_router::HostRouter::new(
             store.clone(),

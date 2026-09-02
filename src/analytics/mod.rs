@@ -401,13 +401,22 @@ pub trait AnalyticsSink: Send + Sync + 'static {
     }
 }
 
-/// Batch size that triggers an immediate flush (in addition to the 5s timer).
+/// Batch size that triggers an immediate flush (in addition to the periodic
+/// timer, whose cadence is `DEFAULT_FLUSH_INTERVAL_SECS` unless overridden).
 pub const BATCH: usize = 500;
 
-/// Cadence of the flush/refresh tick: the worker flushes what it buffered and
-/// re-reads its snapshots this often, on top of flushing whenever the buffer
-/// reaches `BATCH`.
-const FLUSH_INTERVAL_SECS: u64 = 5;
+/// Default cadence of the flush/refresh tick: the worker flushes what it
+/// buffered and re-reads its snapshots this often, on top of flushing whenever
+/// the buffer reaches `BATCH`. Five seconds keeps a pixel or alert-rule edit
+/// live almost immediately, which is what a self-hosted database wants.
+///
+/// It is a default rather than a fixed value because the tick re-reads the
+/// snapshots unconditionally, one `list_pixels` per tenant, whether or not any
+/// click arrived. Against a serverless Postgres billed by active compute time
+/// that poll alone keeps the database awake around the clock, so such a
+/// deployment raises it with `QUARK_ANALYTICS_FLUSH_SECS` and accepts the
+/// matching delay on pixel and alert-rule edits.
+pub const DEFAULT_FLUSH_INTERVAL_SECS: u64 = 5;
 
 /// Per-replica in-memory state for `AlertCounter::Memory`: for each
 /// `(tenant, link_id)`, the current fixed window, the click count in it, and
@@ -649,6 +658,7 @@ pub fn spawn_worker(
     bases: PixelBases,
     webhooks: Arc<WebhookDispatcher>,
     control: Option<redis::aio::MultiplexedConnection>,
+    flush_secs: u64,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut buf: Vec<ClickEvent> = Vec::with_capacity(BATCH);
@@ -661,7 +671,9 @@ pub fn spawn_worker(
         let mut alerts: Vec<(TenantId, HashMap<u64, AlertRule>)> = Vec::new();
         refresh_alert_snapshot(&store, &mut alerts).await;
         let counter = AlertCounter::new(control);
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(FLUSH_INTERVAL_SECS));
+        // `interval` panics on a zero period, and the caller clamps to >= 1, but
+        // clamp here too so a future caller cannot take the process down.
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(flush_secs.max(1)));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
@@ -1018,6 +1030,7 @@ mod tests {
             PixelBases::default(),
             test_dispatcher().0,
             None,
+            DEFAULT_FLUSH_INTERVAL_SECS,
         );
 
         for i in 0..250u64 {

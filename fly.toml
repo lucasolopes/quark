@@ -24,7 +24,12 @@ primary_region = "gru"
   # Scheduled Google Sheets sync interval, seconds (LUC-87 fase 1b). Every
   # connected tenant's catalog is mirrored on this cadence (lease-coordinated,
   # floored to 60s). Needs QUARK_PUBLIC_HOST (set above) for correct short URLs.
-  QUARK_SHEETS_SYNC_SECS = "900"
+  QUARK_SHEETS_SYNC_SECS = "3600"
+  # Analytics flush/snapshot cadence. The 5s default polls the store on every
+  # tick even with no traffic, which keeps a scale-to-zero Postgres awake around
+  # the clock. This deployment is on Neon, billed by active compute, so the tick
+  # is hourly here; pixel and alert-rule edits take up to an hour to apply.
+  QUARK_ANALYTICS_FLUSH_SECS = "3600"
 
 [http_service]
   internal_port = 8080
